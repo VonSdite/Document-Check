@@ -1,22 +1,69 @@
 {% extends "base.html" %}
 
-{% block title %}我的任务 - 文档智能门禁{% endblock %}
+{% block title %}任务 - 文档智能门禁{% endblock %}
 
 {% block content %}
-<section class="hero-band">
-  <div>
-    <p class="eyebrow">当前访问身份</p>
-    <h1>{{ user.username if user and user.username else "未标识用户" }}</h1>
-    <p class="muted">IP：<strong>{{ ip }}</strong>{% if user and user.username %} · 用户名：<strong>{{ user.username }}</strong>{% endif %}</p>
-  </div>
-  <div class="hero-actions">
+<form method="post" enctype="multipart/form-data" class="panel create-panel">
+  <div class="panel-head compact-head">
+    <div>
+      <h1>创建检查</h1>
+      <div class="identity-line">
+        <span>IP：<strong>{{ ip }}</strong></span>
+        {% if user and user.username %}<span>用户：<strong>{{ user.username }}</strong></span>{% endif %}
+        <span class="help-tip" tabindex="0" data-tip="仅使用 remote_addr 直连 IP 识别用户和任务范围。">?</span>
+      </div>
+    </div>
     {% if user and user.is_disabled %}
-    <span class="status-pill status-failed">已禁用提交</span>
+    <span class="status-pill status-failed">已禁用</span>
     {% else %}
-    <a class="primary-button" href="{{ url_for('user_new_task') }}">创建检查任务</a>
+    <button class="primary-button" type="submit" {{ "disabled" if not models else "" }}>提交检查</button>
     {% endif %}
   </div>
-</section>
+
+  {% if not (user and user.is_disabled) %}
+  <div class="quick-form-grid">
+    <label>
+      文档
+      <span class="field-with-help">
+        <input name="document" type="file" accept=".docx,.pdf,.txt,.md,.html" required>
+        <span class="help-tip" tabindex="0" data-tip="支持 docx、pdf、txt、md、html，单文件最大 50MB。">?</span>
+      </span>
+    </label>
+    <label>
+      模型
+      <select name="model_id" required {{ "disabled" if not models else "" }}>
+        {% if not models %}
+        <option value="">暂无可用模型</option>
+        {% else %}
+          {% for model in models %}
+          <option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}</option>
+          {% endfor %}
+        {% endif %}
+      </select>
+    </label>
+  </div>
+
+  <div class="check-row">
+    <div class="check-row-title">
+      <span>检查项</span>
+      <span class="help-tip" tabindex="0" data-tip="可多选；系统会按检查项逐项调用模型。">?</span>
+    </div>
+    <div class="check-chip-grid">
+      {% for item in check_items %}
+      <label class="check-chip" title="{{ item.description or item.name }}">
+        <input type="checkbox" name="checks" value="{{ item.id }}" checked>
+        <span>{{ item.name }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% if not models %}
+  <div class="inline-warning">暂无可用模型，请联系管理员配置。</div>
+  {% endif %}
+  {% else %}
+  <div class="inline-warning">当前 IP 已禁用提交任务。</div>
+  {% endif %}
+</form>
 
 <section class="metric-grid">
   <div class="metric"><span>全部</span><strong>{{ stats.total }}</strong></div>
@@ -26,10 +73,10 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head">
-    <div>
-      <h2>我的检查任务</h2>
-      <p>仅显示当前直连 IP 创建的任务。</p>
+  <div class="panel-head compact-head">
+    <div class="title-with-help">
+      <h2>我的任务</h2>
+      <span class="help-tip" tabindex="0" data-tip="这里只显示当前直连 IP 创建的任务。">?</span>
     </div>
   </div>
   {% if tasks %}
@@ -76,12 +123,8 @@
     </table>
   </div>
   {% else %}
-  <div class="empty-state">
-    <h3>还没有检查任务</h3>
-    <p>上传文档、选择检查项和模型后即可开始。</p>
-    {% if not (user and user.is_disabled) %}
-    <a class="primary-button" href="{{ url_for('user_new_task') }}">创建检查任务</a>
-    {% endif %}
+  <div class="empty-state compact">
+    <h3>暂无任务</h3>
   </div>
   {% endif %}
 </section>

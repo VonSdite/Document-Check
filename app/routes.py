@@ -40,10 +40,15 @@ def register_routes(app):
             "status_labels": STATUS_LABELS,
         }
 
-    @app.get("/")
+    @app.route("/", methods=["GET", "POST"])
     def user_tasks():
         ip = client_ip()
         user = get_ip_user(ip)
+        if request.method == "POST":
+            if user and user["is_disabled"]:
+                flash("当前 IP 已被管理员禁用，不能提交任务。", "error")
+                return redirect(url_for("user_tasks"))
+            return create_task_for_ip(ip, user, admin_created=False)
         rows = get_db().execute(
             """
             SELECT *
@@ -54,26 +59,26 @@ def register_routes(app):
             (ip,),
         ).fetchall()
         stats = _task_stats(rows)
-        return render_template("user_tasks.html", ip=ip, user=user, tasks=rows, stats=stats)
+        return render_template(
+            "user_tasks.html",
+            ip=ip,
+            user=user,
+            tasks=rows,
+            stats=stats,
+            check_items=get_enabled_check_items(),
+            models=get_enabled_models(),
+        )
 
     @app.route("/tasks/new", methods=["GET", "POST"])
     def user_new_task():
         ip = client_ip()
         user = get_ip_user(ip)
         if user and user["is_disabled"]:
-            flash("当前 IP 已被管理员禁用，不能提交新的检查任务。", "error")
+            flash("当前 IP 已被管理员禁用，不能提交任务。", "error")
             return redirect(url_for("user_tasks"))
         if request.method == "POST":
             return create_task_for_ip(ip, user, admin_created=False)
-        return render_template(
-            "task_form.html",
-            mode="user",
-            ip=ip,
-            user=user,
-            check_items=get_enabled_check_items(),
-            models=get_enabled_models(),
-            admin_prefix=current_app.config["ADMIN_URL"],
-        )
+        return redirect(url_for("user_tasks"))
 
     @app.get("/tasks/<int:task_id>")
     def user_task_detail(task_id):
@@ -451,7 +456,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
     if not admin_created:
         current_user = get_ip_user(ip)
         if current_user and current_user["is_disabled"]:
-            flash("当前 IP 已被管理员禁用，不能提交新的检查任务。", "error")
+            flash("当前 IP 已被管理员禁用，不能提交任务。", "error")
             return redirect(url_for("user_tasks"))
 
     upload = request.files.get("document")
@@ -527,7 +532,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
 def _back_to_task_form(admin_created: bool):
     if admin_created:
         return redirect(url_for("admin_new_task"))
-    return redirect(url_for("user_new_task"))
+    return redirect(url_for("user_tasks"))
 
 
 def admin_required(view):
