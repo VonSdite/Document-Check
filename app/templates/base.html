@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}文档智能门禁{% endblock %}</title>
+  {% block extra_head %}{% endblock %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  {% set is_admin = request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login' %}
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="{{ url_for('admin_dashboard') if is_admin else url_for('user_tasks') }}">
+        <span class="brand-mark">文</span>
+        <span>
+          <strong>文档智能门禁</strong>
+          <small>{{ "管理面" if is_admin else "用户面" }}</small>
+        </span>
+      </a>
+      {% if is_admin %}
+      <nav class="nav">
+        <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active' if request.endpoint == 'admin_dashboard' else '' }}">概览</a>
+        <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if request.endpoint in ['admin_tasks', 'admin_new_task', 'admin_task_detail'] else '' }}">任务</a>
+        <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户</a>
+        <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型</a>
+        <a href="{{ url_for('admin_prompts') }}" class="{{ 'active' if request.endpoint == 'admin_prompts' else '' }}">提示词</a>
+        <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint == 'admin_settings' else '' }}">并发</a>
+      </nav>
+      <form method="post" action="{{ url_for('admin_logout') }}">
+        <button class="ghost-button" type="submit">退出</button>
+      </form>
+      {% else %}
+      <nav class="nav">
+        <a href="{{ url_for('user_tasks') }}" class="{{ 'active' if request.endpoint == 'user_tasks' else '' }}">我的任务</a>
+        <a href="{{ url_for('user_new_task') }}" class="{{ 'active' if request.endpoint == 'user_new_task' else '' }}">创建检查</a>
+      </nav>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div class="flash-stack">
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

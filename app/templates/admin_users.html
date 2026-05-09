@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}用户管理 - 文档智能门禁{% endblock %}
+
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">用户管理</p>
+    <h1>IP 用户标识</h1>
+  </div>
+</section>
+
+<section class="split-grid">
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>新增或更新用户</h2>
+        <p>按直连 IP 识别用户，可禁用其提交新任务。</p>
+      </div>
+    </div>
+    <form method="post" class="stack-form">
+      <label>
+        IP
+        <input name="ip" placeholder="例如 192.168.1.10" required>
+      </label>
+      <label>
+        用户名
+        <input name="username" placeholder="例如 财务部-张三">
+      </label>
+      <label class="switch-line">
+        <input type="checkbox" name="is_disabled">
+        <span>禁用提交任务</span>
+      </label>
+      <button class="primary-button" type="submit">保存用户</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>未标识 IP</h2>
+        <p>来自任务记录但尚未设置用户名的 IP。</p>
+      </div>
+    </div>
+    {% if ips %}
+    <div class="stack-list">
+      {% for item in ips %}
+      <form method="post" class="inline-edit">
+        <input type="hidden" name="ip" value="{{ item.ip }}">
+        <div>
+          <strong>{{ item.ip }}</strong>
+          <div class="subline">{{ item.task_count }} 个任务 · 最近 {{ item.last_task_at }}</div>
+        </div>
+        <input name="username" placeholder="用户名">
+        <button class="small-button" type="submit">标识</button>
+      </form>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state compact">
+      <h3>没有未标识 IP</h3>
+      <p>所有有任务记录的 IP 都已设置。</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>已标识用户</h2>
+      <p>修改用户名、禁用状态或删除标识。</p>
+    </div>
+  </div>
+  {% if users %}
+  <div class="user-list">
+    {% for user in users %}
+    <div class="user-row">
+      <form method="post" class="user-edit-form">
+        <input type="hidden" name="ip" value="{{ user.ip }}">
+        <div class="user-main">
+          <strong>{{ user.ip }}</strong>
+          <span class="subline">{{ user.task_count or 0 }} 个任务{% if user.running_count %} · {{ user.running_count }} 个检查中{% endif %}</span>
+        </div>
+        <input name="username" value="{{ user.username or '' }}" placeholder="用户名">
+        <label class="switch-line compact-switch">
+          <input type="checkbox" name="is_disabled" {{ "checked" if user.is_disabled else "" }}>
+          <span>{{ "禁用" if user.is_disabled else "启用" }}</span>
+        </label>
+        <button class="small-button" type="submit">保存</button>
+      </form>
+      <form method="post" data-confirm="确认删除该 IP 的用户标识？任务记录不会删除。">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="ip" value="{{ user.ip }}">
+        <button class="small-button danger" type="submit">删除</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state compact">
+    <h3>还没有用户标识</h3>
+    <p>新增一个 IP 后会显示在这里。</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

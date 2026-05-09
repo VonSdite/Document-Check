@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}创建检查任务 - 文档智能门禁{% endblock %}
+
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">{{ "管理创建" if mode == "admin" else "新建任务" }}</p>
+    <h1>创建检查任务</h1>
+  </div>
+  <a class="ghost-button" href="{{ url_for('admin_tasks') if mode == 'admin' else url_for('user_tasks') }}">返回列表</a>
+</section>
+
+<form method="post" enctype="multipart/form-data" class="task-layout">
+  <section class="panel form-panel">
+    <div class="panel-head">
+      <div>
+        <h2>文档与模型</h2>
+        <p>支持 docx、pdf、txt、md、html，单文件最大 50MB。</p>
+      </div>
+    </div>
+    {% if mode == "admin" %}
+    <label>
+      任务归属 IP
+      <input name="target_ip" value="{{ ip }}" required>
+    </label>
+    {% endif %}
+    <label>
+      上传文档
+      <input name="document" type="file" accept=".docx,.pdf,.txt,.md,.html" required>
+    </label>
+    <label>
+      选择模型
+      <select name="model_id" required {{ "disabled" if not models else "" }}>
+        {% if not models %}
+        <option value="">暂无可用模型，请联系管理员配置</option>
+        {% else %}
+          {% for model in models %}
+          <option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}</option>
+          {% endfor %}
+        {% endif %}
+      </select>
+    </label>
+  </section>
+
+  <section class="panel form-panel">
+    <div class="panel-head">
+      <div>
+        <h2>检查项</h2>
+        <p>可同时选择多个检查项，系统会依次调用模型生成结果。</p>
+      </div>
+    </div>
+    <div class="check-grid">
+      {% for item in check_items %}
+      <label class="check-card">
+        <input type="checkbox" name="checks" value="{{ item.id }}" checked>
+        <span>
+          <strong>{{ item.name }}</strong>
+          <small>{{ item.description }}</small>
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="form-actions">
+      <button class="primary-button" type="submit" {{ "disabled" if not models else "" }}>提交检查</button>
+    </div>
+  </section>
+</form>
+{% endblock %}

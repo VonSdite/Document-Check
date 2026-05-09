@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}并发设置 - 文档智能门禁{% endblock %}
+
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">运行设置</p>
+    <h1>任务并发度</h1>
+  </div>
+</section>
+
+<section class="panel narrow-panel">
+  <form method="post" class="stack-form">
+    <label>
+      系统同时执行任务数
+      <input name="global_concurrency" type="number" min="1" step="1" value="{{ global_concurrency }}" required>
+    </label>
+    <label>
+      单个 IP 同时执行任务数
+      <input name="user_concurrency" type="number" min="1" step="1" value="{{ user_concurrency }}" required>
+    </label>
+    <button class="primary-button" type="submit">保存设置</button>
+  </form>
+</section>
+{% endblock %}

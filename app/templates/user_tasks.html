@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}我的任务 - 文档智能门禁{% endblock %}
+
+{% block content %}
+<section class="hero-band">
+  <div>
+    <p class="eyebrow">当前访问身份</p>
+    <h1>{{ user.username if user and user.username else "未标识用户" }}</h1>
+    <p class="muted">IP：<strong>{{ ip }}</strong>{% if user and user.username %} · 用户名：<strong>{{ user.username }}</strong>{% endif %}</p>
+  </div>
+  <div class="hero-actions">
+    {% if user and user.is_disabled %}
+    <span class="status-pill status-failed">已禁用提交</span>
+    {% else %}
+    <a class="primary-button" href="{{ url_for('user_new_task') }}">创建检查任务</a>
+    {% endif %}
+  </div>
+</section>
+
+<section class="metric-grid">
+  <div class="metric"><span>全部</span><strong>{{ stats.total }}</strong></div>
+  <div class="metric"><span>排队</span><strong>{{ stats.queued }}</strong></div>
+  <div class="metric"><span>检查中</span><strong>{{ stats.running }}</strong></div>
+  <div class="metric"><span>已完成</span><strong>{{ stats.completed }}</strong></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>我的检查任务</h2>
+      <p>仅显示当前直连 IP 创建的任务。</p>
+    </div>
+  </div>
+  {% if tasks %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>文档</th>
+          <th>模型</th>
+          <th>状态</th>
+          <th>创建时间</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+        <tr>
+          <td>
+            <a class="strong-link" href="{{ url_for('user_task_detail', task_id=task.id) }}">{{ task.original_filename }}</a>
+            <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</div>
+          </td>
+          <td>{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
+          <td>
+            <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
+            {% if task.status == "running" %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
+          </td>
+          <td>{{ task.created_at }}</td>
+          <td class="actions right">
+            <a class="small-button" href="{{ url_for('user_task_detail', task_id=task.id) }}">查看</a>
+            {% if task.status in ["queued", "running"] %}
+            <form method="post" action="{{ url_for('user_cancel_task', task_id=task.id) }}">
+              <button class="small-button warn" type="submit">取消</button>
+            </form>
+            {% endif %}
+            {% if task.status != "running" %}
+            <form method="post" action="{{ url_for('user_delete_task', task_id=task.id) }}" data-confirm="确认删除该历史任务？删除后不可恢复。">
+              <button class="small-button danger" type="submit">删除</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>还没有检查任务</h3>
+    <p>上传文档、选择检查项和模型后即可开始。</p>
+    {% if not (user and user.is_disabled) %}
+    <a class="primary-button" href="{{ url_for('user_new_task') }}">创建检查任务</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,8 @@
+{
+  "secret_key": "请替换为随机长字符串",
+  "admin": {
+    "username": "admin",
+    "password": "请替换为强密码"
+  },
+  "admin_url": "/_gate_ops_9f2c7a"
+}

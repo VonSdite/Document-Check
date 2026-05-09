@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>管理员登录 - 文档智能门禁</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="login-body">
+  <main class="login-panel">
+    <div class="login-brand">
+      <span class="brand-mark">文</span>
+      <div>
+        <strong>文档智能门禁</strong>
+        <small>管理面</small>
+      </div>
+    </div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div class="flash-stack">
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endwith %}
+    <form method="post" class="stack-form">
+      <label>
+        管理员账号
+        <input name="username" autocomplete="username" required>
+      </label>
+      <label>
+        管理员密码
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="primary-button full" type="submit">登录管理面</button>
+    </form>
+  </main>
+</body>
+</html>

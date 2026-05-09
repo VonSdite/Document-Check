@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}模型管理 - 文档智能门禁{% endblock %}
+
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">模型管理</p>
+    <h1>模型提供商</h1>
+  </div>
+</section>
+
+<section class="split-grid">
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>创建提供商</h2>
+        <p>按 OpenAI Chat Completions 兼容接口调用。</p>
+      </div>
+    </div>
+    <form method="post" class="stack-form">
+      <label>提供商名称<input name="name" placeholder="例如 OpenAI 兼容服务" required></label>
+      <label>API 地址<input name="api_base" placeholder="https://api.example.com/v1" required></label>
+      <label>API Key<input name="api_key" type="password" autocomplete="new-password"></label>
+      <label>代理服务<input name="proxy" placeholder="http://127.0.0.1:7890"></label>
+      <label>模型列表<textarea name="models" rows="5" placeholder="每行一个模型名称，例如&#10;gpt-4.1-mini&#10;qwen-plus" required></textarea></label>
+      <label class="switch-line"><input type="checkbox" name="is_active" checked><span>启用提供商</span></label>
+      <button class="primary-button" type="submit">创建提供商</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>调用格式</h2>
+        <p>系统会向 API 地址追加 `/chat/completions`，已填写完整路径时不会重复追加。</p>
+      </div>
+    </div>
+    <div class="code-box">
+      POST /chat/completions<br>
+      Authorization: Bearer API_KEY<br>
+      model: 选择的模型名称
+    </div>
+  </div>
+</section>
+
+<section class="provider-stack">
+  {% for provider in providers %}
+  <article class="panel">
+    <form method="post" class="provider-form">
+      <input type="hidden" name="provider_id" value="{{ provider.id }}">
+      <div class="panel-head">
+        <div>
+          <h2>{{ provider.name }}</h2>
+          <p>{{ provider.api_base }}</p>
+        </div>
+        <span class="status-pill {{ 'status-completed' if provider.is_active else 'status-canceled' }}">{{ "启用" if provider.is_active else "停用" }}</span>
+      </div>
+      <div class="form-grid">
+        <label>提供商名称<input name="name" value="{{ provider.name }}" required></label>
+        <label>API 地址<input name="api_base" value="{{ provider.api_base }}" required></label>
+        <label>API Key<input name="api_key" type="password" value="{{ provider.api_key or '' }}" autocomplete="new-password"></label>
+        <label>代理服务<input name="proxy" value="{{ provider.proxy or '' }}"></label>
+      </div>
+      <label>启用模型<textarea name="models" rows="4" required>{% for model in models_by_provider[provider.id] if model.enabled %}{{ model.model_name }}
+{% endfor %}</textarea></label>
+      <div class="model-chips">
+        {% for model in models_by_provider[provider.id] %}
+        <span class="chip {{ '' if model.enabled else 'muted-chip' }}">{{ model.model_name }}</span>
+        {% endfor %}
+      </div>
+      <div class="form-actions">
+        <label class="switch-line"><input type="checkbox" name="is_active" {{ "checked" if provider.is_active else "" }}><span>启用提供商</span></label>
+        <button class="secondary-button" type="submit">保存</button>
+        <button class="secondary-button danger" type="submit" name="action" value="delete" data-confirm-click="确认删除该模型提供商？相关模型会一并删除。">删除</button>
+      </div>
+    </form>
+  </article>
+  {% else %}
+  <div class="panel empty-state compact">
+    <h3>暂无模型提供商</h3>
+    <p>创建提供商后，用户创建任务时即可选择模型。</p>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

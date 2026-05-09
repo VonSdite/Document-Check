@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}任务详情 - 文档智能门禁{% endblock %}
+{% block extra_head %}
+  {% if task.status in ["queued", "running"] %}
+  <meta http-equiv="refresh" content="6">
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">任务 #{{ task.id }}</p>
+    <h1>{{ task.original_filename }}</h1>
+  </div>
+  <a class="ghost-button" href="{{ url_for('admin_tasks') if mode == 'admin' else url_for('user_tasks') }}">返回列表</a>
+</section>
+
+<section class="detail-grid">
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>任务状态</h2>
+        <p>{{ task.provider_name or "-" }} / {{ task.model_name }}</p>
+      </div>
+      <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
+    </div>
+    <div class="progress"><span style="width: {{ task.progress }}%"></span></div>
+    <dl class="meta-list">
+      <div><dt>归属 IP</dt><dd>{{ task.ip }}{% if task.username_snapshot %} · {{ task.username_snapshot }}{% endif %}</dd></div>
+      <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
+      <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>
+      <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
+      {% if task.started_at %}<div><dt>开始时间</dt><dd>{{ task.started_at }}</dd></div>{% endif %}
+      {% if task.finished_at %}<div><dt>结束时间</dt><dd>{{ task.finished_at }}</dd></div>{% endif %}
+    </dl>
+    <div class="form-actions">
+      {% if task.status in ["queued", "running"] %}
+      <form method="post" action="{{ url_for('admin_cancel_task' if mode == 'admin' else 'user_cancel_task', task_id=task.id) }}">
+        <button class="secondary-button warn" type="submit">取消任务</button>
+      </form>
+      {% endif %}
+      {% if task.status != "running" %}
+      <form method="post" action="{{ url_for('admin_delete_task' if mode == 'admin' else 'user_delete_task', task_id=task.id) }}" data-confirm="确认删除该任务？删除后不可恢复。">
+        <button class="secondary-button danger" type="submit">删除任务</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>检查摘要</h2>
+        <p>{{ task.summary or "等待检查结果生成。" }}</p>
+      </div>
+    </div>
+    {% if task.error %}
+    <div class="error-box">{{ task.error }}</div>
+    {% elif task.status in ["queued", "running"] %}
+    <div class="empty-state compact">
+      <h3>{{ "正在检查文档" if task.status == "running" else "任务正在排队" }}</h3>
+      <p>页面会自动刷新。</p>
+    </div>
+    {% else %}
+    <p class="muted">检查完成后，各检查项结果会在下方展示。</p>
+    {% endif %}
+  </div>
+</section>
+
+{% if results %}
+<section class="result-stack">
+  {% for result in results %}
+  <article class="panel result-panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">{{ result.code }}</p>
+        <h2>{{ result.name }}</h2>
+      </div>
+    </div>
+    <div class="result-text">{{ result.result }}</div>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}
