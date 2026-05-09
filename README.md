@@ -31,6 +31,27 @@ http://127.0.0.1:5000/_gate_ops_9f2c7a/login
 
 上线或给他人使用前，请修改 `config.local.json` 中的管理员密码、`secret_key` 和 `admin_url`。
 
+## 本地配置
+
+`config.local.json` 支持配置管理入口、监听地址和端口：
+
+```json
+{
+  "secret_key": "请替换为随机长字符串",
+  "admin": {
+    "username": "admin",
+    "password": "请替换为强密码"
+  },
+  "admin_url": "/_gate_ops_9f2c7a",
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5000
+  }
+}
+```
+
+`admin_url` 可以写成 `/_gate_ops_9f2c7a` 或 `_gate_ops_9f2c7a`，启动时会自动规范为合法路径。临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
+
 ## 模型配置
 
 进入管理面后，在“模型”页面创建提供商：
@@ -45,6 +66,6 @@ http://127.0.0.1:5000/_gate_ops_9f2c7a/login
 
 - `instance/document_check.sqlite3`：SQLite 数据库。
 - `instance/uploads/`：上传文档。
-- `config.local.json`：本地管理员账号、密码、隐藏管理入口和密钥。
+- `config.local.json`：本地管理员账号、密码、隐藏管理入口、监听地址、启动端口和密钥。
 
 以上文件均被 `.gitignore` 忽略，不应提交到仓库。
