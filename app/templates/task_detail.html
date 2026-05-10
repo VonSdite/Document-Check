@@ -29,7 +29,7 @@
       <dt>文件名称</dt>
       <dd>{{ task.original_filename }}</dd>
     </div>
-    <div><dt>归属 IP</dt><dd>{{ task.ip }}{% if task.username_snapshot %} · {{ task.username_snapshot }}{% endif %}</dd></div>
+    <div><dt>归属 IP</dt><dd>{{ task.ip }}{% if task.current_username %} · {{ task.current_username }}{% endif %}</dd></div>
     <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
     <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>
     <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>

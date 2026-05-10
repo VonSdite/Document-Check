@@ -172,23 +172,24 @@ def register_routes(app):
         params = []
         clauses = []
         if status:
-            clauses.append("status = ?")
+            clauses.append("t.status = ?")
             params.append(status)
         if ip:
-            clauses.append("ip LIKE ?")
+            clauses.append("t.ip LIKE ?")
             params.append(f"%{ip}%")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         total = get_db().execute(
-            f"SELECT COUNT(*) AS total FROM tasks {where}",
+            f"SELECT COUNT(*) AS total FROM tasks t {where}",
             tuple(params),
         ).fetchone()["total"]
         page = _bounded_page(page, total, TASKS_PER_PAGE)
         rows = get_db().execute(
             f"""
-            SELECT *
-            FROM tasks
+            SELECT t.*, u.username AS current_username
+            FROM tasks t
+            LEFT JOIN ip_users u ON u.ip = t.ip
             {where}
-            ORDER BY created_at DESC, id DESC
+            ORDER BY t.created_at DESC, t.id DESC
             LIMIT ? OFFSET ?
             """,
             tuple(params + [TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE]),
@@ -616,7 +617,15 @@ def admin_required(view):
 
 
 def _get_task_or_404(task_id: int):
-    task = get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    task = get_db().execute(
+        """
+        SELECT t.*, u.username AS current_username
+        FROM tasks t
+        LEFT JOIN ip_users u ON u.ip = t.ip
+        WHERE t.id = ?
+        """,
+        (task_id,),
+    ).fetchone()
     if task is None:
         abort(404)
     return task
@@ -624,7 +633,12 @@ def _get_task_or_404(task_id: int):
 
 def _get_user_task(task_id: int):
     task = get_db().execute(
-        "SELECT * FROM tasks WHERE id = ? AND ip = ?",
+        """
+        SELECT t.*, u.username AS current_username
+        FROM tasks t
+        LEFT JOIN ip_users u ON u.ip = t.ip
+        WHERE t.id = ? AND t.ip = ?
+        """,
         (task_id, client_ip()),
     ).fetchone()
     if task is None:

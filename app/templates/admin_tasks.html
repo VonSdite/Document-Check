@@ -115,7 +115,7 @@
             <a class="strong-link" href="{{ url_for('admin_download_task_document', task_id=task.id) }}" title="下载文档">{{ task.original_filename }}</a>
             <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</div>
           </td>
-          <td class="task-owner-cell">{{ task.ip }}{% if task.username_snapshot %}<div class="subline">{{ task.username_snapshot }}</div>{% endif %}</td>
+          <td class="task-owner-cell">{{ task.ip }}{% if task.current_username %}<div class="subline">{{ task.current_username }}</div>{% endif %}</td>
           <td class="task-model-cell">{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
           <td class="task-status-cell">
             <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>

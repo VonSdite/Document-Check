@@ -190,6 +190,49 @@ document.addEventListener("click", (event) => {
   }
 });
 
+const LAST_MODEL_KEY = "document-check:last-model-id";
+
+function readLastModelId() {
+  try {
+    return window.localStorage.getItem(LAST_MODEL_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeLastModelId(value) {
+  try {
+    window.localStorage.setItem(LAST_MODEL_KEY, value);
+  } catch {
+    // Ignore storage errors; the form still works without browser persistence.
+  }
+}
+
+function selectContainsValue(select, value) {
+  return Array.from(select.options).some((option) => option.value === value);
+}
+
+document.querySelectorAll('select[name="model_id"]').forEach((select) => {
+  if (!(select instanceof HTMLSelectElement)) {
+    return;
+  }
+  const lastModelId = readLastModelId();
+  if (lastModelId && selectContainsValue(select, lastModelId)) {
+    select.value = lastModelId;
+  }
+});
+
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  const select = form.querySelector('select[name="model_id"]');
+  if (select instanceof HTMLSelectElement && select.value) {
+    writeLastModelId(select.value);
+  }
+});
+
 function clearFileControl(target) {
   const control = target.closest(".file-upload-control");
   if (!control) {
@@ -293,6 +336,10 @@ document.addEventListener("change", (event) => {
     if (form) {
       form.dataset.proxyMode = input.value;
     }
+    return;
+  }
+  if (input instanceof HTMLSelectElement && input.name === "model_id") {
+    writeLastModelId(input.value);
     return;
   }
   if (!(input instanceof HTMLInputElement) || input.type !== "file") {
