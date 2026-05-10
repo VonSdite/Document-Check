@@ -21,9 +21,8 @@
       <nav class="nav">
         <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if request.endpoint in ['admin_dashboard', 'admin_tasks', 'admin_new_task', 'admin_task_detail'] else '' }}">检查任务</a>
         <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户管理</a>
-        <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型</a>
-        <a href="{{ url_for('admin_prompts') }}" class="{{ 'active' if request.endpoint == 'admin_prompts' else '' }}">提示词</a>
-        <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint == 'admin_settings' else '' }}">并发</a>
+        <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型管理</a>
+        <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] else '' }}">系统设置</a>
       </nav>
       <div class="nav-identity">{{ nav_identity }}</div>
       <div class="admin-tag">管理员</div>

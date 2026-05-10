@@ -144,6 +144,52 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("resize", closeConfirmPopover);
 window.addEventListener("scroll", closeConfirmPopover, true);
 
+function openModal(id) {
+  const modal = document.getElementById(id);
+  if (!(modal instanceof HTMLDialogElement)) {
+    return;
+  }
+  if (typeof modal.showModal === "function") {
+    modal.showModal();
+  } else {
+    modal.setAttribute("open", "");
+  }
+  const firstField = modal.querySelector("input:not([type='hidden']), select, textarea, button");
+  window.setTimeout(() => firstField?.focus());
+}
+
+function closeModal(target) {
+  const modal = target.closest("dialog");
+  if (!(modal instanceof HTMLDialogElement)) {
+    return;
+  }
+  if (typeof modal.close === "function") {
+    modal.close();
+  } else {
+    modal.removeAttribute("open");
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const opener = event.target.closest("[data-modal-open]");
+  if (opener) {
+    event.preventDefault();
+    openModal(opener.dataset.modalOpen);
+    return;
+  }
+
+  const closer = event.target.closest("[data-modal-close]");
+  if (closer) {
+    event.preventDefault();
+    closeModal(closer);
+    return;
+  }
+
+  if (event.target instanceof HTMLDialogElement && event.target.classList.contains("modal")) {
+    event.target.close();
+  }
+});
+
 function clearFileControl(target) {
   const control = target.closest(".file-upload-control");
   if (!control) {

@@ -436,8 +436,30 @@ def register_routes(app):
     @app.route(f"{admin_prefix}/prompts", methods=["GET", "POST"])
     @admin_required
     def admin_prompts():
+        return redirect(url_for("admin_settings"))
+
+    @app.route(f"{admin_prefix}/settings", methods=["GET", "POST"])
+    @admin_required
+    def admin_settings():
         db = get_db()
         if request.method == "POST":
+            action = request.form.get("action", "concurrency")
+            if action == "concurrency":
+                try:
+                    global_concurrency = max(1, int(request.form.get("global_concurrency", "5")))
+                    user_concurrency = max(1, int(request.form.get("user_concurrency", "1")))
+                except ValueError:
+                    flash("并发度必须是正整数。", "error")
+                    return redirect(url_for("admin_settings"))
+                set_setting("global_concurrency", global_concurrency)
+                set_setting("user_concurrency", user_concurrency)
+                flash("并发设置已保存。", "success")
+                return redirect(url_for("admin_settings"))
+
+            if action != "prompt":
+                flash("未知设置操作。", "error")
+                return redirect(url_for("admin_settings"))
+
             item_id = request.form.get("item_id")
             name = request.form.get("name", "").strip()
             description = request.form.get("description", "").strip()
@@ -445,7 +467,7 @@ def register_routes(app):
             enabled = 1 if request.form.get("enabled") == "on" else 0
             if not item_id or not name or not prompt:
                 flash("检查项名称和提示词不能为空。", "error")
-                return redirect(url_for("admin_prompts"))
+                return redirect(url_for("admin_settings"))
             db.execute(
                 """
                 UPDATE check_items
@@ -456,27 +478,12 @@ def register_routes(app):
             )
             db.commit()
             flash("检查项提示词已保存。", "success")
-            return redirect(url_for("admin_prompts"))
+            return redirect(url_for("admin_settings"))
 
         items = db.execute("SELECT * FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
-        return render_template("admin_prompts.html", items=items)
-
-    @app.route(f"{admin_prefix}/settings", methods=["GET", "POST"])
-    @admin_required
-    def admin_settings():
-        if request.method == "POST":
-            try:
-                global_concurrency = max(1, int(request.form.get("global_concurrency", "5")))
-                user_concurrency = max(1, int(request.form.get("user_concurrency", "1")))
-            except ValueError:
-                flash("并发度必须是正整数。", "error")
-                return redirect(url_for("admin_settings"))
-            set_setting("global_concurrency", global_concurrency)
-            set_setting("user_concurrency", user_concurrency)
-            flash("并发设置已保存。", "success")
-            return redirect(url_for("admin_settings"))
         return render_template(
             "admin_settings.html",
+            items=items,
             global_concurrency=get_setting("global_concurrency", 5),
             user_concurrency=get_setting("user_concurrency", 1),
         )

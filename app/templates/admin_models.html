@@ -2,102 +2,137 @@
 
 {% block title %}模型管理 - 文档智能门禁{% endblock %}
 
+{% macro provider_modal(dialog_id, title, provider=None, models=[]) %}
+<dialog class="modal provider-modal" id="{{ dialog_id }}">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>{{ title }}</h2>
+      <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <form method="post" class="stack-form provider-modal-form" data-proxy-mode="{{ provider.proxy_mode if provider else 'direct' }}">
+      {% if provider %}<input type="hidden" name="provider_id" value="{{ provider.id }}">{% endif %}
+      <div class="form-grid">
+        <label>提供商名称<input name="name" value="{{ provider.name if provider else '' }}" placeholder="例如 OpenAI 兼容服务" required></label>
+        <div class="form-field">
+          <span class="field-with-help">
+            <span class="field-label">API 地址</span>
+            <span class="help-tip" tabindex="0" data-tip="兼容 OpenAI Chat Completions：POST /chat/completions，Authorization: Bearer API_KEY，model 为选择的模型名称。">?</span>
+          </span>
+          <input name="api_base" value="{{ provider.api_base if provider else '' }}" placeholder="https://api.example.com/v1" required>
+        </div>
+        <label>API Key<input name="api_key" type="password" value="{{ provider.api_key if provider and provider.api_key else '' }}" autocomplete="new-password"></label>
+        <label>代理模式
+          <select name="proxy_mode" class="proxy-mode-select">
+            {% set proxy_mode = provider.proxy_mode if provider else 'direct' %}
+            <option value="direct" {{ "selected" if proxy_mode == "direct" else "" }}>直连</option>
+            <option value="system" {{ "selected" if proxy_mode == "system" else "" }}>系统代理</option>
+            <option value="custom" {{ "selected" if proxy_mode == "custom" else "" }}>自定义代理</option>
+          </select>
+        </label>
+        <label class="proxy-custom-field">自定义代理<input name="proxy" value="{{ provider.proxy if provider and provider.proxy else '' }}" placeholder="http://127.0.0.1:7890"></label>
+        <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout if provider and provider.request_timeout else 3600 }}" required></label>
+        <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="200000" step="1000" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 60000 }}" required></label>
+      </div>
+      <label>模型列表<textarea name="models" rows="5" placeholder="每行一个模型名称" required>{% if provider %}{% for model in models if model.enabled %}{{ model.model_name }}
+{% endfor %}{% endif %}</textarea></label>
+      <div class="form-actions modal-actions">
+        <label class="switch-line"><input type="checkbox" name="is_active" {{ "checked" if not provider or provider.is_active else "" }}><span>启用</span></label>
+        <button class="secondary-button" type="button" data-modal-close>取消</button>
+        <button class="primary-button" type="submit">保存</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+{% endmacro %}
+
 {% block content %}
 <section class="page-title">
   <div>
-    <h1>模型提供商</h1>
+    <h1>模型管理</h1>
   </div>
+  <button class="primary-button" type="button" data-modal-open="provider-modal-new">添加提供商</button>
 </section>
 
-<section class="split-grid">
-  <div class="panel">
-    <div class="panel-head">
-      <div>
-        <h2>创建提供商</h2>
-        <p>按 OpenAI Chat Completions 兼容接口调用。</p>
-      </div>
-    </div>
-    <form method="post" class="stack-form" data-proxy-mode="direct">
-      <label>提供商名称<input name="name" placeholder="例如 OpenAI 兼容服务" required></label>
-      <label>API 地址<input name="api_base" placeholder="https://api.example.com/v1" required></label>
-      <label>API Key<input name="api_key" type="password" autocomplete="new-password"></label>
-      <label>代理模式
-        <select name="proxy_mode" class="proxy-mode-select">
-          <option value="direct" selected>直连</option>
-          <option value="system">系统代理</option>
-          <option value="custom">自定义代理</option>
-        </select>
-      </label>
-      <label class="proxy-custom-field">自定义代理<input name="proxy" placeholder="http://127.0.0.1:7890"></label>
-      <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="3600" required></label>
-      <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="200000" step="1000" value="60000" required></label>
-      <label>模型列表<textarea name="models" rows="5" placeholder="每行一个模型名称，例如&#10;gpt-4.1-mini&#10;qwen-plus" required></textarea></label>
-      <label class="switch-line"><input type="checkbox" name="is_active" checked><span>启用提供商</span></label>
-      <button class="primary-button" type="submit">创建提供商</button>
-    </form>
-  </div>
-
-  <div class="panel">
-    <div class="panel-head">
-      <div>
-        <h2>调用格式</h2>
-        <p>兼容 Chat Completions，超时按提供商设置。</p>
-      </div>
-    </div>
-    <div class="code-box">
-      POST /chat/completions<br>
-      Authorization: Bearer API_KEY<br>
-      model: 选择的模型名称
-    </div>
-  </div>
-</section>
-
-<section class="provider-stack">
-  {% for provider in providers %}
-  <article class="panel">
-    <form method="post" class="provider-form" data-proxy-mode="{{ provider.proxy_mode or 'direct' }}">
-      <input type="hidden" name="provider_id" value="{{ provider.id }}">
-      <div class="panel-head">
-        <div>
-          <h2>{{ provider.name }}</h2>
-          <p>{{ provider.api_base }}</p>
-        </div>
-        <span class="status-pill {{ 'status-completed' if provider.is_active else 'status-canceled' }}">{{ "启用" if provider.is_active else "停用" }}</span>
-      </div>
-      <div class="form-grid">
-        <label>提供商名称<input name="name" value="{{ provider.name }}" required></label>
-        <label>API 地址<input name="api_base" value="{{ provider.api_base }}" required></label>
-        <label>API Key<input name="api_key" type="password" value="{{ provider.api_key or '' }}" autocomplete="new-password"></label>
-        <label>代理模式
-          <select name="proxy_mode" class="proxy-mode-select">
-            <option value="direct" {{ "selected" if provider.proxy_mode == "direct" else "" }}>直连</option>
-            <option value="system" {{ "selected" if provider.proxy_mode == "system" else "" }}>系统代理</option>
-            <option value="custom" {{ "selected" if provider.proxy_mode == "custom" else "" }}>自定义代理</option>
-          </select>
-        </label>
-        <label class="proxy-custom-field">自定义代理<input name="proxy" value="{{ provider.proxy or '' }}" placeholder="http://127.0.0.1:7890"></label>
-        <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout or 3600 }}" required></label>
-        <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="200000" step="1000" value="{{ provider.max_input_chars or 60000 }}" required></label>
-      </div>
-      <label>启用模型<textarea name="models" rows="4" required>{% for model in models_by_provider[provider.id] if model.enabled %}{{ model.model_name }}
-{% endfor %}</textarea></label>
-      <div class="model-chips">
-        {% for model in models_by_provider[provider.id] %}
-        <span class="chip {{ '' if model.enabled else 'muted-chip' }}">{{ model.model_name }}</span>
+<section class="panel">
+  <div class="table-wrap">
+    <table class="provider-table">
+      <thead>
+        <tr>
+          <th>提供商</th>
+          <th>
+            <span class="table-heading-help">
+              API 地址
+              <span class="help-tip" tabindex="0" data-tip="兼容 OpenAI Chat Completions：POST /chat/completions，Authorization: Bearer API_KEY，model 为选择的模型名称。">?</span>
+            </span>
+          </th>
+          <th>模型</th>
+          <th>代理</th>
+          <th>限制</th>
+          <th>状态</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if providers %}
+        {% for provider in providers %}
+        <tr>
+          <td>
+            <strong>{{ provider.name }}</strong>
+            <div class="subline">更新 {{ provider.updated_at }}</div>
+          </td>
+          <td class="provider-api-cell">{{ provider.api_base }}</td>
+          <td>
+            <div class="model-chips">
+              {% for model in models_by_provider[provider.id] %}
+              <span class="chip {{ '' if model.enabled else 'muted-chip' }}">{{ model.model_name }}</span>
+              {% else %}
+              <span class="muted">无模型</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td>
+            {% if provider.proxy_mode == "system" %}
+            系统代理
+            {% elif provider.proxy_mode == "custom" %}
+            自定义代理
+            <div class="subline">{{ provider.proxy or "-" }}</div>
+            {% else %}
+            直连
+            {% endif %}
+          </td>
+          <td>
+            {{ provider.request_timeout or 3600 }} 秒
+            <div class="subline">{{ provider.max_input_chars or 60000 }} 字</div>
+          </td>
+          <td><span class="status-pill {{ 'status-completed' if provider.is_active else 'status-canceled' }}">{{ "启用" if provider.is_active else "停用" }}</span></td>
+          <td class="right">
+            <div class="task-actions">
+              <button class="small-button" type="button" data-modal-open="provider-modal-{{ provider.id }}">编辑</button>
+              <form method="post">
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="provider_id" value="{{ provider.id }}">
+                <button class="small-button danger" type="submit" data-confirm-click="确认删除该模型提供商？相关模型会一并删除。">删除</button>
+              </form>
+            </div>
+          </td>
+        </tr>
         {% endfor %}
-      </div>
-      <div class="form-actions">
-        <label class="switch-line"><input type="checkbox" name="is_active" {{ "checked" if provider.is_active else "" }}><span>启用提供商</span></label>
-        <button class="secondary-button" type="submit">保存</button>
-        <button class="secondary-button danger" type="submit" name="action" value="delete" data-confirm-click="确认删除该模型提供商？相关模型会一并删除。">删除</button>
-      </div>
-    </form>
-  </article>
-  {% else %}
-  <div class="panel empty-state compact">
-    <h3>暂无模型提供商</h3>
-    <p>创建提供商后，用户创建任务时即可选择模型。</p>
+        {% else %}
+        <tr>
+          <td colspan="7">
+            <div class="empty-state compact">
+              <h3>暂无提供商</h3>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
   </div>
-  {% endfor %}
 </section>
+
+{{ provider_modal("provider-modal-new", "添加提供商") }}
+{% for provider in providers %}
+{{ provider_modal("provider-modal-" ~ provider.id, "编辑提供商", provider, models_by_provider[provider.id]) }}
+{% endfor %}
 {% endblock %}
