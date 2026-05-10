@@ -10,7 +10,6 @@
       <div class="identity-line">
         <span>IP：<strong>{{ ip }}</strong></span>
         {% if user and user.username %}<span>用户：<strong>{{ user.username }}</strong></span>{% endif %}
-        <span class="help-tip" tabindex="0" data-tip="仅使用 remote_addr 直连 IP 识别用户和任务范围。">?</span>
       </div>
     </div>
     {% if user and user.is_disabled %}
@@ -57,9 +56,6 @@
       {% endfor %}
     </div>
   </div>
-  {% if not models %}
-  <div class="inline-warning">暂无可用模型，请联系管理员配置。</div>
-  {% endif %}
   {% else %}
   <div class="inline-warning">当前 IP 已禁用提交任务。</div>
   {% endif %}
@@ -74,10 +70,7 @@
 
 <section class="panel">
   <div class="panel-head compact-head">
-    <div class="title-with-help">
-      <h2>我的任务</h2>
-      <span class="help-tip" tabindex="0" data-tip="这里只显示当前直连 IP 创建的任务。">?</span>
-    </div>
+    <h2>我的任务</h2>
   </div>
   {% if tasks %}
   <div class="table-wrap">
@@ -122,6 +115,16 @@
       </tbody>
     </table>
   </div>
+  {% if pagination.pages > 1 %}
+  <nav class="pagination" aria-label="任务分页">
+    <span>共 {{ pagination.total }} 条，每页 {{ pagination.per_page }} 条</span>
+    <div>
+      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('user_tasks', page=pagination.prev_page) }}">上一页</a>
+      <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
+      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('user_tasks', page=pagination.next_page) }}">下一页</a>
+    </div>
+  </nav>
+  {% endif %}
   {% else %}
   <div class="empty-state compact">
     <h3>暂无任务</h3>

@@ -74,6 +74,16 @@
       </tbody>
     </table>
   </div>
+  {% if pagination.pages > 1 %}
+  <nav class="pagination" aria-label="任务分页">
+    <span>共 {{ pagination.total }} 条，每页 {{ pagination.per_page }} 条</span>
+    <div>
+      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('admin_tasks', status=status, ip=ip, page=pagination.prev_page) }}">上一页</a>
+      <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
+      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('admin_tasks', status=status, ip=ip, page=pagination.next_page) }}">下一页</a>
+    </div>
+  </nav>
+  {% endif %}
   {% else %}
   <div class="empty-state compact">
     <h3>没有匹配任务</h3>

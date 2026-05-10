@@ -28,6 +28,7 @@ STATUS_LABELS = {
     "failed": "失败",
     "canceled": "已取消",
 }
+TASKS_PER_PAGE = 20
 
 
 def register_routes(app):
@@ -49,22 +50,30 @@ def register_routes(app):
                 flash("当前 IP 已被管理员禁用，不能提交任务。", "error")
                 return redirect(url_for("user_tasks"))
             return create_task_for_ip(ip, user, admin_created=False)
+        page = _page_arg()
+        total = get_db().execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE ip = ?",
+            (ip,),
+        ).fetchone()["total"]
+        page = _bounded_page(page, total, TASKS_PER_PAGE)
         rows = get_db().execute(
             """
             SELECT *
             FROM tasks
             WHERE ip = ?
             ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
             """,
-            (ip,),
+            (ip, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
         ).fetchall()
-        stats = _task_stats(rows)
+        stats = _task_stats_for_where("ip = ?", (ip,))
         return render_template(
             "user_tasks.html",
             ip=ip,
             user=user,
             tasks=rows,
             stats=stats,
+            pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(),
             models=get_enabled_models(),
         )
@@ -161,6 +170,7 @@ def register_routes(app):
     def admin_tasks():
         status = request.args.get("status", "")
         ip = request.args.get("ip", "").strip()
+        page = _page_arg()
         params = []
         clauses = []
         if status:
@@ -170,17 +180,28 @@ def register_routes(app):
             clauses.append("ip LIKE ?")
             params.append(f"%{ip}%")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        total = get_db().execute(
+            f"SELECT COUNT(*) AS total FROM tasks {where}",
+            tuple(params),
+        ).fetchone()["total"]
+        page = _bounded_page(page, total, TASKS_PER_PAGE)
         rows = get_db().execute(
             f"""
             SELECT *
             FROM tasks
             {where}
             ORDER BY created_at DESC, id DESC
-            LIMIT 200
+            LIMIT ? OFFSET ?
             """,
-            tuple(params),
+            tuple(params + [TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE]),
         ).fetchall()
-        return render_template("admin_tasks.html", tasks=rows, status=status, ip=ip)
+        return render_template(
+            "admin_tasks.html",
+            tasks=rows,
+            status=status,
+            ip=ip,
+            pagination=_pagination(page, total, TASKS_PER_PAGE),
+        )
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
     @admin_required
@@ -605,9 +626,44 @@ def _task_results(task):
         return []
 
 
-def _task_stats(rows):
-    stats = {"total": len(rows), "queued": 0, "running": 0, "completed": 0, "failed": 0, "canceled": 0}
+def _page_arg() -> int:
+    try:
+        page = int(request.args.get("page", "1"))
+    except ValueError:
+        return 1
+    return max(1, page)
+
+
+def _bounded_page(page: int, total: int, per_page: int) -> int:
+    pages = max(1, (total + per_page - 1) // per_page)
+    return min(max(1, page), pages)
+
+
+def _pagination(page: int, total: int, per_page: int) -> dict:
+    pages = max(1, (total + per_page - 1) // per_page)
+    return {
+        "page": page,
+        "pages": pages,
+        "per_page": per_page,
+        "total": total,
+        "has_prev": page > 1,
+        "has_next": page < pages,
+        "prev_page": max(1, page - 1),
+        "next_page": min(pages, page + 1),
+        "start": 0 if total == 0 else (page - 1) * per_page + 1,
+        "end": min(total, page * per_page),
+    }
+
+
+def _task_stats_for_where(where: str, params: tuple) -> dict:
+    stats = {"total": 0, "queued": 0, "running": 0, "completed": 0, "failed": 0, "canceled": 0}
+    rows = get_db().execute(
+        f"SELECT status, COUNT(*) AS total FROM tasks WHERE {where} GROUP BY status",
+        params,
+    ).fetchall()
     for row in rows:
+        count = row["total"]
+        stats["total"] += count
         if row["status"] in stats:
-            stats[row["status"]] += 1
+            stats[row["status"]] = count
     return stats
