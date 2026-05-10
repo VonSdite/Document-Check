@@ -1031,15 +1031,17 @@ td {
 
 .progress span {
   display: block;
+  max-width: 100%;
   height: 100%;
   background: linear-gradient(90deg, var(--primary), var(--blue));
 }
 
 .progress.mini {
-  width: 110px;
+  width: 100%;
+  max-width: 110px;
   height: 6px;
   margin: 7px 0 0;
-  display: inline-block;
+  display: block;
 }
 
 .empty-state {

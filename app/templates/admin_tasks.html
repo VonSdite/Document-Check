@@ -73,7 +73,7 @@
                 <button class="small-button warn" type="submit">取消</button>
               </form>
               {% endif %}
-              {% if task.status != "running" %}
+              {% if task.status not in ["queued", "running"] %}
               <form method="post" action="{{ url_for('admin_delete_task', task_id=task.id) }}" data-confirm="确认删除该任务？删除后不可恢复。">
                 <button class="small-button danger" type="submit">删除</button>
               </form>
