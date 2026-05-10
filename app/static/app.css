@@ -1441,12 +1441,6 @@ td {
   font-weight: 800;
 }
 
-.muted-chip {
-  background: #eceff1;
-  color: #6d7672;
-  text-decoration: line-through;
-}
-
 .flash-stack {
   position: fixed;
   top: 86px;

@@ -86,7 +86,7 @@
           <td>
             <div class="model-chips">
               {% for model in models_by_provider[provider.id] %}
-              <span class="chip {{ '' if model.enabled else 'muted-chip' }}">{{ model.model_name }}</span>
+              <span class="chip">{{ model.model_name }}</span>
               {% else %}
               <span class="muted">无模型</span>
               {% endfor %}

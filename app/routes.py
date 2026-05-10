@@ -341,7 +341,7 @@ def register_routes(app):
                 return redirect(url_for("admin_models"))
             is_active = 1 if request.form.get("is_active") == "on" else 0
             models_text = request.form.get("models", "")
-            model_names = [line.strip() for line in models_text.splitlines() if line.strip()]
+            model_names = list(dict.fromkeys(line.strip() for line in models_text.splitlines() if line.strip()))
             if proxy_mode not in PROXY_MODES:
                 proxy_mode = "direct"
             if proxy_mode == "custom" and not proxy:
@@ -423,7 +423,8 @@ def register_routes(app):
                 SELECT *
                 FROM provider_models
                 WHERE provider_id = ?
-                ORDER BY enabled DESC, model_name ASC
+                  AND enabled = 1
+                ORDER BY model_name ASC
                 """,
                 (provider["id"],),
             ).fetchall()
