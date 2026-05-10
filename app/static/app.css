@@ -290,31 +290,6 @@ td {
   font-size: 12px;
 }
 
-.file-subline,
-.report-file-value {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-.subline-link {
-  color: var(--primary-strong);
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.subline-link:hover {
-  color: var(--primary);
-  text-decoration: underline;
-}
-
-.report-file-name {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .hero-actions,
 .actions,
 .form-actions {

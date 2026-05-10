@@ -110,7 +110,7 @@ def register_routes(app):
     @app.get("/tasks/<int:task_id>/export")
     def user_export_task(task_id):
         task = _get_user_task(task_id)
-        return _export_task_report(task, "user_download_task_document")
+        return _export_task_report(task)
 
     @app.get("/tasks/<int:task_id>/document")
     def user_download_task_document(task_id):
@@ -253,7 +253,7 @@ def register_routes(app):
     @admin_required
     def admin_export_task(task_id):
         task = _get_task_or_404(task_id)
-        return _export_task_report(task, "admin_download_task_document")
+        return _export_task_report(task)
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/document")
     @admin_required
@@ -737,14 +737,13 @@ def _task_results(task):
         return []
 
 
-def _export_task_report(task, document_endpoint: str):
+def _export_task_report(task):
     app_css = (Path(current_app.static_folder) / "app.css").read_text(encoding="utf-8")
     html = render_template(
         "task_report_export.html",
         task=task,
         results=_task_results(task),
         app_css=app_css,
-        document_download_url=url_for(document_endpoint, task_id=task["id"], _external=True),
     )
     filename = f"document-check-report-{task['id']}.html"
     return Response(
