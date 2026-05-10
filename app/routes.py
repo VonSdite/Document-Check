@@ -30,6 +30,9 @@ STATUS_LABELS = {
 }
 TASKS_PER_PAGE = 20
 PROXY_MODES = {"direct", "system", "custom"}
+PROVIDER_TIMEOUT_DEFAULT = 180
+PROVIDER_TIMEOUT_MIN = 30
+PROVIDER_TIMEOUT_MAX = 7200
 
 
 def register_routes(app):
@@ -324,6 +327,11 @@ def register_routes(app):
             api_key = request.form.get("api_key", "").strip()
             proxy_mode = request.form.get("proxy_mode", "direct")
             proxy = request.form.get("proxy", "").strip()
+            try:
+                request_timeout = int(request.form.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)))
+            except ValueError:
+                flash("超时时间必须是整数秒。", "error")
+                return redirect(url_for("admin_models"))
             is_active = 1 if request.form.get("is_active") == "on" else 0
             models_text = request.form.get("models", "")
             model_names = [line.strip() for line in models_text.splitlines() if line.strip()]
@@ -337,6 +345,9 @@ def register_routes(app):
             if not name or not api_base:
                 flash("提供商名称和 API 地址不能为空。", "error")
                 return redirect(url_for("admin_models"))
+            if request_timeout < PROVIDER_TIMEOUT_MIN or request_timeout > PROVIDER_TIMEOUT_MAX:
+                flash(f"超时时间需在 {PROVIDER_TIMEOUT_MIN}-{PROVIDER_TIMEOUT_MAX} 秒之间。", "error")
+                return redirect(url_for("admin_models"))
             if not model_names:
                 flash("至少需要填写一个模型名称。", "error")
                 return redirect(url_for("admin_models"))
@@ -345,19 +356,19 @@ def register_routes(app):
                 db.execute(
                     """
                     UPDATE providers
-                    SET name = ?, api_base = ?, api_key = ?, proxy_mode = ?, proxy = ?, is_active = ?, updated_at = ?
+                    SET name = ?, api_base = ?, api_key = ?, proxy_mode = ?, proxy = ?, request_timeout = ?, is_active = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (name, api_base, api_key, proxy_mode, proxy, is_active, now_text(), provider_id),
+                    (name, api_base, api_key, proxy_mode, proxy, request_timeout, is_active, now_text(), provider_id),
                 )
                 pid = int(provider_id)
             else:
                 cursor = db.execute(
                     """
-                    INSERT INTO providers(name, api_base, api_key, proxy_mode, proxy, is_active, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO providers(name, api_base, api_key, proxy_mode, proxy, request_timeout, is_active, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (name, api_base, api_key, proxy_mode, proxy, is_active, now_text(), now_text()),
+                    (name, api_base, api_key, proxy_mode, proxy, request_timeout, is_active, now_text(), now_text()),
                 )
                 pid = cursor.lastrowid
 

@@ -49,6 +49,7 @@ def init_db():
             api_key TEXT,
             proxy_mode TEXT NOT NULL DEFAULT 'direct',
             proxy TEXT,
+            request_timeout INTEGER NOT NULL DEFAULT 180,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -126,6 +127,8 @@ def _ensure_provider_columns(db):
             WHERE proxy IS NOT NULL AND TRIM(proxy) != ''
             """
         )
+    if "request_timeout" not in columns:
+        db.execute("ALTER TABLE providers ADD COLUMN request_timeout INTEGER NOT NULL DEFAULT 180")
 
 
 def set_setting(key: str, value):

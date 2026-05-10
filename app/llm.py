@@ -14,6 +14,7 @@ def run_check(
     api_key: Optional[str],
     proxy_mode: str = "direct",
     proxy: Optional[str] = None,
+    request_timeout: int = 180,
     model_name: str,
     check_name: str,
     prompt: str,
@@ -53,7 +54,7 @@ def run_check(
             request_kwargs = {
                 "headers": headers,
                 "json": payload,
-                "timeout": 180,
+                "timeout": request_timeout,
             }
             if proxy_mode == "custom":
                 if not proxy:
@@ -64,7 +65,7 @@ def run_check(
                 session.trust_env = False
             response = session.post(endpoint, **request_kwargs)
     except requests.ReadTimeout as exc:
-        raise LLMError("模型服务处理超时：已连接到服务，但 180 秒内没有返回结果") from exc
+        raise LLMError(f"模型服务处理超时：已连接到服务，但 {request_timeout} 秒内没有返回结果") from exc
     except requests.RequestException as exc:
         raise LLMError(f"模型服务请求失败：{exc}") from exc
 

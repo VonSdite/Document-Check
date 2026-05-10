@@ -154,6 +154,7 @@ class TaskScheduler:
                         api_key=provider["api_key"],
                         proxy_mode=provider["proxy_mode"],
                         proxy=provider["proxy"],
+                        request_timeout=provider["request_timeout"],
                         model_name=model["model_name"],
                         check_name=item["name"],
                         prompt=item["prompt"],
