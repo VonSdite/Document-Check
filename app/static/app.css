@@ -849,6 +849,12 @@ td {
   accent-color: var(--primary);
 }
 
+.check-chip-tip {
+  width: 16px;
+  height: 16px;
+  font-size: 11px;
+}
+
 .inline-warning {
   margin-top: 12px;
   padding: 10px 12px;

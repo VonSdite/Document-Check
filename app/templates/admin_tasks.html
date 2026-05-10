@@ -51,9 +51,10 @@
     </div>
     <div class="check-chip-grid">
       {% for item in check_items %}
-      <label class="check-chip" title="{{ item.description or item.name }}">
+      <label class="check-chip">
         <input type="checkbox" name="checks" value="{{ item.id }}" checked>
         <span>{{ item.name }}</span>
+        <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
       </label>
       {% endfor %}
     </div>
