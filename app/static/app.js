@@ -20,6 +20,45 @@ document.addEventListener("click", (event) => {
   }
 });
 
+function clearFileControl(target) {
+  const control = target.closest(".file-upload-control");
+  if (!control) {
+    return;
+  }
+  const input = control.querySelector(".file-input");
+  const name = control.querySelector(".file-name");
+  if (input instanceof HTMLInputElement) {
+    input.value = "";
+  }
+  if (name) {
+    name.textContent = "未选择文件";
+    name.removeAttribute("title");
+  }
+  control.classList.remove("has-file");
+}
+
+document.addEventListener("click", (event) => {
+  const clear = event.target.closest(".file-clear");
+  if (!clear) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  clearFileControl(clear);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  const clear = event.target.closest(".file-clear");
+  if (!clear) {
+    return;
+  }
+  event.preventDefault();
+  clearFileControl(clear);
+});
+
 document.addEventListener("change", (event) => {
   const input = event.target;
   if (!(input instanceof HTMLInputElement) || input.type !== "file") {
@@ -30,5 +69,11 @@ document.addEventListener("change", (event) => {
   if (!name) {
     return;
   }
-  name.textContent = input.files?.[0]?.name || "未选择文件";
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+  name.textContent = file.name;
+  name.setAttribute("title", file.name);
+  control.classList.add("has-file");
 });
