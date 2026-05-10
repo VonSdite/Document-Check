@@ -1,7 +1,7 @@
 import hmac
 import json
 import os
-import uuid
+import re
 from functools import wraps
 from pathlib import Path
 
@@ -13,10 +13,10 @@ from flask import (
     render_template,
     request,
     Response,
+    send_file,
     session,
     url_for,
 )
-from werkzeug.utils import secure_filename
 
 from .db import get_db, get_setting, now_text, set_setting
 from .documents import allowed_file, extension_of
@@ -37,6 +37,7 @@ PROVIDER_TIMEOUT_MAX = 7200
 PROVIDER_INPUT_LIMIT_DEFAULT = 60000
 PROVIDER_INPUT_LIMIT_MIN = 5000
 PROVIDER_INPUT_LIMIT_MAX = 200000
+INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
 
 
 def register_routes(app):
@@ -109,7 +110,12 @@ def register_routes(app):
     @app.get("/tasks/<int:task_id>/export")
     def user_export_task(task_id):
         task = _get_user_task(task_id)
-        return _export_task_report(task)
+        return _export_task_report(task, "user_download_task_document")
+
+    @app.get("/tasks/<int:task_id>/document")
+    def user_download_task_document(task_id):
+        task = _get_user_task(task_id)
+        return _download_task_document(task, "user_task_detail")
 
     @app.post("/tasks/<int:task_id>/cancel")
     def user_cancel_task(task_id):
@@ -247,7 +253,13 @@ def register_routes(app):
     @admin_required
     def admin_export_task(task_id):
         task = _get_task_or_404(task_id)
-        return _export_task_report(task)
+        return _export_task_report(task, "admin_download_task_document")
+
+    @app.get(f"{admin_prefix}/tasks/<int:task_id>/document")
+    @admin_required
+    def admin_download_task_document(task_id):
+        task = _get_task_or_404(task_id)
+        return _download_task_document(task, "admin_task_detail")
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/cancel")
     @admin_required
@@ -558,10 +570,9 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         return _back_to_task_form(admin_created)
 
     file_type = extension_of(upload.filename)
-    safe_name = secure_filename(upload.filename)
-    original_filename = safe_name if "." in safe_name else f"document.{file_type}"
-    stored_filename = f"{uuid.uuid4().hex}.{file_type}"
-    destination = Path(current_app.config["UPLOAD_FOLDER"]) / stored_filename
+    original_filename = _clean_upload_filename(upload.filename, file_type)
+    created_at = now_text()
+    stored_filename, destination = _upload_destination(original_filename, ip, created_at, file_type)
     upload.save(destination)
     file_size = os.path.getsize(destination)
     username = user["username"] if user and user["username"] else None
@@ -586,8 +597,8 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
             model["provider_name"],
             model["id"],
             model["model_name"],
-            now_text(),
-            now_text(),
+            created_at,
+            created_at,
         ),
     )
     db.commit()
@@ -655,12 +666,66 @@ def _delete_task(task):
         flash("运行中的任务不能直接删除，请先取消后再删除。", "error")
         return False
     db = get_db()
-    upload_path = Path(current_app.config["UPLOAD_FOLDER"]) / task["stored_filename"]
+    upload_path = _task_upload_path(task)
     if upload_path.exists():
         upload_path.unlink()
     db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
     db.commit()
     return True
+
+
+def _download_task_document(task, fallback_endpoint: str):
+    upload_path = _task_upload_path(task)
+    if not upload_path.is_file():
+        flash("文档已删除，无法下载。", "error")
+        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
+    return send_file(
+        upload_path,
+        as_attachment=True,
+        download_name=task["original_filename"],
+    )
+
+
+def _task_upload_path(task) -> Path:
+    return Path(current_app.config["UPLOAD_FOLDER"]) / Path(task["stored_filename"]).name
+
+
+def _clean_upload_filename(filename: str, file_type: str) -> str:
+    name = Path(filename.replace("\\", "/")).name.strip()
+    name = _safe_filename_part(name, f"document.{file_type}")
+    if "." not in name:
+        name = f"{name}.{file_type}"
+    return name
+
+
+def _upload_destination(original_filename: str, ip: str, created_at: str, file_type: str) -> tuple[str, Path]:
+    upload_dir = Path(current_app.config["UPLOAD_FOLDER"])
+    timestamp = re.sub(r"\D", "", created_at) or now_text().replace("-", "").replace(":", "").replace(" ", "")
+    stem = _limit_utf8_bytes(_safe_filename_part(Path(original_filename).stem, "document"), 140)
+    ip_part = _limit_utf8_bytes(_safe_filename_part(ip, "0.0.0.0"), 80)
+    stored_filename = f"{stem}_{ip_part}_{timestamp}.{file_type}"
+    destination = upload_dir / stored_filename
+    if not destination.exists():
+        return stored_filename, destination
+
+    for index in range(2, 1000):
+        candidate = f"{stem}_{ip_part}_{timestamp}-{index}.{file_type}"
+        destination = upload_dir / candidate
+        if not destination.exists():
+            return candidate, destination
+    raise RuntimeError("无法保存上传文档，请稍后再试")
+
+
+def _safe_filename_part(value: str, fallback: str) -> str:
+    value = INVALID_FILENAME_CHARS.sub("_", value).strip(" ._")
+    value = re.sub(r"_+", "_", value)
+    return value or fallback
+
+
+def _limit_utf8_bytes(value: str, max_bytes: int) -> str:
+    while len(value.encode("utf-8")) > max_bytes:
+        value = value[:-1]
+    return value or "document"
 
 
 def _task_results(task):
@@ -672,13 +737,14 @@ def _task_results(task):
         return []
 
 
-def _export_task_report(task):
+def _export_task_report(task, document_endpoint: str):
     app_css = (Path(current_app.static_folder) / "app.css").read_text(encoding="utf-8")
     html = render_template(
         "task_report_export.html",
         task=task,
         results=_task_results(task),
         app_css=app_css,
+        document_download_url=url_for(document_endpoint, task_id=task["id"], _external=True),
     )
     filename = f"document-check-report-{task['id']}.html"
     return Response(

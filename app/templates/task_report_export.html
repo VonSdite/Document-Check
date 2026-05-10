@@ -45,7 +45,13 @@
       </div>
       <div class="progress"><span style="width: {{ task.progress }}%"></span></div>
       <dl class="meta-list report-meta-list">
-        <div class="report-file-meta"><dt>文件名称</dt><dd>{{ task.original_filename }}</dd></div>
+        <div class="report-file-meta">
+          <dt>文件名称</dt>
+          <dd class="report-file-value">
+            <span class="report-file-name">{{ task.original_filename }}</span>
+            <a class="subline-link" href="{{ document_download_url }}">下载文档</a>
+          </dd>
+        </div>
         <div><dt>归属 IP</dt><dd>{{ task.ip }}{% if task.username_snapshot %} · {{ task.username_snapshot }}{% endif %}</dd></div>
         <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
         <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>

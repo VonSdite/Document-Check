@@ -47,7 +47,10 @@
         <tr>
           <td>
             <a class="strong-link" href="{{ url_for('admin_task_detail', task_id=task.id) }}">{{ task.original_filename }}</a>
-            <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</div>
+            <div class="subline file-subline">
+              <span>{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</span>
+              <a class="subline-link" href="{{ url_for('admin_download_task_document', task_id=task.id) }}">下载文档</a>
+            </div>
           </td>
           <td>{{ task.ip }}{% if task.username_snapshot %}<div class="subline">{{ task.username_snapshot }}</div>{% endif %}</td>
           <td>{{ task.provider_name or "-" }} / {{ task.model_name }}</td>

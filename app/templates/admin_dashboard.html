@@ -45,7 +45,10 @@
       <tbody>
         {% for task in recent_tasks %}
         <tr>
-          <td><a class="strong-link" href="{{ url_for('admin_task_detail', task_id=task.id) }}">{{ task.original_filename }}</a></td>
+          <td>
+            <a class="strong-link" href="{{ url_for('admin_task_detail', task_id=task.id) }}">{{ task.original_filename }}</a>
+            <div class="subline file-subline"><a class="subline-link" href="{{ url_for('admin_download_task_document', task_id=task.id) }}">下载文档</a></div>
+          </td>
           <td>{{ task.ip }}{% if task.username_snapshot %}<div class="subline">{{ task.username_snapshot }}</div>{% endif %}</td>
           <td>{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
           <td><span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span></td>
