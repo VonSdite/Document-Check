@@ -23,7 +23,7 @@
       单个 IP 同时执行任务数
       <input name="user_concurrency" type="number" min="1" step="1" value="{{ user_concurrency }}" required>
     </label>
-    <button class="primary-button" type="submit">保存设置</button>
+    <button class="primary-button settings-save-button" type="submit">保存设置</button>
   </form>
 </section>
 
@@ -46,11 +46,17 @@
       </div>
       <div class="form-grid">
         <label>检查项名称<input name="name" value="{{ item.name }}" required></label>
-        <label>说明<input name="description" value="{{ item.description or '' }}"></label>
+        <div class="form-field">
+          <span class="field-with-help">
+            <span class="field-label">悬浮提示</span>
+            <span class="help-tip" tabindex="0" data-tip="显示在创建检查的检查项悬浮提示中。">?</span>
+          </span>
+          <input name="description" value="{{ item.description or '' }}">
+        </div>
       </div>
       <label>提示词<textarea name="prompt" rows="10" required>{{ item.prompt }}</textarea></label>
       <div class="form-actions">
-        <button class="secondary-button" type="submit">保存提示词</button>
+        <button class="primary-button settings-save-button" type="submit">保存提示词</button>
       </div>
     </form>
   </article>

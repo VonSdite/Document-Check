@@ -523,7 +523,7 @@ td {
   align-items: end;
 }
 
-.settings-concurrency-form .primary-button {
+.settings-save-button {
   min-width: 128px;
 }
 
