@@ -63,6 +63,8 @@ def run_check(
             elif proxy_mode != "system":
                 session.trust_env = False
             response = session.post(endpoint, **request_kwargs)
+    except requests.ReadTimeout as exc:
+        raise LLMError("模型服务处理超时：已连接到服务，但 180 秒内没有返回结果") from exc
     except requests.RequestException as exc:
         raise LLMError(f"模型服务请求失败：{exc}") from exc
 

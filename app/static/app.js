@@ -9,6 +9,23 @@ document.addEventListener("submit", (event) => {
   }
 });
 
+function hideToast(toast) {
+  toast.classList.add("is-hiding");
+  window.setTimeout(() => toast.remove(), 220);
+}
+
+document.querySelectorAll(".flash").forEach((toast) => {
+  window.setTimeout(() => hideToast(toast), 4200);
+});
+
+document.addEventListener("click", (event) => {
+  const toast = event.target.closest(".flash");
+  if (!toast) {
+    return;
+  }
+  hideToast(toast);
+});
+
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-confirm-click]");
   if (!target) {

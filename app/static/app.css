@@ -1015,18 +1015,33 @@ td {
 }
 
 .flash-stack {
+  position: fixed;
+  top: 86px;
+  right: max(18px, calc((100vw - var(--content-width)) / 2));
+  z-index: 80;
+  width: min(420px, calc(100vw - 28px));
   display: grid;
   gap: 10px;
-  margin-bottom: 18px;
+  pointer-events: none;
 }
 
 .flash {
+  width: 100%;
   padding: 12px 14px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: #fff;
   color: var(--text);
+  text-align: left;
   box-shadow: 0 8px 20px rgba(91, 130, 189, 0.05);
+  pointer-events: auto;
+  animation: toast-in 0.18s ease-out;
+}
+
+.flash.is-hiding {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
 .flash.success {
@@ -1039,6 +1054,18 @@ td {
   background: #fde8e4;
   border-color: #fac5bd;
   color: var(--danger);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .login-body {
