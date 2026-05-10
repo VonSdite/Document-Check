@@ -29,6 +29,7 @@ STATUS_LABELS = {
     "canceled": "已取消",
 }
 TASKS_PER_PAGE = 20
+PROXY_MODES = {"direct", "system", "custom"}
 
 
 def register_routes(app):
@@ -321,9 +322,18 @@ def register_routes(app):
             name = request.form.get("name", "").strip()
             api_base = request.form.get("api_base", "").strip()
             api_key = request.form.get("api_key", "").strip()
+            proxy_mode = request.form.get("proxy_mode", "direct")
+            proxy = request.form.get("proxy", "").strip()
             is_active = 1 if request.form.get("is_active") == "on" else 0
             models_text = request.form.get("models", "")
             model_names = [line.strip() for line in models_text.splitlines() if line.strip()]
+            if proxy_mode not in PROXY_MODES:
+                proxy_mode = "direct"
+            if proxy_mode == "custom" and not proxy:
+                flash("自定义代理模式需要填写代理地址。", "error")
+                return redirect(url_for("admin_models"))
+            if proxy_mode != "custom":
+                proxy = ""
             if not name or not api_base:
                 flash("提供商名称和 API 地址不能为空。", "error")
                 return redirect(url_for("admin_models"))
@@ -335,19 +345,19 @@ def register_routes(app):
                 db.execute(
                     """
                     UPDATE providers
-                    SET name = ?, api_base = ?, api_key = ?, proxy = ?, is_active = ?, updated_at = ?
+                    SET name = ?, api_base = ?, api_key = ?, proxy_mode = ?, proxy = ?, is_active = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (name, api_base, api_key, "", is_active, now_text(), provider_id),
+                    (name, api_base, api_key, proxy_mode, proxy, is_active, now_text(), provider_id),
                 )
                 pid = int(provider_id)
             else:
                 cursor = db.execute(
                     """
-                    INSERT INTO providers(name, api_base, api_key, proxy, is_active, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO providers(name, api_base, api_key, proxy_mode, proxy, is_active, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (name, api_base, api_key, "", is_active, now_text(), now_text()),
+                    (name, api_base, api_key, proxy_mode, proxy, is_active, now_text(), now_text()),
                 )
                 pid = cursor.lastrowid
 

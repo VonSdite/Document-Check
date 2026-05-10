@@ -832,6 +832,14 @@ td {
   gap: 14px;
 }
 
+.proxy-custom-field {
+  display: none;
+}
+
+[data-proxy-mode="custom"] .proxy-custom-field {
+  display: grid;
+}
+
 .check-grid {
   display: grid;
   gap: 12px;

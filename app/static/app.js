@@ -61,6 +61,13 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input instanceof HTMLSelectElement && input.classList.contains("proxy-mode-select")) {
+    const form = input.closest("form");
+    if (form) {
+      form.dataset.proxyMode = input.value;
+    }
+    return;
+  }
   if (!(input instanceof HTMLInputElement) || input.type !== "file") {
     return;
   }

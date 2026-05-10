@@ -47,6 +47,7 @@ def init_db():
             name TEXT NOT NULL,
             api_base TEXT NOT NULL,
             api_key TEXT,
+            proxy_mode TEXT NOT NULL DEFAULT 'direct',
             proxy TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -106,8 +107,25 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         """
     )
+    _ensure_provider_columns(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
+
+
+def _ensure_provider_columns(db):
+    columns = {
+        row["name"]
+        for row in db.execute("PRAGMA table_info(providers)").fetchall()
+    }
+    if "proxy_mode" not in columns:
+        db.execute("ALTER TABLE providers ADD COLUMN proxy_mode TEXT NOT NULL DEFAULT 'direct'")
+        db.execute(
+            """
+            UPDATE providers
+            SET proxy_mode = 'custom'
+            WHERE proxy IS NOT NULL AND TRIM(proxy) != ''
+            """
+        )
 
 
 def set_setting(key: str, value):

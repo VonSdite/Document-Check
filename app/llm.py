@@ -12,6 +12,8 @@ def run_check(
     *,
     api_base: str,
     api_key: Optional[str],
+    proxy_mode: str = "direct",
+    proxy: Optional[str] = None,
     model_name: str,
     check_name: str,
     prompt: str,
@@ -47,13 +49,20 @@ def run_check(
 
     try:
         with requests.Session() as session:
-            session.trust_env = False
-            response = session.post(
-                endpoint,
-                headers=headers,
-                json=payload,
-                timeout=180,
-            )
+            session.trust_env = proxy_mode == "system"
+            request_kwargs = {
+                "headers": headers,
+                "json": payload,
+                "timeout": 180,
+            }
+            if proxy_mode == "custom":
+                if not proxy:
+                    raise LLMError("自定义代理模式需要填写代理地址")
+                session.trust_env = False
+                request_kwargs["proxies"] = {"http": proxy, "https": proxy}
+            elif proxy_mode != "system":
+                session.trust_env = False
+            response = session.post(endpoint, **request_kwargs)
     except requests.RequestException as exc:
         raise LLMError(f"模型服务请求失败：{exc}") from exc
 
