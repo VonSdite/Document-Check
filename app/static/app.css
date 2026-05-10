@@ -982,6 +982,10 @@ td {
   grid-template-columns: repeat(3, minmax(180px, 1fr));
 }
 
+.report-file-meta {
+  grid-column: 1 / -1;
+}
+
 .report-error {
   margin-top: 16px;
 }
