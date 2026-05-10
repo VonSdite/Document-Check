@@ -188,7 +188,6 @@
         <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
         {% if task.started_at %}<div><dt>开始时间</dt><dd>{{ task.started_at }}</dd></div>{% endif %}
         {% if task.finished_at %}<div><dt>结束时间</dt><dd>{{ task.finished_at }}</dd></div>{% endif %}
-        <div><dt>导出时间</dt><dd>{{ generated_at }}</dd></div>
       </dl>
       {% if task.error %}<div class="error">{{ task.error }}</div>{% endif %}
     </section>

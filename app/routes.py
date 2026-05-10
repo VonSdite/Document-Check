@@ -677,7 +677,6 @@ def _export_task_report(task):
         "task_report_export.html",
         task=task,
         results=_task_results(task),
-        generated_at=now_text(),
     )
     filename = f"document-check-report-{task['id']}.html"
     return Response(
