@@ -8,10 +8,16 @@
     <h1>文档检查运行台</h1>
     <p class="muted">全局并发 {{ global_concurrency }}，单 IP 并发 {{ user_concurrency }}。</p>
   </div>
-  <a class="primary-button" href="{{ url_for('admin_new_task') }}">创建任务</a>
+  <div class="actions">
+    <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
+      <span class="refresh-dot" aria-hidden="true"></span>
+      <span data-refresh-label>刷新中</span>
+    </button>
+    <a class="primary-button" href="{{ url_for('admin_new_task') }}">创建任务</a>
+  </div>
 </section>
 
-<section class="metric-grid five">
+<section class="metric-grid five" data-refresh-region="stats">
   <div class="metric"><span>全部任务</span><strong>{{ totals.tasks }}</strong></div>
   <div class="metric"><span>检查中</span><strong>{{ totals.running }}</strong></div>
   <div class="metric"><span>排队中</span><strong>{{ totals.queued }}</strong></div>
@@ -37,6 +43,7 @@
     <button class="secondary-button" type="submit">筛选</button>
   </form>
 
+  <div data-refresh-region="task-list">
   {% if tasks %}
   <div class="table-wrap">
     <table class="admin-task-table">
@@ -101,5 +108,6 @@
     <p>调整筛选条件后再查看。</p>
   </div>
   {% endif %}
+  </div>
 </section>
 {% endblock %}
