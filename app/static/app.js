@@ -265,8 +265,12 @@ document.addEventListener("change", (event) => {
 });
 
 const AUTO_REFRESH_KEY = "document-check:auto-refresh";
+const AUTO_REFRESH_INTERACTION_PAUSE_MS = 8000;
 let autoRefreshTimer = null;
 let autoRefreshPending = false;
+let autoRefreshSuspendedUntil = 0;
+let taskListPointerInside = false;
+let taskListFocusInside = false;
 
 function autoRefreshEnabled() {
   const saved = window.localStorage.getItem(AUTO_REFRESH_KEY);
@@ -275,6 +279,28 @@ function autoRefreshEnabled() {
 
 function setAutoRefreshEnabled(enabled) {
   window.localStorage.setItem(AUTO_REFRESH_KEY, enabled ? "1" : "0");
+}
+
+function suspendAutoRefresh(duration = AUTO_REFRESH_INTERACTION_PAUSE_MS) {
+  autoRefreshSuspendedUntil = Math.max(autoRefreshSuspendedUntil, Date.now() + duration);
+}
+
+function taskListInteractiveTarget(target) {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+  return target.closest(
+    '[data-refresh-region="task-list"] a, [data-refresh-region="task-list"] button, [data-refresh-region="task-list"] form',
+  );
+}
+
+function autoRefreshSuspended() {
+  return (
+    Boolean(activeConfirmPopover)
+    || taskListPointerInside
+    || taskListFocusInside
+    || Date.now() < autoRefreshSuspendedUntil
+  );
 }
 
 function updateRefreshToggle() {
@@ -301,7 +327,7 @@ function replaceRefreshRegion(documentFragment, name) {
 }
 
 async function refreshTaskRegions() {
-  if (autoRefreshPending || document.hidden) {
+  if (autoRefreshPending || document.hidden || autoRefreshSuspended()) {
     return;
   }
   autoRefreshPending = true;
@@ -316,6 +342,9 @@ async function refreshTaskRegions() {
       return;
     }
     const html = await response.text();
+    if (autoRefreshSuspended()) {
+      return;
+    }
     const nextDocument = new DOMParser().parseFromString(html, "text/html");
     replaceRefreshRegion(nextDocument, "stats");
     replaceRefreshRegion(nextDocument, "task-list");
@@ -355,6 +384,45 @@ document.addEventListener("click", (event) => {
   }
   setAutoRefreshEnabled(!autoRefreshEnabled());
   applyAutoRefreshState();
+});
+
+document.addEventListener("pointerover", (event) => {
+  if (!taskListInteractiveTarget(event.target)) {
+    return;
+  }
+  taskListPointerInside = true;
+  suspendAutoRefresh();
+});
+
+document.addEventListener("pointerout", (event) => {
+  if (!taskListPointerInside || taskListInteractiveTarget(event.relatedTarget)) {
+    return;
+  }
+  taskListPointerInside = false;
+  suspendAutoRefresh(2000);
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (taskListInteractiveTarget(event.target)) {
+    suspendAutoRefresh();
+  }
+});
+
+document.addEventListener("focusin", (event) => {
+  if (!taskListInteractiveTarget(event.target)) {
+    return;
+  }
+  taskListFocusInside = true;
+  suspendAutoRefresh();
+});
+
+document.addEventListener("focusout", () => {
+  window.setTimeout(() => {
+    taskListFocusInside = Boolean(taskListInteractiveTarget(document.activeElement));
+    if (!taskListFocusInside) {
+      suspendAutoRefresh(2000);
+    }
+  });
 });
 
 applyAutoRefreshState();
