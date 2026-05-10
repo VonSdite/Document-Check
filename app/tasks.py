@@ -152,7 +152,6 @@ class TaskScheduler:
                     content = run_check(
                         api_base=provider["api_base"],
                         api_key=provider["api_key"],
-                        proxy=provider["proxy"],
                         model_name=model["model_name"],
                         check_name=item["name"],
                         prompt=item["prompt"],

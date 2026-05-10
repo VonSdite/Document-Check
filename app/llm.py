@@ -12,7 +12,6 @@ def run_check(
     *,
     api_base: str,
     api_key: Optional[str],
-    proxy: Optional[str],
     model_name: str,
     check_name: str,
     prompt: str,
@@ -45,16 +44,16 @@ def run_check(
         ],
         "temperature": 0.2,
     }
-    proxies = {"http": proxy, "https": proxy} if proxy else None
 
     try:
-        response = requests.post(
-            endpoint,
-            headers=headers,
-            json=payload,
-            proxies=proxies,
-            timeout=180,
-        )
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=180,
+            )
     except requests.RequestException as exc:
         raise LLMError(f"模型服务请求失败：{exc}") from exc
 

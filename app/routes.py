@@ -321,7 +321,6 @@ def register_routes(app):
             name = request.form.get("name", "").strip()
             api_base = request.form.get("api_base", "").strip()
             api_key = request.form.get("api_key", "").strip()
-            proxy = request.form.get("proxy", "").strip()
             is_active = 1 if request.form.get("is_active") == "on" else 0
             models_text = request.form.get("models", "")
             model_names = [line.strip() for line in models_text.splitlines() if line.strip()]
@@ -339,7 +338,7 @@ def register_routes(app):
                     SET name = ?, api_base = ?, api_key = ?, proxy = ?, is_active = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (name, api_base, api_key, proxy, is_active, now_text(), provider_id),
+                    (name, api_base, api_key, "", is_active, now_text(), provider_id),
                 )
                 pid = int(provider_id)
             else:
@@ -348,7 +347,7 @@ def register_routes(app):
                     INSERT INTO providers(name, api_base, api_key, proxy, is_active, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (name, api_base, api_key, proxy, is_active, now_text(), now_text()),
+                    (name, api_base, api_key, "", is_active, now_text(), now_text()),
                 )
                 pid = cursor.lastrowid
 

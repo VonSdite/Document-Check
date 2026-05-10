@@ -22,7 +22,6 @@
       <label>提供商名称<input name="name" placeholder="例如 OpenAI 兼容服务" required></label>
       <label>API 地址<input name="api_base" placeholder="https://api.example.com/v1" required></label>
       <label>API Key<input name="api_key" type="password" autocomplete="new-password"></label>
-      <label>代理服务<input name="proxy" placeholder="http://127.0.0.1:7890"></label>
       <label>模型列表<textarea name="models" rows="5" placeholder="每行一个模型名称，例如&#10;gpt-4.1-mini&#10;qwen-plus" required></textarea></label>
       <label class="switch-line"><input type="checkbox" name="is_active" checked><span>启用提供商</span></label>
       <button class="primary-button" type="submit">创建提供商</button>
@@ -33,7 +32,7 @@
     <div class="panel-head">
       <div>
         <h2>调用格式</h2>
-        <p>系统会向 API 地址追加 `/chat/completions`，已填写完整路径时不会重复追加。</p>
+        <p>系统会向 API 地址追加 `/chat/completions`，已填写完整路径时不会重复追加。模型请求默认直连，不读取系统代理。</p>
       </div>
     </div>
     <div class="code-box">
@@ -60,7 +59,6 @@
         <label>提供商名称<input name="name" value="{{ provider.name }}" required></label>
         <label>API 地址<input name="api_base" value="{{ provider.api_base }}" required></label>
         <label>API Key<input name="api_key" type="password" value="{{ provider.api_key or '' }}" autocomplete="new-password"></label>
-        <label>代理服务<input name="proxy" value="{{ provider.proxy or '' }}"></label>
       </div>
       <label>启用模型<textarea name="models" rows="4" required>{% for model in models_by_provider[provider.id] if model.enabled %}{{ model.model_name }}
 {% endfor %}</textarea></label>
