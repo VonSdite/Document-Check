@@ -6,3 +6,4 @@
 4. 所有文本文件统一使用 LF 换行符。
 5. 管理员账号、密码、隐藏管理入口、监听地址和启动端口配置在本地 `config.local.json` 中，真实配置不提交到仓库。
 6. SQLite 数据库与上传文件保存在本地 `instance/` 目录中，作为运行时数据处理。
+7. 使用 uv 管理 Python 依赖和虚拟环境，依赖声明维护在 `pyproject.toml`，锁定文件为 `uv.lock`，启动使用 `uv run python run.py`。

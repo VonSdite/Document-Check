@@ -12,10 +12,11 @@
 ## 快速启动
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python run.py
+uv sync
+uv run python run.py
 ```
+
+`uv sync` 会按 `pyproject.toml` 和 `uv.lock` 创建/更新 `.venv`，后续启动统一使用 `uv run`。
 
 用户面地址：
 
