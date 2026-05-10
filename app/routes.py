@@ -644,20 +644,18 @@ def _cancel_task(task):
     if task["status"] in {"completed", "failed", "canceled"}:
         return
     db = get_db()
-    if task["status"] == "queued":
-        db.execute(
-            """
-            UPDATE tasks
-            SET cancel_requested = 1, status = 'canceled', updated_at = ?, finished_at = ?
-            WHERE id = ?
-            """,
-            (now_text(), now_text(), task["id"]),
-        )
-    else:
-        db.execute(
-            "UPDATE tasks SET cancel_requested = 1, updated_at = ? WHERE id = ?",
-            (now_text(), task["id"]),
-        )
+    db.execute(
+        """
+        UPDATE tasks
+        SET cancel_requested = 1,
+            status = 'canceled',
+            progress = 0,
+            updated_at = ?,
+            finished_at = ?
+        WHERE id = ? AND status NOT IN ('completed', 'failed', 'canceled')
+        """,
+        (now_text(), now_text(), task["id"]),
+    )
     db.commit()
 
 

@@ -8,6 +8,10 @@ from .documents import DocumentReadError, extract_text, trim_for_model
 from .llm import LLMError, run_check
 
 
+class TaskCanceled(Exception):
+    pass
+
+
 class TaskScheduler:
     def __init__(self, app):
         self.app = app
@@ -160,6 +164,8 @@ class TaskScheduler:
 
                     def on_delta(delta: str):
                         nonlocal last_stream_write
+                        if _cancel_requested(db, task_id):
+                            raise TaskCanceled
                         current_parts.append(delta)
                         if time.monotonic() - last_stream_write < 1.2:
                             return
@@ -200,6 +206,10 @@ class TaskScheduler:
                         heartbeat_stop.set()
                         heartbeat.join(timeout=2)
 
+                    if _cancel_requested(db, task_id):
+                        _mark_canceled(db, task_id)
+                        return
+
                     results.append(
                         {
                             "code": item["code"],
@@ -226,11 +236,13 @@ class TaskScheduler:
                         error = NULL,
                         updated_at = ?,
                         finished_at = ?
-                    WHERE id = ?
+                    WHERE id = ? AND status = 'running' AND cancel_requested = 0
                     """,
                     (json.dumps(results, ensure_ascii=False), summary, now_text(), now_text(), task_id),
                 )
                 db.commit()
+            except TaskCanceled:
+                _mark_canceled(db, task_id)
             except (DocumentReadError, LLMError, RuntimeError) as exc:
                 _mark_failed(db, task_id, str(exc), results)
             except Exception as exc:
@@ -248,7 +260,7 @@ def _cancel_requested(db, task_id: int) -> bool:
 
 def _update_progress(db, task_id: int, progress: int):
     db.execute(
-        "UPDATE tasks SET progress = ?, updated_at = ? WHERE id = ?",
+        "UPDATE tasks SET progress = ?, updated_at = ? WHERE id = ? AND status = 'running'",
         (progress, now_text(), task_id),
     )
     db.commit()
@@ -339,7 +351,7 @@ def _mark_failed(db, task_id: int, error: str, results: list[dict] | None = None
             summary = ?,
             updated_at = ?,
             finished_at = ?
-        WHERE id = ?
+        WHERE id = ? AND status = 'running'
         """,
         (error, result_json, summary, now_text(), now_text(), task_id),
     )
