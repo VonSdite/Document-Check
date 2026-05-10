@@ -497,6 +497,35 @@ td {
   margin-bottom: 14px;
 }
 
+.settings-section {
+  margin-bottom: 26px;
+}
+
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.settings-section-head h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.settings-concurrency-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.settings-concurrency-form .primary-button {
+  min-width: 128px;
+}
+
 .create-panel {
   padding: 24px;
 }
@@ -1570,7 +1599,8 @@ td {
   .detail-grid,
   .report-meta-list,
   .form-grid,
-  .filter-bar {
+  .filter-bar,
+  .settings-concurrency-form {
     grid-template-columns: 1fr;
   }
 

@@ -9,11 +9,11 @@
   </div>
 </section>
 
-<section class="panel narrow-panel">
-  <div class="panel-head compact-head">
+<section class="settings-section">
+  <div class="settings-section-head">
     <h2>任务并发度</h2>
   </div>
-  <form method="post" class="stack-form">
+  <form method="post" class="panel settings-concurrency-form">
     <input type="hidden" name="action" value="concurrency">
     <label>
       系统同时执行任务数
@@ -27,7 +27,11 @@
   </form>
 </section>
 
-<section class="prompt-stack">
+<section class="settings-section">
+  <div class="settings-section-head">
+    <h2>提示词设置</h2>
+  </div>
+  <div class="prompt-stack">
   {% for item in items %}
   <article class="panel">
     <form method="post" class="stack-form">
@@ -51,5 +55,6 @@
     </form>
   </article>
   {% endfor %}
+  </div>
 </section>
 {% endblock %}
