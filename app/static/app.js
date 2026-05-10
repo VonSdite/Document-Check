@@ -37,6 +37,63 @@ function clearFileControl(target) {
   control.classList.remove("has-file");
 }
 
+function updateFileControl(control, input) {
+  const name = control.querySelector(".file-name");
+  const file = input.files?.[0];
+  if (!name || !file) {
+    return;
+  }
+  name.textContent = file.name;
+  name.setAttribute("title", file.name);
+  control.classList.add("has-file");
+}
+
+function openFilePicker(control) {
+  const currentInput = control.querySelector(".file-input");
+  if (!(currentInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const picker = document.createElement("input");
+  picker.type = "file";
+  picker.className = currentInput.className;
+  picker.name = currentInput.name;
+  picker.accept = currentInput.accept;
+  picker.required = currentInput.required;
+  picker.multiple = currentInput.multiple;
+  picker.disabled = currentInput.disabled;
+
+  picker.addEventListener(
+    "change",
+    () => {
+      if (!picker.files?.[0]) {
+        picker.remove();
+        return;
+      }
+      picker.removeAttribute("style");
+      currentInput.replaceWith(picker);
+      updateFileControl(control, picker);
+    },
+    { once: true },
+  );
+  picker.addEventListener("cancel", () => picker.remove(), { once: true });
+
+  picker.style.position = "fixed";
+  picker.style.left = "-9999px";
+  picker.style.top = "0";
+  document.body.appendChild(picker);
+  picker.click();
+}
+
+document.addEventListener("click", (event) => {
+  const control = event.target.closest(".file-upload-control");
+  if (!control || event.target.closest(".file-clear")) {
+    return;
+  }
+  event.preventDefault();
+  openFilePicker(control);
+});
+
 document.addEventListener("click", (event) => {
   const clear = event.target.closest(".file-clear");
   if (!clear) {
@@ -80,7 +137,5 @@ document.addEventListener("change", (event) => {
   if (!file) {
     return;
   }
-  name.textContent = file.name;
-  name.setAttribute("title", file.name);
-  control.classList.add("has-file");
+  updateFileControl(control, input);
 });
