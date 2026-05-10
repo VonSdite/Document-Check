@@ -159,9 +159,13 @@ def register_routes(app):
     def admin_dashboard():
         return redirect(url_for("admin_tasks"))
 
-    @app.route(f"{admin_prefix}/tasks", methods=["GET"])
+    @app.route(f"{admin_prefix}/tasks", methods=["GET", "POST"])
     @admin_required
     def admin_tasks():
+        if request.method == "POST":
+            ip = client_ip()
+            return create_task_for_ip(ip, get_ip_user(ip), admin_created=True)
+
         status = request.args.get("status", "")
         ip = request.args.get("ip", "").strip()
         page = _page_arg()
@@ -198,24 +202,17 @@ def register_routes(app):
             totals=_admin_totals(),
             global_concurrency=get_setting("global_concurrency", 5),
             user_concurrency=get_setting("user_concurrency", 1),
+            check_items=get_enabled_check_items(),
+            models=get_enabled_models(),
         )
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
     @admin_required
     def admin_new_task():
-        target_ip = request.form.get("target_ip", client_ip()).strip() if request.method == "POST" else client_ip()
-        user = get_ip_user(target_ip)
         if request.method == "POST":
-            return create_task_for_ip(target_ip, user, admin_created=True)
-        return render_template(
-            "task_form.html",
-            mode="admin",
-            ip=target_ip,
-            user=user,
-            check_items=get_enabled_check_items(),
-            models=get_enabled_models(),
-            admin_prefix=admin_prefix,
-        )
+            ip = client_ip()
+            return create_task_for_ip(ip, get_ip_user(ip), admin_created=True)
+        return redirect(url_for("admin_tasks"))
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>")
     @admin_required
@@ -611,7 +608,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
 
 def _back_to_task_form(admin_created: bool):
     if admin_created:
-        return redirect(url_for("admin_new_task"))
+        return redirect(url_for("admin_tasks"))
     return redirect(url_for("user_tasks"))
 
 

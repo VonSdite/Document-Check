@@ -3,19 +3,62 @@
 {% block title %}任务管理 - 文档智能门禁{% endblock %}
 
 {% block content %}
-<section class="page-title">
-  <div>
-    <h1>文档检查运行台</h1>
-    <p class="muted">全局并发 {{ global_concurrency }}，单 IP 并发 {{ user_concurrency }}。</p>
+{% set submit_disabled = not models %}
+<form method="post" enctype="multipart/form-data" class="panel create-panel">
+  <div class="panel-head compact-head">
+    <h1>创建检查</h1>
   </div>
-  <div class="actions">
-    <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
-      <span class="refresh-dot" aria-hidden="true"></span>
-      <span data-refresh-label>刷新中</span>
-    </button>
-    <a class="primary-button" href="{{ url_for('admin_new_task') }}">创建任务</a>
+
+  <div class="quick-form-grid">
+    <div class="form-field">
+      <span class="field-label">文档</span>
+      <span class="field-with-help">
+        <label class="file-upload-control">
+          <input class="file-input" name="document" type="file" accept=".docx,.pdf,.txt,.md,.html" required>
+          <span class="file-name">未选择文件</span>
+          <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
+          <span class="file-button" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <path d="M14 2v6h6"/>
+            </svg>
+          </span>
+        </label>
+        <span class="help-tip" tabindex="0" data-tip="支持 docx、pdf、txt、md、html，单文件最大 50MB。">?</span>
+      </span>
+    </div>
+    <label>
+      模型
+      <select name="model_id" required {{ "disabled" if submit_disabled else "" }}>
+        {% if not models %}
+        <option value="">暂无可用模型</option>
+        {% else %}
+          {% for model in models %}
+          <option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}</option>
+          {% endfor %}
+        {% endif %}
+      </select>
+    </label>
+    <div class="submit-slot">
+      <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
+    </div>
   </div>
-</section>
+
+  <div class="check-row">
+    <div class="check-row-title">
+      <span>检查项</span>
+      <span class="help-tip" tabindex="0" data-tip="可多选；系统会按检查项逐项调用模型。">?</span>
+    </div>
+    <div class="check-chip-grid">
+      {% for item in check_items %}
+      <label class="check-chip" title="{{ item.description or item.name }}">
+        <input type="checkbox" name="checks" value="{{ item.id }}" checked>
+        <span>{{ item.name }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+</form>
 
 <section class="metric-grid five" data-refresh-region="stats">
   <div class="metric"><span>全部任务</span><strong>{{ totals.tasks }}</strong></div>
@@ -26,6 +69,13 @@
 </section>
 
 <section class="panel">
+  <div class="panel-head compact-head task-panel-head">
+    <h2>检查任务</h2>
+    <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
+      <span class="refresh-dot" aria-hidden="true"></span>
+      <span data-refresh-label>刷新中</span>
+    </button>
+  </div>
   <form method="get" class="filter-bar">
     <label>
       状态
