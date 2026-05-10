@@ -218,6 +218,14 @@ td {
   margin-bottom: 22px;
 }
 
+.report-back {
+  margin-bottom: 12px;
+}
+
+.report-status-panel {
+  margin-bottom: 20px;
+}
+
 .hero-band {
   min-height: 176px;
   padding: 28px;
@@ -966,6 +974,14 @@ td {
   overflow-wrap: anywhere;
 }
 
+.report-meta-list {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.report-error {
+  margin-top: 16px;
+}
+
 .error-box {
   padding: 14px;
   border-radius: var(--radius);
@@ -1318,6 +1334,7 @@ td {
   .task-layout,
   .split-grid,
   .detail-grid,
+  .report-meta-list,
   .form-grid,
   .filter-bar {
     grid-template-columns: 1fr;
