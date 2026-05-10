@@ -37,8 +37,10 @@
 {% endfor %}{% endif %}</textarea></label>
       <div class="form-actions modal-actions">
         <label class="switch-line"><input type="checkbox" name="is_active" {{ "checked" if not provider or provider.is_active else "" }}><span>启用</span></label>
-        <button class="secondary-button" type="button" data-modal-close>取消</button>
-        <button class="primary-button" type="submit">保存</button>
+        <div class="modal-action-buttons">
+          <button class="secondary-button" type="button" data-modal-close>取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
       </div>
     </form>
   </div>

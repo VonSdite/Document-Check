@@ -1579,6 +1579,13 @@ td {
   justify-content: space-between;
 }
 
+.modal-action-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
