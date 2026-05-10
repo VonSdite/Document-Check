@@ -2,186 +2,50 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ task.original_filename }} - 检查报告</title>
   <style>
-    :root {
-      color: #102033;
-      background: #f8fbff;
-      font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
-      line-height: 1.65;
-    }
-    body {
-      margin: 0;
-      padding: 36px;
-      background: #f8fbff;
-    }
-    .page {
-      max-width: 1120px;
-      margin: 0 auto;
-    }
-    .brand {
-      margin: 0 0 18px;
-      color: #365f99;
-      font-size: 13px;
-      font-weight: 800;
-    }
-    h1 {
-      margin: 0 0 24px;
-      font-size: 32px;
-      line-height: 1.2;
-      overflow-wrap: anywhere;
-    }
-    h2 {
-      margin: 0;
-      font-size: 22px;
-    }
-    .panel {
-      margin-bottom: 18px;
-      padding: 20px;
-      border: 1px solid #dce8f6;
-      border-radius: 8px;
-      background: #fff;
-    }
-    .status-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: flex-start;
-    }
-    .muted {
-      color: #64748b;
-    }
-    .pill {
-      display: inline-block;
-      border-radius: 999px;
-      padding: 4px 10px;
-      background: #edf8ff;
-      color: #075985;
-      font-size: 12px;
-      font-weight: 800;
-    }
-    .meta {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px 18px;
-      margin: 16px 0 0;
-    }
-    .meta div {
-      min-width: 0;
-    }
-    .meta dt {
-      color: #64748b;
-      font-weight: 800;
-    }
-    .meta dd {
-      margin: 2px 0 0;
-      overflow-wrap: anywhere;
-    }
-    .error {
-      margin-top: 16px;
-      padding: 12px;
-      border: 1px solid #fac5bd;
-      border-radius: 8px;
-      background: #fde8e4;
-      color: #b42318;
-      white-space: pre-wrap;
-    }
-    .eyebrow {
-      margin: 0 0 4px;
-      color: #4b79b0;
-      font-size: 12px;
-      font-weight: 800;
-      text-transform: uppercase;
-    }
-    .result {
-      margin-top: 14px;
-      padding: 16px;
-      border: 1px solid #dce8f6;
-      border-radius: 8px;
-      background: #fbfdff;
-      overflow-wrap: anywhere;
-    }
-    .result p,
-    .result ul,
-    .result ol,
-    .result table,
-    .result pre {
-      margin: 0 0 14px;
-    }
-    .result > :last-child {
-      margin-bottom: 0;
-    }
-    .result strong {
-      color: #17345c;
-      font-weight: 850;
-    }
-    .result ul,
-    .result ol {
-      padding-left: 24px;
-    }
-    .result li {
-      margin: 6px 0;
-    }
-    .result code {
-      padding: 2px 5px;
-      border-radius: 5px;
-      background: #eef5ff;
-      color: #17345c;
-      font-family: Consolas, "Liberation Mono", monospace;
-      font-size: 0.92em;
-    }
-    .result pre {
-      padding: 12px;
-      overflow-x: auto;
-      border-radius: 8px;
-      background: #102033;
-      color: #eff6ff;
-    }
-    .result pre code {
-      padding: 0;
-      background: transparent;
-      color: inherit;
-    }
-    .result table {
-      display: block;
-      width: 100%;
-      overflow-x: auto;
-      border-collapse: collapse;
-    }
-    .result th,
-    .result td {
-      min-width: 120px;
-      border: 1px solid #dce8f6;
-      padding: 8px 10px;
-      vertical-align: top;
-    }
-    .result th {
-      background: #f0f6ff;
-    }
-    @media (max-width: 720px) {
+    {{ app_css|safe }}
+
+    @media print {
       body {
-        padding: 18px;
+        background: #fff;
       }
-      .meta {
-        grid-template-columns: 1fr;
+      .topbar {
+        position: static;
+      }
+      .panel {
+        box-shadow: none;
+        break-inside: avoid;
       }
     }
   </style>
 </head>
 <body>
-  <main class="page">
-    <p class="brand">文档智能门禁 · 检查报告</p>
-    <h1>{{ task.original_filename }}</h1>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark">文</span>
+        <span>
+          <strong>文档智能门禁</strong>
+          <small>检查报告</small>
+        </span>
+      </div>
+    </div>
+  </header>
 
-    <section class="panel">
-      <div class="status-head">
+  <main class="page">
+    <section class="panel report-status-panel">
+      <div class="panel-head">
         <div>
           <h2>任务状态</h2>
-          <p class="muted">{{ task.provider_name or "-" }} / {{ task.model_name }}</p>
+          <p>{{ task.provider_name or "-" }} / {{ task.model_name }}</p>
         </div>
-        <span class="pill">{{ status_labels[task.status] }}</span>
+        <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
       </div>
-      <dl class="meta">
+      <div class="progress"><span style="width: {{ task.progress }}%"></span></div>
+      <dl class="meta-list report-meta-list">
+        <div class="report-file-meta"><dt>文件名称</dt><dd>{{ task.original_filename }}</dd></div>
         <div><dt>归属 IP</dt><dd>{{ task.ip }}{% if task.username_snapshot %} · {{ task.username_snapshot }}{% endif %}</dd></div>
         <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
         <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>
@@ -189,16 +53,26 @@
         {% if task.started_at %}<div><dt>开始时间</dt><dd>{{ task.started_at }}</dd></div>{% endif %}
         {% if task.finished_at %}<div><dt>结束时间</dt><dd>{{ task.finished_at }}</dd></div>{% endif %}
       </dl>
-      {% if task.error %}<div class="error">{{ task.error }}</div>{% endif %}
+      {% if task.error %}
+      <div class="error-box">{{ task.error }}</div>
+      {% endif %}
     </section>
 
-    {% for result in results %}
-    <section class="panel">
-      <p class="eyebrow">{{ result.code }}</p>
-      <h2>{{ result.name }}</h2>
-      <div class="result">{{ result.result|markdown }}</div>
+    {% if results %}
+    <section class="result-stack">
+      {% for result in results %}
+      <article class="panel result-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">{{ result.code }}</p>
+            <h2>{{ result.name }}</h2>
+          </div>
+        </div>
+        <div class="result-text markdown-body">{{ result.result|markdown }}</div>
+      </article>
+      {% endfor %}
     </section>
-    {% endfor %}
+    {% endif %}
   </main>
 </body>
 </html>

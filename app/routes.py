@@ -673,10 +673,12 @@ def _task_results(task):
 
 
 def _export_task_report(task):
+    app_css = (Path(current_app.static_folder) / "app.css").read_text(encoding="utf-8")
     html = render_template(
         "task_report_export.html",
         task=task,
         results=_task_results(task),
+        app_css=app_css,
     )
     filename = f"document-check-report-{task['id']}.html"
     return Response(
