@@ -122,7 +122,7 @@ def register_routes(app):
         task = _get_user_task(task_id)
         _cancel_task(task)
         flash("已提交取消请求。", "success")
-        return redirect(url_for("user_task_detail", task_id=task_id))
+        return redirect(_task_action_redirect("user_tasks"))
 
     @app.post("/tasks/<int:task_id>/delete")
     def user_delete_task(task_id):
@@ -267,7 +267,7 @@ def register_routes(app):
         task = _get_task_or_404(task_id)
         _cancel_task(task)
         flash("已提交取消请求。", "success")
-        return redirect(url_for("admin_task_detail", task_id=task_id))
+        return redirect(_task_action_redirect("admin_tasks"))
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/delete")
     @admin_required
@@ -672,6 +672,13 @@ def _delete_task(task):
     db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
     db.commit()
     return True
+
+
+def _task_action_redirect(default_endpoint: str):
+    next_url = request.form.get("next", "").strip()
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        return next_url
+    return url_for(default_endpoint)
 
 
 def _download_task_document(task, fallback_endpoint: str):

@@ -112,6 +112,7 @@
               <a class="small-button" href="{{ url_for('user_task_detail', task_id=task.id) }}">查看</a>
               {% if task.status in ["queued", "running"] %}
               <form method="post" action="{{ url_for('user_cancel_task', task_id=task.id) }}">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
                 <button class="small-button warn" type="submit">取消</button>
               </form>
               {% endif %}
