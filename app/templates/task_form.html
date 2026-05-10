@@ -5,7 +5,6 @@
 {% block content %}
 <section class="page-title">
   <div>
-    <p class="eyebrow">{{ "管理创建" if mode == "admin" else "新建任务" }}</p>
     <h1>创建检查任务</h1>
   </div>
   <a class="ghost-button" href="{{ url_for('admin_tasks') if mode == 'admin' else url_for('user_tasks') }}">返回列表</a>
