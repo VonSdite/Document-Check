@@ -5,29 +5,25 @@
 {% block content %}
 <form method="post" enctype="multipart/form-data" class="panel create-panel">
   <div class="panel-head compact-head">
-    <div>
-      <h1>创建检查</h1>
-      <div class="identity-line">
-        <span>IP：<strong>{{ ip }}</strong></span>
-        {% if user and user.username %}<span>用户：<strong>{{ user.username }}</strong></span>{% endif %}
-      </div>
-    </div>
+    <h1>创建检查</h1>
     {% if user and user.is_disabled %}
     <span class="status-pill status-failed">已禁用</span>
-    {% else %}
-    <button class="primary-button" type="submit" {{ "disabled" if not models else "" }}>提交检查</button>
     {% endif %}
   </div>
 
   {% if not (user and user.is_disabled) %}
   <div class="quick-form-grid">
-    <label>
-      文档
+    <div class="form-field">
+      <span class="field-label">文档</span>
       <span class="field-with-help">
-        <input name="document" type="file" accept=".docx,.pdf,.txt,.md,.html" required>
+        <label class="file-upload-control">
+          <input class="file-input" name="document" type="file" accept=".docx,.pdf,.txt,.md,.html" required>
+          <span class="file-button">选择文件</span>
+          <span class="file-name">未选择文件</span>
+        </label>
         <span class="help-tip" tabindex="0" data-tip="支持 docx、pdf、txt、md、html，单文件最大 50MB。">?</span>
       </span>
-    </label>
+    </div>
     <label>
       模型
       <select name="model_id" required {{ "disabled" if not models else "" }}>
@@ -40,6 +36,9 @@
         {% endif %}
       </select>
     </label>
+    <div class="submit-slot">
+      <button class="primary-button" type="submit" {{ "disabled" if not models else "" }}>提交检查</button>
+    </div>
   </div>
 
   <div class="check-row">

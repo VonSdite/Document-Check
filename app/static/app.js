@@ -19,3 +19,16 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
   }
 });
+
+document.addEventListener("change", (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || input.type !== "file") {
+    return;
+  }
+  const control = input.closest(".file-upload-control");
+  const name = control?.querySelector(".file-name");
+  if (!name) {
+    return;
+  }
+  name.textContent = input.files?.[0]?.name || "未选择文件";
+});

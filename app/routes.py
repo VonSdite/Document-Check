@@ -37,8 +37,12 @@ def register_routes(app):
 
     @app.context_processor
     def inject_globals():
+        ip = client_ip()
+        user = get_ip_user(ip)
+        username = user["username"] if user and user["username"] else ""
         return {
             "status_labels": STATUS_LABELS,
+            "nav_identity": f"{ip}-{username}" if username else ip,
         }
 
     @app.route("/", methods=["GET", "POST"])
