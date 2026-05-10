@@ -184,10 +184,6 @@ document.addEventListener("click", (event) => {
     closeModal(closer);
     return;
   }
-
-  if (event.target instanceof HTMLDialogElement && event.target.classList.contains("modal")) {
-    event.target.close();
-  }
 });
 
 const LAST_MODEL_KEY = "document-check:last-model-id";
