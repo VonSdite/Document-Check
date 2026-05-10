@@ -27,7 +27,13 @@ class TaskScheduler:
             db.execute(
                 """
                 UPDATE tasks
-                SET status = 'queued', progress = 0, updated_at = ?, started_at = NULL
+                SET status = 'queued',
+                    progress = 0,
+                    result_json = NULL,
+                    summary = NULL,
+                    error = NULL,
+                    updated_at = ?,
+                    started_at = NULL
                 WHERE status = 'running'
                 """,
                 (now_text(),),
@@ -149,6 +155,18 @@ class TaskScheduler:
                     progress = 5 + int((index - 1) / total * 85)
                     next_progress = 5 + int(index / total * 85)
                     _update_progress(db, task_id, progress)
+                    current_parts = []
+                    last_stream_write = 0.0
+
+                    def on_delta(delta: str):
+                        nonlocal last_stream_write
+                        current_parts.append(delta)
+                        if time.monotonic() - last_stream_write < 1.2:
+                            return
+                        last_stream_write = time.monotonic()
+                        content = "".join(current_parts).strip()
+                        if content:
+                            _save_stream_result(db, task_id, results, item, content, progress)
 
                     heartbeat_stop = threading.Event()
                     heartbeat = threading.Thread(
@@ -176,6 +194,7 @@ class TaskScheduler:
                             check_name=item["name"],
                             prompt=item["prompt"],
                             document_text=document_text,
+                            on_delta=on_delta,
                         )
                     finally:
                         heartbeat_stop.set()
@@ -187,6 +206,13 @@ class TaskScheduler:
                             "name": item["name"],
                             "result": content,
                         }
+                    )
+                    _save_intermediate_results(
+                        db,
+                        task_id,
+                        results,
+                        f"已完成 {len(results)} 个检查项，继续检查中。",
+                        next_progress,
                     )
 
                 summary = _build_summary(results)
@@ -224,6 +250,32 @@ def _update_progress(db, task_id: int, progress: int):
     db.execute(
         "UPDATE tasks SET progress = ?, updated_at = ? WHERE id = ?",
         (progress, now_text(), task_id),
+    )
+    db.commit()
+
+
+def _save_stream_result(db, task_id: int, completed: list[dict], item, content: str, progress: int):
+    results = completed + [
+        {
+            "code": item["code"],
+            "name": item["name"],
+            "result": content,
+        }
+    ]
+    _save_intermediate_results(db, task_id, results, f"正在检查：{item['name']}", progress)
+
+
+def _save_intermediate_results(db, task_id: int, results: list[dict], summary: str, progress: int):
+    db.execute(
+        """
+        UPDATE tasks
+        SET result_json = ?,
+            summary = ?,
+            progress = MAX(progress, ?),
+            updated_at = ?
+        WHERE id = ? AND status = 'running'
+        """,
+        (json.dumps(results, ensure_ascii=False), summary, progress, now_text(), task_id),
     )
     db.commit()
 
@@ -272,8 +324,12 @@ def _mark_canceled(db, task_id: int):
 
 
 def _mark_failed(db, task_id: int, error: str, results: list[dict] | None = None):
-    result_json = json.dumps(results, ensure_ascii=False) if results else None
-    summary = f"已完成 {len(results)} 个检查项，后续检查失败。" if results else None
+    existing = db.execute("SELECT result_json, summary FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    result_json = existing["result_json"] if existing else None
+    summary = existing["summary"] if existing else None
+    if not result_json and results:
+        result_json = json.dumps(results, ensure_ascii=False)
+        summary = f"已完成 {len(results)} 个检查项，后续检查失败。"
     db.execute(
         """
         UPDATE tasks

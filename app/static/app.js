@@ -221,7 +221,7 @@ function startAutoRefresh() {
   if (autoRefreshTimer || !document.querySelector("[data-auto-refresh-toggle]")) {
     return;
   }
-  autoRefreshTimer = window.setInterval(refreshTaskRegions, 6000);
+  autoRefreshTimer = window.setInterval(refreshTaskRegions, 2000);
 }
 
 function stopAutoRefresh() {
