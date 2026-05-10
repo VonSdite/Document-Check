@@ -56,18 +56,20 @@
             {% if task.status == "running" %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
           </td>
           <td>{{ task.created_at }}</td>
-          <td class="actions right">
-            <a class="small-button" href="{{ url_for('admin_task_detail', task_id=task.id) }}">查看</a>
-            {% if task.status in ["queued", "running"] %}
-            <form method="post" action="{{ url_for('admin_cancel_task', task_id=task.id) }}">
-              <button class="small-button warn" type="submit">取消</button>
-            </form>
-            {% endif %}
-            {% if task.status != "running" %}
-            <form method="post" action="{{ url_for('admin_delete_task', task_id=task.id) }}" data-confirm="确认删除该任务？删除后不可恢复。">
-              <button class="small-button danger" type="submit">删除</button>
-            </form>
-            {% endif %}
+          <td class="right">
+            <div class="task-actions">
+              <a class="small-button" href="{{ url_for('admin_task_detail', task_id=task.id) }}">查看</a>
+              {% if task.status in ["queued", "running"] %}
+              <form method="post" action="{{ url_for('admin_cancel_task', task_id=task.id) }}">
+                <button class="small-button warn" type="submit">取消</button>
+              </form>
+              {% endif %}
+              {% if task.status != "running" %}
+              <form method="post" action="{{ url_for('admin_delete_task', task_id=task.id) }}" data-confirm="确认删除该任务？删除后不可恢复。">
+                <button class="small-button danger" type="submit">删除</button>
+              </form>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% endfor %}
