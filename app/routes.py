@@ -557,7 +557,6 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         ),
     )
     db.commit()
-    flash("检查任务已创建，系统会按并发设置自动执行。", "success")
     if admin_created:
         return redirect(url_for("admin_tasks"))
     return redirect(url_for("user_tasks"))
