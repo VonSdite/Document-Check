@@ -268,7 +268,10 @@ def register_routes(app):
                 return redirect(url_for("admin_users"))
 
             username = request.form.get("username", "").strip()
-            is_disabled = 1 if request.form.get("is_disabled") == "on" else 0
+            if request.form.get("permission_submitted") == "1":
+                is_disabled = 0 if request.form.get("is_enabled") == "1" else 1
+            else:
+                is_disabled = 0
             db.execute(
                 """
                 INSERT INTO ip_users(ip, username, is_disabled, created_at, updated_at)

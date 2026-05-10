@@ -9,15 +9,15 @@
   </div>
 </section>
 
-<section class="split-grid">
+<section class="admin-user-stack">
   <div class="panel">
     <div class="panel-head">
       <div>
-        <h2>新增或更新用户</h2>
-        <p>按直连 IP 识别用户，可禁用其提交新任务。</p>
+        <h2>新增用户</h2>
       </div>
     </div>
     <form method="post" class="stack-form">
+      <input type="hidden" name="permission_submitted" value="1">
       <label>
         IP
         <input name="ip" placeholder="例如 192.168.1.10" required>
@@ -27,10 +27,10 @@
         <input name="username" placeholder="例如 财务部-张三">
       </label>
       <label class="switch-line">
-        <input type="checkbox" name="is_disabled">
-        <span>禁用提交任务</span>
+        <input type="checkbox" name="is_enabled" value="1" checked>
+        <span>允许提交</span>
       </label>
-      <button class="primary-button" type="submit">保存用户</button>
+      <button class="primary-button" type="submit">保存</button>
     </form>
   </div>
 
@@ -38,7 +38,6 @@
     <div class="panel-head">
       <div>
         <h2>未标识 IP</h2>
-        <p>来自任务记录但尚未设置用户名的 IP。</p>
       </div>
     </div>
     {% if ips %}
@@ -57,8 +56,7 @@
     </div>
     {% else %}
     <div class="empty-state compact">
-      <h3>没有未标识 IP</h3>
-      <p>所有有任务记录的 IP 都已设置。</p>
+      <h3>无未标识 IP</h3>
     </div>
     {% endif %}
   </div>
@@ -68,7 +66,6 @@
   <div class="panel-head">
     <div>
       <h2>已标识用户</h2>
-      <p>修改用户名、禁用状态或删除标识。</p>
     </div>
   </div>
   {% if users %}
@@ -77,14 +74,15 @@
     <div class="user-row">
       <form method="post" class="user-edit-form">
         <input type="hidden" name="ip" value="{{ user.ip }}">
+        <input type="hidden" name="permission_submitted" value="1">
         <div class="user-main">
           <strong>{{ user.ip }}</strong>
           <span class="subline">{{ user.task_count or 0 }} 个任务{% if user.running_count %} · {{ user.running_count }} 个检查中{% endif %}</span>
         </div>
         <input name="username" value="{{ user.username or '' }}" placeholder="用户名">
         <label class="switch-line compact-switch">
-          <input type="checkbox" name="is_disabled" {{ "checked" if user.is_disabled else "" }}>
-          <span>{{ "禁用" if user.is_disabled else "启用" }}</span>
+          <input type="checkbox" name="is_enabled" value="1" {{ "checked" if not user.is_disabled else "" }}>
+          <span>允许提交</span>
         </label>
         <button class="small-button" type="submit">保存</button>
       </form>
@@ -98,8 +96,7 @@
   </div>
   {% else %}
   <div class="empty-state compact">
-    <h3>还没有用户标识</h3>
-    <p>新增一个 IP 后会显示在这里。</p>
+    <h3>暂无用户</h3>
   </div>
   {% endif %}
 </section>

@@ -20,16 +20,16 @@
       {% if is_admin %}
       <nav class="nav">
         <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if request.endpoint in ['admin_dashboard', 'admin_tasks', 'admin_new_task', 'admin_task_detail'] else '' }}">检查任务</a>
-        <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户</a>
+        <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户管理</a>
         <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型</a>
         <a href="{{ url_for('admin_prompts') }}" class="{{ 'active' if request.endpoint == 'admin_prompts' else '' }}">提示词</a>
         <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint == 'admin_settings' else '' }}">并发</a>
       </nav>
-      <form method="post" action="{{ url_for('admin_logout') }}">
-        <button class="ghost-button" type="submit">退出</button>
-      </form>
       <div class="nav-identity">{{ nav_identity }}</div>
       <div class="admin-tag">管理员</div>
+      <form class="logout-form" method="post" action="{{ url_for('admin_logout') }}">
+        <button class="logout-button" type="submit">退出</button>
+      </form>
       {% else %}
       <nav class="nav">
         <a href="{{ url_for('user_tasks') }}" class="active">检查任务</a>
