@@ -147,19 +147,40 @@ class TaskScheduler:
                         return
 
                     progress = 5 + int((index - 1) / total * 85)
+                    next_progress = 5 + int(index / total * 85)
                     _update_progress(db, task_id, progress)
 
-                    content = run_check(
-                        api_base=provider["api_base"],
-                        api_key=provider["api_key"],
-                        proxy_mode=provider["proxy_mode"],
-                        proxy=provider["proxy"],
-                        request_timeout=provider["request_timeout"],
-                        model_name=model["model_name"],
-                        check_name=item["name"],
-                        prompt=item["prompt"],
-                        document_text=document_text,
+                    heartbeat_stop = threading.Event()
+                    heartbeat = threading.Thread(
+                        target=_progress_heartbeat,
+                        args=(
+                            self.app,
+                            task_id,
+                            heartbeat_stop,
+                            progress,
+                            max(progress, next_progress - 1),
+                            provider["request_timeout"],
+                        ),
+                        daemon=True,
+                        name=f"task-heartbeat-{task_id}-{index}",
                     )
+                    heartbeat.start()
+                    try:
+                        content = run_check(
+                            api_base=provider["api_base"],
+                            api_key=provider["api_key"],
+                            proxy_mode=provider["proxy_mode"],
+                            proxy=provider["proxy"],
+                            request_timeout=provider["request_timeout"],
+                            model_name=model["model_name"],
+                            check_name=item["name"],
+                            prompt=item["prompt"],
+                            document_text=document_text,
+                        )
+                    finally:
+                        heartbeat_stop.set()
+                        heartbeat.join(timeout=2)
+
                     results.append(
                         {
                             "code": item["code"],
@@ -205,6 +226,37 @@ def _update_progress(db, task_id: int, progress: int):
         (progress, now_text(), task_id),
     )
     db.commit()
+
+
+def _progress_heartbeat(
+    app,
+    task_id: int,
+    stop_event: threading.Event,
+    start: int,
+    end: int,
+    timeout_seconds: int,
+):
+    if end <= start:
+        return
+    started_at = time.monotonic()
+    climb_seconds = max(60, min(int(timeout_seconds or 300), 300))
+    while not stop_event.wait(8):
+        elapsed = time.monotonic() - started_at
+        ratio = min(1, elapsed / climb_seconds)
+        progress = start + int((end - start) * ratio)
+        if progress <= start:
+            continue
+        with app.app_context():
+            db = get_db()
+            row = db.execute(
+                "SELECT status, progress FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None or row["status"] != "running":
+                return
+            if row["progress"] >= progress:
+                continue
+            _update_progress(db, task_id, progress)
 
 
 def _mark_canceled(db, task_id: int):
