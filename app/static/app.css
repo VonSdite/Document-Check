@@ -21,7 +21,7 @@
 }
 
 html {
-  min-width: 320px;
+  min-width: 1180px;
 }
 
 body {
@@ -62,6 +62,7 @@ textarea {
   border-radius: var(--radius);
   background: #fff;
   color: var(--text);
+  font-weight: 400;
   padding: 10px 12px;
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -1583,86 +1584,4 @@ td {
 
 .login-brand {
   margin-bottom: 24px;
-}
-
-@media (max-width: 920px) {
-  .topbar-inner,
-  .page {
-    width: calc(100vw - 28px);
-  }
-
-  .topbar-inner,
-  .hero-band,
-  .page-title {
-    align-items: flex-start;
-  }
-
-  .topbar-inner,
-  .hero-band,
-  .page-title,
-  .report-toolbar,
-  .inline-edit,
-  .user-row,
-  .user-edit-form {
-    flex-direction: column;
-  }
-
-  .nav {
-    width: 100%;
-  }
-
-  .metric-grid,
-  .metric-grid.five,
-  .quick-form-grid,
-  .task-layout,
-  .split-grid,
-  .detail-grid,
-  .report-meta-list,
-  .form-grid,
-  .filter-bar,
-  .settings-concurrency-form {
-    grid-template-columns: 1fr;
-  }
-
-  .hero-actions,
-  .actions,
-  .form-actions {
-    justify-content: flex-start;
-  }
-
-  .inline-edit input,
-  .user-edit-form input[name="username"] {
-    max-width: none;
-  }
-
-  .page {
-    padding: 20px 0 42px;
-  }
-
-  .hero-band,
-  .panel {
-    padding: 18px;
-  }
-}
-
-@media (max-width: 560px) {
-  .panel-head,
-  .meta-list div {
-    grid-template-columns: 1fr;
-  }
-
-  .panel-head {
-    display: grid;
-  }
-
-  .hero-band h1,
-  .page-title h1 {
-    font-size: 28px;
-  }
-
-  .primary-button,
-  .secondary-button,
-  .ghost-button {
-    width: 100%;
-  }
 }
