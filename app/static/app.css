@@ -1085,6 +1085,13 @@ td {
   padding: 24px 16px;
 }
 
+.empty-state.subtle-empty {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .empty-state h3 {
   margin: 0 0 8px;
 }
@@ -1330,6 +1337,19 @@ td {
 .user-list {
   display: grid;
   gap: 10px;
+}
+
+.new-user-form {
+  display: grid;
+  gap: 16px;
+}
+
+.new-user-actions {
+  justify-content: space-between;
+}
+
+.new-user-actions .primary-button {
+  min-width: 128px;
 }
 
 .admin-user-stack {

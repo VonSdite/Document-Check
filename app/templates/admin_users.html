@@ -16,21 +16,25 @@
         <h2>新增用户</h2>
       </div>
     </div>
-    <form method="post" class="stack-form">
+    <form method="post" class="new-user-form">
       <input type="hidden" name="permission_submitted" value="1">
-      <label>
-        IP
-        <input name="ip" placeholder="例如 192.168.1.10" required>
-      </label>
-      <label>
-        用户名
-        <input name="username" placeholder="例如 财务部-张三">
-      </label>
-      <label class="switch-line">
-        <input type="checkbox" name="is_enabled" value="1" checked>
-        <span>允许提交</span>
-      </label>
-      <button class="primary-button" type="submit">保存</button>
+      <div class="form-grid">
+        <label>
+          IP
+          <input name="ip" placeholder="例如 192.168.1.10" required>
+        </label>
+        <label>
+          用户名
+          <input name="username" placeholder="例如 财务部-张三">
+        </label>
+      </div>
+      <div class="form-actions new-user-actions">
+        <label class="switch-line">
+          <input type="checkbox" name="is_enabled" value="1" checked>
+          <span>允许提交</span>
+        </label>
+        <button class="primary-button" type="submit">保存</button>
+      </div>
     </form>
   </div>
 
@@ -55,8 +59,8 @@
       {% endfor %}
     </div>
     {% else %}
-    <div class="empty-state compact">
-      <h3>无未标识 IP</h3>
+    <div class="empty-state compact subtle-empty">
+      <span>无未标识 IP</span>
     </div>
     {% endif %}
   </div>
