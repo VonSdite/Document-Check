@@ -49,7 +49,7 @@ def init_db():
             api_key TEXT,
             proxy_mode TEXT NOT NULL DEFAULT 'direct',
             proxy TEXT,
-            request_timeout INTEGER NOT NULL DEFAULT 180,
+            request_timeout INTEGER NOT NULL DEFAULT 900,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -128,7 +128,30 @@ def _ensure_provider_columns(db):
             """
         )
     if "request_timeout" not in columns:
-        db.execute("ALTER TABLE providers ADD COLUMN request_timeout INTEGER NOT NULL DEFAULT 180")
+        db.execute("ALTER TABLE providers ADD COLUMN request_timeout INTEGER NOT NULL DEFAULT 900")
+        _mark_provider_timeout_default_migrated(db)
+    elif _provider_timeout_default_needs_migration(db):
+        db.execute("UPDATE providers SET request_timeout = 900 WHERE request_timeout = 180")
+        _mark_provider_timeout_default_migrated(db)
+
+
+def _provider_timeout_default_needs_migration(db) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM settings WHERE key = ?",
+        ("provider_timeout_default_900_migrated",),
+    ).fetchone()
+    return row is None
+
+
+def _mark_provider_timeout_default_migrated(db):
+    db.execute(
+        """
+        INSERT INTO settings(key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        ("provider_timeout_default_900_migrated", json.dumps(True), now_text()),
+    )
 
 
 def set_setting(key: str, value):

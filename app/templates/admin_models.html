@@ -30,7 +30,7 @@
         </select>
       </label>
       <label class="proxy-custom-field">自定义代理<input name="proxy" placeholder="http://127.0.0.1:7890"></label>
-      <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="180" required></label>
+      <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="900" required></label>
       <label>模型列表<textarea name="models" rows="5" placeholder="每行一个模型名称，例如&#10;gpt-4.1-mini&#10;qwen-plus" required></textarea></label>
       <label class="switch-line"><input type="checkbox" name="is_active" checked><span>启用提供商</span></label>
       <button class="primary-button" type="submit">创建提供商</button>
@@ -76,7 +76,7 @@
           </select>
         </label>
         <label class="proxy-custom-field">自定义代理<input name="proxy" value="{{ provider.proxy or '' }}" placeholder="http://127.0.0.1:7890"></label>
-        <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout or 180 }}" required></label>
+        <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout or 900 }}" required></label>
       </div>
       <label>启用模型<textarea name="models" rows="4" required>{% for model in models_by_provider[provider.id] if model.enabled %}{{ model.model_name }}
 {% endfor %}</textarea></label>

@@ -14,7 +14,7 @@ def run_check(
     api_key: Optional[str],
     proxy_mode: str = "direct",
     proxy: Optional[str] = None,
-    request_timeout: int = 180,
+    request_timeout: int = 900,
     model_name: str,
     check_name: str,
     prompt: str,
