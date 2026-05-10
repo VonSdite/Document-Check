@@ -100,6 +100,7 @@ class TaskScheduler:
             if task is None:
                 return
 
+            results = []
             try:
                 if task["cancel_requested"]:
                     _mark_canceled(db, task_id)
@@ -123,7 +124,7 @@ class TaskScheduler:
                 document_text = extract_text(upload_path, task["file_type"]).strip()
                 if not document_text:
                     raise RuntimeError("未能从文档中提取到可检查文本")
-                document_text = trim_for_model(document_text)
+                document_text = trim_for_model(document_text, limit=provider["max_input_chars"])
 
                 check_ids = json.loads(task["checks_json"])
                 placeholders = ",".join("?" for _ in check_ids)
@@ -139,7 +140,6 @@ class TaskScheduler:
                 if not check_items:
                     raise RuntimeError("没有可执行的检查项")
 
-                results = []
                 total = len(check_items)
                 for index, item in enumerate(check_items, start=1):
                     if _cancel_requested(db, task_id):
@@ -185,10 +185,10 @@ class TaskScheduler:
                 )
                 db.commit()
             except (DocumentReadError, LLMError, RuntimeError) as exc:
-                _mark_failed(db, task_id, str(exc))
+                _mark_failed(db, task_id, str(exc), results)
             except Exception as exc:
                 self.app.logger.exception("任务执行异常：%s", task_id)
-                _mark_failed(db, task_id, f"任务执行异常：{exc}")
+                _mark_failed(db, task_id, f"任务执行异常：{exc}", results)
 
 
 def _cancel_requested(db, task_id: int) -> bool:
@@ -219,14 +219,21 @@ def _mark_canceled(db, task_id: int):
     db.commit()
 
 
-def _mark_failed(db, task_id: int, error: str):
+def _mark_failed(db, task_id: int, error: str, results: list[dict] | None = None):
+    result_json = json.dumps(results, ensure_ascii=False) if results else None
+    summary = f"已完成 {len(results)} 个检查项，后续检查失败。" if results else None
     db.execute(
         """
         UPDATE tasks
-        SET status = 'failed', error = ?, updated_at = ?, finished_at = ?
+        SET status = 'failed',
+            error = ?,
+            result_json = ?,
+            summary = ?,
+            updated_at = ?,
+            finished_at = ?
         WHERE id = ?
         """,
-        (error, now_text(), now_text(), task_id),
+        (error, result_json, summary, now_text(), now_text(), task_id),
     )
     db.commit()
 

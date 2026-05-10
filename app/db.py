@@ -50,6 +50,7 @@ def init_db():
             proxy_mode TEXT NOT NULL DEFAULT 'direct',
             proxy TEXT,
             request_timeout INTEGER NOT NULL DEFAULT 900,
+            max_input_chars INTEGER NOT NULL DEFAULT 20000,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -129,6 +130,8 @@ def _ensure_provider_columns(db):
         )
     if "request_timeout" not in columns:
         db.execute("ALTER TABLE providers ADD COLUMN request_timeout INTEGER NOT NULL DEFAULT 900")
+    if "max_input_chars" not in columns:
+        db.execute("ALTER TABLE providers ADD COLUMN max_input_chars INTEGER NOT NULL DEFAULT 20000")
 
 
 def set_setting(key: str, value):

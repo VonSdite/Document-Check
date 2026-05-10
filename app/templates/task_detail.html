@@ -40,7 +40,7 @@
         <button class="secondary-button warn" type="submit">取消任务</button>
       </form>
       {% endif %}
-      {% if task.status != "running" %}
+      {% if task.status not in ["queued", "running"] %}
       <form method="post" action="{{ url_for('admin_delete_task' if mode == 'admin' else 'user_delete_task', task_id=task.id) }}" data-confirm="确认删除该任务？删除后不可恢复。">
         <button class="secondary-button danger" type="submit">删除任务</button>
       </form>

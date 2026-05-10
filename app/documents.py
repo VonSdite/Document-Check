@@ -78,7 +78,7 @@ def _extract_html(path: Path) -> str:
     return soup.get_text("\n", strip=True)
 
 
-def trim_for_model(text: str, limit: int = 60000) -> str:
+def trim_for_model(text: str, limit: int = 20000) -> str:
     if len(text) <= limit:
         return text
     head = text[: limit // 2]

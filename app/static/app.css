@@ -326,6 +326,21 @@ td {
   font-size: 13px;
 }
 
+.refresh-toggle {
+  min-width: 86px;
+}
+
+.refresh-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #2f855a;
+}
+
+.refresh-toggle.is-off .refresh-dot {
+  background: #94a3b8;
+}
+
 .warn {
   color: var(--amber);
 }
@@ -672,6 +687,59 @@ td {
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+}
+
+.task-table {
+  min-width: 980px;
+  table-layout: fixed;
+}
+
+.task-table th:nth-child(1) {
+  width: 54%;
+}
+
+.task-table th:nth-child(2) {
+  width: 14%;
+}
+
+.task-table th:nth-child(3) {
+  width: 11%;
+}
+
+.task-table th:nth-child(4) {
+  width: 13%;
+}
+
+.task-table th:nth-child(5) {
+  width: 118px;
+}
+
+.task-file-cell .strong-link {
+  display: block;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.task-model-cell {
+  overflow-wrap: anywhere;
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.task-actions form {
+  margin: 0;
+}
+
+.task-actions .small-button {
+  min-width: 48px;
+  padding-left: 9px;
+  padding-right: 9px;
 }
 
 .pagination {

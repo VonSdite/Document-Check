@@ -156,3 +156,98 @@ document.addEventListener("change", (event) => {
   }
   updateFileControl(control, input);
 });
+
+const AUTO_REFRESH_KEY = "document-check:auto-refresh";
+let autoRefreshTimer = null;
+let autoRefreshPending = false;
+
+function autoRefreshEnabled() {
+  const saved = window.localStorage.getItem(AUTO_REFRESH_KEY);
+  return saved === null || saved === "1";
+}
+
+function setAutoRefreshEnabled(enabled) {
+  window.localStorage.setItem(AUTO_REFRESH_KEY, enabled ? "1" : "0");
+}
+
+function updateRefreshToggle() {
+  const toggle = document.querySelector("[data-auto-refresh-toggle]");
+  if (!(toggle instanceof HTMLButtonElement)) {
+    return;
+  }
+  const enabled = autoRefreshEnabled();
+  const label = toggle.querySelector("[data-refresh-label]");
+  toggle.classList.toggle("is-on", enabled);
+  toggle.classList.toggle("is-off", !enabled);
+  toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+  if (label) {
+    label.textContent = enabled ? "刷新中" : "已暂停";
+  }
+}
+
+function replaceRefreshRegion(documentFragment, name) {
+  const current = document.querySelector(`[data-refresh-region="${name}"]`);
+  const next = documentFragment.querySelector(`[data-refresh-region="${name}"]`);
+  if (current && next) {
+    current.innerHTML = next.innerHTML;
+  }
+}
+
+async function refreshTaskRegions() {
+  if (autoRefreshPending || document.hidden) {
+    return;
+  }
+  autoRefreshPending = true;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("_refresh", Date.now().toString());
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: { "X-Requested-With": "fetch" },
+    });
+    if (!response.ok) {
+      return;
+    }
+    const html = await response.text();
+    const nextDocument = new DOMParser().parseFromString(html, "text/html");
+    replaceRefreshRegion(nextDocument, "stats");
+    replaceRefreshRegion(nextDocument, "task-list");
+  } finally {
+    autoRefreshPending = false;
+  }
+}
+
+function startAutoRefresh() {
+  if (autoRefreshTimer || !document.querySelector("[data-auto-refresh-toggle]")) {
+    return;
+  }
+  autoRefreshTimer = window.setInterval(refreshTaskRegions, 6000);
+}
+
+function stopAutoRefresh() {
+  if (!autoRefreshTimer) {
+    return;
+  }
+  window.clearInterval(autoRefreshTimer);
+  autoRefreshTimer = null;
+}
+
+function applyAutoRefreshState() {
+  updateRefreshToggle();
+  if (autoRefreshEnabled()) {
+    startAutoRefresh();
+  } else {
+    stopAutoRefresh();
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-auto-refresh-toggle]");
+  if (!toggle) {
+    return;
+  }
+  setAutoRefreshEnabled(!autoRefreshEnabled());
+  applyAutoRefreshState();
+});
+
+applyAutoRefreshState();
