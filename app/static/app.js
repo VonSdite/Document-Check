@@ -1,12 +1,97 @@
+let activeConfirmPopover = null;
+
+function closeConfirmPopover() {
+  if (!activeConfirmPopover) {
+    return;
+  }
+  activeConfirmPopover.remove();
+  activeConfirmPopover = null;
+}
+
+function placeConfirmPopover(popover, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 12;
+  const width = popover.offsetWidth;
+  const height = popover.offsetHeight;
+  let left = rect.right - width;
+  let top = rect.bottom + 8;
+
+  if (left < margin) {
+    left = margin;
+  }
+  if (left + width > window.innerWidth - margin) {
+    left = window.innerWidth - width - margin;
+  }
+  if (top + height > window.innerHeight - margin) {
+    top = rect.top - height - 8;
+  }
+  if (top < margin) {
+    top = margin;
+  }
+
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function showConfirmPopover(anchor, message, onConfirm) {
+  closeConfirmPopover();
+
+  const popover = document.createElement("div");
+  popover.className = "confirm-popover";
+  popover.setAttribute("role", "dialog");
+  popover.setAttribute("aria-live", "polite");
+  popover.innerHTML = `
+    <div class="confirm-popover-title">确认操作</div>
+    <div class="confirm-popover-message"></div>
+    <div class="confirm-popover-actions">
+      <button class="small-button" type="button" data-confirm-cancel>取消</button>
+      <button class="small-button danger" type="button" data-confirm-ok>确认</button>
+    </div>
+  `;
+  popover.querySelector(".confirm-popover-message").textContent = message;
+  document.body.appendChild(popover);
+  activeConfirmPopover = popover;
+  placeConfirmPopover(popover, anchor);
+
+  window.setTimeout(() => {
+    const okButton = popover.querySelector("[data-confirm-ok]");
+    okButton?.focus();
+  });
+
+  popover.addEventListener("click", (event) => {
+    if (event.target.closest("[data-confirm-cancel]")) {
+      closeConfirmPopover();
+      return;
+    }
+    if (event.target.closest("[data-confirm-ok]")) {
+      closeConfirmPopover();
+      onConfirm();
+    }
+  });
+}
+
 document.addEventListener("submit", (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) {
     return;
   }
   const message = form.dataset.confirm;
-  if (message && !window.confirm(message)) {
-    event.preventDefault();
+  if (!message || form.dataset.confirmed === "true") {
+    delete form.dataset.confirmed;
+    return;
   }
+
+  event.preventDefault();
+  const submitter = event.submitter;
+  const anchor = submitter instanceof HTMLElement ? submitter : form;
+  showConfirmPopover(anchor, message, () => {
+    form.dataset.confirmed = "true";
+    if (submitter instanceof HTMLElement && typeof form.requestSubmit === "function") {
+      form.requestSubmit(submitter);
+    } else {
+      form.submit();
+    }
+  });
 });
 
 function hideToast(toast) {
@@ -29,13 +114,35 @@ document.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-confirm-click]");
   if (!target) {
+    if (activeConfirmPopover && !event.target.closest(".confirm-popover")) {
+      closeConfirmPopover();
+    }
     return;
   }
   const message = target.dataset.confirmClick;
-  if (message && !window.confirm(message)) {
-    event.preventDefault();
+  if (!message) {
+    return;
+  }
+
+  event.preventDefault();
+  showConfirmPopover(target, message, () => {
+    const form = target.form;
+    if (form instanceof HTMLFormElement && typeof form.requestSubmit === "function") {
+      form.requestSubmit(target);
+      return;
+    }
+    target.click();
+  });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeConfirmPopover();
   }
 });
+
+window.addEventListener("resize", closeConfirmPopover);
+window.addEventListener("scroll", closeConfirmPopover, true);
 
 function clearFileControl(target) {
   const control = target.closest(".file-upload-control");

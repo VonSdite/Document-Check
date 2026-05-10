@@ -1206,6 +1206,52 @@ td {
   color: var(--danger);
 }
 
+.confirm-popover {
+  position: fixed;
+  z-index: 100;
+  width: min(300px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid #cfe0f5;
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 18px 42px rgba(16, 32, 51, 0.16);
+  animation: toast-in 0.14s ease-out;
+}
+
+.confirm-popover::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  right: 24px;
+  width: 12px;
+  height: 12px;
+  border-top: 1px solid #cfe0f5;
+  border-left: 1px solid #cfe0f5;
+  background: #fff;
+  transform: rotate(45deg);
+}
+
+.confirm-popover-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.confirm-popover-message {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.confirm-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
