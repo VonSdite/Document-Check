@@ -78,7 +78,7 @@
         <h2>{{ result.name }}</h2>
       </div>
     </div>
-    <div class="result-text">{{ result.result }}</div>
+    <div class="result-text markdown-body">{{ result.result|markdown }}</div>
   </article>
   {% endfor %}
 </section>

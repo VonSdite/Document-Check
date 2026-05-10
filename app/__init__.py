@@ -5,6 +5,7 @@ from flask import Flask
 
 from .config import load_local_config
 from .db import init_db, seed_defaults
+from .formatting import render_markdown
 from .routes import register_routes
 from .tasks import TaskScheduler
 
@@ -35,6 +36,7 @@ def create_app():
         seed_defaults()
 
     register_routes(app)
+    app.add_template_filter(render_markdown, "markdown")
 
     if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         scheduler = TaskScheduler(app)
