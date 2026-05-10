@@ -12,6 +12,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    Response,
     session,
     url_for,
 )
@@ -104,6 +105,11 @@ def register_routes(app):
     def user_task_detail(task_id):
         task = _get_user_task(task_id)
         return render_template("task_detail.html", mode="user", task=task, results=_task_results(task))
+
+    @app.get("/tasks/<int:task_id>/export")
+    def user_export_task(task_id):
+        task = _get_user_task(task_id)
+        return _export_task_report(task)
 
     @app.post("/tasks/<int:task_id>/cancel")
     def user_cancel_task(task_id):
@@ -236,6 +242,12 @@ def register_routes(app):
     def admin_task_detail(task_id):
         task = _get_task_or_404(task_id)
         return render_template("task_detail.html", mode="admin", task=task, results=_task_results(task))
+
+    @app.get(f"{admin_prefix}/tasks/<int:task_id>/export")
+    @admin_required
+    def admin_export_task(task_id):
+        task = _get_task_or_404(task_id)
+        return _export_task_report(task)
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/cancel")
     @admin_required
@@ -658,6 +670,21 @@ def _task_results(task):
         return json.loads(task["result_json"])
     except json.JSONDecodeError:
         return []
+
+
+def _export_task_report(task):
+    html = render_template(
+        "task_report_export.html",
+        task=task,
+        results=_task_results(task),
+        generated_at=now_text(),
+    )
+    filename = f"document-check-report-{task['id']}.html"
+    return Response(
+        html,
+        mimetype="text/html",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _page_arg() -> int:

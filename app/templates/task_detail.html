@@ -8,13 +8,13 @@
 {% endblock %}
 
 {% block content %}
-<div class="report-back">
+<div class="report-toolbar">
   <a class="ghost-button" href="{{ url_for('admin_tasks') if mode == 'admin' else url_for('user_tasks') }}">返回列表</a>
+  <a class="secondary-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">导出 HTML</a>
 </div>
 
 <section class="page-title">
   <div>
-    <p class="eyebrow">任务 #{{ task.id }}</p>
     <h1>{{ task.original_filename }}</h1>
   </div>
 </section>

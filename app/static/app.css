@@ -218,7 +218,11 @@ td {
   margin-bottom: 22px;
 }
 
-.report-back {
+.report-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
 }
 
@@ -1318,6 +1322,7 @@ td {
   .topbar-inner,
   .hero-band,
   .page-title,
+  .report-toolbar,
   .inline-edit,
   .user-row,
   .user-edit-form {
