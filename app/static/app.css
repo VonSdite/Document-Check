@@ -176,16 +176,29 @@ td {
 
 .nav a {
   color: var(--muted);
+  border: 1px solid transparent;
   padding: 9px 11px;
   border-radius: var(--radius);
   font-size: 14px;
   font-weight: 700;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.nav a:hover,
 .nav a.active {
   color: var(--primary-strong);
   background: #f0f6ff;
+}
+
+.nav a:hover {
+  color: var(--primary-strong);
+  background: #fff;
+  border-color: #bfd2ec;
+  box-shadow: 0 6px 16px rgba(91, 130, 189, 0.11);
+}
+
+.nav a.active:hover {
+  background: #e6f0ff;
+  border-color: #abc7e9;
 }
 
 .nav-identity {
