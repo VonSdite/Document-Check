@@ -10,7 +10,9 @@
 {% block content %}
 <div class="report-toolbar">
   <a class="secondary-button" href="{{ url_for('admin_tasks') if mode == 'admin' else url_for('user_tasks') }}">返回列表</a>
+  {% if task.status == "completed" %}
   <a class="secondary-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">导出 HTML</a>
+  {% endif %}
 </div>
 
 <section class="panel report-status-panel">
@@ -36,13 +38,6 @@
   </dl>
   {% if task.error %}
   <div class="error-box report-error">{{ task.error }}</div>
-  {% endif %}
-  {% if task.status in ["queued", "running"] %}
-  <div class="form-actions">
-    <form method="post" action="{{ url_for('admin_cancel_task' if mode == 'admin' else 'user_cancel_task', task_id=task.id) }}">
-      <button class="secondary-button warn" type="submit">取消任务</button>
-    </form>
-  </div>
   {% endif %}
 </section>
 
