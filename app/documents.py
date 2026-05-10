@@ -76,15 +76,3 @@ def _extract_html(path: Path) -> str:
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     return soup.get_text("\n", strip=True)
-
-
-def trim_for_model(text: str, limit: int = 60000) -> str:
-    if len(text) <= limit:
-        return text
-    notice = "\n\n[文档过长，中间部分已截断，仅保留首尾内容用于本次检查]\n\n"
-    if limit <= len(notice):
-        return text[:limit]
-    content_limit = limit - len(notice)
-    head_length = content_limit // 2
-    tail_length = content_limit - head_length
-    return f"{text[:head_length]}{notice}{text[-tail_length:]}"

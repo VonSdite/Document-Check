@@ -19,7 +19,7 @@ from flask import (
 )
 
 from .db import get_db, get_setting, now_text, set_setting
-from .documents import allowed_file, extension_of
+from .documents import DocumentReadError, allowed_file, extension_of, extract_text
 
 
 STATUS_LABELS = {
@@ -551,7 +551,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         return _back_to_task_form(admin_created)
     model = db.execute(
         """
-        SELECT pm.*, p.name AS provider_name, p.id AS provider_id
+        SELECT pm.*, p.name AS provider_name, p.id AS provider_id, p.max_input_chars
         FROM provider_models pm
         JOIN providers p ON p.id = pm.provider_id
         WHERE pm.id = ? AND pm.enabled = 1 AND p.is_active = 1
@@ -568,6 +568,21 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
     stored_filename, destination = _upload_destination(original_filename, ip, created_at, file_type)
     upload.save(destination)
     file_size = os.path.getsize(destination)
+    try:
+        document_text = extract_text(destination, file_type).strip()
+    except DocumentReadError as exc:
+        _remove_uploaded_file(destination)
+        flash(f"文档读取失败：{exc}", "error")
+        return _back_to_task_form(admin_created)
+    if not document_text:
+        _remove_uploaded_file(destination)
+        flash("未能从文档中提取到可检查文本。", "error")
+        return _back_to_task_form(admin_created)
+    if len(document_text) > model["max_input_chars"]:
+        _remove_uploaded_file(destination)
+        flash(f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
+        return _back_to_task_form(admin_created)
+
     username = user["username"] if user and user["username"] else None
     db.execute(
         """
@@ -695,6 +710,11 @@ def _download_task_document(task, fallback_endpoint: str):
         as_attachment=True,
         download_name=task["original_filename"],
     )
+
+
+def _remove_uploaded_file(path: Path):
+    if path.exists():
+        path.unlink()
 
 
 def _task_upload_path(task) -> Path:

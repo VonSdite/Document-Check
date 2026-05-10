@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from .db import get_db, get_setting, now_text
-from .documents import DocumentReadError, extract_text, trim_for_model
+from .documents import DocumentReadError, extract_text
 from .llm import LLMError, run_check
 
 
@@ -134,7 +134,10 @@ class TaskScheduler:
                 document_text = extract_text(upload_path, task["file_type"]).strip()
                 if not document_text:
                     raise RuntimeError("未能从文档中提取到可检查文本")
-                document_text = trim_for_model(document_text, limit=provider["max_input_chars"])
+                if len(document_text) > provider["max_input_chars"]:
+                    raise RuntimeError(
+                        f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {provider['max_input_chars']} 字"
+                    )
 
                 check_ids = json.loads(task["checks_json"])
                 placeholders = ",".join("?" for _ in check_ids)
