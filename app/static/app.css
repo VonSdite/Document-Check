@@ -215,6 +215,20 @@ td {
   font-weight: 800;
 }
 
+.admin-tag {
+  flex: 0 0 auto;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #cfe0f5;
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  color: var(--primary-strong);
+  background: #f0f6ff;
+  font-size: 13px;
+  font-weight: 850;
+}
+
 .page {
   width: var(--content-width);
   max-width: none;
@@ -252,12 +266,6 @@ td {
     var(--panel);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
-}
-
-.admin-hero {
-  background:
-    linear-gradient(110deg, rgba(91, 130, 189, 0.08), rgba(106, 165, 199, 0.07)),
-    var(--panel);
 }
 
 .hero-band h1,
@@ -719,6 +727,11 @@ td {
   table-layout: fixed;
 }
 
+.admin-task-table {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
 .task-table th:nth-child(1) {
   width: 54%;
 }
@@ -739,6 +752,30 @@ td {
   width: 118px;
 }
 
+.admin-task-table th:nth-child(1) {
+  width: 50%;
+}
+
+.admin-task-table th:nth-child(2) {
+  width: 12%;
+}
+
+.admin-task-table th:nth-child(3) {
+  width: 13%;
+}
+
+.admin-task-table th:nth-child(4) {
+  width: 92px;
+}
+
+.admin-task-table th:nth-child(5) {
+  width: 132px;
+}
+
+.admin-task-table th:nth-child(6) {
+  width: 118px;
+}
+
 .task-file-cell .strong-link {
   display: block;
   line-height: 1.35;
@@ -747,6 +784,16 @@ td {
 
 .task-model-cell {
   overflow-wrap: anywhere;
+}
+
+.task-owner-cell,
+.task-time-cell,
+.task-status-cell {
+  overflow-wrap: anywhere;
+}
+
+.task-status-cell {
+  white-space: nowrap;
 }
 
 .task-actions {
@@ -820,6 +867,7 @@ td {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   min-height: 26px;
   border-radius: 999px;
   padding: 3px 10px;

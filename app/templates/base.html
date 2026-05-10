@@ -11,17 +11,15 @@
   {% set is_admin = request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login' %}
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="{{ url_for('admin_dashboard') if is_admin else url_for('user_tasks') }}">
+      <a class="brand" href="{{ url_for('admin_tasks') if is_admin else url_for('user_tasks') }}">
         <span class="brand-mark">文</span>
         <span>
           <strong>文档智能门禁</strong>
-          {% if is_admin %}<small>管理</small>{% endif %}
         </span>
       </a>
       {% if is_admin %}
       <nav class="nav">
-        <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active' if request.endpoint == 'admin_dashboard' else '' }}">概览</a>
-        <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if request.endpoint in ['admin_tasks', 'admin_new_task', 'admin_task_detail'] else '' }}">检查任务</a>
+        <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if request.endpoint in ['admin_dashboard', 'admin_tasks', 'admin_new_task', 'admin_task_detail'] else '' }}">检查任务</a>
         <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户</a>
         <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型</a>
         <a href="{{ url_for('admin_prompts') }}" class="{{ 'active' if request.endpoint == 'admin_prompts' else '' }}">提示词</a>
@@ -30,6 +28,8 @@
       <form method="post" action="{{ url_for('admin_logout') }}">
         <button class="ghost-button" type="submit">退出</button>
       </form>
+      <div class="nav-identity">{{ nav_identity }}</div>
+      <div class="admin-tag">管理员</div>
       {% else %}
       <nav class="nav">
         <a href="{{ url_for('user_tasks') }}" class="active">检查任务</a>

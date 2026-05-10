@@ -144,7 +144,7 @@ def register_routes(app):
             if ok:
                 session["admin_logged_in"] = True
                 flash("管理员已登录。", "success")
-                return redirect(url_for("admin_dashboard"))
+                return redirect(url_for("admin_tasks"))
             flash("账号或密码不正确。", "error")
         return render_template("admin_login.html")
 
@@ -157,36 +157,7 @@ def register_routes(app):
     @app.get(admin_prefix)
     @admin_required
     def admin_dashboard():
-        db = get_db()
-        totals = {
-            "tasks": db.execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"],
-            "running": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'").fetchone()["total"],
-            "queued": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued'").fetchone()["total"],
-            "users": db.execute("SELECT COUNT(*) AS total FROM ip_users").fetchone()["total"],
-            "models": db.execute(
-                """
-                SELECT COUNT(*) AS total
-                FROM provider_models pm
-                JOIN providers p ON p.id = pm.provider_id
-                WHERE p.is_active = 1 AND pm.enabled = 1
-                """
-            ).fetchone()["total"],
-        }
-        recent_tasks = db.execute(
-            """
-            SELECT *
-            FROM tasks
-            ORDER BY created_at DESC, id DESC
-            LIMIT 8
-            """
-        ).fetchall()
-        return render_template(
-            "admin_dashboard.html",
-            totals=totals,
-            recent_tasks=recent_tasks,
-            global_concurrency=get_setting("global_concurrency", 5),
-            user_concurrency=get_setting("user_concurrency", 1),
-        )
+        return redirect(url_for("admin_tasks"))
 
     @app.route(f"{admin_prefix}/tasks", methods=["GET"])
     @admin_required
@@ -224,6 +195,9 @@ def register_routes(app):
             status=status,
             ip=ip,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
+            totals=_admin_totals(),
+            global_concurrency=get_setting("global_concurrency", 5),
+            user_concurrency=get_setting("user_concurrency", 1),
         )
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
@@ -529,6 +503,24 @@ def get_enabled_models():
         ORDER BY p.name ASC, pm.model_name ASC
         """
     ).fetchall()
+
+
+def _admin_totals() -> dict:
+    db = get_db()
+    return {
+        "tasks": db.execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"],
+        "running": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'").fetchone()["total"],
+        "queued": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued'").fetchone()["total"],
+        "users": db.execute("SELECT COUNT(*) AS total FROM ip_users").fetchone()["total"],
+        "models": db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM provider_models pm
+            JOIN providers p ON p.id = pm.provider_id
+            WHERE p.is_active = 1 AND pm.enabled = 1
+            """
+        ).fetchone()["total"],
+    }
 
 
 def create_task_for_ip(ip: str, user, *, admin_created: bool):
