@@ -48,8 +48,8 @@
         <label>检查项名称<input name="name" value="{{ item.name }}" required></label>
         <div class="form-field">
           <span class="field-with-help">
-            <span class="field-label">悬浮提示</span>
-            <span class="help-tip" tabindex="0" data-tip="显示在创建检查的检查项悬浮提示中。">?</span>
+            <span class="field-label">说明</span>
+            <button class="help-tip" type="button" aria-label="说明用途" data-tip="显示在创建检查页，鼠标悬浮检查项时可查看。">?</button>
           </span>
           <input name="description" value="{{ item.description or '' }}">
         </div>
