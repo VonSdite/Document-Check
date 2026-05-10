@@ -61,11 +61,11 @@
 </form>
 
 <section class="metric-grid five" data-refresh-region="stats">
-  <div class="metric"><span>全部任务</span><strong>{{ totals.tasks }}</strong></div>
+  <div class="metric"><span>全部</span><strong>{{ totals.tasks }}</strong></div>
+  <div class="metric"><span>排队</span><strong>{{ totals.queued }}</strong></div>
   <div class="metric"><span>检查中</span><strong>{{ totals.running }}</strong></div>
-  <div class="metric"><span>排队中</span><strong>{{ totals.queued }}</strong></div>
-  <div class="metric"><span>用户标识</span><strong>{{ totals.users }}</strong></div>
-  <div class="metric"><span>可用模型</span><strong>{{ totals.models }}</strong></div>
+  <div class="metric"><span>已完成</span><strong>{{ totals.completed }}</strong></div>
+  <div class="metric"><span>IP数</span><strong>{{ totals.ips }}</strong></div>
 </section>
 
 <section class="panel">

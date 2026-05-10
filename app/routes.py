@@ -516,17 +516,10 @@ def _admin_totals() -> dict:
     db = get_db()
     return {
         "tasks": db.execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"],
-        "running": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'").fetchone()["total"],
         "queued": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued'").fetchone()["total"],
-        "users": db.execute("SELECT COUNT(*) AS total FROM ip_users").fetchone()["total"],
-        "models": db.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM provider_models pm
-            JOIN providers p ON p.id = pm.provider_id
-            WHERE p.is_active = 1 AND pm.enabled = 1
-            """
-        ).fetchone()["total"],
+        "running": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'").fetchone()["total"],
+        "completed": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'completed'").fetchone()["total"],
+        "ips": db.execute("SELECT COUNT(DISTINCT ip) AS total FROM tasks").fetchone()["total"],
     }
 
 
