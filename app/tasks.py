@@ -238,27 +238,31 @@ def _run_check_items_concurrently(app, task, check_items: list[dict], document_t
                 index,
                 total,
             )
-            current_parts = []
             last_stream_write = 0.0
             progress = 5 + int((index - 1) / total * 85)
 
-            def on_delta(delta: str):
+            def on_content(content: str):
                 nonlocal last_stream_write
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
-                current_parts.append(delta)
-                if time.monotonic() - last_stream_write < 1.2:
-                    return
-                last_stream_write = time.monotonic()
-                content = "".join(current_parts).strip()
-                if not content:
-                    return
+                content = content.strip()
                 with result_lock:
-                    partial_by_code[item["code"]] = {
-                        "code": item["code"],
-                        "name": item["name"],
-                        "result": content,
-                    }
+                    had_partial = item["code"] in partial_by_code
+                    if content:
+                        partial_by_code[item["code"]] = {
+                            "code": item["code"],
+                            "name": item["name"],
+                            "result": content,
+                        }
+                    else:
+                        partial_by_code.pop(item["code"], None)
+
+                now = time.monotonic()
+                if content and now - last_stream_write < 1.2:
+                    return
+                last_stream_write = now
+                if not content and not had_partial:
+                    return
                 save_snapshot(db, f"正在并发检查：{item['name']}", progress)
 
             content = run_check(
@@ -271,7 +275,7 @@ def _run_check_items_concurrently(app, task, check_items: list[dict], document_t
                 check_name=item["name"],
                 prompt=item["prompt"],
                 document_text=document_text,
-                on_delta=on_delta,
+                on_content=on_content,
                 task_id=task_id,
             )
 

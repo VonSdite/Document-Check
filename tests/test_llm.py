@@ -161,6 +161,45 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(len(fake_session.calls), 3)
         self.assertEqual(sleep.call_args_list, [call(1), call(2)])
 
+    def test_reports_stream_content_snapshots_and_clears_failed_attempt(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"失败前片段"}}]}',
+                        'data: {"error":{"message":"temporary"}}',
+                    ]
+                ),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"重试"}}]}',
+                        'data: {"choices":[{"delta":{"content":"成功"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+        snapshots = []
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep") as sleep,
+        ):
+            result = llm.run_check(
+                api_base="http://example.test/v1",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                on_content=snapshots.append,
+            )
+
+        self.assertEqual(result, "重试成功")
+        self.assertEqual(snapshots, ["失败前片段", "", "重试", "重试成功"])
+        self.assertEqual(len(fake_session.calls), 2)
+        sleep.assert_called_once_with(1)
+
 
 if __name__ == "__main__":
     unittest.main()

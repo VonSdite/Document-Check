@@ -34,6 +34,7 @@ def run_check(
     prompt: str,
     document_text: str,
     on_delta: Optional[Callable[[str], None]] = None,
+    on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
 ) -> str:
     request_id = uuid.uuid4().hex[:12]
@@ -77,6 +78,14 @@ def run_check(
 
     last_error = None
     for attempt in range(1, _MAX_RETRIES + 2):
+        attempt_content = ""
+
+        def on_attempt_delta(delta: str):
+            nonlocal attempt_content
+            attempt_content += delta
+            if on_content:
+                on_content(attempt_content)
+
         try:
             content = _run_check_attempt(
                 endpoint=endpoint,
@@ -85,16 +94,20 @@ def run_check(
                 proxy_mode=proxy_mode,
                 proxy=proxy,
                 request_timeout=request_timeout,
-                on_delta=None,
+                on_delta=on_attempt_delta if on_content else None,
                 request_id=request_id,
                 task_id=task_id,
                 attempt=attempt,
             )
+            if on_content and not attempt_content and content:
+                on_content(content)
             if on_delta:
                 on_delta(content)
             return content
         except LLMError as exc:
             last_error = exc
+            if on_content and attempt_content:
+                on_content("")
             if attempt > _MAX_RETRIES:
                 raise
             delay_seconds = attempt
