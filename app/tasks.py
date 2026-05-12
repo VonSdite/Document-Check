@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .db import get_db, get_setting, now_text
@@ -10,6 +11,9 @@ from .llm import LLMError, run_check
 
 class TaskCanceled(Exception):
     pass
+
+
+CHECK_ITEM_CONCURRENCY = 3
 
 
 class TaskScheduler:
@@ -54,7 +58,7 @@ class TaskScheduler:
 
     def _launch_available_tasks(self):
         db = get_db()
-        global_limit = max(1, int(get_setting("global_concurrency", 5)))
+        global_limit = max(1, int(get_setting("global_concurrency", 3)))
         user_limit = max(1, int(get_setting("user_concurrency", 1)))
 
         running_total = db.execute(
@@ -124,131 +128,41 @@ class TaskScheduler:
                     _mark_canceled(db, task_id)
                     return
 
-                provider = db.execute(
-                    "SELECT * FROM providers WHERE id = ? AND is_active = 1",
-                    (task["provider_id"],),
-                ).fetchone()
-                if provider is None:
-                    raise RuntimeError("任务使用的模型提供商不存在或已停用")
-
-                model = db.execute(
-                    "SELECT * FROM provider_models WHERE id = ? AND enabled = 1",
-                    (task["model_id"],),
-                ).fetchone()
-                if model is None:
-                    raise RuntimeError("任务使用的模型不存在或已停用")
-
                 upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / task["stored_filename"]
                 document_text = extract_text(upload_path, task["file_type"]).strip()
                 if not document_text:
                     raise RuntimeError("未能从文档中提取到可检查文本")
-                if len(document_text) > provider["max_input_chars"]:
+                if len(document_text) > task["max_input_chars"]:
                     raise RuntimeError(
-                        f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {provider['max_input_chars']} 字"
+                        f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
                     )
 
                 check_ids = json.loads(task["checks_json"])
                 placeholders = ",".join("?" for _ in check_ids)
-                check_items = db.execute(
-                    f"""
-                    SELECT *
-                    FROM check_items
-                    WHERE id IN ({placeholders}) AND enabled = 1
-                    ORDER BY sort_order ASC, id ASC
-                    """,
-                    tuple(check_ids),
-                ).fetchall()
+                check_items = [
+                    dict(row)
+                    for row in db.execute(
+                        f"""
+                        SELECT *
+                        FROM check_items
+                        WHERE id IN ({placeholders}) AND enabled = 1
+                        ORDER BY sort_order ASC, id ASC
+                        """,
+                        tuple(check_ids),
+                    ).fetchall()
+                ]
                 if not check_items:
                     raise RuntimeError("没有可执行的检查项")
 
-                total = len(check_items)
-                for index, item in enumerate(check_items, start=1):
-                    if _cancel_requested(db, task_id):
-                        _mark_canceled(db, task_id)
-                        return
-
-                    self.app.logger.info(
-                        "任务检查项开始 task_id=%s item=%s index=%s/%s",
-                        task_id,
-                        item["name"],
-                        index,
-                        total,
-                    )
-                    progress = 5 + int((index - 1) / total * 85)
-                    next_progress = 5 + int(index / total * 85)
-                    _update_progress(db, task_id, progress)
-                    current_parts = []
-                    last_stream_write = 0.0
-
-                    def on_delta(delta: str):
-                        nonlocal last_stream_write
-                        if _cancel_requested(db, task_id):
-                            raise TaskCanceled
-                        current_parts.append(delta)
-                        if time.monotonic() - last_stream_write < 1.2:
-                            return
-                        last_stream_write = time.monotonic()
-                        content = "".join(current_parts).strip()
-                        if content:
-                            _save_stream_result(db, task_id, results, item, content, progress)
-
-                    heartbeat_stop = threading.Event()
-                    heartbeat = threading.Thread(
-                        target=_progress_heartbeat,
-                        args=(
-                            self.app,
-                            task_id,
-                            heartbeat_stop,
-                            progress,
-                            max(progress, next_progress - 1),
-                            provider["request_timeout"],
-                        ),
-                        daemon=True,
-                        name=f"task-heartbeat-{task_id}-{index}",
-                    )
-                    heartbeat.start()
-                    try:
-                        content = run_check(
-                            api_base=provider["api_base"],
-                            api_key=provider["api_key"],
-                            proxy_mode=provider["proxy_mode"],
-                            proxy=provider["proxy"],
-                            request_timeout=provider["request_timeout"],
-                            model_name=model["model_name"],
-                            check_name=item["name"],
-                            prompt=item["prompt"],
-                            document_text=document_text,
-                            on_delta=on_delta,
-                            task_id=task_id,
-                        )
-                    finally:
-                        heartbeat_stop.set()
-                        heartbeat.join(timeout=2)
-
-                    if _cancel_requested(db, task_id):
-                        _mark_canceled(db, task_id)
-                        return
-
-                    results.append(
-                        {
-                            "code": item["code"],
-                            "name": item["name"],
-                            "result": content,
-                        }
-                    )
-                    self.app.logger.info(
-                        "任务检查项完成 task_id=%s item=%s output_chars=%s",
-                        task_id,
-                        item["name"],
-                        len(content),
-                    )
-                    _save_intermediate_results(
-                        db,
-                        task_id,
-                        results,
-                        f"已完成 {len(results)} 个检查项，继续检查中。",
-                        next_progress,
-                    )
+                results = _run_check_items_concurrently(
+                    self.app,
+                    task,
+                    check_items,
+                    document_text,
+                    max_workers=CHECK_ITEM_CONCURRENCY,
+                )
+                if _cancel_requested(db, task_id):
+                    raise TaskCanceled
 
                 summary = _build_summary(results)
                 db.execute(
@@ -278,6 +192,146 @@ class TaskScheduler:
                 _mark_failed(db, task_id, f"任务执行异常：{exc}", results)
 
 
+def _run_check_items_concurrently(app, task, check_items: list[dict], document_text: str, *, max_workers: int) -> list[dict]:
+    task_id = task["id"]
+    total = len(check_items)
+    completed_by_code: dict[str, dict] = {}
+    partial_by_code: dict[str, dict] = {}
+    result_lock = threading.Lock()
+    save_lock = threading.Lock()
+    cancel_event = threading.Event()
+    heartbeat_stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_progress_heartbeat,
+        args=(
+            app,
+            task_id,
+            heartbeat_stop,
+            5,
+            89,
+            task["request_timeout"],
+        ),
+        daemon=True,
+        name=f"task-heartbeat-{task_id}",
+    )
+    with save_lock:
+        db = get_db()
+        _update_progress(db, task_id, 5)
+    heartbeat.start()
+
+    def save_snapshot(db, summary: str, progress: int):
+        with result_lock:
+            snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
+        with save_lock:
+            _save_intermediate_results(db, task_id, snapshot, summary, progress)
+
+    def run_item(index: int, item: dict) -> dict:
+        with app.app_context():
+            db = get_db()
+            if cancel_event.is_set() or _cancel_requested(db, task_id):
+                raise TaskCanceled
+
+            app.logger.info(
+                "任务检查项开始 task_id=%s item=%s index=%s/%s",
+                task_id,
+                item["name"],
+                index,
+                total,
+            )
+            current_parts = []
+            last_stream_write = 0.0
+            progress = 5 + int((index - 1) / total * 85)
+
+            def on_delta(delta: str):
+                nonlocal last_stream_write
+                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                    raise TaskCanceled
+                current_parts.append(delta)
+                if time.monotonic() - last_stream_write < 1.2:
+                    return
+                last_stream_write = time.monotonic()
+                content = "".join(current_parts).strip()
+                if not content:
+                    return
+                with result_lock:
+                    partial_by_code[item["code"]] = {
+                        "code": item["code"],
+                        "name": item["name"],
+                        "result": content,
+                    }
+                save_snapshot(db, f"正在并发检查：{item['name']}", progress)
+
+            content = run_check(
+                api_base=task["api_base"],
+                api_key=task["api_key"],
+                proxy_mode=task["proxy_mode"],
+                proxy=task["proxy"],
+                request_timeout=task["request_timeout"],
+                model_name=task["model_name"],
+                check_name=item["name"],
+                prompt=item["prompt"],
+                document_text=document_text,
+                on_delta=on_delta,
+                task_id=task_id,
+            )
+
+            if cancel_event.is_set() or _cancel_requested(db, task_id):
+                raise TaskCanceled
+
+            result = {
+                "code": item["code"],
+                "name": item["name"],
+                "result": content,
+            }
+            with result_lock:
+                completed_by_code[item["code"]] = result
+                partial_by_code.pop(item["code"], None)
+                completed_count = len(completed_by_code)
+            save_snapshot(
+                db,
+                f"已完成 {completed_count}/{total} 个检查项，继续检查中。",
+                5 + int(completed_count / total * 85),
+            )
+            app.logger.info(
+                "任务检查项完成 task_id=%s item=%s output_chars=%s",
+                task_id,
+                item["name"],
+                len(content),
+            )
+            return result
+
+    executor = ThreadPoolExecutor(max_workers=max(1, min(max_workers, total)), thread_name_prefix=f"task-check-{task_id}")
+    futures = []
+    try:
+        futures = [executor.submit(run_item, index, item) for index, item in enumerate(check_items, start=1)]
+        results = []
+        for future in as_completed(futures):
+            results.append(future.result())
+        with result_lock:
+            ordered = _ordered_results(check_items, completed_by_code, {})
+        if len(ordered) != total:
+            raise RuntimeError("部分检查项未完成")
+        return ordered
+    except Exception:
+        cancel_event.set()
+        for future in futures:
+            future.cancel()
+        raise
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=2)
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _ordered_results(check_items: list[dict], completed: dict[str, dict], partial: dict[str, dict]) -> list[dict]:
+    results = []
+    for item in check_items:
+        result = completed.get(item["code"]) or partial.get(item["code"])
+        if result:
+            results.append(result)
+    return results
+
+
 def _cancel_requested(db, task_id: int) -> bool:
     row = db.execute(
         "SELECT cancel_requested FROM tasks WHERE id = ?",
@@ -292,17 +346,6 @@ def _update_progress(db, task_id: int, progress: int):
         (progress, now_text(), task_id),
     )
     db.commit()
-
-
-def _save_stream_result(db, task_id: int, completed: list[dict], item, content: str, progress: int):
-    results = completed + [
-        {
-            "code": item["code"],
-            "name": item["name"],
-            "result": content,
-        }
-    ]
-    _save_intermediate_results(db, task_id, results, f"正在检查：{item['name']}", progress)
 
 
 def _save_intermediate_results(db, task_id: int, results: list[dict], summary: str, progress: int):

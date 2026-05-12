@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from app import llm
 
@@ -131,6 +131,35 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertNotIn("stream_options", fake_session.calls[1][1]["json"])
         self.assertTrue(fake_session.calls[0][1]["stream"])
         self.assertFalse(fake_session.calls[1][1]["stream"])
+
+    def test_retries_llm_errors_twice_before_success(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"error":{"message":"temporary"}}']),
+                FakeResponse(lines=['data: {"error":{"message":"temporary again"}}']),
+                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"重试成功"}}]}', "data: [DONE]"]),
+            ]
+        )
+        chunks = []
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep") as sleep,
+        ):
+            result = llm.run_check(
+                api_base="http://example.test/v1",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                on_delta=chunks.append,
+            )
+
+        self.assertEqual(result, "重试成功")
+        self.assertEqual(chunks, ["重试成功"])
+        self.assertEqual(len(fake_session.calls), 3)
+        self.assertEqual(sleep.call_args_list, [call(1), call(2)])
 
 
 if __name__ == "__main__":

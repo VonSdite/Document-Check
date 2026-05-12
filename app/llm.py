@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import uuid
 from typing import Callable, Optional
 
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 _REASONING_FIELDS = ("reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
+_MAX_RETRIES = 2
 
 
 class LLMError(Exception):
@@ -73,6 +75,55 @@ def run_check(
         len(document_text),
     )
 
+    last_error = None
+    for attempt in range(1, _MAX_RETRIES + 2):
+        try:
+            content = _run_check_attempt(
+                endpoint=endpoint,
+                headers=headers,
+                payload=payload,
+                proxy_mode=proxy_mode,
+                proxy=proxy,
+                request_timeout=request_timeout,
+                on_delta=None,
+                request_id=request_id,
+                task_id=task_id,
+                attempt=attempt,
+            )
+            if on_delta:
+                on_delta(content)
+            return content
+        except LLMError as exc:
+            last_error = exc
+            if attempt > _MAX_RETRIES:
+                raise
+            delay_seconds = attempt
+            logger.warning(
+                "LLM 请求出错，准备重试 request_id=%s task_id=%s attempt=%s/%s delay=%ss error=%s",
+                request_id,
+                task_id or "-",
+                attempt,
+                _MAX_RETRIES + 1,
+                delay_seconds,
+                exc,
+            )
+            time.sleep(delay_seconds)
+    raise last_error or LLMError("模型服务请求失败")
+
+
+def _run_check_attempt(
+    *,
+    endpoint: str,
+    headers: dict,
+    payload: dict,
+    proxy_mode: str,
+    proxy: Optional[str],
+    request_timeout: int,
+    on_delta: Optional[Callable[[str], None]],
+    request_id: str,
+    task_id: Optional[int],
+    attempt: int,
+) -> str:
     try:
         with requests.Session() as session:
             session.trust_env = proxy_mode == "system"
@@ -91,22 +142,25 @@ def run_check(
             stream_payload = dict(payload)
             stream_payload["stream"] = True
             stream_payload["stream_options"] = {"include_usage": True}
-            response = session.post(endpoint, json=stream_payload, stream=True, **request_kwargs)
+            response = None
             try:
+                response = session.post(endpoint, json=stream_payload, stream=True, **request_kwargs)
                 content = _read_stream_response(response, on_delta, request_id=request_id, task_id=task_id)
                 logger.info(
-                    "LLM 请求完成 request_id=%s task_id=%s mode=stream output_chars=%s",
+                    "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=stream output_chars=%s",
                     request_id,
                     task_id or "-",
+                    attempt,
                     len(content),
                 )
                 return content
             except _EmptyContentError as stream_exc:
                 _close_response(response)
                 logger.warning(
-                    "LLM 流式响应为空，改用 OpenAI Chat 非流式重试 request_id=%s task_id=%s reason=%s",
+                    "LLM 流式响应为空，改用 OpenAI Chat 非流式重试 request_id=%s task_id=%s attempt=%s reason=%s",
                     request_id,
                     task_id or "-",
+                    attempt,
                     stream_exc,
                 )
 
@@ -116,9 +170,10 @@ def run_check(
                 try:
                     content = _read_json_response(response, on_delta, request_id=request_id, task_id=task_id)
                     logger.info(
-                        "LLM 请求完成 request_id=%s task_id=%s mode=non_stream_retry output_chars=%s",
+                        "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=non_stream_retry output_chars=%s",
                         request_id,
                         task_id or "-",
+                        attempt,
                         len(content),
                     )
                     return content
@@ -126,16 +181,19 @@ def run_check(
                     raise LLMError(
                         f"{stream_exc}；已自动改用 OpenAI Chat 非流式重试，仍未获得可输出文本：{non_stream_exc}"
                     ) from non_stream_exc
+            finally:
+                _close_response(response)
     except requests.ReadTimeout as exc:
         logger.warning(
-            "LLM 请求超时 request_id=%s task_id=%s timeout=%s",
+            "LLM 请求超时 request_id=%s task_id=%s attempt=%s timeout=%s",
             request_id,
             task_id or "-",
+            attempt,
             request_timeout,
         )
         raise LLMError(f"模型服务处理超时：已连接到服务，但 {request_timeout} 秒内没有返回结果") from exc
     except requests.RequestException as exc:
-        logger.warning("LLM 请求失败 request_id=%s task_id=%s error=%s", request_id, task_id or "-", exc)
+        logger.warning("LLM 请求失败 request_id=%s task_id=%s attempt=%s error=%s", request_id, task_id or "-", attempt, exc)
         raise LLMError(f"模型服务请求失败：{exc}") from exc
 
 

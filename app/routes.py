@@ -2,6 +2,7 @@ import hmac
 import json
 import os
 import re
+import uuid
 from functools import wraps
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from flask import (
 )
 
 from .db import get_db, get_setting, now_text, set_setting
+from .config import load_local_config, save_local_config
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text
 
 
@@ -201,7 +203,7 @@ def register_routes(app):
             ip=ip,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             totals=_admin_totals(),
-            global_concurrency=get_setting("global_concurrency", 5),
+            global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
             check_items=get_enabled_check_items(),
             models=get_enabled_models(),
@@ -314,13 +316,12 @@ def register_routes(app):
     @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
     @admin_required
     def admin_models():
-        db = get_db()
+        providers = _load_providers()
         if request.method == "POST":
             action = request.form.get("action", "save")
             provider_id = request.form.get("provider_id")
             if action == "delete" and provider_id:
-                db.execute("DELETE FROM providers WHERE id = ?", (provider_id,))
-                db.commit()
+                _save_providers([provider for provider in providers if provider["id"] != provider_id])
                 flash("模型提供商已删除。", "success")
                 return redirect(url_for("admin_models"))
 
@@ -362,72 +363,50 @@ def register_routes(app):
                 flash("至少需要填写一个模型名称。", "error")
                 return redirect(url_for("admin_models"))
 
+            now = now_text()
             if provider_id:
-                db.execute(
-                    """
-                    UPDATE providers
-                    SET name = ?, api_base = ?, api_key = ?, proxy_mode = ?, proxy = ?, request_timeout = ?, max_input_chars = ?, is_active = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (name, api_base, api_key, proxy_mode, proxy, request_timeout, max_input_chars, is_active, now_text(), provider_id),
+                existing = next((provider for provider in providers if provider["id"] == provider_id), None)
+                if existing is None:
+                    flash("模型提供商不存在。", "error")
+                    return redirect(url_for("admin_models"))
+                saved_provider = _provider_config(
+                    provider_id=provider_id,
+                    name=name,
+                    api_base=api_base,
+                    api_key=api_key,
+                    proxy_mode=proxy_mode,
+                    proxy=proxy,
+                    request_timeout=request_timeout,
+                    max_input_chars=max_input_chars,
+                    is_active=bool(is_active),
+                    models=model_names,
+                    created_at=existing.get("created_at") or now,
+                    updated_at=now,
                 )
-                pid = int(provider_id)
+                providers = [saved_provider if provider["id"] == provider_id else provider for provider in providers]
             else:
-                cursor = db.execute(
-                    """
-                    INSERT INTO providers(name, api_base, api_key, proxy_mode, proxy, request_timeout, max_input_chars, is_active, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (name, api_base, api_key, proxy_mode, proxy, request_timeout, max_input_chars, is_active, now_text(), now_text()),
+                saved_provider = _provider_config(
+                    provider_id=uuid.uuid4().hex,
+                    name=name,
+                    api_base=api_base,
+                    api_key=api_key,
+                    proxy_mode=proxy_mode,
+                    proxy=proxy,
+                    request_timeout=request_timeout,
+                    max_input_chars=max_input_chars,
+                    is_active=bool(is_active),
+                    models=model_names,
+                    created_at=now,
+                    updated_at=now,
                 )
-                pid = cursor.lastrowid
-
-            existing = {
-                row["model_name"]: row["id"]
-                for row in db.execute("SELECT id, model_name FROM provider_models WHERE provider_id = ?", (pid,))
-            }
-            for model_name in model_names:
-                if model_name in existing:
-                    db.execute(
-                        "UPDATE provider_models SET enabled = 1, updated_at = ? WHERE id = ?",
-                        (now_text(), existing[model_name]),
-                    )
-                else:
-                    db.execute(
-                        """
-                        INSERT INTO provider_models(provider_id, model_name, display_name, enabled, created_at, updated_at)
-                        VALUES (?, ?, ?, 1, ?, ?)
-                        """,
-                        (pid, model_name, model_name, now_text(), now_text()),
-                    )
-            for model_name, model_id in existing.items():
-                if model_name not in model_names:
-                    db.execute(
-                        "UPDATE provider_models SET enabled = 0, updated_at = ? WHERE id = ?",
-                        (now_text(), model_id),
-                    )
-            db.commit()
+                providers.append(saved_provider)
+            _save_providers(providers)
             flash("模型提供商已保存。", "success")
             return redirect(url_for("admin_models"))
 
-        providers = db.execute(
-            """
-            SELECT *
-            FROM providers
-            ORDER BY updated_at DESC, id DESC
-            """
-        ).fetchall()
+        providers = sorted(providers, key=lambda provider: (provider["updated_at"], provider["id"]), reverse=True)
         models_by_provider = {
-            provider["id"]: db.execute(
-                """
-                SELECT *
-                FROM provider_models
-                WHERE provider_id = ?
-                  AND enabled = 1
-                ORDER BY model_name ASC
-                """,
-                (provider["id"],),
-            ).fetchall()
+            provider["id"]: [{"model_name": model_name, "enabled": True} for model_name in sorted(provider["models"])]
             for provider in providers
         }
         return render_template("admin_models.html", providers=providers, models_by_provider=models_by_provider)
@@ -445,7 +424,7 @@ def register_routes(app):
             action = request.form.get("action", "concurrency")
             if action == "concurrency":
                 try:
-                    global_concurrency = max(1, int(request.form.get("global_concurrency", "5")))
+                    global_concurrency = max(1, int(request.form.get("global_concurrency", "3")))
                     user_concurrency = max(1, int(request.form.get("user_concurrency", "1")))
                 except ValueError:
                     flash("并发度必须是正整数。", "error")
@@ -483,7 +462,7 @@ def register_routes(app):
         return render_template(
             "admin_settings.html",
             items=items,
-            global_concurrency=get_setting("global_concurrency", 5),
+            global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
         )
 
@@ -503,15 +482,83 @@ def get_enabled_check_items():
 
 
 def get_enabled_models():
-    return get_db().execute(
-        """
-        SELECT pm.*, p.name AS provider_name
-        FROM provider_models pm
-        JOIN providers p ON p.id = pm.provider_id
-        WHERE p.is_active = 1 AND pm.enabled = 1
-        ORDER BY p.name ASC, pm.model_name ASC
-        """
-    ).fetchall()
+    models = []
+    for provider in _load_providers():
+        if not provider["is_active"]:
+            continue
+        for model_name in provider["models"]:
+            models.append(_model_option(provider, model_name))
+    return sorted(models, key=lambda model: (model["provider_name"], model["model_name"]))
+
+
+def _load_providers() -> list[dict]:
+    return load_local_config(Path(current_app.config["ROOT_DIR"]))["providers"]
+
+
+def _save_providers(providers: list[dict]):
+    root_dir = Path(current_app.config["ROOT_DIR"])
+    config = load_local_config(root_dir)
+    config["providers"] = providers
+    save_local_config(root_dir, config)
+
+
+def _provider_config(
+    *,
+    provider_id: str,
+    name: str,
+    api_base: str,
+    api_key: str,
+    proxy_mode: str,
+    proxy: str,
+    request_timeout: int,
+    max_input_chars: int,
+    is_active: bool,
+    models: list[str],
+    created_at: str,
+    updated_at: str,
+) -> dict:
+    return {
+        "id": provider_id,
+        "name": name,
+        "api_base": api_base,
+        "api_key": api_key,
+        "proxy_mode": proxy_mode,
+        "proxy": proxy,
+        "request_timeout": request_timeout,
+        "max_input_chars": max_input_chars,
+        "is_active": is_active,
+        "models": models,
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+def _model_option(provider: dict, model_name: str) -> dict:
+    return {
+        "id": f"{provider['id']}:{model_name}",
+        "provider_id": provider["id"],
+        "provider_name": provider["name"],
+        "model_name": model_name,
+        "api_base": provider["api_base"],
+        "api_key": provider["api_key"],
+        "proxy_mode": provider["proxy_mode"],
+        "proxy": provider["proxy"],
+        "request_timeout": provider["request_timeout"],
+        "max_input_chars": provider["max_input_chars"],
+    }
+
+
+def _find_enabled_model(model_id: str) -> dict | None:
+    if ":" not in model_id:
+        return None
+    provider_id, model_name = model_id.split(":", 1)
+    for provider in _load_providers():
+        if provider["id"] != provider_id or not provider["is_active"]:
+            continue
+        if model_name not in provider["models"]:
+            return None
+        return _model_option(provider, model_name)
+    return None
 
 
 def _admin_totals() -> dict:
@@ -547,20 +594,9 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         return _back_to_task_form(admin_created)
 
     model_id = request.form.get("model_id", "")
-    if not model_id.isdigit():
-        flash("请选择可用模型。", "error")
-        return _back_to_task_form(admin_created)
-    model = db.execute(
-        """
-        SELECT pm.*, p.name AS provider_name, p.id AS provider_id, p.max_input_chars
-        FROM provider_models pm
-        JOIN providers p ON p.id = pm.provider_id
-        WHERE pm.id = ? AND pm.enabled = 1 AND p.is_active = 1
-        """,
-        (int(model_id),),
-    ).fetchone()
+    model = _find_enabled_model(model_id)
     if model is None:
-        flash("所选模型不可用，请重新选择。", "error")
+        flash("请选择可用模型。", "error")
         return _back_to_task_form(admin_created)
 
     file_type = extension_of(upload.filename)
@@ -589,10 +625,11 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         """
         INSERT INTO tasks(
             ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
-            checks_json, provider_id, provider_name, model_id, model_name,
+            checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
+            request_timeout, max_input_chars,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             ip,
@@ -602,10 +639,14 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
             file_type,
             file_size,
             json.dumps(check_ids, ensure_ascii=False),
-            model["provider_id"],
             model["provider_name"],
-            model["id"],
             model["model_name"],
+            model["api_base"],
+            model["api_key"],
+            model["proxy_mode"],
+            model["proxy"],
+            model["request_timeout"],
+            model["max_input_chars"],
             created_at,
             created_at,
         ),

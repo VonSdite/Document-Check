@@ -26,6 +26,8 @@ def close_db(_error=None):
 
 def init_db():
     db = get_db()
+    db.execute("PRAGMA journal_mode = WAL")
+    db.execute("PRAGMA synchronous = NORMAL")
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS settings (
@@ -40,32 +42,6 @@ def init_db():
             is_disabled INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS providers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            api_base TEXT NOT NULL,
-            api_key TEXT,
-            proxy_mode TEXT NOT NULL DEFAULT 'direct',
-            proxy TEXT,
-            request_timeout INTEGER NOT NULL DEFAULT 3600,
-            max_input_chars INTEGER NOT NULL DEFAULT 60000,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS provider_models (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            provider_id INTEGER NOT NULL,
-            model_name TEXT NOT NULL,
-            display_name TEXT,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE,
-            UNIQUE(provider_id, model_name)
         );
 
         CREATE TABLE IF NOT EXISTS check_items (
@@ -89,10 +65,14 @@ def init_db():
             file_type TEXT NOT NULL,
             file_size INTEGER NOT NULL,
             checks_json TEXT NOT NULL,
-            provider_id INTEGER,
             provider_name TEXT,
-            model_id INTEGER,
             model_name TEXT NOT NULL,
+            api_base TEXT NOT NULL,
+            api_key TEXT,
+            proxy_mode TEXT NOT NULL DEFAULT 'direct',
+            proxy TEXT,
+            request_timeout INTEGER NOT NULL DEFAULT 3600,
+            max_input_chars INTEGER NOT NULL DEFAULT 60000,
             status TEXT NOT NULL DEFAULT 'queued',
             progress INTEGER NOT NULL DEFAULT 0,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
@@ -109,29 +89,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         """
     )
-    _ensure_provider_columns(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
-
-
-def _ensure_provider_columns(db):
-    columns = {
-        row["name"]
-        for row in db.execute("PRAGMA table_info(providers)").fetchall()
-    }
-    if "proxy_mode" not in columns:
-        db.execute("ALTER TABLE providers ADD COLUMN proxy_mode TEXT NOT NULL DEFAULT 'direct'")
-        db.execute(
-            """
-            UPDATE providers
-            SET proxy_mode = 'custom'
-            WHERE proxy IS NOT NULL AND TRIM(proxy) != ''
-            """
-        )
-    if "request_timeout" not in columns:
-        db.execute("ALTER TABLE providers ADD COLUMN request_timeout INTEGER NOT NULL DEFAULT 3600")
-    if "max_input_chars" not in columns:
-        db.execute("ALTER TABLE providers ADD COLUMN max_input_chars INTEGER NOT NULL DEFAULT 60000")
 
 
 def set_setting(key: str, value):
@@ -162,7 +121,7 @@ def seed_defaults():
     now = now_text()
 
     defaults = {
-        "global_concurrency": 5,
+        "global_concurrency": 3,
         "user_concurrency": 1,
     }
     for key, value in defaults.items():

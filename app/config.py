@@ -1,11 +1,18 @@
 import json
 import secrets
+import threading
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 
 DEFAULT_ADMIN_URL = "/_gate_ops_9f2c7a"
 DEFAULT_LISTEN_HOST = "0.0.0.0"
 DEFAULT_LISTEN_PORT = 5000
+DEFAULT_REQUEST_TIMEOUT = 3600
+DEFAULT_MAX_INPUT_CHARS = 60000
+PROXY_MODES = {"direct", "system", "custom"}
+_CONFIG_LOCK = threading.Lock()
 
 
 def load_local_config(root_dir: Path) -> dict:
@@ -34,6 +41,18 @@ def load_local_config(root_dir: Path) -> dict:
     return config
 
 
+def save_local_config(root_dir: Path, config: dict) -> dict:
+    with _CONFIG_LOCK:
+        config = _normalize_config(config)
+        config_path = root_dir / "config.local.json"
+        config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return config
+
+
 def _default_config() -> dict:
     return {
         "secret_key": secrets.token_urlsafe(32),
@@ -46,6 +65,7 @@ def _default_config() -> dict:
             "host": DEFAULT_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
         },
+        "providers": [],
     }
 
 
@@ -58,7 +78,63 @@ def _normalize_config(config: dict) -> dict:
     config.setdefault("server", {})
     config["server"].setdefault("host", DEFAULT_LISTEN_HOST)
     config["server"]["port"] = _normalize_port(config["server"].get("port", DEFAULT_LISTEN_PORT))
+    config["providers"] = _normalize_providers(config.get("providers", []))
     return config
+
+
+def _normalize_providers(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    providers = []
+    seen_ids = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        provider = _normalize_provider(item)
+        if provider["id"] in seen_ids:
+            provider["id"] = uuid.uuid4().hex
+        seen_ids.add(provider["id"])
+        providers.append(provider)
+    return providers
+
+
+def _normalize_provider(provider: dict) -> dict:
+    now = _now_text()
+    proxy_mode = str(provider.get("proxy_mode", "direct") or "direct")
+    if proxy_mode not in PROXY_MODES:
+        proxy_mode = "direct"
+    proxy = str(provider.get("proxy", "") or "").strip() if proxy_mode == "custom" else ""
+    return {
+        "id": str(provider.get("id") or uuid.uuid4().hex),
+        "name": str(provider.get("name", "") or "").strip(),
+        "api_base": str(provider.get("api_base", "") or "").strip(),
+        "api_key": str(provider.get("api_key", "") or ""),
+        "proxy_mode": proxy_mode,
+        "proxy": proxy,
+        "request_timeout": _normalize_int(provider.get("request_timeout"), DEFAULT_REQUEST_TIMEOUT),
+        "max_input_chars": _normalize_int(provider.get("max_input_chars"), DEFAULT_MAX_INPUT_CHARS),
+        "is_active": bool(provider.get("is_active", True)),
+        "models": _normalize_models(provider.get("models", [])),
+        "created_at": str(provider.get("created_at") or now),
+        "updated_at": str(provider.get("updated_at") or now),
+    }
+
+
+def _normalize_models(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    models = []
+    seen = set()
+    for item in value:
+        if isinstance(item, dict):
+            model_name = str(item.get("model_name") or item.get("id") or "").strip()
+        else:
+            model_name = str(item or "").strip()
+        if not model_name or model_name in seen:
+            continue
+        seen.add(model_name)
+        models.append(model_name)
+    return models
 
 
 def _normalize_admin_url(value: str) -> str:
@@ -78,3 +154,14 @@ def _normalize_port(value) -> int:
     if 1 <= port <= 65535:
         return port
     return DEFAULT_LISTEN_PORT
+
+
+def _normalize_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _now_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
