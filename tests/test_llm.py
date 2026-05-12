@@ -11,6 +11,7 @@ class FakeResponse:
         self._data = data
         self.status_code = status_code
         self.text = text if text is not None else json.dumps(data or {}, ensure_ascii=False)
+        self.closed = False
 
     def iter_lines(self, decode_unicode=False):
         return iter(self._lines)
@@ -19,6 +20,9 @@ class FakeResponse:
         if self._data is None:
             raise json.JSONDecodeError("empty", self.text, 0)
         return self._data
+
+    def close(self):
+        self.closed = True
 
 
 class FakeSession:
@@ -53,7 +57,7 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         self.assertEqual(result, "检查完成")
 
-    def test_reads_responses_api_output_text_delta(self):
+    def test_does_not_treat_responses_api_events_as_chat_completion_content(self):
         response = FakeResponse(
             lines=[
                 'data: {"type":"response.output_text.delta","delta":"检查"}',
@@ -62,9 +66,8 @@ class LLMResponseParsingTest(unittest.TestCase):
             ]
         )
 
-        result = llm._read_stream_response(response, None)
-
-        self.assertEqual(result, "检查完成")
+        with self.assertRaisesRegex(llm.LLMError, "OpenAI Chat Completions"):
+            llm._read_stream_response(response, None)
 
     def test_reports_reasoning_without_content(self):
         response = FakeResponse(
@@ -123,7 +126,9 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(chunks, ["非流式结果"])
         self.assertEqual(len(fake_session.calls), 2)
         self.assertTrue(fake_session.calls[0][1]["json"]["stream"])
+        self.assertEqual(fake_session.calls[0][1]["json"]["stream_options"], {"include_usage": True})
         self.assertFalse(fake_session.calls[1][1]["json"]["stream"])
+        self.assertNotIn("stream_options", fake_session.calls[1][1]["json"])
         self.assertTrue(fake_session.calls[0][1]["stream"])
         self.assertFalse(fake_session.calls[1][1]["stream"])
 

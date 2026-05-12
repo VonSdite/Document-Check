@@ -1,7 +1,15 @@
 import json
+import logging
+import uuid
 from typing import Callable, Optional
 
 import requests
+
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+_REASONING_FIELDS = ("reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
 
 
 class LLMError(Exception):
@@ -24,11 +32,10 @@ def run_check(
     prompt: str,
     document_text: str,
     on_delta: Optional[Callable[[str], None]] = None,
+    task_id: Optional[int] = None,
 ) -> str:
-    api_base = api_base.rstrip("/")
-    endpoint = api_base
-    if not endpoint.endswith("/chat/completions"):
-        endpoint = f"{endpoint}/chat/completions"
+    request_id = uuid.uuid4().hex[:12]
+    endpoint = _chat_completions_endpoint(api_base)
 
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -53,6 +60,19 @@ def run_check(
         "temperature": 0.2,
     }
 
+    logger.info(
+        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s timeout=%s prompt_chars=%s document_chars=%s",
+        request_id,
+        task_id or "-",
+        endpoint,
+        model_name,
+        check_name,
+        proxy_mode,
+        request_timeout,
+        len(prompt),
+        len(document_text),
+    )
+
     try:
         with requests.Session() as session:
             session.trust_env = proxy_mode == "system"
@@ -70,31 +90,73 @@ def run_check(
 
             stream_payload = dict(payload)
             stream_payload["stream"] = True
+            stream_payload["stream_options"] = {"include_usage": True}
             response = session.post(endpoint, json=stream_payload, stream=True, **request_kwargs)
             try:
-                return _read_stream_response(response, on_delta)
+                content = _read_stream_response(response, on_delta, request_id=request_id, task_id=task_id)
+                logger.info(
+                    "LLM 请求完成 request_id=%s task_id=%s mode=stream output_chars=%s",
+                    request_id,
+                    task_id or "-",
+                    len(content),
+                )
+                return content
             except _EmptyContentError as stream_exc:
                 _close_response(response)
+                logger.warning(
+                    "LLM 流式响应为空，改用 OpenAI Chat 非流式重试 request_id=%s task_id=%s reason=%s",
+                    request_id,
+                    task_id or "-",
+                    stream_exc,
+                )
+
                 non_stream_payload = dict(payload)
                 non_stream_payload["stream"] = False
                 response = session.post(endpoint, json=non_stream_payload, stream=False, **request_kwargs)
                 try:
-                    return _read_json_response(response, on_delta)
+                    content = _read_json_response(response, on_delta, request_id=request_id, task_id=task_id)
+                    logger.info(
+                        "LLM 请求完成 request_id=%s task_id=%s mode=non_stream_retry output_chars=%s",
+                        request_id,
+                        task_id or "-",
+                        len(content),
+                    )
+                    return content
                 except _EmptyContentError as non_stream_exc:
                     raise LLMError(
-                        f"{stream_exc}；已自动改用非流式重试，仍未获得可输出文本：{non_stream_exc}"
+                        f"{stream_exc}；已自动改用 OpenAI Chat 非流式重试，仍未获得可输出文本：{non_stream_exc}"
                     ) from non_stream_exc
     except requests.ReadTimeout as exc:
+        logger.warning(
+            "LLM 请求超时 request_id=%s task_id=%s timeout=%s",
+            request_id,
+            task_id or "-",
+            request_timeout,
+        )
         raise LLMError(f"模型服务处理超时：已连接到服务，但 {request_timeout} 秒内没有返回结果") from exc
     except requests.RequestException as exc:
+        logger.warning("LLM 请求失败 request_id=%s task_id=%s error=%s", request_id, task_id or "-", exc)
         raise LLMError(f"模型服务请求失败：{exc}") from exc
 
 
-def _read_stream_response(response, on_delta: Optional[Callable[[str], None]]) -> str:
-    _raise_for_http_error(response)
+def _chat_completions_endpoint(api_base: str) -> str:
+    endpoint = api_base.rstrip("/")
+    if not endpoint.endswith("/chat/completions"):
+        endpoint = f"{endpoint}/chat/completions"
+    return endpoint
+
+
+def _read_stream_response(
+    response,
+    on_delta: Optional[Callable[[str], None]],
+    *,
+    request_id: str = "-",
+    task_id: Optional[int] = None,
+) -> str:
+    _raise_for_http_error(response, request_id=request_id, task_id=task_id)
 
     parts = []
-    diagnostics = _ResponseDiagnostics()
+    diagnostics = _OpenAIChatDiagnostics()
     for raw_line in response.iter_lines(decode_unicode=True):
         if not raw_line:
             continue
@@ -106,18 +168,33 @@ def _read_stream_response(response, on_delta: Optional[Callable[[str], None]]) -
         if line.startswith("data:"):
             line = line[5:].strip()
         if line == "[DONE]":
+            diagnostics.done = True
             break
+
         try:
             data = json.loads(line)
         except json.JSONDecodeError as exc:
+            logger.warning(
+                "LLM 流式帧不是 JSON request_id=%s task_id=%s frame=%s",
+                request_id,
+                task_id or "-",
+                _short_text(line, 1000),
+            )
             raise LLMError(f"模型服务返回了非 JSON 内容：{_short_text(line)}") from exc
 
         service_error = _extract_service_error(data)
         if service_error:
+            logger.warning(
+                "LLM 流式帧返回错误 request_id=%s task_id=%s error=%s raw=%s",
+                request_id,
+                task_id or "-",
+                service_error,
+                _short_text(line, 1000),
+            )
             raise LLMError(f"模型服务返回错误：{service_error}")
 
-        diagnostics.observe(data)
-        delta = _extract_content_delta(data, diagnostics)
+        diagnostics.observe(data, raw=line)
+        delta = _extract_chat_content(data)
         if not delta:
             continue
         parts.append(delta)
@@ -125,35 +202,75 @@ def _read_stream_response(response, on_delta: Optional[Callable[[str], None]]) -
             on_delta(delta)
 
     content = "".join(parts).strip()
+    logger.info(
+        "LLM 流式响应结束 request_id=%s task_id=%s %s",
+        request_id,
+        task_id or "-",
+        diagnostics.log_summary(),
+    )
     if not content:
+        logger.warning(
+            "LLM 流式响应没有 assistant content request_id=%s task_id=%s samples=%s",
+            request_id,
+            task_id or "-",
+            diagnostics.samples,
+        )
         raise _EmptyContentError(_empty_content_message(diagnostics))
     return content
 
 
-def _read_json_response(response, on_delta: Optional[Callable[[str], None]]) -> str:
-    _raise_for_http_error(response)
+def _read_json_response(
+    response,
+    on_delta: Optional[Callable[[str], None]],
+    *,
+    request_id: str = "-",
+    task_id: Optional[int] = None,
+) -> str:
+    _raise_for_http_error(response, request_id=request_id, task_id=task_id)
     try:
         data = response.json()
     except ValueError as exc:
-        raise LLMError(f"模型服务返回了非 JSON 内容：{_short_text(response.text)}") from exc
+        body = _short_text(response.text, 1000)
+        logger.warning("LLM 非流式响应不是 JSON request_id=%s task_id=%s body=%s", request_id, task_id or "-", body)
+        raise LLMError(f"模型服务返回了非 JSON 内容：{body}") from exc
 
     service_error = _extract_service_error(data)
     if service_error:
+        logger.warning("LLM 非流式响应返回错误 request_id=%s task_id=%s error=%s", request_id, task_id or "-", service_error)
         raise LLMError(f"模型服务返回错误：{service_error}")
 
-    diagnostics = _ResponseDiagnostics()
-    diagnostics.observe(data)
-    content = _extract_content_delta(data, diagnostics).strip()
+    diagnostics = _OpenAIChatDiagnostics()
+    diagnostics.observe(data, raw=json.dumps(data, ensure_ascii=False))
+    content = _extract_chat_content(data).strip()
+    logger.info(
+        "LLM 非流式响应结束 request_id=%s task_id=%s %s",
+        request_id,
+        task_id or "-",
+        diagnostics.log_summary(),
+    )
     if not content:
+        logger.warning(
+            "LLM 非流式响应没有 assistant content request_id=%s task_id=%s samples=%s",
+            request_id,
+            task_id or "-",
+            diagnostics.samples,
+        )
         raise _EmptyContentError(_empty_content_message(diagnostics))
     if on_delta:
         on_delta(content)
     return content
 
 
-def _raise_for_http_error(response):
+def _raise_for_http_error(response, *, request_id: str = "-", task_id: Optional[int] = None):
     if response.status_code >= 400:
-        body = response.text[:1000]
+        body = _short_text(response.text, 1500)
+        logger.warning(
+            "LLM HTTP 错误 request_id=%s task_id=%s status=%s body=%s",
+            request_id,
+            task_id or "-",
+            response.status_code,
+            body,
+        )
         raise LLMError(f"模型服务返回 {response.status_code}：{body}")
 
 
@@ -163,98 +280,110 @@ def _close_response(response):
         close()
 
 
-class _ResponseDiagnostics:
+class _OpenAIChatDiagnostics:
     def __init__(self):
         self.frames = 0
+        self.done = False
+        self.content_chunks = 0
+        self.content_chars = 0
+        self.reasoning_chunks = 0
+        self.reasoning_chars = 0
+        self.reasoning_fields = set()
+        self.tool_call_chunks = 0
         self.finish_reasons = set()
-        self.response_types = set()
-        self.saw_reasoning = False
-        self.saw_tool_call = False
-        self.refusal = ""
+        self.usage = None
+        self.response_id = ""
+        self.response_model = ""
+        self.samples = []
 
-    def observe(self, data: dict):
+    def observe(self, data: dict, *, raw: str):
+        self.frames += 1
+        if len(self.samples) < 3:
+            self.samples.append(_short_text(raw, 1000))
         if not isinstance(data, dict):
             return
-        self.frames += 1
-        response_type = data.get("type")
-        if response_type:
-            self.response_types.add(str(response_type))
+
+        if data.get("id"):
+            self.response_id = str(data["id"])
+        if data.get("model"):
+            self.response_model = str(data["model"])
+        if isinstance(data.get("usage"), dict):
+            self.usage = _short_text(json.dumps(data["usage"], ensure_ascii=False), 1000)
 
         choices = data.get("choices")
-        if isinstance(choices, list):
-            for choice in choices:
-                if not isinstance(choice, dict):
-                    continue
-                finish_reason = choice.get("finish_reason")
-                if finish_reason:
-                    self.finish_reasons.add(str(finish_reason))
-                self._observe_message(choice.get("delta"))
-                self._observe_message(choice.get("message"))
-                if choice.get("tool_calls"):
-                    self.saw_tool_call = True
-
-        self._observe_message(data)
+        if not isinstance(choices, list):
+            return
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            finish_reason = choice.get("finish_reason")
+            if finish_reason:
+                self.finish_reasons.add(str(finish_reason))
+            self._observe_message(choice.get("delta"))
+            self._observe_message(choice.get("message"))
 
     def _observe_message(self, value):
         if not isinstance(value, dict):
             return
-        reasoning = value.get("reasoning_content") or value.get("reasoning")
-        if reasoning:
-            self.saw_reasoning = True
-        refusal = value.get("refusal")
-        if refusal and not self.refusal:
-            self.refusal = _content_to_text(refusal)
-        if value.get("tool_calls"):
-            self.saw_tool_call = True
+        content = value.get("content")
+        if isinstance(content, str) and content:
+            self.content_chunks += 1
+            self.content_chars += len(content)
+
+        reasoning_field, reasoning_text = _extract_reasoning(value)
+        if reasoning_text:
+            self.reasoning_fields.add(reasoning_field)
+            self.reasoning_chunks += 1
+            self.reasoning_chars += len(reasoning_text)
+
+        tool_calls = value.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            self.tool_call_chunks += 1
+
+    def log_summary(self) -> str:
+        return (
+            f"frames={self.frames} done={self.done} content_chunks={self.content_chunks} "
+            f"content_chars={self.content_chars} reasoning_chunks={self.reasoning_chunks} "
+            f"reasoning_chars={self.reasoning_chars} reasoning_fields={','.join(sorted(self.reasoning_fields)) or '-'} "
+            f"tool_call_chunks={self.tool_call_chunks} "
+            f"finish_reasons={','.join(sorted(self.finish_reasons)) or '-'} "
+            f"usage={self.usage or '-'} response_id={self.response_id or '-'} response_model={self.response_model or '-'}"
+        )
 
 
-def _extract_content_delta(data: dict, diagnostics: Optional[_ResponseDiagnostics] = None) -> str:
+def _extract_chat_content(data: dict) -> str:
     if not isinstance(data, dict):
         return ""
-
-    response_type = data.get("type")
-    if response_type == "response.output_text.delta":
-        return _content_to_text(data.get("delta"))
-    if response_type == "response.output_text.done":
-        return _content_to_text(data.get("text"))
-    if response_type in {"response.refusal.delta", "response.refusal.done"} and diagnostics:
-        diagnostics.refusal = diagnostics.refusal or _content_to_text(data.get("delta") or data.get("refusal"))
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
         return ""
-
-    choices = data.get("choices") if isinstance(data, dict) else None
-    if not choices:
-        return _content_to_text(
-            data.get("content")
-            or data.get("output_text")
-            or data.get("message")
-            or data.get("output")
-        )
     choice = choices[0]
     if not isinstance(choice, dict):
         return ""
 
     delta = choice.get("delta")
     if isinstance(delta, dict):
-        content = _content_to_text(delta.get("content"))
-        if content:
+        content = delta.get("content")
+        if isinstance(content, str):
             return content
-        if diagnostics and delta.get("refusal"):
-            diagnostics.refusal = diagnostics.refusal or _content_to_text(delta.get("refusal"))
-    elif delta is not None:
-        return _content_to_text(delta)
 
     message = choice.get("message")
     if isinstance(message, dict):
-        content = _content_to_text(message.get("content"))
-        if content:
+        content = message.get("content")
+        if isinstance(content, str):
             return content
-        if diagnostics and message.get("refusal"):
-            diagnostics.refusal = diagnostics.refusal or _content_to_text(message.get("refusal"))
 
-    text = choice.get("text")
-    if text is not None:
-        return _content_to_text(text)
     return ""
+
+
+def _extract_reasoning(message: dict) -> tuple[str, str]:
+    for field in _REASONING_FIELDS:
+        value = message.get(field)
+        if isinstance(value, str) and value:
+            return field, value
+        if isinstance(value, list) and value:
+            return field, _short_text(value, 1000)
+    return "", ""
 
 
 def _extract_service_error(data: dict) -> str:
@@ -271,36 +400,17 @@ def _extract_service_error(data: dict) -> str:
     return _short_text(error)
 
 
-def _content_to_text(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return "".join(_content_to_text(item) for item in value)
-    if isinstance(value, dict):
-        if value.get("type") in {"text", "output_text"}:
-            return _content_to_text(value.get("text"))
-        if "text" in value:
-            return _content_to_text(value.get("text"))
-        if "content" in value:
-            return _content_to_text(value.get("content"))
-        return ""
-    return str(value)
-
-
-def _empty_content_message(diagnostics: _ResponseDiagnostics) -> str:
-    details = []
-    if diagnostics.saw_reasoning:
-        details.append("服务返回了 reasoning_content，但没有返回 assistant content")
-    if diagnostics.refusal:
-        details.append(f"服务返回拒绝信息：{_short_text(diagnostics.refusal)}")
-    if diagnostics.saw_tool_call:
-        details.append("服务返回了工具调用而不是文本")
+def _empty_content_message(diagnostics: _OpenAIChatDiagnostics) -> str:
+    details = ["按 OpenAI Chat Completions 结构解析后没有得到 choices[0].delta.content 或 choices[0].message.content"]
+    if diagnostics.reasoning_chunks:
+        fields = ",".join(sorted(diagnostics.reasoning_fields)) or "reasoning"
+        details.append(f"服务返回了 {fields} 字段 {diagnostics.reasoning_chunks} 段/{diagnostics.reasoning_chars} 字")
+    if diagnostics.tool_call_chunks:
+        details.append("服务返回了 tool_calls 而不是文本")
     if diagnostics.finish_reasons:
         details.append(f"finish_reason={','.join(sorted(diagnostics.finish_reasons))}")
-    if diagnostics.response_types:
-        details.append(f"事件类型={','.join(sorted(diagnostics.response_types))}")
+    if diagnostics.usage:
+        details.append(f"usage={diagnostics.usage}")
     if diagnostics.frames:
         details.append(f"已收到 {diagnostics.frames} 个 JSON 数据帧")
     else:

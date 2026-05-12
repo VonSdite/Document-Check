@@ -112,6 +112,14 @@ class TaskScheduler:
 
             results = []
             try:
+                self.app.logger.info(
+                    "任务开始 task_id=%s ip=%s file=%s model=%s/%s",
+                    task_id,
+                    task["ip"],
+                    task["original_filename"],
+                    task["provider_name"],
+                    task["model_name"],
+                )
                 if task["cancel_requested"]:
                     _mark_canceled(db, task_id)
                     return
@@ -159,6 +167,13 @@ class TaskScheduler:
                         _mark_canceled(db, task_id)
                         return
 
+                    self.app.logger.info(
+                        "任务检查项开始 task_id=%s item=%s index=%s/%s",
+                        task_id,
+                        item["name"],
+                        index,
+                        total,
+                    )
                     progress = 5 + int((index - 1) / total * 85)
                     next_progress = 5 + int(index / total * 85)
                     _update_progress(db, task_id, progress)
@@ -204,6 +219,7 @@ class TaskScheduler:
                             prompt=item["prompt"],
                             document_text=document_text,
                             on_delta=on_delta,
+                            task_id=task_id,
                         )
                     finally:
                         heartbeat_stop.set()
@@ -219,6 +235,12 @@ class TaskScheduler:
                             "name": item["name"],
                             "result": content,
                         }
+                    )
+                    self.app.logger.info(
+                        "任务检查项完成 task_id=%s item=%s output_chars=%s",
+                        task_id,
+                        item["name"],
+                        len(content),
                     )
                     _save_intermediate_results(
                         db,
@@ -244,9 +266,12 @@ class TaskScheduler:
                     (json.dumps(results, ensure_ascii=False), summary, now_text(), now_text(), task_id),
                 )
                 db.commit()
+                self.app.logger.info("任务完成 task_id=%s checks=%s", task_id, len(results))
             except TaskCanceled:
+                self.app.logger.info("任务取消 task_id=%s", task_id)
                 _mark_canceled(db, task_id)
             except (DocumentReadError, LLMError, RuntimeError) as exc:
+                self.app.logger.warning("任务失败 task_id=%s error=%s", task_id, exc)
                 _mark_failed(db, task_id, str(exc), results)
             except Exception as exc:
                 self.app.logger.exception("任务执行异常：%s", task_id)
