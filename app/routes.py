@@ -19,8 +19,15 @@ from flask import (
     url_for,
 )
 
-from .db import get_db, get_setting, now_text, set_setting
 from .config import load_local_config, save_local_config
+from .db import (
+    default_check_item_codes,
+    get_db,
+    get_setting,
+    now_text,
+    reset_default_check_item_prompt,
+    set_setting,
+)
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text
 
 
@@ -434,6 +441,17 @@ def register_routes(app):
                 flash("并发设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
+            if action == "prompt" and request.form.get("reset_prompt") == "1":
+                item_id = request.form.get("item_id")
+                if not item_id or not item_id.isdigit():
+                    flash("检查项不存在，无法重置。", "error")
+                    return redirect(url_for("admin_settings"))
+                if not reset_default_check_item_prompt(int(item_id)):
+                    flash("该检查项没有默认提示词可重置。", "error")
+                    return redirect(url_for("admin_settings"))
+                flash("检查项提示词已重置为默认内容。", "success")
+                return redirect(url_for("admin_settings"))
+
             if action != "prompt":
                 flash("未知设置操作。", "error")
                 return redirect(url_for("admin_settings"))
@@ -462,6 +480,7 @@ def register_routes(app):
         return render_template(
             "admin_settings.html",
             items=items,
+            default_check_codes=default_check_item_codes(),
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
         )
