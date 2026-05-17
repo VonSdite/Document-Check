@@ -93,13 +93,14 @@
             </button>
           </td>
           <td>
-            <button class="check-item-toggle" type="button" data-check-item-toggle aria-expanded="false" aria-controls="check-item-detail-{{ item.id }}">
-              <span>{{ item.name }}</span>
-              <span class="check-item-row-actions">
+            <div class="check-item-row-main">
+              <button class="check-item-toggle" type="button" data-check-item-toggle aria-expanded="false" aria-controls="check-item-detail-{{ item.id }}">
+                <span>{{ item.name }}</span>
+              </button>
+              <div class="check-item-row-actions">
                 <span class="status-pill {{ 'status-completed' if is_builtin else 'status-queued' }}">{{ "内置" if is_builtin else "扩展" }}</span>
                 {% if not is_builtin %}
-                <span class="check-item-delete-wrap">
-                  <form method="post">
+                <form method="post" class="check-item-delete-form">
                     <input type="hidden" name="action" value="delete_check_item">
                     <input type="hidden" name="item_id" value="{{ item.id }}">
                     <button class="check-item-delete-button" type="submit" data-confirm-click="确认删除该扩展检查项？已创建的历史任务报告不会被删除。" aria-label="删除扩展检查项：{{ item.name }}">
@@ -111,14 +112,13 @@
                         <path d="M14 11v5"></path>
                       </svg>
                     </button>
-                  </form>
-                </span>
+                </form>
                 {% endif %}
                 <svg class="check-item-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="m8 10 4 4 4-4"></path>
                 </svg>
-              </span>
-            </button>
+              </div>
+            </div>
           </td>
         </tr>
         <tr class="check-item-detail-row" id="check-item-detail-{{ item.id }}" data-check-item-detail="{{ item.id }}" hidden>

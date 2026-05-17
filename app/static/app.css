@@ -682,13 +682,21 @@ td {
   fill: currentColor;
 }
 
-.check-item-toggle {
+.check-item-row-main {
   width: 100%;
   min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.check-item-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
   border: 0;
   background: transparent;
   color: var(--text);
@@ -697,16 +705,8 @@ td {
   font-weight: 850;
 }
 
-.check-item-toggle svg {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 0.15s ease;
+.check-item-toggle span {
+  overflow-wrap: anywhere;
 }
 
 .check-item-row.is-expanded .check-item-chevron {
@@ -718,10 +718,23 @@ td {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  padding-right: 12px;
 }
 
-.check-item-delete-wrap form {
+.check-item-delete-form {
   margin: 0;
+}
+
+.check-item-chevron {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s ease;
 }
 
 .check-item-delete-button {
