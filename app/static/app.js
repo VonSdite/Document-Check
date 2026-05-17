@@ -144,6 +144,66 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("resize", closeConfirmPopover);
 window.addEventListener("scroll", closeConfirmPopover, true);
 
+function createPasswordToggleButton() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "password-toggle";
+  button.dataset.passwordToggle = "true";
+  button.setAttribute("aria-label", "显示密码");
+  button.setAttribute("aria-pressed", "false");
+  button.title = "显示密码";
+  button.innerHTML = `
+    <svg class="password-icon password-icon-eye" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+      <path d="M2.1 12s3.6-7 9.9-7 9.9 7 9.9 7-3.6 7-9.9 7-9.9-7-9.9-7Z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+    <svg class="password-icon password-icon-off" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+      <path d="M10.7 5.1A10.9 10.9 0 0 1 12 5c6.3 0 9.9 7 9.9 7a18 18 0 0 1-2.7 3.6"></path>
+      <path d="M6.6 6.6C3.8 8.5 2.1 12 2.1 12s3.6 7 9.9 7a10 10 0 0 0 5.4-1.6"></path>
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+      <path d="M3 3l18 18"></path>
+    </svg>
+  `;
+  return button;
+}
+
+function enhancePasswordInput(input) {
+  if (!(input instanceof HTMLInputElement) || input.dataset.passwordEnhanced === "true") {
+    return;
+  }
+  input.dataset.passwordEnhanced = "true";
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "password-field";
+  input.before(wrapper);
+  wrapper.appendChild(input);
+  wrapper.appendChild(createPasswordToggleButton());
+}
+
+document.querySelectorAll('input[type="password"]').forEach(enhancePasswordInput);
+
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-password-toggle]");
+  if (!(toggle instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  event.preventDefault();
+  const wrapper = toggle.closest(".password-field");
+  const input = wrapper?.querySelector("input");
+  if (!(input instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const showPassword = input.type === "password";
+  input.type = showPassword ? "text" : "password";
+  wrapper.classList.toggle("is-visible", showPassword);
+  toggle.setAttribute("aria-pressed", showPassword ? "true" : "false");
+  const label = showPassword ? "隐藏密码" : "显示密码";
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+});
+
 function openModal(id) {
   const modal = document.getElementById(id);
   if (!(modal instanceof HTMLDialogElement)) {

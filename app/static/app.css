@@ -82,6 +82,69 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(91, 130, 189, 0.14);
 }
 
+.password-field {
+  position: relative;
+  width: 100%;
+}
+
+.password-field input {
+  padding-right: 48px;
+}
+
+.password-field input::-ms-clear,
+.password-field input::-ms-reveal {
+  display: none;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  padding: 0;
+}
+
+.password-toggle:hover,
+.password-toggle:focus {
+  color: var(--primary-strong);
+  background: #f0f6ff;
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid rgba(91, 130, 189, 0.38);
+  outline-offset: 2px;
+}
+
+.password-icon {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.password-icon-off {
+  display: none;
+}
+
+.password-field.is-visible .password-icon-eye {
+  display: none;
+}
+
+.password-field.is-visible .password-icon-off {
+  display: block;
+}
+
 label {
   display: grid;
   gap: 7px;
