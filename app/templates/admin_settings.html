@@ -95,9 +95,29 @@
           <td>
             <button class="check-item-toggle" type="button" data-check-item-toggle aria-expanded="false" aria-controls="check-item-detail-{{ item.id }}">
               <span>{{ item.name }}</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="m8 10 4 4 4-4"></path>
-              </svg>
+              <span class="check-item-row-actions">
+                <span class="status-pill {{ 'status-completed' if is_builtin else 'status-queued' }}">{{ "内置" if is_builtin else "扩展" }}</span>
+                {% if not is_builtin %}
+                <span class="check-item-delete-wrap">
+                  <form method="post">
+                    <input type="hidden" name="action" value="delete_check_item">
+                    <input type="hidden" name="item_id" value="{{ item.id }}">
+                    <button class="check-item-delete-button" type="submit" data-confirm-click="确认删除该扩展检查项？已创建的历史任务报告不会被删除。" aria-label="删除扩展检查项：{{ item.name }}">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M3 6h18"></path>
+                        <path d="M8 6V4h8v2"></path>
+                        <path d="M19 6l-1 14H6L5 6"></path>
+                        <path d="M10 11v5"></path>
+                        <path d="M14 11v5"></path>
+                      </svg>
+                    </button>
+                  </form>
+                </span>
+                {% endif %}
+                <svg class="check-item-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="m8 10 4 4 4-4"></path>
+                </svg>
+              </span>
             </button>
           </td>
         </tr>
@@ -105,9 +125,6 @@
           <td></td>
           <td>
             <div class="check-item-detail-panel">
-              <div class="prompt-item-actions">
-                <span class="status-pill {{ 'status-completed' if is_builtin else 'status-queued' }}">{{ "内置" if is_builtin else "扩展" }}</span>
-              </div>
               <form method="post" class="stack-form">
                 <input type="hidden" name="action" value="prompt">
                 <input type="hidden" name="item_id" value="{{ item.id }}">
@@ -133,13 +150,6 @@
                   <button class="primary-button settings-save-button" type="submit">保存</button>
                 </div>
               </form>
-              {% if not is_builtin %}
-              <form method="post" class="prompt-delete-form">
-                <input type="hidden" name="action" value="delete_check_item">
-                <input type="hidden" name="item_id" value="{{ item.id }}">
-                <button class="small-button danger" type="submit" data-confirm-click="确认删除该扩展检查项？已创建的历史任务报告不会被删除。">删除扩展项</button>
-              </form>
-              {% endif %}
             </div>
           </td>
         </tr>

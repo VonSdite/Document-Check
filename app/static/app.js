@@ -198,7 +198,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const row = event.target.closest("[data-check-item-row]");
-  if (!row || event.target.closest("[data-check-item-drag]")) {
+  if (!row || event.target.closest("[data-check-item-drag], .check-item-delete-button")) {
     return;
   }
   setCheckItemOpen(row, !row.classList.contains("is-expanded"));

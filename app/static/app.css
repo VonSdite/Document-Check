@@ -615,12 +615,6 @@ td {
   flex-wrap: wrap;
 }
 
-.prompt-delete-form {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
-
 .check-item-table {
   min-width: 760px;
   table-layout: fixed;
@@ -715,8 +709,48 @@ td {
   transition: transform 0.15s ease;
 }
 
-.check-item-row.is-expanded .check-item-toggle svg {
+.check-item-row.is-expanded .check-item-chevron {
   transform: rotate(180deg);
+}
+
+.check-item-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.check-item-delete-wrap form {
+  margin: 0;
+}
+
+.check-item-delete-button {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #fac5bd;
+  border-radius: var(--radius);
+  color: var(--danger);
+  background: #fff7f5;
+  padding: 0;
+}
+
+.check-item-delete-button:hover,
+.check-item-delete-button:focus {
+  border-color: #f49a8d;
+  background: #fde8e4;
+}
+
+.check-item-delete-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: none;
 }
 
 .check-item-detail-row[hidden] {
