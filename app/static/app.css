@@ -747,6 +747,29 @@ td {
   background: var(--panel-soft);
 }
 
+.file-upload-control.has-file {
+  border-color: #8fb2df;
+  background: #eef6ff;
+  box-shadow: inset 4px 0 0 var(--primary), 0 0 0 1px rgba(91, 130, 189, 0.08);
+}
+
+.file-upload-control.has-file:hover {
+  border-color: var(--primary);
+  background: #e8f2ff;
+}
+
+.file-upload-control.has-file::before {
+  content: "已选择";
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #fff;
+  background: var(--primary);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
 .file-upload-control.is-disabled {
   cursor: not-allowed;
   opacity: 0.65;
@@ -800,6 +823,17 @@ td {
   font-weight: 700;
 }
 
+.file-upload-control.has-file .file-name {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.file-upload-control.has-file .file-button {
+  background: var(--primary);
+  color: #fff;
+}
+
 .file-clear {
   display: none;
   align-items: center;
@@ -817,6 +851,9 @@ td {
 
 .file-upload-control.has-file .file-clear {
   display: inline-flex;
+  border: 1px solid #cfe0f5;
+  background: #fff;
+  color: var(--primary-strong);
 }
 
 .file-clear:hover,
