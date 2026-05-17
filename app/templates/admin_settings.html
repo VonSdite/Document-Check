@@ -142,7 +142,7 @@
                 <div class="form-actions">
                   <label class="switch-line">
                     <input type="checkbox" name="enabled" {{ "checked" if item.enabled else "" }}>
-                    <span>{{ "启用" if item.enabled else "停用" }}</span>
+                    <span>启用</span>
                   </label>
                   {% if is_builtin %}
                   <button class="secondary-button settings-save-button" type="submit" name="reset_prompt" value="1" formnovalidate data-confirm-click="确认将该检查项提示词重置为默认内容？">重置</button>
