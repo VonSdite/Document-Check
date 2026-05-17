@@ -552,12 +552,13 @@ function clearFileControl(target) {
 
 function updateFileControl(control, input) {
   const name = control.querySelector(".file-name");
-  const file = input.files?.[0];
-  if (!name || !file) {
+  const files = Array.from(input.files || []);
+  if (!name || files.length === 0) {
     return;
   }
-  name.textContent = file.name;
-  name.setAttribute("title", file.name);
+  const fileNames = files.map((file) => file.name);
+  name.textContent = files.length === 1 ? fileNames[0] : `${files.length} 个文件：${fileNames.join("、")}`;
+  name.setAttribute("title", fileNames.join("\n"));
   control.classList.add("has-file");
 }
 
@@ -650,8 +651,7 @@ document.addEventListener("change", (event) => {
   if (!name) {
     return;
   }
-  const file = input.files?.[0];
-  if (!file) {
+  if (!input.files?.length) {
     return;
   }
   updateFileControl(control, input);

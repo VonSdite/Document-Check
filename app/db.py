@@ -4,6 +4,8 @@ from datetime import datetime
 
 from flask import current_app, g
 
+from .task_types import DOCUMENT_TASK_TYPE
+
 
 def now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -58,12 +60,14 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_type TEXT NOT NULL DEFAULT 'document_check',
             ip TEXT NOT NULL,
             username_snapshot TEXT,
             original_filename TEXT NOT NULL,
             stored_filename TEXT NOT NULL,
             file_type TEXT NOT NULL,
             file_size INTEGER NOT NULL,
+            document_meta_json TEXT,
             checks_json TEXT NOT NULL,
             provider_name TEXT,
             model_name TEXT NOT NULL,
@@ -90,6 +94,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         """
     )
+    _ensure_column(db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")
+    _ensure_column(db, "tasks", "document_meta_json", "TEXT")
     _ensure_column(db, "tasks", "ssl_verify", "INTEGER NOT NULL DEFAULT 0")
     current_app.teardown_appcontext(close_db)
     db.commit()

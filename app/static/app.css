@@ -957,7 +957,15 @@ td {
   align-items: end;
 }
 
-.quick-form-grid > * {
+.consistency-form-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) minmax(220px, 0.7fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.quick-form-grid > *,
+.consistency-form-grid > * {
   min-width: 0;
 }
 
@@ -1625,6 +1633,41 @@ td {
 
 .report-file-meta {
   grid-column: 1 / -1;
+}
+
+.report-document-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.report-document-groups section {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fbfdff;
+}
+
+.report-document-groups strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.report-file-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.report-file-list li {
+  overflow-wrap: anywhere;
+}
+
+.report-file-list span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .report-error {

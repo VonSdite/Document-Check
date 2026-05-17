@@ -19,7 +19,8 @@
       </a>
       {% if is_admin %}
       <nav class="nav">
-        <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if request.endpoint in ['admin_dashboard', 'admin_tasks', 'admin_new_task', 'admin_task_detail'] else '' }}">检查任务</a>
+        <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_dashboard', 'admin_tasks', 'admin_new_task'] else '' }}">文档检查</a>
+        <a href="{{ url_for('admin_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint == 'admin_consistency' else '' }}">一致性检查</a>
         <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户管理</a>
         <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型管理</a>
         <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] else '' }}">系统设置</a>
@@ -31,7 +32,8 @@
       </form>
       {% else %}
       <nav class="nav">
-        <a href="{{ url_for('user_tasks') }}" class="active">检查任务</a>
+        <a href="{{ url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['user_tasks', 'user_new_task'] else '' }}">文档检查</a>
+        <a href="{{ url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint == 'user_consistency' else '' }}">一致性检查</a>
       </nav>
       <div class="nav-identity">{{ nav_identity }}</div>
       {% endif %}

@@ -1,24 +1,24 @@
 {% extends "base.html" %}
 
-{% block title %}文档检查 - 文档智能门禁{% endblock %}
+{% block title %}一致性检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
 {% set user_disabled = user and user.is_disabled %}
 {% set submit_disabled = user_disabled or not models %}
 <form method="post" enctype="multipart/form-data" class="panel create-panel">
   <div class="panel-head compact-head">
-    <h1>创建文档检查</h1>
+    <h1>创建一致性检查</h1>
     {% if user_disabled %}
     <span class="status-pill status-failed">已禁用</span>
     {% endif %}
   </div>
 
-  <div class="quick-form-grid">
+  <div class="consistency-form-grid">
     <div class="form-field">
-      <span class="field-label">文档</span>
+      <span class="field-label">母本文档</span>
       <span class="field-with-help">
         <label class="file-upload-control {{ 'is-disabled' if user_disabled else '' }}">
-          <input class="file-input" name="document" type="file" accept=".docx,.pdf,.txt,.md,.html" required {{ "disabled" if user_disabled else "" }}>
+          <input class="file-input" name="master_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" multiple required {{ "disabled" if user_disabled else "" }}>
           <span class="file-name">未选择文件</span>
           <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
           <span class="file-button" aria-hidden="true">
@@ -28,9 +28,28 @@
             </svg>
           </span>
         </label>
-        <span class="help-tip" tabindex="0" data-tip="支持 docx、pdf、txt、md、html，单文件最大 50MB。">?</span>
+        <span class="help-tip" tabindex="0" data-tip="作为核对基准，可选择 1-3 个 docx、pdf、txt、md、html 文档。">?</span>
       </span>
     </div>
+
+    <div class="form-field">
+      <span class="field-label">相关文档</span>
+      <span class="field-with-help">
+        <label class="file-upload-control {{ 'is-disabled' if user_disabled else '' }}">
+          <input class="file-input" name="related_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" multiple required {{ "disabled" if user_disabled else "" }}>
+          <span class="file-name">未选择文件</span>
+          <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
+          <span class="file-button" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <path d="M14 2v6h6"/>
+            </svg>
+          </span>
+        </label>
+        <span class="help-tip" tabindex="0" data-tip="待核对文档，可选择 1-3 个 docx、pdf、txt、md、html 文档。">?</span>
+      </span>
+    </div>
+
     <label>
       模型
       <select name="model_id" required {{ "disabled" if submit_disabled else "" }}>
@@ -43,26 +62,11 @@
         {% endif %}
       </select>
     </label>
+
     <div class="submit-slot">
       <span class="{{ 'disabled-submit-tip' if user_disabled else '' }}" {% if user_disabled %}data-tip="当前 IP 已禁用，请联系管理员"{% endif %}>
         <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
       </span>
-    </div>
-  </div>
-
-  <div class="check-row">
-    <div class="check-row-title">
-      <span>检查项</span>
-      <span class="help-tip" tabindex="0" data-tip="可多选；系统会按检查项逐项调用模型。">?</span>
-    </div>
-    <div class="check-chip-grid">
-      {% for item in check_items %}
-      <label class="check-chip">
-        <input type="checkbox" name="checks" value="{{ item.id }}" checked {{ "disabled" if user_disabled else "" }}>
-        <span>{{ item.name }}</span>
-        <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
-      </label>
-      {% endfor %}
     </div>
   </div>
 </form>
@@ -76,12 +80,13 @@
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
-    <h2>我的任务</h2>
+    <h2>一致性检查任务</h2>
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
       <span class="refresh-dot" aria-hidden="true"></span>
       <span data-refresh-label>刷新中</span>
     </button>
   </div>
+
   <div data-refresh-region="task-list">
   {% if tasks %}
   <div class="table-wrap">
@@ -142,9 +147,9 @@
   <nav class="pagination" aria-label="任务分页">
     <span>共 {{ pagination.total }} 条，每页 {{ pagination.per_page }} 条</span>
     <div>
-      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('user_tasks', page=pagination.prev_page) }}">上一页</a>
+      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('user_consistency', page=pagination.prev_page) }}">上一页</a>
       <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
-      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('user_tasks', page=pagination.next_page) }}">下一页</a>
+      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('user_consistency', page=pagination.next_page) }}">下一页</a>
     </div>
   </nav>
   {% endif %}

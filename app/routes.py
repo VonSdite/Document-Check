@@ -1,8 +1,10 @@
 import hmac
+import io
 import json
 import os
 import re
 import uuid
+import zipfile
 from functools import wraps
 from pathlib import Path
 
@@ -29,6 +31,13 @@ from .db import (
     set_setting,
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text
+from .task_types import (
+    CONSISTENCY_MAX_FILES_PER_GROUP,
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    document_groups_from_meta,
+    task_type_label,
+)
 
 
 STATUS_LABELS = {
@@ -40,6 +49,7 @@ STATUS_LABELS = {
 }
 TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
+CONSISTENCY_CHECKS_JSON = json.dumps(["consistency-cross-document"], ensure_ascii=False)
 PROXY_MODES = {"direct", "system", "custom"}
 PROVIDER_TIMEOUT_DEFAULT = 3600
 PROVIDER_TIMEOUT_MIN = 30
@@ -62,6 +72,7 @@ def register_routes(app):
         return {
             "status_labels": STATUS_LABELS,
             "nav_identity": f"{ip}-{username}" if username else ip,
+            "task_type_label": task_type_label,
         }
 
     @app.route("/", methods=["GET", "POST"])
@@ -75,21 +86,21 @@ def register_routes(app):
             return create_task_for_ip(ip, user, admin_created=False)
         page = _page_arg()
         total = get_db().execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE ip = ?",
-            (ip,),
+            "SELECT COUNT(*) AS total FROM tasks WHERE ip = ? AND task_type = ?",
+            (ip, DOCUMENT_TASK_TYPE),
         ).fetchone()["total"]
         page = _bounded_page(page, total, TASKS_PER_PAGE)
         rows = get_db().execute(
             """
             SELECT *
             FROM tasks
-            WHERE ip = ?
+            WHERE ip = ? AND task_type = ?
             ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
             """,
-            (ip, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
+            (ip, DOCUMENT_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
         ).fetchall()
-        stats = _task_stats_for_where("ip = ?", (ip,))
+        stats = _task_stats_for_where("ip = ? AND task_type = ?", (ip, DOCUMENT_TASK_TYPE))
         return render_template(
             "user_tasks.html",
             ip=ip,
@@ -99,6 +110,7 @@ def register_routes(app):
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(),
             models=get_enabled_models(),
+            active_nav=DOCUMENT_TASK_TYPE,
         )
 
     @app.route("/tasks/new", methods=["GET", "POST"])
@@ -112,10 +124,56 @@ def register_routes(app):
             return create_task_for_ip(ip, user, admin_created=False)
         return redirect(url_for("user_tasks"))
 
+    @app.route("/consistency", methods=["GET", "POST"])
+    def user_consistency():
+        ip = client_ip()
+        user = get_ip_user(ip)
+        if request.method == "POST":
+            if user and user["is_disabled"]:
+                flash("当前 IP 已被管理员禁用，不能提交任务。", "error")
+                return redirect(url_for("user_consistency"))
+            return create_consistency_task_for_ip(ip, user, admin_created=False)
+
+        page = _page_arg()
+        total = get_db().execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE ip = ? AND task_type = ?",
+            (ip, CONSISTENCY_TASK_TYPE),
+        ).fetchone()["total"]
+        page = _bounded_page(page, total, TASKS_PER_PAGE)
+        rows = get_db().execute(
+            """
+            SELECT *
+            FROM tasks
+            WHERE ip = ? AND task_type = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (ip, CONSISTENCY_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
+        ).fetchall()
+        stats = _task_stats_for_where("ip = ? AND task_type = ?", (ip, CONSISTENCY_TASK_TYPE))
+        return render_template(
+            "user_consistency.html",
+            ip=ip,
+            user=user,
+            tasks=rows,
+            stats=stats,
+            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            models=get_enabled_models(),
+            active_nav=CONSISTENCY_TASK_TYPE,
+        )
+
     @app.get("/tasks/<int:task_id>")
     def user_task_detail(task_id):
         task = _get_user_task(task_id)
-        return render_template("task_detail.html", mode="user", task=task, results=_task_results(task))
+        return render_template(
+            "task_detail.html",
+            mode="user",
+            task=task,
+            results=_task_results(task),
+            document_groups=_task_document_groups(task),
+            active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
+            back_endpoint=_task_list_endpoint(False, task["task_type"]),
+        )
 
     @app.get("/tasks/<int:task_id>/export")
     def user_export_task(task_id):
@@ -139,7 +197,7 @@ def register_routes(app):
         task = _get_user_task(task_id)
         if _delete_task(task):
             flash("任务已删除。", "success")
-        return redirect(url_for("user_tasks"))
+        return redirect(url_for(_task_list_endpoint(False, task["task_type"])))
 
     admin_prefix = app.config["ADMIN_URL"]
 
@@ -187,6 +245,8 @@ def register_routes(app):
         if ip:
             clauses.append("t.ip LIKE ?")
             params.append(f"%{ip}%")
+        clauses.append("t.task_type = ?")
+        params.append(DOCUMENT_TASK_TYPE)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         total = get_db().execute(
             f"SELECT COUNT(*) AS total FROM tasks t {where}",
@@ -210,11 +270,12 @@ def register_routes(app):
             status=status,
             ip=ip,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
-            totals=_admin_totals(),
+            totals=_admin_totals(DOCUMENT_TASK_TYPE),
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
             check_items=get_enabled_check_items(),
             models=get_enabled_models(),
+            active_nav=DOCUMENT_TASK_TYPE,
         )
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
@@ -225,11 +286,67 @@ def register_routes(app):
             return create_task_for_ip(ip, get_ip_user(ip), admin_created=True)
         return redirect(url_for("admin_tasks"))
 
+    @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
+    @admin_required
+    def admin_consistency():
+        if request.method == "POST":
+            ip = client_ip()
+            return create_consistency_task_for_ip(ip, get_ip_user(ip), admin_created=True)
+
+        status = request.args.get("status", "")
+        ip = request.args.get("ip", "").strip()
+        page = _page_arg()
+        params = []
+        clauses = []
+        if status:
+            clauses.append("t.status = ?")
+            params.append(status)
+        if ip:
+            clauses.append("t.ip LIKE ?")
+            params.append(f"%{ip}%")
+        clauses.append("t.task_type = ?")
+        params.append(CONSISTENCY_TASK_TYPE)
+        where = f"WHERE {' AND '.join(clauses)}"
+        total = get_db().execute(
+            f"SELECT COUNT(*) AS total FROM tasks t {where}",
+            tuple(params),
+        ).fetchone()["total"]
+        page = _bounded_page(page, total, TASKS_PER_PAGE)
+        rows = get_db().execute(
+            f"""
+            SELECT t.*, u.username AS current_username
+            FROM tasks t
+            LEFT JOIN ip_users u ON u.ip = t.ip
+            {where}
+            ORDER BY t.created_at DESC, t.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params + [TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE]),
+        ).fetchall()
+        return render_template(
+            "admin_consistency.html",
+            tasks=rows,
+            status=status,
+            ip=ip,
+            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            totals=_admin_totals(CONSISTENCY_TASK_TYPE),
+            models=get_enabled_models(),
+            active_nav=CONSISTENCY_TASK_TYPE,
+        )
+
     @app.get(f"{admin_prefix}/tasks/<int:task_id>")
     @admin_required
     def admin_task_detail(task_id):
         task = _get_task_or_404(task_id)
-        return render_template("task_detail.html", mode="admin", task=task, results=_task_results(task))
+        return render_template(
+            "task_detail.html",
+            mode="admin",
+            task=task,
+            results=_task_results(task),
+            document_groups=_task_document_groups(task),
+            active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
+            back_endpoint=_task_list_endpoint(True, task["task_type"]),
+        )
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/export")
     @admin_required
@@ -257,7 +374,7 @@ def register_routes(app):
         task = _get_task_or_404(task_id)
         if _delete_task(task):
             flash("任务已删除。", "success")
-        return redirect(url_for("admin_tasks"))
+        return redirect(url_for(_task_list_endpoint(True, task["task_type"])))
 
     @app.route(f"{admin_prefix}/users", methods=["GET", "POST"])
     @admin_required
@@ -693,14 +810,29 @@ def _find_enabled_model(model_id: str) -> dict | None:
     return None
 
 
-def _admin_totals() -> dict:
+def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
     db = get_db()
     return {
-        "tasks": db.execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"],
-        "queued": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued'").fetchone()["total"],
-        "running": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'").fetchone()["total"],
-        "completed": db.execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'completed'").fetchone()["total"],
-        "ips": db.execute("SELECT COUNT(DISTINCT ip) AS total FROM tasks").fetchone()["total"],
+        "tasks": db.execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE task_type = ?",
+            (task_type,),
+        ).fetchone()["total"],
+        "queued": db.execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued' AND task_type = ?",
+            (task_type,),
+        ).fetchone()["total"],
+        "running": db.execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running' AND task_type = ?",
+            (task_type,),
+        ).fetchone()["total"],
+        "completed": db.execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'completed' AND task_type = ?",
+            (task_type,),
+        ).fetchone()["total"],
+        "ips": db.execute(
+            "SELECT COUNT(DISTINCT ip) AS total FROM tasks WHERE task_type = ?",
+            (task_type,),
+        ).fetchone()["total"],
     }
 
 
@@ -756,14 +888,15 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
     db.execute(
         """
         INSERT INTO tasks(
-            ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
+            task_type, ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
             checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
             ssl_verify, request_timeout, max_input_chars,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
+            DOCUMENT_TASK_TYPE,
             ip,
             username,
             original_filename,
@@ -790,10 +923,177 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
     return redirect(url_for("user_tasks"))
 
 
-def _back_to_task_form(admin_created: bool):
-    if admin_created:
-        return redirect(url_for("admin_tasks"))
-    return redirect(url_for("user_tasks"))
+def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
+    db = get_db()
+    if not admin_created:
+        current_user = get_ip_user(ip)
+        if current_user and current_user["is_disabled"]:
+            flash("当前 IP 已被管理员禁用，不能提交任务。", "error")
+            return redirect(url_for("user_consistency"))
+
+    master_uploads = _selected_uploads("master_documents")
+    related_uploads = _selected_uploads("related_documents")
+    if not _validate_consistency_uploads(master_uploads, "母本文档"):
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+    if not _validate_consistency_uploads(related_uploads, "相关文档"):
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+
+    model_id = request.form.get("model_id", "")
+    model = _find_enabled_model(model_id)
+    if model is None:
+        flash("请选择可用模型。", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+
+    created_at = now_text()
+    saved_paths = []
+    try:
+        master_files = _save_consistency_upload_group(master_uploads, ip, created_at, "母本文档", saved_paths)
+        related_files = _save_consistency_upload_group(related_uploads, ip, created_at, "相关文档", saved_paths)
+    except DocumentReadError as exc:
+        _remove_uploaded_files(saved_paths)
+        flash(f"文档读取失败：{exc}", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+
+    validation_text = _compose_consistency_validation_text(
+        [
+            {"label": "母本文档", "files": master_files},
+            {"label": "相关文档", "files": related_files},
+        ]
+    )
+    if len(validation_text) > model["max_input_chars"]:
+        _remove_uploaded_files(saved_paths)
+        flash(f"文档文本 {len(validation_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+
+    document_meta = {
+        "groups": [
+            {
+                "role": "master",
+                "label": "母本文档",
+                "files": [_persisted_file_info(file_info) for file_info in master_files],
+            },
+            {
+                "role": "related",
+                "label": "相关文档",
+                "files": [_persisted_file_info(file_info) for file_info in related_files],
+            },
+        ]
+    }
+    all_files = master_files + related_files
+    first_file = all_files[0]
+    file_size = sum(file_info["file_size"] for file_info in all_files)
+    original_filename = f"一致性检查：母本{len(master_files)}个 / 相关{len(related_files)}个"
+    username = user["username"] if user and user["username"] else None
+
+    db.execute(
+        """
+        INSERT INTO tasks(
+            task_type, ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
+            document_meta_json, checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
+            ssl_verify, request_timeout, max_input_chars,
+            status, progress, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        """,
+        (
+            CONSISTENCY_TASK_TYPE,
+            ip,
+            username,
+            original_filename,
+            first_file["stored_filename"],
+            "多文档",
+            file_size,
+            json.dumps(document_meta, ensure_ascii=False),
+            CONSISTENCY_CHECKS_JSON,
+            model["provider_name"],
+            model["model_name"],
+            model["api_base"],
+            model["api_key"],
+            model["proxy_mode"],
+            model["proxy"],
+            1 if model["ssl_verify"] else 0,
+            model["request_timeout"],
+            model["max_input_chars"],
+            created_at,
+            created_at,
+        ),
+    )
+    db.commit()
+    return redirect(url_for(_task_list_endpoint(admin_created, CONSISTENCY_TASK_TYPE)))
+
+
+def _back_to_task_form(admin_created: bool, task_type: str = DOCUMENT_TASK_TYPE):
+    return redirect(url_for(_task_list_endpoint(admin_created, task_type)))
+
+
+def _task_list_endpoint(admin_created: bool, task_type: str | None = DOCUMENT_TASK_TYPE) -> str:
+    if task_type == CONSISTENCY_TASK_TYPE:
+        return "admin_consistency" if admin_created else "user_consistency"
+    return "admin_tasks" if admin_created else "user_tasks"
+
+
+def _selected_uploads(field_name: str):
+    return [upload for upload in request.files.getlist(field_name) if upload and upload.filename]
+
+
+def _validate_consistency_uploads(uploads: list, label: str) -> bool:
+    if not uploads:
+        flash(f"请至少选择 1 个{label}。", "error")
+        return False
+    if len(uploads) > CONSISTENCY_MAX_FILES_PER_GROUP:
+        flash(f"{label}最多上传 {CONSISTENCY_MAX_FILES_PER_GROUP} 个。", "error")
+        return False
+    for upload in uploads:
+        if not allowed_file(upload.filename):
+            flash(f"{label}仅支持 docx、pdf、txt、md、html 文件。", "error")
+            return False
+    return True
+
+
+def _save_consistency_upload_group(uploads: list, ip: str, created_at: str, label: str, saved_paths: list[Path]) -> list[dict]:
+    files = []
+    for upload in uploads:
+        file_type = extension_of(upload.filename)
+        original_filename = _clean_upload_filename(upload.filename, file_type)
+        stored_filename, destination = _upload_destination(original_filename, ip, created_at, file_type)
+        upload.save(destination)
+        saved_paths.append(destination)
+        file_size = os.path.getsize(destination)
+        try:
+            text = extract_text(destination, file_type).strip()
+        except DocumentReadError as exc:
+            raise DocumentReadError(f"{label}“{original_filename}”：{exc}") from exc
+        if not text:
+            raise DocumentReadError(f"{label}“{original_filename}”未能提取到可检查文本")
+        files.append(
+            {
+                "original_filename": original_filename,
+                "stored_filename": stored_filename,
+                "file_type": file_type,
+                "file_size": file_size,
+                "text": text,
+            }
+        )
+    return files
+
+
+def _compose_consistency_validation_text(groups: list[dict]) -> str:
+    sections = []
+    for group in groups:
+        group_parts = [f"# {group['label']}"]
+        for index, file_info in enumerate(group["files"], start=1):
+            group_parts.append(f"## {group['label']}{index}：{file_info['original_filename']}\n{file_info['text']}")
+        sections.append("\n\n".join(group_parts))
+    return "\n\n".join(sections).strip()
+
+
+def _persisted_file_info(file_info: dict) -> dict:
+    return {
+        "original_filename": file_info["original_filename"],
+        "stored_filename": file_info["stored_filename"],
+        "file_type": file_info["file_type"],
+        "file_size": file_info["file_size"],
+    }
 
 
 def admin_required(view):
@@ -860,9 +1160,7 @@ def _delete_task(task):
         flash("运行中的任务不能直接删除，请先取消后再删除。", "error")
         return False
     db = get_db()
-    upload_path = _task_upload_path(task)
-    if upload_path.exists():
-        upload_path.unlink()
+    _remove_uploaded_files(_task_upload_paths(task))
     db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
     db.commit()
     return True
@@ -876,6 +1174,9 @@ def _task_action_redirect(default_endpoint: str):
 
 
 def _download_task_document(task, fallback_endpoint: str):
+    if task["task_type"] == CONSISTENCY_TASK_TYPE:
+        return _download_task_documents_zip(task, fallback_endpoint)
+
     upload_path = _task_upload_path(task)
     if not upload_path.is_file():
         flash("文档已删除，无法下载。", "error")
@@ -892,8 +1193,87 @@ def _remove_uploaded_file(path: Path):
         path.unlink()
 
 
+def _remove_uploaded_files(paths: list[Path]):
+    for path in paths:
+        _remove_uploaded_file(path)
+
+
 def _task_upload_path(task) -> Path:
     return Path(current_app.config["UPLOAD_FOLDER"]) / Path(task["stored_filename"]).name
+
+
+def _task_upload_paths(task) -> list[Path]:
+    groups = _task_document_groups(task)
+    if not groups:
+        return [_task_upload_path(task)]
+    upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
+    paths = []
+    for group in groups:
+        for file_info in group["files"]:
+            stored_filename = Path(str(file_info.get("stored_filename") or "")).name
+            if stored_filename:
+                paths.append(upload_folder / stored_filename)
+    return paths
+
+
+def _task_document_groups(task) -> list[dict]:
+    return document_groups_from_meta(task["document_meta_json"])
+
+
+def _download_task_documents_zip(task, fallback_endpoint: str):
+    groups = _task_document_groups(task)
+    if not groups:
+        flash("文档信息缺失，无法下载。", "error")
+        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
+
+    upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
+    buffer = io.BytesIO()
+    added = 0
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        used_names = set()
+        for group in groups:
+            for file_info in group["files"]:
+                stored_filename = Path(str(file_info.get("stored_filename") or "")).name
+                if not stored_filename:
+                    continue
+                upload_path = upload_folder / stored_filename
+                if not upload_path.is_file():
+                    continue
+                archive_name = _unique_archive_name(
+                    used_names,
+                    f"{group['label']}/{Path(str(file_info.get('original_filename') or stored_filename)).name}",
+                )
+                archive.write(upload_path, archive_name)
+                added += 1
+    if added == 0:
+        flash("文档已删除，无法下载。", "error")
+        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
+
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"consistency-task-{task['id']}-documents.zip",
+    )
+
+
+def _unique_archive_name(used_names: set[str], archive_name: str) -> str:
+    archive_name = archive_name.strip("/\\") or "document"
+    if archive_name not in used_names:
+        used_names.add(archive_name)
+        return archive_name
+    path = Path(archive_name)
+    parent = str(path.parent)
+    stem = path.stem or "document"
+    suffix = path.suffix
+    for index in range(2, 1000):
+        candidate_name = f"{stem}-{index}{suffix}"
+        candidate = f"{parent}/{candidate_name}" if parent and parent != "." else candidate_name
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+    raise RuntimeError("压缩包内文件名过多，无法生成唯一名称")
 
 
 def _clean_upload_filename(filename: str, file_type: str) -> str:
@@ -949,6 +1329,7 @@ def _export_task_report(task):
         "task_report_export.html",
         task=task,
         results=_task_results(task),
+        document_groups=_task_document_groups(task),
         app_css=app_css,
     )
     filename = f"document-check-report-{task['id']}.html"

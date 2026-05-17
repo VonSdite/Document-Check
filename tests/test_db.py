@@ -66,6 +66,17 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("ssl_verify", columns)
         self.assertEqual(columns["ssl_verify"]["dflt_value"], "0")
 
+    def test_tasks_table_has_task_type_and_document_meta(self):
+        db = get_db()
+        columns = {
+            row["name"]: row
+            for row in db.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+
+        self.assertIn("task_type", columns)
+        self.assertEqual(columns["task_type"]["dflt_value"], "'document_check'")
+        self.assertIn("document_meta_json", columns)
+
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 1)
 
