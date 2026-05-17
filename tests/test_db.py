@@ -67,7 +67,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(columns["ssl_verify"]["dflt_value"], "0")
 
     def test_default_check_item_concurrency_is_seeded(self):
-        self.assertEqual(get_setting("check_item_concurrency"), 3)
+        self.assertEqual(get_setting("check_item_concurrency"), 1)
 
     def test_next_custom_check_item_sort_order_goes_before_first_item(self):
         self.assertEqual(_next_check_item_sort_order(get_db()), 0)

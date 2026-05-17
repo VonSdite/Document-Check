@@ -13,7 +13,7 @@ class TaskCanceled(Exception):
     pass
 
 
-DEFAULT_CHECK_ITEM_CONCURRENCY = 3
+DEFAULT_CHECK_ITEM_CONCURRENCY = 1
 
 
 class TaskScheduler:
