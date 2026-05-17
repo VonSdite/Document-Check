@@ -80,6 +80,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 1)
 
+    def test_llm_stream_trace_is_disabled_by_default(self):
+        self.assertFalse(get_setting("llm_stream_trace_enabled"))
+
     def test_next_custom_check_item_sort_order_goes_before_first_item(self):
         self.assertEqual(_next_check_item_sort_order(get_db()), 0)
 

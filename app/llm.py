@@ -41,6 +41,7 @@ def run_check(
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
+    stream_trace_enabled: bool = False,
 ) -> str:
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
@@ -105,6 +106,7 @@ def run_check(
                 request_id=request_id,
                 task_id=task_id,
                 attempt=attempt,
+                stream_trace_enabled=stream_trace_enabled,
             )
             if on_content and not attempt_content and content:
                 on_content(content)
@@ -144,6 +146,7 @@ def _run_check_attempt(
     request_id: str,
     task_id: Optional[int],
     attempt: int,
+    stream_trace_enabled: bool,
 ) -> str:
     try:
         with requests.Session() as session:
@@ -166,8 +169,38 @@ def _run_check_attempt(
             stream_payload["stream_options"] = {"include_usage": True}
             response = None
             try:
+                if stream_trace_enabled:
+                    logger.info(
+                        "LLM 流式定位请求发送 request_id=%s task_id=%s attempt=%s endpoint=%s timeout=%s proxy_mode=%s ssl_verify=%s",
+                        request_id,
+                        task_id or "-",
+                        attempt,
+                        endpoint,
+                        request_timeout,
+                        proxy_mode,
+                        ssl_verify,
+                    )
+                started_at = time.monotonic()
                 response = session.post(endpoint, json=stream_payload, stream=True, **request_kwargs)
-                content = _read_stream_response(response, on_delta, request_id=request_id, task_id=task_id)
+                if stream_trace_enabled:
+                    headers = getattr(response, "headers", {}) or {}
+                    logger.info(
+                        "LLM 流式定位响应建立 request_id=%s task_id=%s attempt=%s status=%s content_type=%s elapsed_ms=%s",
+                        request_id,
+                        task_id or "-",
+                        attempt,
+                        getattr(response, "status_code", "-"),
+                        headers.get("content-type") or headers.get("Content-Type") or "-",
+                        int((time.monotonic() - started_at) * 1000),
+                    )
+                content = _read_stream_response(
+                    response,
+                    on_delta,
+                    request_id=request_id,
+                    task_id=task_id,
+                    attempt=attempt,
+                    stream_trace_enabled=stream_trace_enabled,
+                )
                 logger.info(
                     "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=stream output_chars=%s",
                     request_id,
@@ -208,15 +241,26 @@ def _read_stream_response(
     *,
     request_id: str = "-",
     task_id: Optional[int] = None,
+    attempt: Optional[int] = None,
+    stream_trace_enabled: bool = False,
 ) -> str:
     _force_utf8_response(response)
     _raise_for_http_error(response, request_id=request_id, task_id=task_id)
+    if stream_trace_enabled:
+        logger.info(
+            "LLM 流式定位开始读取 request_id=%s task_id=%s attempt=%s",
+            request_id,
+            task_id or "-",
+            attempt or "-",
+        )
 
     return _read_stream_lines(
         response.iter_lines(decode_unicode=True),
         on_delta,
         request_id=request_id,
         task_id=task_id,
+        attempt=attempt,
+        stream_trace_enabled=stream_trace_enabled,
     )
 
 
@@ -226,6 +270,8 @@ def _read_stream_lines(
     *,
     request_id: str = "-",
     task_id: Optional[int] = None,
+    attempt: Optional[int] = None,
+    stream_trace_enabled: bool = False,
 ) -> str:
     parts = []
     diagnostics = _OpenAIChatDiagnostics()
@@ -241,6 +287,14 @@ def _read_stream_lines(
             line = line[5:].strip()
         if line == "[DONE]":
             diagnostics.done = True
+            if stream_trace_enabled:
+                logger.info(
+                    "LLM 流式定位收到结束标记 request_id=%s task_id=%s attempt=%s frames=%s",
+                    request_id,
+                    task_id or "-",
+                    attempt or "-",
+                    diagnostics.frames,
+                )
             break
 
         try:
@@ -266,6 +320,16 @@ def _read_stream_lines(
             raise LLMError(f"模型服务返回错误：{service_error}")
 
         diagnostics.observe(data, raw=line)
+        if stream_trace_enabled:
+            logger.info(
+                "LLM 流式定位收到响应chunk request_id=%s task_id=%s attempt=%s frame=%s %s raw=%s",
+                request_id,
+                task_id or "-",
+                attempt or "-",
+                diagnostics.frames,
+                _chat_frame_trace(data),
+                _short_text(line, 600),
+            )
         delta = _extract_chat_content(data)
         if not delta:
             continue
@@ -435,6 +499,64 @@ def _extract_service_error(data: dict) -> str:
         message = data.get("message") or data.get("msg") or data.get("errorCode") or data.get("code") or data
         return _short_text(message)
     return ""
+
+
+def _chat_frame_trace(data: dict) -> str:
+    if not isinstance(data, dict):
+        return f"type={type(data).__name__}"
+
+    parts = []
+    if data.get("object"):
+        parts.append(f"object={_short_text(data['object'], 80)}")
+
+    choices = data.get("choices")
+    if isinstance(choices, list):
+        roles = set()
+        finish_reasons = set()
+        content_chars = 0
+        reasoning_chars = 0
+        reasoning_fields = set()
+        tool_call_chunks = 0
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            finish_reason = choice.get("finish_reason")
+            if finish_reason:
+                finish_reasons.add(str(finish_reason))
+            for message in (choice.get("delta"), choice.get("message")):
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role")
+                if role:
+                    roles.add(str(role))
+                content = message.get("content")
+                if isinstance(content, str):
+                    content_chars += len(content)
+                reasoning_field, reasoning_text = _extract_reasoning(message)
+                if reasoning_text:
+                    reasoning_fields.add(reasoning_field)
+                    reasoning_chars += len(reasoning_text)
+                tool_calls = message.get("tool_calls")
+                if isinstance(tool_calls, list) and tool_calls:
+                    tool_call_chunks += 1
+
+        parts.append(f"choices={len(choices)}")
+        parts.append(f"content_delta_chars={content_chars}")
+        parts.append(f"reasoning_delta_chars={reasoning_chars}")
+        if reasoning_fields:
+            parts.append(f"reasoning_fields={','.join(sorted(reasoning_fields))}")
+        if roles:
+            parts.append(f"roles={','.join(sorted(roles))}")
+        if finish_reasons:
+            parts.append(f"finish_reasons={','.join(sorted(finish_reasons))}")
+        if tool_call_chunks:
+            parts.append(f"tool_call_chunks={tool_call_chunks}")
+    else:
+        parts.append("choices=-")
+
+    if isinstance(data.get("usage"), dict):
+        parts.append("usage=1")
+    return " ".join(parts)
 
 
 def _empty_content_message(diagnostics: _OpenAIChatDiagnostics) -> str:

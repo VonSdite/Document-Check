@@ -177,6 +177,7 @@ class TaskScheduler:
                     check_items,
                     document_text,
                     max_workers=max_workers,
+                    stream_trace_enabled=bool(get_setting("llm_stream_trace_enabled", False)),
                 )
                 if _cancel_requested(db, task_id):
                     raise TaskCanceled
@@ -236,7 +237,15 @@ def _extract_consistency_document_text(app, task) -> str:
     return "\n\n".join(sections).strip()
 
 
-def _run_check_items_concurrently(app, task, check_items: list[dict], document_text: str, *, max_workers: int) -> list[dict]:
+def _run_check_items_concurrently(
+    app,
+    task,
+    check_items: list[dict],
+    document_text: str,
+    *,
+    max_workers: int,
+    stream_trace_enabled: bool,
+) -> list[dict]:
     task_id = task["id"]
     total = len(check_items)
     completed_by_code: dict[str, dict] = {}
@@ -322,6 +331,7 @@ def _run_check_items_concurrently(app, task, check_items: list[dict], document_t
                 document_text=document_text,
                 on_content=on_content,
                 task_id=task_id,
+                stream_trace_enabled=stream_trace_enabled,
             )
 
             if cancel_event.is_set() or _cancel_requested(db, task_id):

@@ -37,6 +37,26 @@
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
+      <h2>模型流式定位日志</h2>
+      <p>用于临时定位大模型流式请求过程和响应 chunk 到达情况。</p>
+    </div>
+  </div>
+  <form method="post" class="settings-diagnostic-form">
+    <input type="hidden" name="action" value="diagnostics">
+    <label class="switch-line settings-diagnostic-toggle">
+      <input type="checkbox" name="llm_stream_trace_enabled" {{ "checked" if llm_stream_trace_enabled else "" }}>
+      <span>
+        <strong>启用定位日志</strong>
+        <small>打开后记录请求发送、响应建立、每个响应 chunk 的短预览和结束标记；默认关闭。</small>
+      </span>
+    </label>
+    <button class="primary-button settings-save-button" type="submit">保存设置</button>
+  </form>
+</section>
+
+<section class="panel settings-section">
+  <div class="settings-section-head">
+    <div>
       <h2>文档检查-提示词设置</h2>
       <p>内置检查项不可删除；扩展检查项可新增、停用或删除。</p>
     </div>

@@ -6,11 +6,12 @@ from app import llm
 
 
 class FakeResponse:
-    def __init__(self, *, lines=None, data=None, status_code=200, text=None):
+    def __init__(self, *, lines=None, data=None, status_code=200, text=None, headers=None):
         self._lines = lines or []
         self._data = data
         self.status_code = status_code
         self.text = text if text is not None else json.dumps(data or {}, ensure_ascii=False)
+        self.headers = headers or {"content-type": "text/event-stream"}
         self.closed = False
 
     def iter_lines(self, decode_unicode=False):
@@ -265,6 +266,44 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(chunks, ["重试成功"])
         self.assertEqual(len(fake_session.calls), 3)
         self.assertEqual(sleep.call_args_list, [call(1), call(2)])
+
+    def test_stream_trace_logs_request_and_chunks(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant","content":""}}]}',
+                        'data: {"object":"chat.completion.chunk","choices":[{"delta":{"reasoning":"分析"}}]}',
+                        'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"结果"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            self.assertLogs("app.llm", level="INFO") as logs,
+        ):
+            result = llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                stream_trace_enabled=True,
+            )
+
+        joined_logs = "\n".join(logs.output)
+        self.assertEqual(result, "结果")
+        self.assertIn("LLM 流式定位请求发送", joined_logs)
+        self.assertIn("LLM 流式定位响应建立", joined_logs)
+        self.assertIn("LLM 流式定位开始读取", joined_logs)
+        self.assertIn("LLM 流式定位收到响应chunk", joined_logs)
+        self.assertIn("reasoning_delta_chars=2", joined_logs)
+        self.assertIn("content_delta_chars=2", joined_logs)
+        self.assertIn("LLM 流式定位收到结束标记", joined_logs)
 
     def test_reports_stream_content_snapshots_and_clears_failed_attempt(self):
         fake_session = FakeSession(

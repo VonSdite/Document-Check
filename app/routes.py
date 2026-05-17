@@ -572,6 +572,11 @@ def register_routes(app):
                 flash("并发设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
+            if action == "diagnostics":
+                set_setting("llm_stream_trace_enabled", request.form.get("llm_stream_trace_enabled") == "on")
+                flash("定位日志设置已保存。", "success")
+                return redirect(url_for("admin_settings"))
+
             if action == "create_check_item":
                 name = request.form.get("name", "").strip()
                 description = request.form.get("description", "").strip()
@@ -678,6 +683,7 @@ def register_routes(app):
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
+            llm_stream_trace_enabled=get_setting("llm_stream_trace_enabled", False),
         )
 
 
