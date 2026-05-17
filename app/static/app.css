@@ -903,6 +903,53 @@ td {
   transform: translate(-50%, 0) rotate(45deg);
 }
 
+.help-tip.is-floating-tip::after,
+.help-tip.is-floating-tip::before {
+  display: none;
+}
+
+.floating-help-tip {
+  position: fixed;
+  z-index: 1200;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 9px 11px;
+  border-radius: var(--radius);
+  background: #102033;
+  color: #fff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.floating-help-tip.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.floating-help-tip::before {
+  content: "";
+  position: absolute;
+  left: var(--tip-arrow-left, 50%);
+  width: 8px;
+  height: 8px;
+  background: #102033;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.floating-help-tip[data-placement="top"]::before {
+  bottom: -4px;
+}
+
+.floating-help-tip[data-placement="bottom"]::before {
+  top: -4px;
+}
+
 .quick-form-grid {
   display: grid;
   grid-template-columns: minmax(260px, 1.1fr) minmax(240px, 0.9fr) auto;
@@ -1880,6 +1927,7 @@ td {
   border-radius: var(--radius);
   background: transparent;
   color: var(--text);
+  overflow: visible;
 }
 
 .modal::backdrop {
