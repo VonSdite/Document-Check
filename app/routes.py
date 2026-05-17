@@ -933,9 +933,9 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
 
     master_uploads = _selected_uploads("master_documents")
     related_uploads = _selected_uploads("related_documents")
-    if not _validate_consistency_uploads(master_uploads, "母本文档"):
+    if not _validate_consistency_uploads(master_uploads, "素材文档"):
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-    if not _validate_consistency_uploads(related_uploads, "相关文档"):
+    if not _validate_consistency_uploads(related_uploads, "资料"):
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     model_id = request.form.get("model_id", "")
@@ -947,8 +947,8 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
     created_at = now_text()
     saved_paths = []
     try:
-        master_files = _save_consistency_upload_group(master_uploads, ip, created_at, "母本文档", saved_paths)
-        related_files = _save_consistency_upload_group(related_uploads, ip, created_at, "相关文档", saved_paths)
+        master_files = _save_consistency_upload_group(master_uploads, ip, created_at, "素材文档", saved_paths)
+        related_files = _save_consistency_upload_group(related_uploads, ip, created_at, "资料", saved_paths)
     except DocumentReadError as exc:
         _remove_uploaded_files(saved_paths)
         flash(f"文档读取失败：{exc}", "error")
@@ -956,8 +956,8 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
 
     validation_text = _compose_consistency_validation_text(
         [
-            {"label": "母本文档", "files": master_files},
-            {"label": "相关文档", "files": related_files},
+            {"label": "素材文档", "files": master_files},
+            {"label": "资料", "files": related_files},
         ]
     )
     if len(validation_text) > model["max_input_chars"]:
@@ -969,12 +969,12 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
         "groups": [
             {
                 "role": "master",
-                "label": "母本文档",
+                "label": "素材文档",
                 "files": [_persisted_file_info(file_info) for file_info in master_files],
             },
             {
                 "role": "related",
-                "label": "相关文档",
+                "label": "资料",
                 "files": [_persisted_file_info(file_info) for file_info in related_files],
             },
         ]
@@ -982,7 +982,7 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
     all_files = master_files + related_files
     first_file = all_files[0]
     file_size = sum(file_info["file_size"] for file_info in all_files)
-    original_filename = f"一致性检查：母本{len(master_files)}个 / 相关{len(related_files)}个"
+    original_filename = f"一致性检查：素材{len(master_files)}个 / 资料{len(related_files)}个"
     username = user["username"] if user and user["username"] else None
 
     db.execute(
