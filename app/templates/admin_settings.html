@@ -37,20 +37,17 @@
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
-      <h2>模型流式定位日志</h2>
-      <p>用于临时定位大模型流式请求过程和响应 chunk 到达情况。</p>
+      <h2 class="title-with-help">模型流式定位日志
+        <button class="help-tip" type="button" aria-label="模型流式定位日志说明" data-tip="用于临时定位大模型流式请求过程和响应 chunk 到达情况；开启后记录请求发送、响应建立、每个响应 chunk 的短预览和结束标记。默认关闭。">?</button>
+      </h2>
     </div>
   </div>
   <form method="post" class="settings-diagnostic-form">
     <input type="hidden" name="action" value="diagnostics">
     <label class="switch-line settings-diagnostic-toggle">
-      <input type="checkbox" name="llm_stream_trace_enabled" {{ "checked" if llm_stream_trace_enabled else "" }}>
-      <span>
-        <strong>启用定位日志</strong>
-        <small>打开后记录请求发送、响应建立、每个响应 chunk 的短预览和结束标记；默认关闭。</small>
-      </span>
+      <input type="checkbox" name="llm_stream_trace_enabled" data-auto-save-setting {{ "checked" if llm_stream_trace_enabled else "" }}>
+      <span>启用定位日志</span>
     </label>
-    <button class="primary-button settings-save-button" type="submit">保存设置</button>
   </form>
 </section>
 

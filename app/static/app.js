@@ -111,6 +111,38 @@ document.addEventListener("click", (event) => {
   hideToast(toast);
 });
 
+document.addEventListener("change", (event) => {
+  const field = event.target.closest("[data-auto-save-setting]");
+  if (!(field instanceof HTMLInputElement)) {
+    return;
+  }
+  const form = field.form;
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+
+  const previousChecked = field.checked;
+  const formData = new FormData(form);
+  field.disabled = true;
+  fetch(form.action || window.location.href, {
+    method: form.method || "POST",
+    body: formData,
+    headers: { "X-Requested-With": "fetch" },
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("save failed");
+      }
+    })
+    .catch(() => {
+      field.checked = !previousChecked;
+      window.alert("设置保存失败，请稍后重试。");
+    })
+    .finally(() => {
+      field.disabled = false;
+    });
+});
+
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-confirm-click]");
   if (!target) {
