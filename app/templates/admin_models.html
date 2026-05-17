@@ -31,7 +31,7 @@
         </label>
         <label class="proxy-custom-field">自定义代理<input name="proxy" value="{{ provider.proxy if provider and provider.proxy else '' }}" placeholder="http://127.0.0.1:7890"></label>
         <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout if provider and provider.request_timeout else 3600 }}" required></label>
-        <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="200000" step="1000" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 60000 }}" required></label>
+        <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="200000" step="1000" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 80000 }}" required></label>
         <label class="switch-line form-switch">
           <input type="checkbox" name="ssl_verify" {{ "checked" if provider and provider.ssl_verify else "" }}>
           <span>SSL 校验</span>
@@ -110,7 +110,7 @@
           </td>
           <td>
             {{ provider.request_timeout or 3600 }} 秒
-            <div class="subline">{{ provider.max_input_chars or 60000 }} 字</div>
+            <div class="subline">{{ provider.max_input_chars or 80000 }} 字</div>
           </td>
           <td><span class="status-pill {{ 'status-completed' if provider.is_active else 'status-canceled' }}">{{ "启用" if provider.is_active else "停用" }}</span></td>
           <td class="right">

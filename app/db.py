@@ -73,7 +73,7 @@ def init_db():
             proxy TEXT,
             ssl_verify INTEGER NOT NULL DEFAULT 0,
             request_timeout INTEGER NOT NULL DEFAULT 3600,
-            max_input_chars INTEGER NOT NULL DEFAULT 60000,
+            max_input_chars INTEGER NOT NULL DEFAULT 80000,
             status TEXT NOT NULL DEFAULT 'queued',
             progress INTEGER NOT NULL DEFAULT 0,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
