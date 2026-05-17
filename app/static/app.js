@@ -142,10 +142,12 @@ document.addEventListener("change", (event) => {
   const savedChecked = field.dataset.savedChecked === "true";
   const targetChecked = field.checked;
   const formData = new FormData(form);
+  const actionUrl = form.getAttribute("action") || window.location.href;
+  const method = form.getAttribute("method") || "POST";
   formData.set(field.name, targetChecked ? "on" : "off");
   field.disabled = true;
-  fetch(form.action || window.location.href, {
-    method: form.method || "POST",
+  fetch(actionUrl, {
+    method,
     body: formData,
     credentials: "same-origin",
     headers: {
