@@ -32,7 +32,8 @@ from .db import (
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text
 from .task_types import (
-    CONSISTENCY_MAX_FILES_PER_GROUP,
+    CONSISTENCY_MAX_DATA_FILES,
+    CONSISTENCY_MAX_MATERIAL_FILES,
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     document_groups_from_meta,
@@ -933,9 +934,9 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
 
     master_uploads = _selected_uploads("master_documents")
     related_uploads = _selected_uploads("related_documents")
-    if not _validate_consistency_uploads(master_uploads, "素材文档"):
+    if not _validate_consistency_uploads(master_uploads, "素材文档", CONSISTENCY_MAX_MATERIAL_FILES):
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-    if not _validate_consistency_uploads(related_uploads, "资料"):
+    if not _validate_consistency_uploads(related_uploads, "资料", CONSISTENCY_MAX_DATA_FILES):
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     model_id = request.form.get("model_id", "")
@@ -1036,12 +1037,12 @@ def _selected_uploads(field_name: str):
     return [upload for upload in request.files.getlist(field_name) if upload and upload.filename]
 
 
-def _validate_consistency_uploads(uploads: list, label: str) -> bool:
+def _validate_consistency_uploads(uploads: list, label: str, max_files: int) -> bool:
     if not uploads:
         flash(f"请至少选择 1 个{label}。", "error")
         return False
-    if len(uploads) > CONSISTENCY_MAX_FILES_PER_GROUP:
-        flash(f"{label}最多上传 {CONSISTENCY_MAX_FILES_PER_GROUP} 个。", "error")
+    if len(uploads) > max_files:
+        flash(f"{label}最多上传 {max_files} 个。", "error")
         return False
     for upload in uploads:
         if not allowed_file(upload.filename):

@@ -18,7 +18,7 @@
       <span class="field-label">素材文档</span>
       <span class="field-with-help">
         <label class="file-upload-control {{ 'is-disabled' if user_disabled else '' }}">
-          <input class="file-input" name="master_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" data-file-limit="3" multiple required {{ "disabled" if user_disabled else "" }}>
+          <input class="file-input" name="master_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" data-file-limit="5" multiple required {{ "disabled" if user_disabled else "" }}>
           <span class="file-name">未选择文件</span>
           <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
           <span class="file-button" aria-hidden="true">
@@ -28,7 +28,7 @@
             </svg>
           </span>
         </label>
-        <span class="help-tip" tabindex="0" data-tip="选择写作依据或素材内容，可选择 1-3 个 docx、pdf、txt、md、html 文档。">?</span>
+        <span class="help-tip" tabindex="0" data-tip="选择写作依据或素材内容，可选择 1-5 个 docx、pdf、txt、md、html 文档。">?</span>
       </span>
       <div class="selected-file-list" data-file-list hidden></div>
     </div>
