@@ -337,6 +337,7 @@ def register_routes(app):
             api_key = request.form.get("api_key", "").strip()
             proxy_mode = request.form.get("proxy_mode", "direct")
             proxy = request.form.get("proxy", "").strip()
+            ssl_verify = request.form.get("ssl_verify") == "on"
             try:
                 request_timeout = int(request.form.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)))
             except ValueError:
@@ -383,6 +384,7 @@ def register_routes(app):
                     api_key=api_key,
                     proxy_mode=proxy_mode,
                     proxy=proxy,
+                    ssl_verify=ssl_verify,
                     request_timeout=request_timeout,
                     max_input_chars=max_input_chars,
                     is_active=bool(is_active),
@@ -399,6 +401,7 @@ def register_routes(app):
                     api_key=api_key,
                     proxy_mode=proxy_mode,
                     proxy=proxy,
+                    ssl_verify=ssl_verify,
                     request_timeout=request_timeout,
                     max_input_chars=max_input_chars,
                     is_active=bool(is_active),
@@ -529,6 +532,7 @@ def _provider_config(
     api_key: str,
     proxy_mode: str,
     proxy: str,
+    ssl_verify: bool,
     request_timeout: int,
     max_input_chars: int,
     is_active: bool,
@@ -543,6 +547,7 @@ def _provider_config(
         "api_key": api_key,
         "proxy_mode": proxy_mode,
         "proxy": proxy,
+        "ssl_verify": ssl_verify,
         "request_timeout": request_timeout,
         "max_input_chars": max_input_chars,
         "is_active": is_active,
@@ -562,6 +567,7 @@ def _model_option(provider: dict, model_name: str) -> dict:
         "api_key": provider["api_key"],
         "proxy_mode": provider["proxy_mode"],
         "proxy": provider["proxy"],
+        "ssl_verify": provider["ssl_verify"],
         "request_timeout": provider["request_timeout"],
         "max_input_chars": provider["max_input_chars"],
     }
@@ -645,10 +651,10 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         INSERT INTO tasks(
             ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
             checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
-            request_timeout, max_input_chars,
+            ssl_verify, request_timeout, max_input_chars,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             ip,
@@ -664,6 +670,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
             model["api_key"],
             model["proxy_mode"],
             model["proxy"],
+            1 if model["ssl_verify"] else 0,
             model["request_timeout"],
             model["max_input_chars"],
             created_at,

@@ -11,6 +11,7 @@ DEFAULT_LISTEN_HOST = "0.0.0.0"
 DEFAULT_LISTEN_PORT = 5000
 DEFAULT_REQUEST_TIMEOUT = 3600
 DEFAULT_MAX_INPUT_CHARS = 60000
+DEFAULT_SSL_VERIFY = False
 PROXY_MODES = {"direct", "system", "custom"}
 _CONFIG_LOCK = threading.Lock()
 
@@ -111,6 +112,7 @@ def _normalize_provider(provider: dict) -> dict:
         "api_key": str(provider.get("api_key", "") or ""),
         "proxy_mode": proxy_mode,
         "proxy": proxy,
+        "ssl_verify": _normalize_bool(provider.get("ssl_verify"), DEFAULT_SSL_VERIFY),
         "request_timeout": _normalize_int(provider.get("request_timeout"), DEFAULT_REQUEST_TIMEOUT),
         "max_input_chars": _normalize_int(provider.get("max_input_chars"), DEFAULT_MAX_INPUT_CHARS),
         "is_active": bool(provider.get("is_active", True)),
@@ -161,6 +163,21 @@ def _normalize_int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_bool(value, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _now_text() -> str:

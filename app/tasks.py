@@ -270,6 +270,7 @@ def _run_check_items_concurrently(app, task, check_items: list[dict], document_t
                 api_key=task["api_key"],
                 proxy_mode=task["proxy_mode"],
                 proxy=task["proxy"],
+                ssl_verify=bool(task["ssl_verify"]),
                 request_timeout=task["request_timeout"],
                 model_name=task["model_name"],
                 check_name=item["name"],

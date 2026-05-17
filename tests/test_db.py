@@ -54,6 +54,16 @@ class CheckItemDefaultsTest(unittest.TestCase):
         updated = db.execute("SELECT prompt FROM check_items WHERE id = ?", (item["id"],)).fetchone()
         self.assertEqual(updated["prompt"], item["prompt"])
 
+    def test_tasks_table_has_ssl_verify_default_off(self):
+        db = get_db()
+        columns = {
+            row["name"]: row
+            for row in db.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+
+        self.assertIn("ssl_verify", columns)
+        self.assertEqual(columns["ssl_verify"]["dflt_value"], "0")
+
 
 if __name__ == "__main__":
     unittest.main()

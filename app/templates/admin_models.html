@@ -32,6 +32,11 @@
         <label class="proxy-custom-field">自定义代理<input name="proxy" value="{{ provider.proxy if provider and provider.proxy else '' }}" placeholder="http://127.0.0.1:7890"></label>
         <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout if provider and provider.request_timeout else 3600 }}" required></label>
         <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="200000" step="1000" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 60000 }}" required></label>
+        <label class="switch-line form-switch">
+          <input type="checkbox" name="ssl_verify" {{ "checked" if provider and provider.ssl_verify else "" }}>
+          <span>SSL 校验</span>
+          <span class="help-tip" tabindex="0" data-tip="开启后校验 HTTPS 证书；默认关闭，适合自签名证书或内网服务。">?</span>
+        </label>
       </div>
       <label>模型列表<textarea name="models" rows="5" placeholder="每行一个模型名称" required>{% if provider %}{% for model in models if model.enabled %}{{ model.model_name }}
 {% endfor %}{% endif %}</textarea></label>
@@ -101,6 +106,7 @@
             {% else %}
             直连
             {% endif %}
+            <div class="subline">SSL校验：{{ "开启" if provider.ssl_verify else "关闭" }}</div>
           </td>
           <td>
             {{ provider.request_timeout or 3600 }} 秒

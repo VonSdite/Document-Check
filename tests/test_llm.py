@@ -131,6 +131,30 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertNotIn("stream_options", fake_session.calls[1][1]["json"])
         self.assertTrue(fake_session.calls[0][1]["stream"])
         self.assertFalse(fake_session.calls[1][1]["stream"])
+        self.assertFalse(fake_session.calls[0][1]["verify"])
+        self.assertFalse(fake_session.calls[1][1]["verify"])
+
+    def test_passes_ssl_verify_flag_to_requests(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"校验开启"}}]}', "data: [DONE]"]),
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_check(
+                api_base="https://example.test/v1",
+                api_key="key",
+                ssl_verify=True,
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, "校验开启")
+        self.assertEqual(len(fake_session.calls), 1)
+        self.assertTrue(fake_session.calls[0][1]["verify"])
 
     def test_retries_llm_errors_twice_before_success(self):
         fake_session = FakeSession(

@@ -1171,6 +1171,11 @@ td {
   display: grid;
 }
 
+.form-switch {
+  min-height: 43px;
+  align-self: end;
+}
+
 .check-grid {
   display: grid;
   gap: 12px;

@@ -28,6 +28,7 @@ def run_check(
     api_key: Optional[str],
     proxy_mode: str = "direct",
     proxy: Optional[str] = None,
+    ssl_verify: bool = False,
     request_timeout: int = 3600,
     model_name: str,
     check_name: str,
@@ -64,13 +65,14 @@ def run_check(
     }
 
     logger.info(
-        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s timeout=%s prompt_chars=%s document_chars=%s",
+        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s prompt_chars=%s document_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
         model_name,
         check_name,
         proxy_mode,
+        ssl_verify,
         request_timeout,
         len(prompt),
         len(document_text),
@@ -93,6 +95,7 @@ def run_check(
                 payload=payload,
                 proxy_mode=proxy_mode,
                 proxy=proxy,
+                ssl_verify=ssl_verify,
                 request_timeout=request_timeout,
                 on_delta=on_attempt_delta if on_content else None,
                 request_id=request_id,
@@ -131,6 +134,7 @@ def _run_check_attempt(
     payload: dict,
     proxy_mode: str,
     proxy: Optional[str],
+    ssl_verify: bool,
     request_timeout: int,
     on_delta: Optional[Callable[[str], None]],
     request_id: str,
@@ -143,6 +147,7 @@ def _run_check_attempt(
             request_kwargs = {
                 "headers": headers,
                 "timeout": request_timeout,
+                "verify": ssl_verify,
             }
             if proxy_mode == "custom":
                 if not proxy:

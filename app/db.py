@@ -71,6 +71,7 @@ def init_db():
             api_key TEXT,
             proxy_mode TEXT NOT NULL DEFAULT 'direct',
             proxy TEXT,
+            ssl_verify INTEGER NOT NULL DEFAULT 0,
             request_timeout INTEGER NOT NULL DEFAULT 3600,
             max_input_chars INTEGER NOT NULL DEFAULT 60000,
             status TEXT NOT NULL DEFAULT 'queued',
@@ -89,8 +90,15 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         """
     )
+    _ensure_column(db, "tasks", "ssl_verify", "INTEGER NOT NULL DEFAULT 0")
     current_app.teardown_appcontext(close_db)
     db.commit()
+
+
+def _ensure_column(db, table: str, column: str, definition: str):
+    columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def set_setting(key: str, value):
