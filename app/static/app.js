@@ -572,6 +572,20 @@ function setInputFiles(input, files) {
   return true;
 }
 
+function sameFile(left, right) {
+  return left.name === right.name && left.size === right.size && left.lastModified === right.lastModified;
+}
+
+function mergeFiles(existingFiles, selectedFiles) {
+  const merged = [...existingFiles];
+  selectedFiles.forEach((file) => {
+    if (!merged.some((item) => sameFile(item, file))) {
+      merged.push(file);
+    }
+  });
+  return merged;
+}
+
 function trimFilesToLimit(input) {
   const limit = fileLimitFor(input);
   const files = Array.from(input.files || []);
@@ -609,7 +623,17 @@ function renderSelectedFileList(control, input, trimmedCount = 0) {
   const limit = fileLimitFor(input);
   const summary = document.createElement("div");
   summary.className = "selected-file-summary";
-  summary.textContent = limit ? `已选择 ${files.length}/${limit} 个文件` : `已选择 ${files.length} 个文件`;
+  const summaryText = document.createElement("span");
+  summaryText.textContent = limit ? `已选择 ${files.length}/${limit} 个文件` : `已选择 ${files.length} 个文件`;
+  summary.appendChild(summaryText);
+  if (!limit || files.length < limit) {
+    const addButton = document.createElement("button");
+    addButton.className = "selected-file-add";
+    addButton.type = "button";
+    addButton.dataset.fileAdd = "1";
+    addButton.textContent = "继续添加";
+    summary.appendChild(addButton);
+  }
   list.appendChild(summary);
 
   const items = document.createElement("ul");
@@ -662,7 +686,10 @@ function updateFileControl(control, input) {
   const fileNames = files.map((file) => file.name);
   if (input.multiple) {
     const limit = fileLimitFor(input);
-    name.textContent = limit ? `已选择 ${files.length} / ${limit} 个文件` : `已选择 ${files.length} 个文件`;
+    const canAdd = !limit || files.length < limit;
+    name.textContent = limit
+      ? `已选择 ${files.length} / ${limit} 个文件${canAdd ? "，可继续添加" : ""}`
+      : `已选择 ${files.length} 个文件`;
   } else {
     name.textContent = fileNames[0];
   }
@@ -676,6 +703,7 @@ function openFilePicker(control) {
   if (!(currentInput instanceof HTMLInputElement)) {
     return;
   }
+  const existingFiles = currentInput.multiple ? Array.from(currentInput.files || []) : [];
 
   const picker = document.createElement("input");
   picker.type = "file";
@@ -696,8 +724,12 @@ function openFilePicker(control) {
         picker.remove();
         return;
       }
+      const selectedFiles = Array.from(picker.files || []);
       picker.removeAttribute("style");
       currentInput.replaceWith(picker);
+      if (currentInput.multiple && existingFiles.length) {
+        setInputFiles(picker, mergeFiles(existingFiles, selectedFiles));
+      }
       updateFileControl(control, picker);
     },
     { once: true },
@@ -728,6 +760,19 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
   clearFileControl(clear);
+});
+
+document.addEventListener("click", (event) => {
+  const add = event.target.closest("[data-file-add]");
+  if (!add) {
+    return;
+  }
+  event.preventDefault();
+  const field = add.closest(".multi-file-field");
+  const control = field?.querySelector(".file-upload-control");
+  if (control) {
+    openFilePicker(control);
+  }
 });
 
 document.addEventListener("click", (event) => {

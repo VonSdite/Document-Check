@@ -1135,6 +1135,24 @@ td {
   font-weight: 850;
 }
 
+.selected-file-add {
+  min-height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid #bfd2ec;
+  border-radius: 6px;
+  color: var(--primary-strong);
+  background: #fff;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.selected-file-add:hover,
+.selected-file-add:focus {
+  border-color: var(--primary);
+  background: #f0f6ff;
+}
+
 .selected-file-items {
   display: grid;
   gap: 6px;
