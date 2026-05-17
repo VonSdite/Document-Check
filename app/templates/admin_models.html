@@ -16,9 +16,9 @@
         <div class="form-field">
           <span class="field-with-help">
             <span class="field-label">API 地址</span>
-            <span class="help-tip" tabindex="0" data-tip="兼容 OpenAI Chat Completions：POST /chat/completions，Authorization: Bearer API_KEY，model 为选择的模型名称。">?</span>
+            <span class="help-tip" tabindex="0" data-tip="填写完整 OpenAI Chat Completions 请求地址，例如 https://api.example.com/v1/chat/completions。">?</span>
           </span>
-          <input name="api_base" value="{{ provider.api_base if provider else '' }}" placeholder="https://api.example.com/v1" required>
+          <input name="api_base" value="{{ provider.api_base if provider else '' }}" placeholder="https://api.example.com/v1/chat/completions" required>
         </div>
         <label>API Key<input name="api_key" type="password" value="{{ provider.api_key if provider and provider.api_key else '' }}" autocomplete="new-password"></label>
         <label>代理模式
@@ -69,7 +69,7 @@
           <th>
             <span class="table-heading-help">
               API 地址
-              <span class="help-tip" tabindex="0" data-tip="兼容 OpenAI Chat Completions：POST /chat/completions，Authorization: Bearer API_KEY，model 为选择的模型名称。">?</span>
+              <span class="help-tip" tabindex="0" data-tip="填写完整 OpenAI Chat Completions 请求地址，例如 https://api.example.com/v1/chat/completions。">?</span>
             </span>
           </th>
           <th>模型</th>

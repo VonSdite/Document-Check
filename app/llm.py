@@ -220,9 +220,12 @@ def _run_check_attempt(
 
 
 def _chat_completions_endpoint(api_base: str) -> str:
-    endpoint = api_base.rstrip("/")
-    if not endpoint.endswith("/chat/completions"):
-        endpoint = f"{endpoint}/chat/completions"
+    endpoint = str(api_base or "").strip().rstrip("/")
+    if not endpoint.startswith(("http://", "https://")) or not endpoint.endswith("/chat/completions"):
+        raise LLMError(
+            "模型提供商 API 地址必须填写完整的 OpenAI Chat Completions 请求地址，"
+            "例如 https://api.example.com/v1/chat/completions"
+        )
     return endpoint
 
 
@@ -514,14 +517,17 @@ def _extract_service_error(data: dict) -> str:
     if not isinstance(data, dict):
         return ""
     error = data.get("error")
-    if not error:
-        return ""
-    if isinstance(error, str):
+    if error:
+        if isinstance(error, str):
+            return _short_text(error)
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("msg") or error.get("code") or error
+            return _short_text(message)
         return _short_text(error)
-    if isinstance(error, dict):
-        message = error.get("message") or error.get("msg") or error.get("code") or error
+    if data.get("success") is False:
+        message = data.get("message") or data.get("msg") or data.get("errorCode") or data.get("code") or data
         return _short_text(message)
-    return _short_text(error)
+    return ""
 
 
 def _empty_content_message(diagnostics: _OpenAIChatDiagnostics) -> str:

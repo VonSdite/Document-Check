@@ -60,8 +60,7 @@ http://127.0.0.1:5000/_gate_ops_9f2c7a/login
 
 进入管理面后，在“模型管理”页面创建提供商：
 
-- API 地址填写 OpenAI 兼容服务的基础地址，例如 `https://api.example.com/v1`。
-- 如果已经填写到 `/chat/completions`，系统不会重复追加路径。
+- API 地址填写完整 OpenAI Chat Completions 请求地址，例如 `https://api.example.com/v1/chat/completions`。
 - API Key 可为空，非空时会以 `Authorization: Bearer ...` 发送。
 - 代理模式支持直连、系统代理和自定义代理。默认直连；系统代理模式会读取系统代理环境变量；自定义代理模式使用管理员填写的代理地址。
 - SSL 校验按提供商单独设置，默认关闭；开启后会校验 HTTPS 证书。

@@ -362,6 +362,10 @@ def register_routes(app):
             if not name or not api_base:
                 flash("提供商名称和 API 地址不能为空。", "error")
                 return redirect(url_for("admin_models"))
+            api_base = api_base.rstrip("/")
+            if not _is_chat_completions_endpoint(api_base):
+                flash("API 地址必须填写完整的 /chat/completions 请求地址。", "error")
+                return redirect(url_for("admin_models"))
             if request_timeout < PROVIDER_TIMEOUT_MIN or request_timeout > PROVIDER_TIMEOUT_MAX:
                 flash(f"超时时间需在 {PROVIDER_TIMEOUT_MIN}-{PROVIDER_TIMEOUT_MAX} 秒之间。", "error")
                 return redirect(url_for("admin_models"))
@@ -669,6 +673,11 @@ def _model_option(provider: dict, model_name: str) -> dict:
         "request_timeout": provider["request_timeout"],
         "max_input_chars": provider["max_input_chars"],
     }
+
+
+def _is_chat_completions_endpoint(value: str) -> bool:
+    endpoint = str(value or "").strip().rstrip("/")
+    return endpoint.startswith(("http://", "https://")) and endpoint.endswith("/chat/completions")
 
 
 def _find_enabled_model(model_id: str) -> dict | None:

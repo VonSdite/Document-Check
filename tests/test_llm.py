@@ -43,6 +43,18 @@ class FakeSession:
 
 
 class LLMResponseParsingTest(unittest.TestCase):
+    def test_requires_full_chat_completions_endpoint(self):
+        with self.assertRaisesRegex(llm.LLMError, "chat/completions"):
+            llm._chat_completions_endpoint("http://example.test/v1")
+        with self.assertRaisesRegex(llm.LLMError, "chat/completions"):
+            llm._chat_completions_endpoint("example.test/v1/chat/completions")
+
+    def test_accepts_full_chat_completions_endpoint(self):
+        self.assertEqual(
+            llm._chat_completions_endpoint("http://example.test/v1/chat/completions/"),
+            "http://example.test/v1/chat/completions",
+        )
+
     def test_reads_stream_chat_completion_content(self):
         response = FakeResponse(
             lines=[
@@ -91,6 +103,20 @@ class LLMResponseParsingTest(unittest.TestCase):
         with self.assertRaisesRegex(llm.LLMError, "model not found"):
             llm._read_stream_response(response, None)
 
+    def test_raises_service_error_from_success_false_json(self):
+        response = FakeResponse(
+            data={
+                "code": 401,
+                "success": False,
+                "errorCode": 201001,
+                "data": None,
+                "message": "调用模型服务失败：模型调用超时，请稍后再试",
+            }
+        )
+
+        with self.assertRaisesRegex(llm.LLMError, "模型调用超时"):
+            llm._read_json_response(response, None)
+
     def test_falls_back_to_non_stream_when_stream_has_no_content(self):
         fake_session = FakeSession(
             [
@@ -113,7 +139,7 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         with patch.object(llm.requests, "Session", return_value=fake_session):
             result = llm.run_check(
-                api_base="http://example.test/v1",
+                api_base="http://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="test-model",
                 check_name="规范性",
@@ -153,7 +179,7 @@ class LLMResponseParsingTest(unittest.TestCase):
             patch.object(llm.time, "sleep"),
         ):
             result = llm.run_check(
-                api_base="http://example.test/v1",
+                api_base="http://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="test-model",
                 check_name="规范性",
@@ -200,7 +226,7 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         with patch.object(llm.requests, "Session", return_value=fake_session):
             result = llm.run_check(
-                api_base="https://example.test/v1",
+                api_base="https://example.test/v1/chat/completions",
                 api_key="key",
                 ssl_verify=True,
                 model_name="test-model",
@@ -228,7 +254,7 @@ class LLMResponseParsingTest(unittest.TestCase):
             patch.object(llm.time, "sleep") as sleep,
         ):
             result = llm.run_check(
-                api_base="http://example.test/v1",
+                api_base="http://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="test-model",
                 check_name="规范性",
@@ -267,7 +293,7 @@ class LLMResponseParsingTest(unittest.TestCase):
             patch.object(llm.time, "sleep") as sleep,
         ):
             result = llm.run_check(
-                api_base="http://example.test/v1",
+                api_base="http://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="test-model",
                 check_name="规范性",
