@@ -154,10 +154,11 @@ document.addEventListener("change", (event) => {
       if (!response.ok) {
         throw new Error("save failed");
       }
-      return response.json();
+      return response.text();
     })
-    .then((data) => {
-      const saved = Boolean(data?.llm_stream_trace_enabled);
+    .then((text) => {
+      const data = text ? JSON.parse(text) : null;
+      const saved = data?.llm_stream_trace_enabled ?? targetChecked;
       field.checked = saved;
       field.dataset.savedChecked = saved ? "true" : "false";
       showToast("定位日志设置已保存。", "success");
