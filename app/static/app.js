@@ -148,16 +148,31 @@ document.addEventListener("change", (event) => {
     method: form.method || "POST",
     body: formData,
     credentials: "same-origin",
-    headers: { "X-Requested-With": "fetch" },
+    headers: {
+      "Accept": "application/json",
+      "X-Requested-With": "fetch",
+    },
   })
     .then((response) => {
       if (!response.ok) {
         throw new Error("save failed");
       }
-      return response.text();
+      return response.text().then((text) => ({ response, text }));
     })
-    .then((text) => {
-      const data = text ? JSON.parse(text) : null;
+    .then(({ response, text }) => {
+      const contentType = response.headers.get("content-type") || "";
+      const data = text && contentType.includes("application/json") ? JSON.parse(text) : null;
+      if (response.redirected && response.url.includes("/login")) {
+        throw new Error("login expired");
+      }
+      if (text && !data) {
+        console.warn("自动保存返回了非 JSON 内容，已按本次开关状态显示。", {
+          status: response.status,
+          url: response.url,
+          contentType,
+          bodyPreview: text.slice(0, 300),
+        });
+      }
       const saved = data?.llm_stream_trace_enabled ?? targetChecked;
       field.checked = saved;
       field.dataset.savedChecked = saved ? "true" : "false";

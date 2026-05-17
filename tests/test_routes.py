@@ -66,6 +66,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             self.assertFalse(get_setting("llm_stream_trace_enabled"))
 
+    def test_diagnostics_accept_json_returns_saved_state(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={"action": "diagnostics", "llm_stream_trace_enabled": "on"},
+            headers={"Accept": "application/json"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"llm_stream_trace_enabled": True})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -575,7 +575,7 @@ def register_routes(app):
             if action == "diagnostics":
                 llm_stream_trace_enabled = request.form.get("llm_stream_trace_enabled") == "on"
                 set_setting("llm_stream_trace_enabled", llm_stream_trace_enabled)
-                if request.headers.get("X-Requested-With") == "fetch":
+                if _wants_json_response():
                     return {"llm_stream_trace_enabled": llm_stream_trace_enabled}
                 flash("定位日志设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
@@ -692,6 +692,10 @@ def register_routes(app):
 
 def client_ip() -> str:
     return request.remote_addr or "0.0.0.0"
+
+
+def _wants_json_response() -> bool:
+    return request.headers.get("X-Requested-With") == "fetch" or request.accept_mimetypes.best == "application/json"
 
 
 def get_ip_user(ip: str):
