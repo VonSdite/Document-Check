@@ -691,6 +691,11 @@ td {
   gap: 12px;
 }
 
+.check-item-kind {
+  flex: 0 0 auto;
+  margin-left: 12px;
+}
+
 .check-item-toggle {
   flex: 1 1 auto;
   min-width: 0;
