@@ -581,15 +581,54 @@ td {
   line-height: 1.2;
 }
 
+.settings-section-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .settings-concurrency-form {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  grid-template-columns: repeat(3, minmax(180px, 1fr)) auto;
   gap: 14px;
   align-items: end;
 }
 
 .settings-save-button {
   min-width: 128px;
+}
+
+.settings-new-check-form {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+  padding: 16px;
+  margin-bottom: 18px;
+}
+
+.settings-prompt-item {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.settings-prompt-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.prompt-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.prompt-delete-form {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 .create-panel {

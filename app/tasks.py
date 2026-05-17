@@ -13,7 +13,7 @@ class TaskCanceled(Exception):
     pass
 
 
-CHECK_ITEM_CONCURRENCY = 3
+DEFAULT_CHECK_ITEM_CONCURRENCY = 3
 
 
 class TaskScheduler:
@@ -159,7 +159,10 @@ class TaskScheduler:
                     task,
                     check_items,
                     document_text,
-                    max_workers=CHECK_ITEM_CONCURRENCY,
+                    max_workers=max(
+                        1,
+                        int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
+                    ),
                 )
                 if _cancel_requested(db, task_id):
                     raise TaskCanceled

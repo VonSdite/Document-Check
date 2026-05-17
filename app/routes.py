@@ -39,6 +39,7 @@ STATUS_LABELS = {
     "canceled": "已取消",
 }
 TASKS_PER_PAGE = 20
+CHECK_ITEM_CONCURRENCY_DEFAULT = 3
 PROXY_MODES = {"direct", "system", "custom"}
 PROVIDER_TIMEOUT_DEFAULT = 3600
 PROVIDER_TIMEOUT_MIN = 30
@@ -436,12 +437,66 @@ def register_routes(app):
                 try:
                     global_concurrency = max(1, int(request.form.get("global_concurrency", "3")))
                     user_concurrency = max(1, int(request.form.get("user_concurrency", "1")))
+                    check_item_concurrency = max(
+                        1,
+                        int(request.form.get("check_item_concurrency", str(CHECK_ITEM_CONCURRENCY_DEFAULT))),
+                    )
                 except ValueError:
                     flash("并发度必须是正整数。", "error")
                     return redirect(url_for("admin_settings"))
                 set_setting("global_concurrency", global_concurrency)
                 set_setting("user_concurrency", user_concurrency)
+                set_setting("check_item_concurrency", check_item_concurrency)
                 flash("并发设置已保存。", "success")
+                return redirect(url_for("admin_settings"))
+
+            if action == "create_check_item":
+                name = request.form.get("name", "").strip()
+                description = request.form.get("description", "").strip()
+                prompt = request.form.get("prompt", "").strip()
+                enabled = 1 if request.form.get("enabled") == "on" else 0
+                if not name or not prompt:
+                    flash("检查项名称和提示词不能为空。", "error")
+                    return redirect(url_for("admin_settings"))
+                max_sort_order = db.execute(
+                    "SELECT COALESCE(MAX(sort_order), 0) AS value FROM check_items"
+                ).fetchone()["value"]
+                now = now_text()
+                db.execute(
+                    """
+                    INSERT INTO check_items(code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"custom-{uuid.uuid4().hex}",
+                        name,
+                        description,
+                        prompt,
+                        enabled,
+                        max_sort_order + 10,
+                        now,
+                        now,
+                    ),
+                )
+                db.commit()
+                flash("扩展检查项已创建。", "success")
+                return redirect(url_for("admin_settings"))
+
+            if action == "delete_check_item":
+                item_id = request.form.get("item_id")
+                if not item_id or not item_id.isdigit():
+                    flash("检查项不存在，无法删除。", "error")
+                    return redirect(url_for("admin_settings"))
+                item = db.execute("SELECT code FROM check_items WHERE id = ?", (item_id,)).fetchone()
+                if item is None:
+                    flash("检查项不存在，无法删除。", "error")
+                    return redirect(url_for("admin_settings"))
+                if item["code"] in default_check_item_codes():
+                    flash("内置检查项不能删除。", "error")
+                    return redirect(url_for("admin_settings"))
+                db.execute("DELETE FROM check_items WHERE id = ?", (item_id,))
+                db.commit()
+                flash("扩展检查项已删除。", "success")
                 return redirect(url_for("admin_settings"))
 
             if action == "prompt" and request.form.get("reset_prompt") == "1":
@@ -464,8 +519,11 @@ def register_routes(app):
             description = request.form.get("description", "").strip()
             prompt = request.form.get("prompt", "").strip()
             enabled = 1 if request.form.get("enabled") == "on" else 0
-            if not item_id or not name or not prompt:
+            if not item_id or not item_id.isdigit() or not name or not prompt:
                 flash("检查项名称和提示词不能为空。", "error")
+                return redirect(url_for("admin_settings"))
+            if db.execute("SELECT 1 FROM check_items WHERE id = ?", (item_id,)).fetchone() is None:
+                flash("检查项不存在，无法保存。", "error")
                 return redirect(url_for("admin_settings"))
             db.execute(
                 """
@@ -486,6 +544,7 @@ def register_routes(app):
             default_check_codes=default_check_item_codes(),
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
+            check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
         )
 
 

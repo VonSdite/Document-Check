@@ -7,6 +7,7 @@ from flask import Flask
 from app.db import (
     DEFAULT_CHECK_ITEMS_BY_CODE,
     get_db,
+    get_setting,
     init_db,
     reset_default_check_item_prompt,
     seed_defaults,
@@ -63,6 +64,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertIn("ssl_verify", columns)
         self.assertEqual(columns["ssl_verify"]["dflt_value"], "0")
+
+    def test_default_check_item_concurrency_is_seeded(self):
+        self.assertEqual(get_setting("check_item_concurrency"), 3)
 
 
 if __name__ == "__main__":

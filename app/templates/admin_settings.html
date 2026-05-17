@@ -9,11 +9,14 @@
   </div>
 </section>
 
-<section class="settings-section">
+<section class="panel settings-section">
   <div class="settings-section-head">
-    <h2>任务并发度</h2>
+    <div>
+      <h2>任务并发度</h2>
+      <p>控制任务队列和单个任务内检查项的并行数量。</p>
+    </div>
   </div>
-  <form method="post" class="panel settings-concurrency-form">
+  <form method="post" class="settings-concurrency-form">
     <input type="hidden" name="action" value="concurrency">
     <label>
       系统同时执行任务数
@@ -23,26 +26,64 @@
       单个 IP 同时执行任务数
       <input name="user_concurrency" type="number" min="1" step="1" value="{{ user_concurrency }}" required>
     </label>
+    <label>
+      单任务检查项并发数
+      <input name="check_item_concurrency" type="number" min="1" step="1" value="{{ check_item_concurrency }}" required>
+    </label>
     <button class="primary-button settings-save-button" type="submit">保存设置</button>
   </form>
 </section>
 
-<section class="settings-section">
+<section class="panel settings-section">
   <div class="settings-section-head">
-    <h2>提示词设置</h2>
+    <div>
+      <h2>检查任务-提示词设置</h2>
+      <p>内置检查项不可删除；扩展检查项可新增、停用或删除。</p>
+    </div>
   </div>
+  <form method="post" class="settings-new-check-form stack-form">
+    <input type="hidden" name="action" value="create_check_item">
+    <div class="panel-head compact-head">
+      <div>
+        <h2>新增扩展检查项</h2>
+      </div>
+      <label class="switch-line">
+        <input type="checkbox" name="enabled" checked>
+        <span>启用</span>
+      </label>
+    </div>
+    <div class="form-grid">
+      <label>检查项名称<input name="name" placeholder="例如：术语一致性检查" required></label>
+      <div class="form-field">
+        <span class="field-with-help">
+          <span class="field-label">说明</span>
+          <button class="help-tip" type="button" aria-label="说明用途" data-tip="显示在创建检查页，鼠标悬浮检查项时可查看。">?</button>
+        </span>
+        <input name="description" placeholder="用于向用户说明该检查项的范围">
+      </div>
+    </div>
+    <label>提示词<textarea name="prompt" rows="6" placeholder="描述该检查项的审查角色、关注范围和输出要求" required></textarea></label>
+    <div class="form-actions">
+      <button class="primary-button settings-save-button" type="submit">创建检查项</button>
+    </div>
+  </form>
+
   <div class="prompt-stack">
   {% for item in items %}
-  <article class="panel">
+  {% set is_builtin = item.code in default_check_codes %}
+  <article class="settings-prompt-item">
     <form method="post" class="stack-form">
       <input type="hidden" name="action" value="prompt">
       <input type="hidden" name="item_id" value="{{ item.id }}">
       <div class="panel-head">
         <h2>{{ item.name }}</h2>
-        <label class="switch-line">
-          <input type="checkbox" name="enabled" {{ "checked" if item.enabled else "" }}>
-          <span>{{ "启用" if item.enabled else "停用" }}</span>
-        </label>
+        <div class="prompt-item-actions">
+          <span class="status-pill {{ 'status-completed' if is_builtin else 'status-queued' }}">{{ "内置" if is_builtin else "扩展" }}</span>
+          <label class="switch-line">
+            <input type="checkbox" name="enabled" {{ "checked" if item.enabled else "" }}>
+            <span>{{ "启用" if item.enabled else "停用" }}</span>
+          </label>
+        </div>
       </div>
       <div class="form-grid">
         <label>检查项名称<input name="name" value="{{ item.name }}" required></label>
@@ -56,12 +97,19 @@
       </div>
       <label>提示词<textarea name="prompt" rows="10" required>{{ item.prompt }}</textarea></label>
       <div class="form-actions">
-        {% if item.code in default_check_codes %}
+        {% if is_builtin %}
         <button class="secondary-button settings-save-button" type="submit" name="reset_prompt" value="1" formnovalidate data-confirm-click="确认将该检查项提示词重置为默认内容？">重置</button>
         {% endif %}
         <button class="primary-button settings-save-button" type="submit">保存</button>
       </div>
     </form>
+    {% if not is_builtin %}
+    <form method="post" class="prompt-delete-form">
+      <input type="hidden" name="action" value="delete_check_item">
+      <input type="hidden" name="item_id" value="{{ item.id }}">
+      <button class="small-button danger" type="submit" data-confirm-click="确认删除该扩展检查项？已创建的历史任务报告不会被删除。">删除扩展项</button>
+    </form>
+    {% endif %}
   </article>
   {% endfor %}
   </div>

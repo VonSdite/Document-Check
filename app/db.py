@@ -190,6 +190,7 @@ def seed_defaults():
     defaults = {
         "global_concurrency": 3,
         "user_concurrency": 1,
+        "check_item_concurrency": 3,
     }
     for key, value in defaults.items():
         exists = db.execute("SELECT 1 FROM settings WHERE key = ?", (key,)).fetchone()
