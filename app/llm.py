@@ -12,6 +12,12 @@ logger.addHandler(logging.NullHandler())
 
 _REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
 _MAX_RETRIES = 2
+_EXECUTION_BOUNDARY = """执行边界：
+1. 只依据提供的文档内容，不补全文档外信息。
+2. 不输出思考过程、推理链、草稿或分析计划。
+3. 优先输出明确问题；不确定请标注“需人工确认”。
+4. 没有发现问题时只给出简短结论。
+5. 单次回复最多列出 20 条问题。"""
 
 
 class LLMError(Exception):
@@ -61,6 +67,7 @@ def run_check(
                 "role": "user",
                 "content": (
                     f"检查项：{check_name}\n\n"
+                    f"{_EXECUTION_BOUNDARY}\n\n"
                     f"检查提示词：\n{prompt}\n\n"
                     f"待检查文档：\n{document_text}"
                 ),

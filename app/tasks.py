@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .db import get_db, get_setting, now_text
-from .documents import DocumentReadError, extract_text
+from .documents import DocumentReadError, extract_text, split_text_chunks
 from .llm import LLMError, run_check
 from .task_types import (
     CONSISTENCY_CHECK_ITEM,
@@ -20,6 +20,11 @@ class TaskCanceled(Exception):
 
 
 DEFAULT_CHECK_ITEM_CONCURRENCY = 1
+DEFAULT_DOCUMENT_CHUNK_CHARS = 12000
+MIN_DOCUMENT_CHUNK_CHARS = 2000
+DOCUMENT_CHUNK_INPUT_RATIO = 0.5
+MAX_DOCUMENT_CHUNKS = 60
+CHUNKED_CHECK_ITEM_LIMIT = 8
 
 
 class TaskScheduler:
@@ -163,7 +168,7 @@ class TaskScheduler:
 
                 if not document_text:
                     raise RuntimeError("未能从文档中提取到可检查文本")
-                if len(document_text) > task["max_input_chars"]:
+                if task_type != DOCUMENT_TASK_TYPE and len(document_text) > task["max_input_chars"]:
                     raise RuntimeError(
                         f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
                     )
@@ -248,6 +253,10 @@ def _run_check_items_concurrently(
 ) -> list[dict]:
     task_id = task["id"]
     total = len(check_items)
+    text_chunks = _text_chunks_for_task(task, document_text)
+    chunk_count = len(text_chunks)
+    total_units = max(1, total * chunk_count)
+    completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
     result_lock = threading.Lock()
@@ -278,6 +287,17 @@ def _run_check_items_concurrently(
         with save_lock:
             _save_intermediate_results(db, task_id, snapshot, summary, progress)
 
+    def current_progress() -> int:
+        with result_lock:
+            units = completed_units
+        return 5 + int(units / total_units * 85)
+
+    def mark_unit_completed() -> int:
+        nonlocal completed_units
+        with result_lock:
+            completed_units += 1
+            return 5 + int(completed_units / total_units * 85)
+
     def run_item(index: int, item: dict) -> dict:
         with app.app_context():
             db = get_db()
@@ -292,9 +312,9 @@ def _run_check_items_concurrently(
                 total,
             )
             last_stream_write = 0.0
-            progress = 5 + int((index - 1) / total * 85)
+            chunk_outputs = []
 
-            def on_content(content: str):
+            def save_partial(content: str, summary: str, *, force: bool = False):
                 nonlocal last_stream_write
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
@@ -311,28 +331,72 @@ def _run_check_items_concurrently(
                         partial_by_code.pop(item["code"], None)
 
                 now = time.monotonic()
-                if content and now - last_stream_write < 1.2:
+                if not force and content and now - last_stream_write < 1.2:
                     return
                 last_stream_write = now
                 if not content and not had_partial:
                     return
-                save_snapshot(db, f"正在并发检查：{item['name']}", progress)
+                save_snapshot(db, summary, current_progress())
 
-            content = run_check(
-                api_base=task["api_base"],
-                api_key=task["api_key"],
-                proxy_mode=task["proxy_mode"],
-                proxy=task["proxy"],
-                ssl_verify=bool(task["ssl_verify"]),
-                request_timeout=task["request_timeout"],
-                model_name=task["model_name"],
-                check_name=item["name"],
-                prompt=item["prompt"],
-                document_text=document_text,
-                on_content=on_content,
-                task_id=task_id,
-                stream_trace_enabled=stream_trace_enabled,
-            )
+            if chunk_count == 1:
+                content = run_check(
+                    api_base=task["api_base"],
+                    api_key=task["api_key"],
+                    proxy_mode=task["proxy_mode"],
+                    proxy=task["proxy"],
+                    ssl_verify=bool(task["ssl_verify"]),
+                    request_timeout=task["request_timeout"],
+                    model_name=task["model_name"],
+                    check_name=item["name"],
+                    prompt=item["prompt"],
+                    document_text=text_chunks[0]["text"],
+                    on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
+                    task_id=task_id,
+                    stream_trace_enabled=stream_trace_enabled,
+                )
+                progress = mark_unit_completed()
+            else:
+                for chunk in text_chunks:
+                    chunk_summary = f"正在检查：{item['name']}（片段 {chunk['index']}/{chunk_count}）"
+
+                    def on_chunk_content(content: str, current_chunk=chunk):
+                        partial_outputs = [
+                            *chunk_outputs,
+                            {
+                                "index": current_chunk["index"],
+                                "total": chunk_count,
+                                "label": current_chunk["label"],
+                                "result": content,
+                            },
+                        ]
+                        save_partial(_format_chunked_result(partial_outputs, chunk_count), chunk_summary)
+
+                    chunk_content = run_check(
+                        api_base=task["api_base"],
+                        api_key=task["api_key"],
+                        proxy_mode=task["proxy_mode"],
+                        proxy=task["proxy"],
+                        ssl_verify=bool(task["ssl_verify"]),
+                        request_timeout=task["request_timeout"],
+                        model_name=task["model_name"],
+                        check_name=f"{item['name']}（片段 {chunk['index']}/{chunk_count}）",
+                        prompt=_chunked_prompt(item["prompt"], chunk),
+                        document_text=_chunked_document_text(chunk),
+                        on_content=on_chunk_content,
+                        task_id=task_id,
+                        stream_trace_enabled=stream_trace_enabled,
+                    )
+                    chunk_outputs.append(
+                        {
+                            "index": chunk["index"],
+                            "total": chunk_count,
+                            "label": chunk["label"],
+                            "result": chunk_content,
+                        }
+                    )
+                    progress = mark_unit_completed()
+                    save_partial(_format_chunked_result(chunk_outputs, chunk_count), chunk_summary, force=True)
+                content = _format_chunked_result(chunk_outputs, chunk_count)
 
             if cancel_event.is_set() or _cancel_requested(db, task_id):
                 raise TaskCanceled
@@ -349,7 +413,7 @@ def _run_check_items_concurrently(
             save_snapshot(
                 db,
                 f"已完成 {completed_count}/{total} 个检查项，继续检查中。",
-                5 + int(completed_count / total * 85),
+                progress,
             )
             app.logger.info(
                 "任务检查项完成 task_id=%s item=%s output_chars=%s",
@@ -380,6 +444,60 @@ def _run_check_items_concurrently(
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
         executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _text_chunks_for_task(task, document_text: str) -> list[dict]:
+    task_type = task["task_type"] or DOCUMENT_TASK_TYPE
+    if task_type != DOCUMENT_TASK_TYPE:
+        return [{"index": 1, "total": 1, "label": "全文", "text": document_text}]
+    chunks = split_text_chunks(document_text, _document_chunk_chars(task["max_input_chars"]))
+    if len(chunks) > MAX_DOCUMENT_CHUNKS:
+        raise RuntimeError(
+            f"文档拆分后需要 {len(chunks)} 个片段，超过当前系统上限 {MAX_DOCUMENT_CHUNKS} 个；"
+            "请先按章节拆分文档后再提交。"
+        )
+    return chunks
+
+
+def _document_chunk_chars(max_input_chars: int) -> int:
+    try:
+        input_chars = int(max_input_chars)
+    except (TypeError, ValueError):
+        input_chars = DEFAULT_DOCUMENT_CHUNK_CHARS
+    chunk_chars = int(input_chars * DOCUMENT_CHUNK_INPUT_RATIO)
+    return max(MIN_DOCUMENT_CHUNK_CHARS, min(DEFAULT_DOCUMENT_CHUNK_CHARS, chunk_chars))
+
+
+def _chunked_prompt(prompt: str, chunk: dict) -> str:
+    return f"""{prompt}
+
+长文档分块执行要求：
+1. 当前是第 {chunk['index']}/{chunk['total']} 个片段，只检查当前片段。
+2. 不要推断其他片段内容，不要要求补充全文。
+3. 本片段最多输出 {CHUNKED_CHECK_ITEM_LIMIT} 条最重要的问题。
+4. 找不到问题时只写“本片段未发现明显问题”。
+5. 不输出思考过程、推理链或草稿。"""
+
+
+def _chunked_document_text(chunk: dict) -> str:
+    return (
+        f"[长文档片段 {chunk['index']}/{chunk['total']}]\n"
+        f"[片段线索] {chunk['label']}\n\n"
+        f"{chunk['text']}"
+    )
+
+
+def _format_chunked_result(outputs: list[dict], total_chunks: int) -> str:
+    parts = [
+        f"长文档已分为 {total_chunks} 个片段分别检查。"
+        "以下结果按片段排列，跨片段一致性问题建议结合原文人工复核。"
+    ]
+    for output in outputs:
+        result = str(output.get("result") or "").strip() or "模型未返回内容"
+        parts.append(
+            f"## 片段 {output['index']}/{total_chunks}：{output['label']}\n{result}"
+        )
+    return "\n\n".join(parts)
 
 
 def _ordered_results(check_items: list[dict], completed: dict[str, dict], partial: dict[str, dict]) -> list[dict]:

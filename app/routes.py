@@ -893,11 +893,6 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         _remove_uploaded_file(destination)
         flash("未能从文档中提取到可检查文本。", "error")
         return _back_to_task_form(admin_created)
-    if len(document_text) > model["max_input_chars"]:
-        _remove_uploaded_file(destination)
-        flash(f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
-        return _back_to_task_form(admin_created)
-
     username = user["username"] if user and user["username"] else None
     db.execute(
         """
