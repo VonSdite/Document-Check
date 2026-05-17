@@ -134,6 +134,63 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertFalse(fake_session.calls[0][1]["verify"])
         self.assertFalse(fake_session.calls[1][1]["verify"])
 
+    def test_falls_back_to_non_stream_when_stream_frame_is_malformed(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"choices":[{"delta":{"reasoning":"分析中"}']),
+                FakeResponse(
+                    data={
+                        "choices": [
+                            {"message": {"role": "assistant", "content": "非流式结果"}}
+                        ]
+                    }
+                ),
+            ]
+        )
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep"),
+        ):
+            result = llm.run_check(
+                api_base="http://example.test/v1",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, "非流式结果")
+        self.assertEqual(len(fake_session.calls), 2)
+        self.assertTrue(fake_session.calls[0][1]["json"]["stream"])
+        self.assertFalse(fake_session.calls[1][1]["json"]["stream"])
+
+    def test_reports_glm_reasoning_field_without_content(self):
+        response = FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"reasoning":"分析中"}}]}',
+                'data: {"choices":[{"finish_reason":"stop","delta":{}}]}',
+                "data: [DONE]",
+            ]
+        )
+
+        with self.assertRaisesRegex(llm.LLMError, "reasoning"):
+            llm._read_stream_response(response, None)
+
+    def test_reads_stream_chunks_returned_by_non_stream_response(self):
+        response = FakeResponse(
+            text=(
+                '{"object":"chat.completion.chunk","choices":[{"delta":{"content":"检查"}}]}\n'
+                '{"object":"chat.completion.chunk","choices":[{"delta":{"content":"完成"}}]}\n'
+                "data: [DONE]\n"
+            )
+        )
+
+        result = llm._read_json_response(response, None)
+
+        self.assertEqual(result, "检查完成")
+
     def test_passes_ssl_verify_flag_to_requests(self):
         fake_session = FakeSession(
             [
