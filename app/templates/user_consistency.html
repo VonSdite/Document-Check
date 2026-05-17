@@ -14,11 +14,11 @@
   </div>
 
   <div class="consistency-form-grid">
-    <div class="form-field">
+    <div class="form-field multi-file-field">
       <span class="field-label">母本文档</span>
       <span class="field-with-help">
         <label class="file-upload-control {{ 'is-disabled' if user_disabled else '' }}">
-          <input class="file-input" name="master_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" multiple required {{ "disabled" if user_disabled else "" }}>
+          <input class="file-input" name="master_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" data-file-limit="3" multiple required {{ "disabled" if user_disabled else "" }}>
           <span class="file-name">未选择文件</span>
           <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
           <span class="file-button" aria-hidden="true">
@@ -30,13 +30,14 @@
         </label>
         <span class="help-tip" tabindex="0" data-tip="作为核对基准，可选择 1-3 个 docx、pdf、txt、md、html 文档。">?</span>
       </span>
+      <div class="selected-file-list" data-file-list hidden></div>
     </div>
 
-    <div class="form-field">
+    <div class="form-field multi-file-field">
       <span class="field-label">相关文档</span>
       <span class="field-with-help">
         <label class="file-upload-control {{ 'is-disabled' if user_disabled else '' }}">
-          <input class="file-input" name="related_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" multiple required {{ "disabled" if user_disabled else "" }}>
+          <input class="file-input" name="related_documents" type="file" accept=".docx,.pdf,.txt,.md,.html" data-file-limit="3" multiple required {{ "disabled" if user_disabled else "" }}>
           <span class="file-name">未选择文件</span>
           <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
           <span class="file-button" aria-hidden="true">
@@ -48,6 +49,7 @@
         </label>
         <span class="help-tip" tabindex="0" data-tip="待核对文档，可选择 1-3 个 docx、pdf、txt、md、html 文档。">?</span>
       </span>
+      <div class="selected-file-list" data-file-list hidden></div>
     </div>
 
     <label>

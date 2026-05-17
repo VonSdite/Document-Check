@@ -548,18 +548,127 @@ function clearFileControl(target) {
     name.removeAttribute("title");
   }
   control.classList.remove("has-file");
+  if (input instanceof HTMLInputElement) {
+    renderSelectedFileList(control, input);
+  }
+}
+
+function fileListFor(control) {
+  return control.closest(".multi-file-field")?.querySelector("[data-file-list]");
+}
+
+function fileLimitFor(input) {
+  const limit = Number(input.dataset.fileLimit || "0");
+  return Number.isInteger(limit) && limit > 0 ? limit : 0;
+}
+
+function setInputFiles(input, files) {
+  if (typeof DataTransfer === "undefined") {
+    return false;
+  }
+  const transfer = new DataTransfer();
+  files.forEach((file) => transfer.items.add(file));
+  input.files = transfer.files;
+  return true;
+}
+
+function trimFilesToLimit(input) {
+  const limit = fileLimitFor(input);
+  const files = Array.from(input.files || []);
+  if (!limit || files.length <= limit) {
+    return 0;
+  }
+  if (!setInputFiles(input, files.slice(0, limit))) {
+    return 0;
+  }
+  return files.length - limit;
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes)) {
+    return "";
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(0.1, bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderSelectedFileList(control, input, trimmedCount = 0) {
+  const list = fileListFor(control);
+  if (!list) {
+    return;
+  }
+  const files = Array.from(input.files || []);
+  list.replaceChildren();
+  list.hidden = files.length === 0;
+  if (!files.length) {
+    return;
+  }
+
+  const limit = fileLimitFor(input);
+  const summary = document.createElement("div");
+  summary.className = "selected-file-summary";
+  summary.textContent = limit ? `已选择 ${files.length}/${limit} 个文件` : `已选择 ${files.length} 个文件`;
+  list.appendChild(summary);
+
+  const items = document.createElement("ul");
+  items.className = "selected-file-items";
+  files.forEach((file, index) => {
+    const item = document.createElement("li");
+    item.className = "selected-file-item";
+
+    const order = document.createElement("span");
+    order.className = "selected-file-index";
+    order.textContent = String(index + 1);
+
+    const name = document.createElement("span");
+    name.className = "selected-file-name";
+    name.textContent = file.name;
+    name.title = file.name;
+
+    const size = document.createElement("span");
+    size.className = "selected-file-size";
+    size.textContent = formatFileSize(file.size);
+
+    const remove = document.createElement("button");
+    remove.className = "selected-file-remove";
+    remove.type = "button";
+    remove.dataset.fileRemoveIndex = String(index);
+    remove.setAttribute("aria-label", `移除文件：${file.name}`);
+    remove.textContent = "×";
+
+    item.append(order, name, size, remove);
+    items.appendChild(item);
+  });
+  list.appendChild(items);
+
+  if (trimmedCount > 0) {
+    const warning = document.createElement("div");
+    warning.className = "selected-file-warning";
+    warning.textContent = `最多选择 ${limit} 个文件，已忽略多出的 ${trimmedCount} 个。`;
+    list.appendChild(warning);
+  }
 }
 
 function updateFileControl(control, input) {
   const name = control.querySelector(".file-name");
+  const trimmedCount = trimFilesToLimit(input);
   const files = Array.from(input.files || []);
   if (!name || files.length === 0) {
+    clearFileControl(control);
     return;
   }
   const fileNames = files.map((file) => file.name);
-  name.textContent = files.length === 1 ? fileNames[0] : `${files.length} 个文件：${fileNames.join("、")}`;
+  if (input.multiple) {
+    const limit = fileLimitFor(input);
+    name.textContent = limit ? `已选择 ${files.length} / ${limit} 个文件` : `已选择 ${files.length} 个文件`;
+  } else {
+    name.textContent = fileNames[0];
+  }
   name.setAttribute("title", fileNames.join("\n"));
   control.classList.add("has-file");
+  renderSelectedFileList(control, input, trimmedCount);
 }
 
 function openFilePicker(control) {
@@ -576,6 +685,9 @@ function openFilePicker(control) {
   picker.required = currentInput.required;
   picker.multiple = currentInput.multiple;
   picker.disabled = currentInput.disabled;
+  Object.entries(currentInput.dataset).forEach(([key, value]) => {
+    picker.dataset[key] = value;
+  });
 
   picker.addEventListener(
     "change",
@@ -616,6 +728,26 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
   clearFileControl(clear);
+});
+
+document.addEventListener("click", (event) => {
+  const remove = event.target.closest("[data-file-remove-index]");
+  if (!remove) {
+    return;
+  }
+  event.preventDefault();
+  const field = remove.closest(".multi-file-field");
+  const input = field?.querySelector(".file-input");
+  const control = field?.querySelector(".file-upload-control");
+  const removeIndex = Number(remove.dataset.fileRemoveIndex);
+  if (!(input instanceof HTMLInputElement) || !control || !Number.isInteger(removeIndex)) {
+    return;
+  }
+  const files = Array.from(input.files || []).filter((_, index) => index !== removeIndex);
+  if (!setInputFiles(input, files)) {
+    input.value = "";
+  }
+  updateFileControl(control, input);
 });
 
 document.addEventListener("keydown", (event) => {

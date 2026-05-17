@@ -961,7 +961,7 @@ td {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) minmax(220px, 0.7fr) auto;
   gap: 14px;
-  align-items: end;
+  align-items: start;
 }
 
 .quick-form-grid > *,
@@ -975,6 +975,10 @@ td {
 
 .field-with-help .file-upload-control {
   flex: 1;
+}
+
+.consistency-form-grid .submit-slot {
+  padding-top: 28px;
 }
 
 .file-upload-control {
@@ -1109,6 +1113,107 @@ td {
 .file-clear:focus {
   color: var(--danger);
   background: #fde8e4;
+}
+
+.selected-file-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.selected-file-list[hidden] {
+  display: none;
+}
+
+.selected-file-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.selected-file-items {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.selected-file-item {
+  min-width: 0;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid #cfe0f5;
+  border-radius: var(--radius);
+  background: #fbfdff;
+}
+
+.selected-file-index {
+  width: 21px;
+  height: 21px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #e8f2ff;
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.selected-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.selected-file-size {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.selected-file-remove {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.selected-file-remove:hover,
+.selected-file-remove:focus {
+  border-color: #fac5bd;
+  color: var(--danger);
+  background: #fde8e4;
+}
+
+.selected-file-warning {
+  padding: 7px 9px;
+  border: 1px solid #f4d39b;
+  border-radius: var(--radius);
+  color: var(--amber);
+  background: #fff8eb;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .submit-slot {
