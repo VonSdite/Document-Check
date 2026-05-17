@@ -99,6 +99,24 @@ function hideToast(toast) {
   window.setTimeout(() => toast.remove(), 220);
 }
 
+function showToast(message, category = "success") {
+  let stack = document.querySelector(".flash-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.className = "flash-stack";
+    stack.setAttribute("aria-live", "polite");
+    stack.setAttribute("aria-atomic", "true");
+    document.body.appendChild(stack);
+  }
+
+  const toast = document.createElement("button");
+  toast.type = "button";
+  toast.className = `flash ${category}`;
+  toast.textContent = message;
+  stack.appendChild(toast);
+  window.setTimeout(() => hideToast(toast), 4200);
+}
+
 document.querySelectorAll(".flash").forEach((toast) => {
   window.setTimeout(() => hideToast(toast), 4200);
 });
@@ -121,22 +139,32 @@ document.addEventListener("change", (event) => {
     return;
   }
 
-  const previousChecked = field.checked;
+  const savedChecked = field.dataset.savedChecked === "true";
+  const targetChecked = field.checked;
   const formData = new FormData(form);
+  formData.set(field.name, targetChecked ? "on" : "off");
   field.disabled = true;
   fetch(form.action || window.location.href, {
     method: form.method || "POST",
     body: formData,
+    credentials: "same-origin",
     headers: { "X-Requested-With": "fetch" },
   })
     .then((response) => {
       if (!response.ok) {
         throw new Error("save failed");
       }
+      return response.json();
+    })
+    .then((data) => {
+      const saved = Boolean(data?.llm_stream_trace_enabled);
+      field.checked = saved;
+      field.dataset.savedChecked = saved ? "true" : "false";
+      showToast("定位日志设置已保存。", "success");
     })
     .catch(() => {
-      field.checked = !previousChecked;
-      window.alert("设置保存失败，请稍后重试。");
+      field.checked = savedChecked;
+      showToast("定位日志设置保存失败，请稍后重试。", "error");
     })
     .finally(() => {
       field.disabled = false;

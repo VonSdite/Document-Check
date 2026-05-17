@@ -45,7 +45,7 @@
   <form method="post" class="settings-diagnostic-form">
     <input type="hidden" name="action" value="diagnostics">
     <label class="switch-line settings-diagnostic-toggle">
-      <input type="checkbox" name="llm_stream_trace_enabled" data-auto-save-setting {{ "checked" if llm_stream_trace_enabled else "" }}>
+      <input type="checkbox" name="llm_stream_trace_enabled" data-auto-save-setting data-saved-checked="{{ 'true' if llm_stream_trace_enabled else 'false' }}" {{ "checked" if llm_stream_trace_enabled else "" }}>
       <span>启用定位日志</span>
     </label>
   </form>

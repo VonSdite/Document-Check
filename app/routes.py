@@ -573,9 +573,10 @@ def register_routes(app):
                 return redirect(url_for("admin_settings"))
 
             if action == "diagnostics":
-                set_setting("llm_stream_trace_enabled", request.form.get("llm_stream_trace_enabled") == "on")
+                llm_stream_trace_enabled = request.form.get("llm_stream_trace_enabled") == "on"
+                set_setting("llm_stream_trace_enabled", llm_stream_trace_enabled)
                 if request.headers.get("X-Requested-With") == "fetch":
-                    return Response(status=204)
+                    return {"llm_stream_trace_enabled": llm_stream_trace_enabled}
                 flash("定位日志设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
