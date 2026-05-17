@@ -1021,10 +1021,58 @@ td {
   width: 118px;
 }
 
-.task-file-cell .strong-link {
+.task-file-line {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.task-file-cell .task-report-link {
+  flex: 1 1 auto;
+  min-width: 0;
   display: block;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.task-download-link {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  margin-top: -3px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--primary-strong);
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.task-download-link svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.task-file-line:hover .task-download-link,
+.task-file-line:focus-within .task-download-link {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.task-download-link:hover,
+.task-download-link:focus {
+  border-color: #bfd2ec;
+  background: #f0f6ff;
+  box-shadow: 0 6px 16px rgba(91, 130, 189, 0.12);
 }
 
 .task-model-cell {

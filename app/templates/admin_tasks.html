@@ -112,7 +112,16 @@
         {% for task in tasks %}
         <tr>
           <td class="task-file-cell">
-            <a class="strong-link" href="{{ url_for('admin_download_task_document', task_id=task.id) }}" title="下载文档">{{ task.original_filename }}</a>
+            <div class="task-file-line">
+              <a class="strong-link task-report-link" href="{{ url_for('admin_task_detail', task_id=task.id) }}" title="查看报告">{{ task.original_filename }}</a>
+              <a class="task-download-link" href="{{ url_for('admin_download_task_document', task_id=task.id) }}" title="下载文档" aria-label="下载文档：{{ task.original_filename }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 3v12"></path>
+                  <path d="m7 10 5 5 5-5"></path>
+                  <path d="M5 21h14"></path>
+                </svg>
+              </a>
+            </div>
             <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</div>
           </td>
           <td class="task-owner-cell">{{ task.ip }}{% if task.current_username %}<div class="subline">{{ task.current_username }}</div>{% endif %}</td>
