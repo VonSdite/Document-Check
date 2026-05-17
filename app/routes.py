@@ -458,9 +458,6 @@ def register_routes(app):
                 if not name or not prompt:
                     flash("检查项名称和提示词不能为空。", "error")
                     return redirect(url_for("admin_settings"))
-                max_sort_order = db.execute(
-                    "SELECT COALESCE(MAX(sort_order), 0) AS value FROM check_items"
-                ).fetchone()["value"]
                 now = now_text()
                 db.execute(
                     """
@@ -473,13 +470,27 @@ def register_routes(app):
                         description,
                         prompt,
                         enabled,
-                        max_sort_order + 10,
+                        _next_check_item_sort_order(db),
                         now,
                         now,
                     ),
                 )
                 db.commit()
                 flash("扩展检查项已创建。", "success")
+                return redirect(url_for("admin_settings"))
+
+            if action == "reorder_check_items":
+                item_ids = [int(value) for value in request.form.getlist("item_ids") if value.isdigit()]
+                if not item_ids:
+                    if request.headers.get("X-Requested-With") == "fetch":
+                        return Response("检查项顺序不能为空。", status=400)
+                    flash("检查项顺序不能为空。", "error")
+                    return redirect(url_for("admin_settings"))
+                _reorder_check_items(db, item_ids)
+                db.commit()
+                if request.headers.get("X-Requested-With") == "fetch":
+                    return Response(status=204)
+                flash("检查项顺序已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
             if action == "delete_check_item":
@@ -560,6 +571,34 @@ def get_enabled_check_items():
     return get_db().execute(
         "SELECT * FROM check_items WHERE enabled = 1 ORDER BY sort_order ASC, id ASC"
     ).fetchall()
+
+
+def _next_check_item_sort_order(db) -> int:
+    row = db.execute("SELECT MIN(sort_order) AS value FROM check_items").fetchone()
+    if row is None or row["value"] is None:
+        return 10
+    return int(row["value"]) - 10
+
+
+def _reorder_check_items(db, item_ids: list[int]) -> list[int]:
+    rows = db.execute("SELECT id FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
+    existing_ids = [int(row["id"]) for row in rows]
+    existing_set = set(existing_ids)
+    ordered_ids = []
+    seen_ids = set()
+    for item_id in item_ids:
+        if item_id in existing_set and item_id not in seen_ids:
+            ordered_ids.append(item_id)
+            seen_ids.add(item_id)
+    ordered_ids.extend(item_id for item_id in existing_ids if item_id not in seen_ids)
+
+    updated_at = now_text()
+    for index, item_id in enumerate(ordered_ids, start=1):
+        db.execute(
+            "UPDATE check_items SET sort_order = ?, updated_at = ? WHERE id = ?",
+            (index * 10, updated_at, item_id),
+        )
+    return ordered_ids
 
 
 def get_enabled_models():

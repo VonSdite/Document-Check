@@ -144,6 +144,136 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("resize", closeConfirmPopover);
 window.addEventListener("scroll", closeConfirmPopover, true);
 
+let checkItemDragArmed = false;
+let draggedCheckItemRow = null;
+let suppressCheckItemClick = false;
+
+function checkItemDetailFor(row) {
+  return document.querySelector(`[data-check-item-detail="${row.dataset.checkItemId}"]`);
+}
+
+function setCheckItemOpen(row, open) {
+  const detail = checkItemDetailFor(row);
+  const toggle = row.querySelector("[data-check-item-toggle]");
+  row.classList.toggle("is-expanded", open);
+  row.setAttribute("aria-expanded", open ? "true" : "false");
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  if (detail) {
+    detail.hidden = !open;
+  }
+}
+
+function moveCheckItemPair(row, reference) {
+  const tbody = row.parentElement;
+  const detail = checkItemDetailFor(row);
+  if (!tbody || reference === row || reference === detail) {
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(row);
+  if (detail) {
+    fragment.appendChild(detail);
+  }
+  tbody.insertBefore(fragment, reference || null);
+}
+
+function saveCheckItemOrder(table) {
+  const formData = new FormData();
+  formData.append("action", "reorder_check_items");
+  table.querySelectorAll("[data-check-item-row]").forEach((row) => {
+    formData.append("item_ids", row.dataset.checkItemId);
+  });
+  return fetch(window.location.href, {
+    method: "POST",
+    body: formData,
+    headers: { "X-Requested-With": "fetch" },
+  });
+}
+
+document.addEventListener("click", (event) => {
+  if (suppressCheckItemClick) {
+    suppressCheckItemClick = false;
+    return;
+  }
+  const row = event.target.closest("[data-check-item-row]");
+  if (!row || event.target.closest("[data-check-item-drag]")) {
+    return;
+  }
+  setCheckItemOpen(row, !row.classList.contains("is-expanded"));
+});
+
+document.addEventListener("pointerdown", (event) => {
+  checkItemDragArmed = Boolean(event.target.closest("[data-check-item-drag]"));
+});
+
+document.addEventListener("pointerup", () => {
+  checkItemDragArmed = false;
+});
+
+document.addEventListener("dragstart", (event) => {
+  const row = event.target.closest("[data-check-item-row]");
+  if (!row || !checkItemDragArmed) {
+    event.preventDefault();
+    return;
+  }
+  draggedCheckItemRow = row;
+  row.classList.add("is-dragging");
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", row.dataset.checkItemId);
+});
+
+document.addEventListener("dragover", (event) => {
+  if (!draggedCheckItemRow) {
+    return;
+  }
+  const targetRow = event.target.closest("[data-check-item-row]");
+  if (!targetRow || targetRow === draggedCheckItemRow) {
+    return;
+  }
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+});
+
+document.addEventListener("drop", (event) => {
+  if (!draggedCheckItemRow) {
+    return;
+  }
+  const targetRow = event.target.closest("[data-check-item-row]");
+  const table = draggedCheckItemRow.closest("[data-check-item-table]");
+  if (!targetRow || targetRow === draggedCheckItemRow || !table) {
+    return;
+  }
+  event.preventDefault();
+  suppressCheckItemClick = true;
+  window.setTimeout(() => {
+    suppressCheckItemClick = false;
+  }, 120);
+
+  const targetDetail = checkItemDetailFor(targetRow);
+  const targetRect = targetRow.getBoundingClientRect();
+  const reference = event.clientY > targetRect.top + targetRect.height / 2
+    ? targetDetail?.nextElementSibling
+    : targetRow;
+  moveCheckItemPair(draggedCheckItemRow, reference);
+  saveCheckItemOrder(table)
+    .then((response) => {
+      if (!response.ok) {
+        window.location.reload();
+      }
+    })
+    .catch(() => window.location.reload());
+});
+
+document.addEventListener("dragend", () => {
+  if (draggedCheckItemRow) {
+    draggedCheckItemRow.classList.remove("is-dragging");
+  }
+  draggedCheckItemRow = null;
+  checkItemDragArmed = false;
+});
+
 function createPasswordToggleButton() {
   const button = document.createElement("button");
   button.type = "button";

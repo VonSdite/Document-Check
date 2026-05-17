@@ -12,6 +12,7 @@ from app.db import (
     reset_default_check_item_prompt,
     seed_defaults,
 )
+from app.routes import _next_check_item_sort_order, _reorder_check_items
 
 
 class CheckItemDefaultsTest(unittest.TestCase):
@@ -67,6 +68,26 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 3)
+
+    def test_next_custom_check_item_sort_order_goes_before_first_item(self):
+        self.assertEqual(_next_check_item_sort_order(get_db()), 0)
+
+    def test_reorders_check_items(self):
+        db = get_db()
+        original_ids = [
+            row["id"]
+            for row in db.execute("SELECT id FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
+        ]
+        requested_ids = list(reversed(original_ids))
+
+        self.assertEqual(_reorder_check_items(db, requested_ids), requested_ids)
+        db.commit()
+
+        updated_ids = [
+            row["id"]
+            for row in db.execute("SELECT id FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
+        ]
+        self.assertEqual(updated_ids, requested_ids)
 
 
 if __name__ == "__main__":
