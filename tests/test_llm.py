@@ -105,19 +105,15 @@ class LLMResponseParsingTest(unittest.TestCase):
 
     def test_raises_service_error_from_success_false_json(self):
         response = FakeResponse(
-            data={
-                "code": 401,
-                "success": False,
-                "errorCode": 201001,
-                "data": None,
-                "message": "调用模型服务失败：模型调用超时，请稍后再试",
-            }
+            lines=[
+                'data: {"code": 401, "success": false, "errorCode": 201001, "data": null, "message": "调用模型服务失败：模型调用超时，请稍后再试"}',
+            ]
         )
 
         with self.assertRaisesRegex(llm.LLMError, "模型调用超时"):
-            llm._read_json_response(response, None)
+            llm._read_stream_response(response, None)
 
-    def test_falls_back_to_non_stream_when_stream_has_no_content(self):
+    def test_retries_stream_when_stream_has_no_content(self):
         fake_session = FakeSession(
             [
                 FakeResponse(
@@ -127,17 +123,19 @@ class LLMResponseParsingTest(unittest.TestCase):
                     ]
                 ),
                 FakeResponse(
-                    data={
-                        "choices": [
-                            {"message": {"role": "assistant", "content": "非流式结果"}}
-                        ]
-                    }
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"流式结果"}}]}',
+                        "data: [DONE]",
+                    ]
                 ),
             ]
         )
         chunks = []
 
-        with patch.object(llm.requests, "Session", return_value=fake_session):
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep") as sleep,
+        ):
             result = llm.run_check(
                 api_base="http://example.test/v1/chat/completions",
                 api_key="key",
@@ -148,28 +146,28 @@ class LLMResponseParsingTest(unittest.TestCase):
                 on_delta=chunks.append,
             )
 
-        self.assertEqual(result, "非流式结果")
-        self.assertEqual(chunks, ["非流式结果"])
+        self.assertEqual(result, "流式结果")
+        self.assertEqual(chunks, ["流式结果"])
         self.assertEqual(len(fake_session.calls), 2)
         self.assertTrue(fake_session.calls[0][1]["json"]["stream"])
         self.assertEqual(fake_session.calls[0][1]["json"]["stream_options"], {"include_usage": True})
-        self.assertFalse(fake_session.calls[1][1]["json"]["stream"])
-        self.assertNotIn("stream_options", fake_session.calls[1][1]["json"])
+        self.assertTrue(fake_session.calls[1][1]["json"]["stream"])
+        self.assertEqual(fake_session.calls[1][1]["json"]["stream_options"], {"include_usage": True})
         self.assertTrue(fake_session.calls[0][1]["stream"])
-        self.assertFalse(fake_session.calls[1][1]["stream"])
+        self.assertTrue(fake_session.calls[1][1]["stream"])
         self.assertFalse(fake_session.calls[0][1]["verify"])
         self.assertFalse(fake_session.calls[1][1]["verify"])
+        sleep.assert_called_once_with(1)
 
-    def test_falls_back_to_non_stream_when_stream_frame_is_malformed(self):
+    def test_retries_stream_when_stream_frame_is_malformed(self):
         fake_session = FakeSession(
             [
                 FakeResponse(lines=['data: {"choices":[{"delta":{"reasoning":"分析中"}']),
                 FakeResponse(
-                    data={
-                        "choices": [
-                            {"message": {"role": "assistant", "content": "非流式结果"}}
-                        ]
-                    }
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"流式结果"}}]}',
+                        "data: [DONE]",
+                    ]
                 ),
             ]
         )
@@ -187,10 +185,10 @@ class LLMResponseParsingTest(unittest.TestCase):
                 document_text="文档",
             )
 
-        self.assertEqual(result, "非流式结果")
+        self.assertEqual(result, "流式结果")
         self.assertEqual(len(fake_session.calls), 2)
         self.assertTrue(fake_session.calls[0][1]["json"]["stream"])
-        self.assertFalse(fake_session.calls[1][1]["json"]["stream"])
+        self.assertTrue(fake_session.calls[1][1]["json"]["stream"])
 
     def test_reports_glm_reasoning_field_without_content(self):
         response = FakeResponse(
@@ -204,16 +202,16 @@ class LLMResponseParsingTest(unittest.TestCase):
         with self.assertRaisesRegex(llm.LLMError, "reasoning"):
             llm._read_stream_response(response, None)
 
-    def test_reads_stream_chunks_returned_by_non_stream_response(self):
+    def test_reads_plain_stream_chunks_without_data_prefix(self):
         response = FakeResponse(
-            text=(
+            lines=(
                 '{"object":"chat.completion.chunk","choices":[{"delta":{"content":"检查"}}]}\n'
                 '{"object":"chat.completion.chunk","choices":[{"delta":{"content":"完成"}}]}\n'
                 "data: [DONE]\n"
-            )
+            ).splitlines()
         )
 
-        result = llm._read_json_response(response, None)
+        result = llm._read_stream_response(response, None)
 
         self.assertEqual(result, "检查完成")
 

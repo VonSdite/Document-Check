@@ -176,33 +176,6 @@ def _run_check_attempt(
                     len(content),
                 )
                 return content
-            except (_EmptyContentError, _StreamParseError) as stream_exc:
-                _close_response(response)
-                logger.warning(
-                    "LLM 流式响应不可用，改用 OpenAI Chat 非流式重试 request_id=%s task_id=%s attempt=%s reason=%s",
-                    request_id,
-                    task_id or "-",
-                    attempt,
-                    stream_exc,
-                )
-
-                non_stream_payload = dict(payload)
-                non_stream_payload["stream"] = False
-                response = session.post(endpoint, json=non_stream_payload, stream=False, **request_kwargs)
-                try:
-                    content = _read_json_response(response, on_delta, request_id=request_id, task_id=task_id)
-                    logger.info(
-                        "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=non_stream_retry output_chars=%s",
-                        request_id,
-                        task_id or "-",
-                        attempt,
-                        len(content),
-                    )
-                    return content
-                except (_EmptyContentError, _StreamParseError) as non_stream_exc:
-                    raise LLMError(
-                        f"{stream_exc}；已自动改用 OpenAI Chat 非流式重试，仍未获得可输出文本：{non_stream_exc}"
-                    ) from non_stream_exc
             finally:
                 _close_response(response)
     except requests.ReadTimeout as exc:
@@ -318,62 +291,6 @@ def _read_stream_lines(
     return content
 
 
-def _read_json_response(
-    response,
-    on_delta: Optional[Callable[[str], None]],
-    *,
-    request_id: str = "-",
-    task_id: Optional[int] = None,
-) -> str:
-    _force_utf8_response(response)
-    _raise_for_http_error(response, request_id=request_id, task_id=task_id)
-    try:
-        data = response.json()
-    except ValueError as exc:
-        body = _short_text(response.text, 1000)
-        if _looks_like_stream_body(response.text):
-            logger.warning(
-                "LLM 非流式响应实际为流式分片 request_id=%s task_id=%s body=%s",
-                request_id,
-                task_id or "-",
-                body,
-            )
-            return _read_stream_lines(
-                response.text.splitlines(),
-                on_delta,
-                request_id=request_id,
-                task_id=task_id,
-            )
-        logger.warning("LLM 非流式响应不是 JSON request_id=%s task_id=%s body=%s", request_id, task_id or "-", body)
-        raise LLMError(f"模型服务返回了非 JSON 内容：{body}") from exc
-
-    service_error = _extract_service_error(data)
-    if service_error:
-        logger.warning("LLM 非流式响应返回错误 request_id=%s task_id=%s error=%s", request_id, task_id or "-", service_error)
-        raise LLMError(f"模型服务返回错误：{service_error}")
-
-    diagnostics = _OpenAIChatDiagnostics()
-    diagnostics.observe(data, raw=json.dumps(data, ensure_ascii=False))
-    content = _extract_chat_content(data).strip()
-    logger.info(
-        "LLM 非流式响应结束 request_id=%s task_id=%s %s",
-        request_id,
-        task_id or "-",
-        diagnostics.log_summary(),
-    )
-    if not content:
-        logger.warning(
-            "LLM 非流式响应没有 assistant content request_id=%s task_id=%s samples=%s",
-            request_id,
-            task_id or "-",
-            diagnostics.samples,
-        )
-        raise _EmptyContentError(_empty_content_message(diagnostics))
-    if on_delta:
-        on_delta(content)
-    return content
-
-
 def _raise_for_http_error(response, *, request_id: str = "-", task_id: Optional[int] = None):
     if response.status_code >= 400:
         body = _short_text(response.text, 1500)
@@ -389,16 +306,6 @@ def _raise_for_http_error(response, *, request_id: str = "-", task_id: Optional[
 
 def _force_utf8_response(response):
     response.encoding = "utf-8"
-
-
-def _looks_like_stream_body(value: str) -> bool:
-    text = str(value or "").lstrip()
-    return (
-        text.startswith("data:")
-        or "\ndata:" in text
-        or '"object":"chat.completion.chunk"' in text
-        or ('"delta"' in text and '"choices"' in text)
-    )
 
 
 def _close_response(response):
