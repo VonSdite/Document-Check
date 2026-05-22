@@ -2018,6 +2018,7 @@ td {
 .model-editor {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .model-editor-head {
@@ -2053,6 +2054,7 @@ td {
 
 .model-editor-table {
   width: 100%;
+  min-width: 0;
   table-layout: fixed;
   border-collapse: collapse;
 }
@@ -2079,7 +2081,8 @@ td {
 
 .model-editor-table th:nth-child(3),
 .model-editor-table td:nth-child(3) {
-  width: 82px;
+  width: 74px;
+  padding-left: 6px;
 }
 
 .model-editor-table tbody tr:last-child td {
