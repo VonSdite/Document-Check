@@ -742,6 +742,37 @@ def get_enabled_check_items():
     ).fetchall()
 
 
+def _enabled_check_item_snapshots(db, check_ids: list[int]) -> list[dict]:
+    unique_ids = []
+    seen = set()
+    for check_id in check_ids:
+        if check_id not in seen:
+            unique_ids.append(check_id)
+            seen.add(check_id)
+    if not unique_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in unique_ids)
+    rows = db.execute(
+        f"""
+        SELECT id, code, name, prompt
+        FROM check_items
+        WHERE id IN ({placeholders}) AND enabled = 1
+        ORDER BY sort_order ASC, id ASC
+        """,
+        tuple(unique_ids),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "code": row["code"],
+            "name": row["name"],
+            "prompt": row["prompt"],
+        }
+        for row in rows
+    ]
+
+
 def _next_check_item_sort_order(db) -> int:
     row = db.execute("SELECT MIN(sort_order) AS value FROM check_items").fetchone()
     if row is None or row["value"] is None:
@@ -994,6 +1025,10 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
     if not check_ids:
         flash("请至少选择一个检查项。", "error")
         return _back_to_task_form(admin_created)
+    check_snapshots = _enabled_check_item_snapshots(db, check_ids)
+    if len(check_snapshots) != len(set(check_ids)):
+        flash("请选择当前可用的检查项。", "error")
+        return _back_to_task_form(admin_created)
 
     model_id = request.form.get("model_id", "")
     model = _find_enabled_model(model_id)
@@ -1027,11 +1062,11 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         """
         INSERT INTO tasks(
             task_type, ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
-            checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
+            document_text, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
             ssl_verify, request_timeout, max_input_chars, force_disable_thinking,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             DOCUMENT_TASK_TYPE,
@@ -1041,7 +1076,9 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
             stored_filename,
             file_type,
             file_size,
+            prepared_document_text,
             json.dumps(check_ids, ensure_ascii=False),
+            json.dumps(check_snapshots, ensure_ascii=False),
             model["provider_name"],
             model["model_name"],
             model["api_base"],
@@ -1128,11 +1165,11 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
         """
         INSERT INTO tasks(
             task_type, ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
-            document_meta_json, checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
+            document_text, document_meta_json, checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
             ssl_verify, request_timeout, max_input_chars, force_disable_thinking,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             CONSISTENCY_TASK_TYPE,
@@ -1142,6 +1179,7 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
             first_file["stored_filename"],
             "多文档",
             file_size,
+            validation_text,
             json.dumps(document_meta, ensure_ascii=False),
             CONSISTENCY_CHECKS_JSON,
             model["provider_name"],
@@ -1429,13 +1467,14 @@ def _upload_destination(original_filename: str, ip: str, created_at: str, file_t
     timestamp = re.sub(r"\D", "", created_at) or now_text().replace("-", "").replace(":", "").replace(" ", "")
     stem = _limit_utf8_bytes(_safe_filename_part(Path(original_filename).stem, "document"), 140)
     ip_part = _limit_utf8_bytes(_safe_filename_part(ip, "0.0.0.0"), 80)
-    stored_filename = f"{stem}_{ip_part}_{timestamp}.{file_type}"
+    token = uuid.uuid4().hex[:12]
+    stored_filename = f"{stem}_{ip_part}_{timestamp}_{token}.{file_type}"
     destination = upload_dir / stored_filename
     if not destination.exists():
         return stored_filename, destination
 
     for index in range(2, 1000):
-        candidate = f"{stem}_{ip_part}_{timestamp}-{index}.{file_type}"
+        candidate = f"{stem}_{ip_part}_{timestamp}_{token}-{index}.{file_type}"
         destination = upload_dir / candidate
         if not destination.exists():
             return candidate, destination

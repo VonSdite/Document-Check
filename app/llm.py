@@ -12,6 +12,7 @@ logger.addHandler(logging.NullHandler())
 
 _REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
 _MAX_RETRIES = 2
+_CONTENT_CALLBACK_INTERVAL = 0.25
 _EXECUTION_BOUNDARY = """执行边界：
 1. 只依据提供的文档内容，不补全文档外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
@@ -96,13 +97,27 @@ def run_check(
 
     last_error = None
     for attempt in range(1, _MAX_RETRIES + 2):
-        attempt_content = ""
+        attempt_parts = []
+        last_content_callback = 0.0
+        last_content_snapshot = ""
+
+        def emit_attempt_content(*, force: bool = False):
+            nonlocal last_content_callback, last_content_snapshot
+            if not on_content:
+                return
+            now = time.monotonic()
+            if not force and now - last_content_callback < _CONTENT_CALLBACK_INTERVAL:
+                return
+            content = "".join(attempt_parts)
+            if content == last_content_snapshot:
+                return
+            last_content_callback = now
+            last_content_snapshot = content
+            on_content(content)
 
         def on_attempt_delta(delta: str):
-            nonlocal attempt_content
-            attempt_content += delta
-            if on_content:
-                on_content(attempt_content)
+            attempt_parts.append(delta)
+            emit_attempt_content()
 
         try:
             content = _run_check_attempt(
@@ -119,14 +134,17 @@ def run_check(
                 attempt=attempt,
                 stream_trace_enabled=stream_trace_enabled,
             )
-            if on_content and not attempt_content and content:
+            if on_content and not attempt_parts and content:
                 on_content(content)
+            elif on_content and content != last_content_snapshot:
+                attempt_parts[:] = [content]
+                emit_attempt_content(force=True)
             if on_delta:
                 on_delta(content)
             return content
         except LLMError as exc:
             last_error = exc
-            if on_content and attempt_content:
+            if on_content and attempt_parts:
                 on_content("")
             if attempt > _MAX_RETRIES:
                 raise

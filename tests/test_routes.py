@@ -1,3 +1,4 @@
+import io
 import json
 import tempfile
 import unittest
@@ -5,9 +6,9 @@ from pathlib import Path
 
 from flask import Flask
 
-from app.config import load_local_config
-from app.db import get_setting, init_db, seed_defaults
-from app.routes import _find_enabled_model, get_enabled_models, register_routes
+from app.config import load_local_config, save_local_config
+from app.db import get_db, get_setting, init_db, seed_defaults
+from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 
 
 class AdminSettingsRouteTest(unittest.TestCase):
@@ -27,6 +28,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             DATABASE=str(root_dir / "test.sqlite3"),
             UPLOAD_FOLDER=str(root_dir / "uploads"),
         )
+        Path(self.app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
         with self.app.app_context():
             init_db()
             seed_defaults()
@@ -37,6 +39,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def _configure_provider(self):
+        root_dir = Path(self.app.config["ROOT_DIR"])
+        config = load_local_config(root_dir)
+        config["providers"] = [
+            {
+                "id": "provider-1",
+                "name": "测试提供商",
+                "api_base": "https://example.test/v1/chat/completions",
+                "api_key": "",
+                "proxy_mode": "direct",
+                "proxy": "",
+                "ssl_verify": False,
+                "request_timeout": 30,
+                "max_input_chars": 80000,
+                "is_active": True,
+                "models": [{"model_name": "model-a", "force_disable_thinking": False}],
+            }
+        ]
+        save_local_config(root_dir, config)
 
     def test_diagnostics_fetch_returns_saved_state(self):
         response = self.client.post(
@@ -170,6 +192,90 @@ class AdminSettingsRouteTest(unittest.TestCase):
             by_mode = {model["force_disable_thinking"]: model for model in models}
             self.assertFalse(_find_enabled_model(by_mode[False]["id"])["force_disable_thinking"])
             self.assertTrue(_find_enabled_model(by_mode[True]["id"])["force_disable_thinking"])
+
+    def test_upload_destination_uses_unique_name_for_same_second_uploads(self):
+        with self.app.app_context():
+            first_name, _ = _upload_destination("报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt")
+            second_name, _ = _upload_destination("报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt")
+
+        self.assertNotEqual(first_name, second_name)
+        self.assertTrue(first_name.endswith(".txt"))
+        self.assertTrue(second_name.endswith(".txt"))
+
+    def test_create_task_rejects_disabled_check_item_before_saving_file(self):
+        self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            get_db().execute("UPDATE check_items SET enabled = 0 WHERE id = ?", (item["id"],))
+            get_db().commit()
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
+                "checks": [str(item["id"])],
+                "model_id": "provider-1:0:model-a",
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
+    def test_create_task_saves_check_snapshot_and_extracted_text(self):
+        self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id, code, name, prompt FROM check_items WHERE code = 'typo'").fetchone()
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
+                "checks": [str(item["id"])],
+                "model_id": "provider-1:0:model-a",
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT * FROM tasks").fetchone()
+        snapshots = json.loads(task["checks_snapshot_json"])
+        self.assertEqual(task["document_text"], "file: doc.txt\n\n测试文档")
+        self.assertEqual(
+            snapshots,
+            [
+                {
+                    "id": item["id"],
+                    "code": item["code"],
+                    "name": item["name"],
+                    "prompt": item["prompt"],
+                }
+            ],
+        )
+
+    def test_create_consistency_task_saves_combined_document_text(self):
+        self._configure_provider()
+
+        response = self.client.post(
+            "/consistency",
+            data={
+                "master_documents": (io.BytesIO("素材参数 10A".encode("utf-8")), "master.txt"),
+                "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
+                "model_id": "provider-1:0:model-a",
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT task_type, document_text FROM tasks").fetchone()
+        self.assertEqual(task["task_type"], "consistency_check")
+        self.assertIn("## 素材文档1：master.txt", task["document_text"])
+        self.assertIn("## 资料1：related.txt", task["document_text"])
 
 
 if __name__ == "__main__":

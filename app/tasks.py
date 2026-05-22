@@ -136,29 +136,18 @@ class TaskScheduler:
 
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
                 if task_type == CONSISTENCY_TASK_TYPE:
-                    document_text = _extract_consistency_document_text(self.app, task)
+                    document_text = _task_value(task, "document_text") or _extract_consistency_document_text(self.app, task)
                     check_items = [CONSISTENCY_CHECK_ITEM]
                     max_workers = 1
                 else:
-                    upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / task["stored_filename"]
-                    document_text = format_document_text(
-                        task["original_filename"],
-                        extract_text(upload_path, task["file_type"]),
-                    )
-                    check_ids = json.loads(task["checks_json"])
-                    placeholders = ",".join("?" for _ in check_ids)
-                    check_items = [
-                        dict(row)
-                        for row in db.execute(
-                            f"""
-                            SELECT *
-                            FROM check_items
-                            WHERE id IN ({placeholders}) AND enabled = 1
-                            ORDER BY sort_order ASC, id ASC
-                            """,
-                            tuple(check_ids),
-                        ).fetchall()
-                    ]
+                    document_text = _task_value(task, "document_text")
+                    if not document_text:
+                        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / task["stored_filename"]
+                        document_text = format_document_text(
+                            task["original_filename"],
+                            extract_text(upload_path, task["file_type"]),
+                        )
+                    check_items = _document_check_items(db, task)
                     max_workers = max(
                         1,
                         int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
@@ -240,6 +229,66 @@ def _extract_consistency_document_text(app, task) -> str:
     return "\n\n".join(sections).strip()
 
 
+def _document_check_items(db, task) -> list[dict]:
+    snapshot = _check_items_from_snapshot(_task_value(task, "checks_snapshot_json"))
+    if snapshot:
+        return snapshot
+
+    try:
+        check_ids = json.loads(task["checks_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("检查项数据无效") from exc
+    if not isinstance(check_ids, list) or not check_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in check_ids)
+    return [
+        dict(row)
+        for row in db.execute(
+            f"""
+            SELECT *
+            FROM check_items
+            WHERE id IN ({placeholders}) AND enabled = 1
+            ORDER BY sort_order ASC, id ASC
+            """,
+            tuple(check_ids),
+        ).fetchall()
+    ]
+
+
+def _check_items_from_snapshot(raw: str | None) -> list[dict]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(value, list):
+        return []
+
+    items = []
+    seen_codes = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip()
+        name = str(item.get("name") or "").strip()
+        prompt = str(item.get("prompt") or "").strip()
+        if not code or not name or not prompt or code in seen_codes:
+            continue
+        seen_codes.add(code)
+        items.append({"code": code, "name": name, "prompt": prompt})
+    return items
+
+
+def _task_value(task, key: str):
+    if hasattr(task, "keys") and key in task.keys():
+        return task[key]
+    if isinstance(task, dict):
+        return task.get(key)
+    return None
+
+
 def _run_check_items_concurrently(
     app,
     task,
@@ -310,9 +359,12 @@ def _run_check_items_concurrently(
             last_stream_write = 0.0
             def save_partial(content: str, summary: str, *, force: bool = False):
                 nonlocal last_stream_write
+                content = content.strip()
+                now = time.monotonic()
+                if not force and content and now - last_stream_write < 1.2:
+                    return
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
-                content = content.strip()
                 with result_lock:
                     had_partial = item["code"] in partial_by_code
                     if content:
@@ -324,9 +376,6 @@ def _run_check_items_concurrently(
                     else:
                         partial_by_code.pop(item["code"], None)
 
-                now = time.monotonic()
-                if not force and content and now - last_stream_write < 1.2:
-                    return
                 last_stream_write = now
                 if not content and not had_partial:
                     return

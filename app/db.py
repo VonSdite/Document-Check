@@ -67,8 +67,10 @@ def init_db():
             stored_filename TEXT NOT NULL,
             file_type TEXT NOT NULL,
             file_size INTEGER NOT NULL,
+            document_text TEXT,
             document_meta_json TEXT,
             checks_json TEXT NOT NULL,
+            checks_snapshot_json TEXT,
             provider_name TEXT,
             model_name TEXT NOT NULL,
             api_base TEXT NOT NULL,
@@ -96,7 +98,9 @@ def init_db():
         """
     )
     _ensure_column(db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")
+    _ensure_column(db, "tasks", "document_text", "TEXT")
     _ensure_column(db, "tasks", "document_meta_json", "TEXT")
+    _ensure_column(db, "tasks", "checks_snapshot_json", "TEXT")
     _ensure_column(db, "tasks", "ssl_verify", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(db, "tasks", "force_disable_thinking", "INTEGER NOT NULL DEFAULT 0")
     current_app.teardown_appcontext(close_db)

@@ -75,7 +75,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertIn("task_type", columns)
         self.assertEqual(columns["task_type"]["dflt_value"], "'document_check'")
+        self.assertIn("document_text", columns)
         self.assertIn("document_meta_json", columns)
+        self.assertIn("checks_snapshot_json", columns)
 
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 1)

@@ -7,7 +7,7 @@ from unittest.mock import patch
 from flask import Flask
 
 from app.db import get_db, init_db, now_text
-from app.tasks import _run_check_items_concurrently
+from app.tasks import TaskScheduler, _document_check_items, _run_check_items_concurrently
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -15,6 +15,8 @@ class TaskExecutionTest(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.app = Flask(__name__)
         self.app.config["DATABASE"] = str(Path(self.temp_dir.name) / "test.sqlite3")
+        self.app.config["UPLOAD_FOLDER"] = str(Path(self.temp_dir.name) / "uploads")
+        Path(self.app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
         self.context = self.app.app_context()
         self.context.push()
         init_db()
@@ -107,6 +109,102 @@ class TaskExecutionTest(unittest.TestCase):
             )
 
         self.assertTrue(calls[0]["force_disable_thinking"])
+
+    def test_document_check_items_prefers_snapshot_over_current_database(self):
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO check_items(code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+            VALUES ('typo', '当前名称', '', '当前提示词', 0, 10, ?, ?)
+            """,
+            (created_at, created_at),
+        )
+        db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'doc.txt', 'doc.txt', 'txt', 1,
+                ?, ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                json.dumps([1]),
+                json.dumps(
+                    [
+                        {
+                            "id": 1,
+                            "code": "typo",
+                            "name": "提交时名称",
+                            "prompt": "提交时提示词",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task = db.execute("SELECT * FROM tasks").fetchone()
+
+        self.assertEqual(
+            _document_check_items(db, task),
+            [{"code": "typo", "name": "提交时名称", "prompt": "提交时提示词"}],
+        )
+
+    def test_run_task_uses_cached_document_text_when_original_file_is_missing(self):
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'missing.txt', 'missing.txt', 'txt', 1,
+                'file: missing.txt\n\n缓存文本', ?, ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                json.dumps([1]),
+                json.dumps(
+                    [
+                        {
+                            "id": 1,
+                            "code": "typo",
+                            "name": "错别字检查",
+                            "prompt": "检查错别字",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+        calls = []
+
+        def fake_run_check(**kwargs):
+            calls.append(kwargs)
+            return "完成"
+
+        with patch("app.tasks.run_check", side_effect=fake_run_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(calls[0]["document_text"], "file: missing.txt\n\n缓存文本")
 
 
 if __name__ == "__main__":

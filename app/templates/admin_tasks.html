@@ -61,7 +61,7 @@
   </div>
 </form>
 
-<section class="metric-grid five" data-refresh-region="stats">
+<section class="metric-grid five" data-refresh-region="stats" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}">
   <div class="metric"><span>全部</span><strong>{{ totals.tasks }}</strong></div>
   <div class="metric"><span>排队</span><strong>{{ totals.queued }}</strong></div>
   <div class="metric"><span>检查中</span><strong>{{ totals.running }}</strong></div>

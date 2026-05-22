@@ -1398,6 +1398,11 @@ function setAutoRefreshEnabled(enabled) {
   window.localStorage.setItem(AUTO_REFRESH_KEY, enabled ? "1" : "0");
 }
 
+function hasActiveRefreshTasks() {
+  const stats = document.querySelector('[data-refresh-region="stats"]');
+  return stats?.dataset.refreshActive === "1";
+}
+
 function suspendAutoRefresh(duration = AUTO_REFRESH_INTERACTION_PAUSE_MS) {
   autoRefreshSuspendedUntil = Math.max(autoRefreshSuspendedUntil, Date.now() + duration);
 }
@@ -1426,12 +1431,13 @@ function updateRefreshToggle() {
     return;
   }
   const enabled = autoRefreshEnabled();
+  const active = hasActiveRefreshTasks();
   const label = toggle.querySelector("[data-refresh-label]");
-  toggle.classList.toggle("is-on", enabled);
-  toggle.classList.toggle("is-off", !enabled);
+  toggle.classList.toggle("is-on", enabled && active);
+  toggle.classList.toggle("is-off", !enabled || !active);
   toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
   if (label) {
-    label.textContent = enabled ? "刷新中" : "已暂停";
+    label.textContent = enabled ? (active ? "刷新中" : "无活动") : "已暂停";
   }
 }
 
@@ -1444,7 +1450,11 @@ function replaceRefreshRegion(documentFragment, name) {
 }
 
 async function refreshTaskRegions() {
-  if (autoRefreshPending || document.hidden || autoRefreshSuspended()) {
+  if (autoRefreshPending || document.hidden || autoRefreshSuspended() || !hasActiveRefreshTasks()) {
+    if (!hasActiveRefreshTasks()) {
+      stopAutoRefresh();
+      updateRefreshToggle();
+    }
     return;
   }
   autoRefreshPending = true;
@@ -1465,13 +1475,17 @@ async function refreshTaskRegions() {
     const nextDocument = new DOMParser().parseFromString(html, "text/html");
     replaceRefreshRegion(nextDocument, "stats");
     replaceRefreshRegion(nextDocument, "task-list");
+    if (!hasActiveRefreshTasks()) {
+      stopAutoRefresh();
+    }
+    updateRefreshToggle();
   } finally {
     autoRefreshPending = false;
   }
 }
 
 function startAutoRefresh() {
-  if (autoRefreshTimer || !document.querySelector("[data-auto-refresh-toggle]")) {
+  if (autoRefreshTimer || !document.querySelector("[data-auto-refresh-toggle]") || !hasActiveRefreshTasks()) {
     return;
   }
   autoRefreshTimer = window.setInterval(refreshTaskRegions, 2000);
@@ -1487,7 +1501,7 @@ function stopAutoRefresh() {
 
 function applyAutoRefreshState() {
   updateRefreshToggle();
-  if (autoRefreshEnabled()) {
+  if (autoRefreshEnabled() && hasActiveRefreshTasks()) {
     startAutoRefresh();
   } else {
     stopAutoRefresh();
