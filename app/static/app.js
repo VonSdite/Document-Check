@@ -835,6 +835,10 @@ function renderFetchModelPicker() {
       badge.className = "fetch-model-badge";
       badge.textContent = "已在清单";
       label.appendChild(badge);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "fetch-model-badge-placeholder";
+      label.appendChild(spacer);
     }
     list.appendChild(label);
   });

@@ -2156,18 +2156,18 @@ td {
 
 .fetch-model-list-head,
 .fetch-model-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 96px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   margin: 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 
 .fetch-model-list-head {
   position: sticky;
   top: 0;
   z-index: 1;
-  justify-content: flex-start;
   border-bottom: 1px solid var(--line);
   background: #f8fbff;
   color: var(--text);
@@ -2177,45 +2177,45 @@ td {
 
 .fetch-model-list-head input,
 .fetch-model-item-main input {
-  flex: 0 0 auto;
+  justify-self: center;
 }
 
 .fetch-model-list-head span {
   min-width: 0;
-  flex: 1 1 auto;
+}
+
+.fetch-model-list-head span:last-child {
+  justify-self: end;
 }
 
 .fetch-model-list-body {
-  padding: 6px;
+  padding: 0;
 }
 
 .fetch-model-item {
-  justify-content: space-between;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
+  min-height: 54px;
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
 
+.fetch-model-item:last-child {
+  border-bottom: 0;
+}
+
 .fetch-model-item:hover {
-  border-color: var(--line);
   background: #f8fbff;
 }
 
 .fetch-model-item.is-selected {
-  border-color: #cfe0f5;
   background: #f0f6ff;
 }
 
 .fetch-model-item-main {
-  flex: 1 1 auto;
+  display: contents;
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .fetch-model-name {
-  flex: 1 1 auto;
   min-width: 0;
   word-break: break-all;
   overflow-wrap: anywhere;
@@ -2225,13 +2225,17 @@ td {
 }
 
 .fetch-model-badge {
-  flex-shrink: 0;
+  justify-self: end;
   padding: 3px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.fetch-model-badge-placeholder {
+  min-width: 1px;
 }
 
 .flash-stack {
