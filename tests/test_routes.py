@@ -109,6 +109,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ],
         )
 
+    def test_admin_models_accepts_million_char_input_limit(self):
+        response = self.client.post(
+            "/admin/models",
+            data={
+                "name": "测试提供商",
+                "api_base": "https://example.test/v1/chat/completions",
+                "api_key": "",
+                "proxy_mode": "direct",
+                "request_timeout": "30",
+                "max_input_chars": "1000000",
+                "is_active": "on",
+                "model_configs": json.dumps(
+                    [{"model_name": "model-a", "force_disable_thinking": False}],
+                    ensure_ascii=False,
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        config = load_local_config(self.app.config["ROOT_DIR"])
+        self.assertEqual(config["providers"][0]["max_input_chars"], 1000000)
+
     def test_admin_models_allows_same_name_for_distinct_thinking_modes(self):
         response = self.client.post(
             "/admin/models",
