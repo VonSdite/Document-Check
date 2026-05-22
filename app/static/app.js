@@ -577,12 +577,19 @@ function modelConfigKey(modelName, forceDisableThinking) {
   return `${forceDisableThinking ? "1" : "0"}:${modelName}`;
 }
 
+function modelConfigName(item) {
+  if (item && typeof item === "object") {
+    return String(item.model_name || item.id || "").trim();
+  }
+  return String(item || "").trim();
+}
+
 function normalizeModelConfigs(value) {
   const source = Array.isArray(value) ? value : [];
   const models = [];
   const seen = new Set();
   source.forEach((item) => {
-    const modelName = String(item?.model_name || item?.id || item || "").trim();
+    const modelName = modelConfigName(item);
     const forceDisableThinking = Boolean(item?.force_disable_thinking);
     const key = modelConfigKey(modelName, forceDisableThinking);
     if (!modelName || seen.has(key)) {
@@ -674,7 +681,7 @@ function renderModelRows(form, configs) {
   }
   body.replaceChildren();
   const rows = (Array.isArray(configs) ? configs : []).map((item) => ({
-    model_name: String(item?.model_name || item?.id || item || "").trim(),
+    model_name: modelConfigName(item),
     force_disable_thinking: Boolean(item?.force_disable_thinking),
   }));
 
