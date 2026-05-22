@@ -1,8 +1,11 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from app import _runtime_root_dir
 from app.config import load_local_config
 
 
@@ -177,6 +180,16 @@ class ProviderConfigTest(unittest.TestCase):
                 {"model_name": "same-model", "force_disable_thinking": True},
             ],
         )
+
+    def test_frozen_runtime_root_uses_executable_directory(self):
+        executable = Path(tempfile.gettempdir()) / "DocumentCheck" / "DocumentCheck.exe"
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "executable", str(executable)),
+        ):
+            root_dir = _runtime_root_dir()
+
+        self.assertEqual(root_dir, executable.parent)
 
 
 if __name__ == "__main__":

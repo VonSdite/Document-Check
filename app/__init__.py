@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -13,10 +14,10 @@ from .tasks import TaskScheduler
 
 
 def create_app():
-    root_dir = Path(__file__).resolve().parent.parent
+    root_dir = _runtime_root_dir()
     local_config = load_local_config(root_dir)
 
-    app = Flask(__name__, instance_relative_config=True)
+    app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True)
     app.config.update(
         SECRET_KEY=local_config["secret_key"],
         ADMIN_USERNAME=local_config["admin"]["username"],
@@ -48,6 +49,12 @@ def create_app():
         app.extensions["task_scheduler"] = scheduler
 
     return app
+
+
+def _runtime_root_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
 
 
 def _configure_logging(app):
