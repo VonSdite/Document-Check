@@ -238,6 +238,27 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(len(fake_session.calls), 1)
         self.assertTrue(fake_session.calls[0][1]["verify"])
 
+    def test_force_disable_thinking_adds_payload_flag(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_check(
+                api_base="https://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                force_disable_thinking=True,
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, "完成")
+        self.assertIs(fake_session.calls[0][1]["json"]["enable_thinking"], False)
+
     def test_retries_llm_errors_twice_before_success(self):
         fake_session = FakeSession(
             [

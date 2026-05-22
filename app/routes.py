@@ -30,7 +30,8 @@ from .db import (
     reset_default_check_item_prompt,
     set_setting,
 )
-from .documents import DocumentReadError, allowed_file, extension_of, extract_text
+from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
+from .model_discovery import ModelDiscoveryError, fetch_models
 from .task_types import (
     CONSISTENCY_MAX_DATA_FILES,
     CONSISTENCY_MAX_MATERIAL_FILES,
@@ -468,8 +469,10 @@ def register_routes(app):
                 flash("文本上限必须是整数。", "error")
                 return redirect(url_for("admin_models"))
             is_active = 1 if request.form.get("is_active") == "on" else 0
-            models_text = request.form.get("models", "")
-            model_names = list(dict.fromkeys(line.strip() for line in models_text.splitlines() if line.strip()))
+            model_configs = _parse_model_configs(
+                request.form.get("model_configs", ""),
+                request.form.get("models", ""),
+            )
             if proxy_mode not in PROXY_MODES:
                 proxy_mode = "direct"
             if proxy_mode == "custom" and not proxy:
@@ -490,7 +493,7 @@ def register_routes(app):
             if max_input_chars < PROVIDER_INPUT_LIMIT_MIN or max_input_chars > PROVIDER_INPUT_LIMIT_MAX:
                 flash(f"文本上限需在 {PROVIDER_INPUT_LIMIT_MIN}-{PROVIDER_INPUT_LIMIT_MAX} 字之间。", "error")
                 return redirect(url_for("admin_models"))
-            if not model_names:
+            if not model_configs:
                 flash("至少需要填写一个模型名称。", "error")
                 return redirect(url_for("admin_models"))
 
@@ -511,7 +514,7 @@ def register_routes(app):
                     request_timeout=request_timeout,
                     max_input_chars=max_input_chars,
                     is_active=bool(is_active),
-                    models=model_names,
+                    models=model_configs,
                     created_at=existing.get("created_at") or now,
                     updated_at=now,
                 )
@@ -528,7 +531,7 @@ def register_routes(app):
                     request_timeout=request_timeout,
                     max_input_chars=max_input_chars,
                     is_active=bool(is_active),
-                    models=model_names,
+                    models=model_configs,
                     created_at=now,
                     updated_at=now,
                 )
@@ -539,10 +542,34 @@ def register_routes(app):
 
         providers = sorted(providers, key=lambda provider: (provider["updated_at"], provider["id"]), reverse=True)
         models_by_provider = {
-            provider["id"]: [{"model_name": model_name, "enabled": True} for model_name in sorted(provider["models"])]
+            provider["id"]: sorted(_provider_model_options(provider), key=lambda model: model["model_name"])
             for provider in providers
         }
         return render_template("admin_models.html", providers=providers, models_by_provider=models_by_provider)
+
+    @app.route(f"{admin_prefix}/models/fetch", methods=["GET"])
+    @admin_required
+    def admin_fetch_models():
+        proxy_mode = request.args.get("proxy_mode", "direct")
+        if proxy_mode not in PROXY_MODES:
+            proxy_mode = "direct"
+        try:
+            request_timeout = int(request.args.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)))
+        except ValueError:
+            request_timeout = PROVIDER_TIMEOUT_DEFAULT
+
+        try:
+            models = fetch_models(
+                api_base=request.args.get("api_base", ""),
+                api_key=request.args.get("api_key", ""),
+                proxy_mode=proxy_mode,
+                proxy=request.args.get("proxy", ""),
+                ssl_verify=_form_bool(request.args.get("ssl_verify")),
+                request_timeout=request_timeout,
+            )
+        except ModelDiscoveryError as exc:
+            return {"error": str(exc)}, 400
+        return {"fetched_models": models, "fetched_count": len(models)}
 
     @app.route(f"{admin_prefix}/prompts", methods=["GET", "POST"])
     @admin_required
@@ -698,6 +725,10 @@ def _wants_json_response() -> bool:
     return request.headers.get("X-Requested-With") == "fetch" or request.accept_mimetypes.best == "application/json"
 
 
+def _form_bool(value) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_ip_user(ip: str):
     return get_db().execute("SELECT * FROM ip_users WHERE ip = ?", (ip,)).fetchone()
 
@@ -741,8 +772,8 @@ def get_enabled_models():
     for provider in _load_providers():
         if not provider["is_active"]:
             continue
-        for model_name in provider["models"]:
-            models.append(_model_option(provider, model_name))
+        for model_config in provider["models"]:
+            models.append(_model_option(provider, model_config))
     return sorted(models, key=lambda model: (model["provider_name"], model["model_name"]))
 
 
@@ -769,7 +800,7 @@ def _provider_config(
     request_timeout: int,
     max_input_chars: int,
     is_active: bool,
-    models: list[str],
+    models: list[dict],
     created_at: str,
     updated_at: str,
 ) -> dict:
@@ -790,12 +821,90 @@ def _provider_config(
     }
 
 
-def _model_option(provider: dict, model_name: str) -> dict:
+def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list[dict]:
+    configs = []
+    try:
+        value = json.loads(model_configs_json) if model_configs_json else []
+    except json.JSONDecodeError:
+        value = []
+
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                model_name = str(item.get("model_name") or item.get("id") or "").strip()
+                force_disable_thinking = _form_bool(item.get("force_disable_thinking"))
+            else:
+                model_name = str(item or "").strip()
+                force_disable_thinking = False
+            configs.append(
+                {
+                    "model_name": model_name,
+                    "force_disable_thinking": force_disable_thinking,
+                }
+            )
+
+    if not configs:
+        configs = [
+            {
+                "model_name": line.strip(),
+                "force_disable_thinking": False,
+            }
+            for line in str(models_text or "").splitlines()
+            if line.strip()
+        ]
+
+    result = []
+    seen = set()
+    for config in configs:
+        model_name = str(config.get("model_name") or "").strip()
+        if not model_name or model_name in seen:
+            continue
+        seen.add(model_name)
+        result.append(
+            {
+                "model_name": model_name,
+                "force_disable_thinking": bool(config.get("force_disable_thinking")),
+            }
+        )
+    return result
+
+
+def _provider_model_options(provider: dict) -> list[dict]:
+    return [
+        {
+            "model_name": _model_config_name(model_config),
+            "force_disable_thinking": _model_config_force_disable_thinking(model_config),
+            "enabled": True,
+        }
+        for model_config in provider["models"]
+        if _model_config_name(model_config)
+    ]
+
+
+def _model_config_name(model_config) -> str:
+    if isinstance(model_config, dict):
+        return str(model_config.get("model_name") or model_config.get("id") or "").strip()
+    return str(model_config or "").strip()
+
+
+def _model_config_force_disable_thinking(model_config) -> bool:
+    return bool(isinstance(model_config, dict) and model_config.get("force_disable_thinking"))
+
+
+def _model_option(provider: dict, model_name) -> dict:
+    if isinstance(model_name, dict):
+        model_config = model_name
+        model_name = str(model_config.get("model_name") or model_config.get("id") or "").strip()
+        force_disable_thinking = bool(model_config.get("force_disable_thinking"))
+    else:
+        model_name = str(model_name or "").strip()
+        force_disable_thinking = False
     return {
         "id": f"{provider['id']}:{model_name}",
         "provider_id": provider["id"],
         "provider_name": provider["name"],
         "model_name": model_name,
+        "force_disable_thinking": force_disable_thinking,
         "api_base": provider["api_base"],
         "api_key": provider["api_key"],
         "proxy_mode": provider["proxy_mode"],
@@ -818,9 +927,10 @@ def _find_enabled_model(model_id: str) -> dict | None:
     for provider in _load_providers():
         if provider["id"] != provider_id or not provider["is_active"]:
             continue
-        if model_name not in provider["models"]:
-            return None
-        return _model_option(provider, model_name)
+        for model_config in provider["models"]:
+            if _model_config_name(model_config) == model_name:
+                return _model_option(provider, model_config)
+        return None
     return None
 
 
@@ -893,16 +1003,21 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         _remove_uploaded_file(destination)
         flash("未能从文档中提取到可检查文本。", "error")
         return _back_to_task_form(admin_created)
+    prepared_document_text = format_document_text(original_filename, document_text)
+    if len(prepared_document_text) > model["max_input_chars"]:
+        _remove_uploaded_file(destination)
+        flash(f"文档文本 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
+        return _back_to_task_form(admin_created)
     username = user["username"] if user and user["username"] else None
     db.execute(
         """
         INSERT INTO tasks(
             task_type, ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
             checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
-            ssl_verify, request_timeout, max_input_chars,
+            ssl_verify, request_timeout, max_input_chars, force_disable_thinking,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             DOCUMENT_TASK_TYPE,
@@ -922,6 +1037,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
             1 if model["ssl_verify"] else 0,
             model["request_timeout"],
             model["max_input_chars"],
+            1 if model["force_disable_thinking"] else 0,
             created_at,
             created_at,
         ),
@@ -999,10 +1115,10 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
         INSERT INTO tasks(
             task_type, ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
             document_meta_json, checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
-            ssl_verify, request_timeout, max_input_chars,
+            ssl_verify, request_timeout, max_input_chars, force_disable_thinking,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             CONSISTENCY_TASK_TYPE,
@@ -1023,6 +1139,7 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
             1 if model["ssl_verify"] else 0,
             model["request_timeout"],
             model["max_input_chars"],
+            1 if model["force_disable_thinking"] else 0,
             created_at,
             created_at,
         ),

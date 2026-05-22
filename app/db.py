@@ -78,6 +78,7 @@ def init_db():
             ssl_verify INTEGER NOT NULL DEFAULT 0,
             request_timeout INTEGER NOT NULL DEFAULT 3600,
             max_input_chars INTEGER NOT NULL DEFAULT 80000,
+            force_disable_thinking INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'queued',
             progress INTEGER NOT NULL DEFAULT 0,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
@@ -97,6 +98,7 @@ def init_db():
     _ensure_column(db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")
     _ensure_column(db, "tasks", "document_meta_json", "TEXT")
     _ensure_column(db, "tasks", "ssl_verify", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(db, "tasks", "force_disable_thinking", "INTEGER NOT NULL DEFAULT 0")
     current_app.teardown_appcontext(close_db)
     db.commit()
 

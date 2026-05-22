@@ -122,7 +122,7 @@ def _normalize_provider(provider: dict) -> dict:
     }
 
 
-def _normalize_models(value) -> list[str]:
+def _normalize_models(value) -> list[dict]:
     if not isinstance(value, list):
         return []
     models = []
@@ -130,12 +130,19 @@ def _normalize_models(value) -> list[str]:
     for item in value:
         if isinstance(item, dict):
             model_name = str(item.get("model_name") or item.get("id") or "").strip()
+            force_disable_thinking = _normalize_bool(item.get("force_disable_thinking"), False)
         else:
             model_name = str(item or "").strip()
+            force_disable_thinking = False
         if not model_name or model_name in seen:
             continue
         seen.add(model_name)
-        models.append(model_name)
+        models.append(
+            {
+                "model_name": model_name,
+                "force_disable_thinking": force_disable_thinking,
+            }
+        )
     return models
 
 

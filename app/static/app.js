@@ -568,6 +568,427 @@ document.addEventListener("click", (event) => {
   }
 });
 
+let activeFetchModelForm = null;
+let fetchedModelCandidates = [];
+let fetchedModelSelection = new Set();
+let fetchedModelExistingSelection = new Set();
+
+function normalizeModelConfigs(value) {
+  const source = Array.isArray(value) ? value : [];
+  const models = [];
+  const seen = new Set();
+  source.forEach((item) => {
+    const modelName = String(item?.model_name || item?.id || item || "").trim();
+    if (!modelName || seen.has(modelName)) {
+      return;
+    }
+    seen.add(modelName);
+    models.push({
+      model_name: modelName,
+      force_disable_thinking: Boolean(item?.force_disable_thinking),
+    });
+  });
+  return models;
+}
+
+function parseModelConfigs(form) {
+  const hidden = form.querySelector("[data-model-configs]");
+  if (!(hidden instanceof HTMLInputElement) || !hidden.value) {
+    return [];
+  }
+  try {
+    return normalizeModelConfigs(JSON.parse(hidden.value));
+  } catch {
+    return [];
+  }
+}
+
+function collectModelConfigs(form) {
+  return normalizeModelConfigs(
+    Array.from(form.querySelectorAll("[data-model-row]")).map((row) => {
+      const input = row.querySelector("[data-model-name]");
+      const checkbox = row.querySelector("[data-model-thinking]");
+      return {
+        model_name: input instanceof HTMLInputElement ? input.value : "",
+        force_disable_thinking: checkbox instanceof HTMLInputElement && checkbox.checked,
+      };
+    }),
+  );
+}
+
+function writeModelConfigs(form, configs = collectModelConfigs(form)) {
+  const normalized = normalizeModelConfigs(configs);
+  const hidden = form.querySelector("[data-model-configs]");
+  const fallback = form.querySelector("[data-model-list-fallback]");
+  if (hidden instanceof HTMLInputElement) {
+    hidden.value = JSON.stringify(normalized);
+  }
+  if (fallback instanceof HTMLTextAreaElement) {
+    fallback.value = normalized.map((item) => item.model_name).join("\n");
+  }
+  updateModelSummary(form, normalized.length);
+  return normalized;
+}
+
+function updateModelSummary(form, count = collectModelConfigs(form).length) {
+  const summary = form.querySelector("[data-model-summary]");
+  if (summary) {
+    summary.textContent = `共 ${count} 个模型`;
+  }
+}
+
+function renderModelRows(form, configs) {
+  const body = form.querySelector("[data-model-rows]");
+  if (!body) {
+    return;
+  }
+  body.replaceChildren();
+  const rows = (Array.isArray(configs) ? configs : []).map((item) => ({
+    model_name: String(item?.model_name || item?.id || item || "").trim(),
+    force_disable_thinking: Boolean(item?.force_disable_thinking),
+  }));
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 3;
+    const empty = document.createElement("div");
+    empty.className = "model-editor-empty";
+    empty.textContent = "当前没有模型";
+    cell.appendChild(empty);
+    row.appendChild(cell);
+    body.appendChild(row);
+    writeModelConfigs(form, []);
+    return;
+  }
+
+  rows.forEach((model) => {
+    const row = document.createElement("tr");
+    row.dataset.modelRow = "1";
+
+    const nameCell = document.createElement("td");
+    const nameInput = document.createElement("input");
+    nameInput.className = "model-name-input";
+    nameInput.type = "text";
+    nameInput.dataset.modelName = "1";
+    nameInput.value = model.model_name;
+    nameInput.placeholder = "请输入模型名称";
+    nameCell.appendChild(nameInput);
+
+    const thinkingCell = document.createElement("td");
+    const thinkingLabel = document.createElement("label");
+    thinkingLabel.className = "model-thinking-toggle";
+    const thinkingCheckbox = document.createElement("input");
+    thinkingCheckbox.type = "checkbox";
+    thinkingCheckbox.dataset.modelThinking = "1";
+    thinkingCheckbox.checked = model.force_disable_thinking;
+    const thinkingText = document.createElement("span");
+    thinkingText.textContent = "关闭";
+    thinkingLabel.append(thinkingCheckbox, thinkingText);
+    thinkingCell.appendChild(thinkingLabel);
+
+    const actionCell = document.createElement("td");
+    actionCell.className = "right";
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "small-button danger";
+    deleteButton.type = "button";
+    deleteButton.dataset.modelRowDelete = "1";
+    deleteButton.textContent = "删除";
+    actionCell.appendChild(deleteButton);
+
+    row.append(nameCell, thinkingCell, actionCell);
+    body.appendChild(row);
+  });
+  writeModelConfigs(form, rows);
+}
+
+document.querySelectorAll(".provider-modal-form").forEach((form) => {
+  renderModelRows(form, parseModelConfigs(form));
+});
+
+function addModelRow(form) {
+  renderModelRows(form, [...collectModelConfigs(form), { model_name: "", force_disable_thinking: false }]);
+  const inputs = form.querySelectorAll("[data-model-name]");
+  const lastInput = inputs[inputs.length - 1];
+  window.setTimeout(() => lastInput?.focus());
+}
+
+function tidyModelRows(form) {
+  const configs = collectModelConfigs(form).sort((left, right) => {
+    return left.model_name.localeCompare(right.model_name);
+  });
+  renderModelRows(form, configs);
+  showToast(configs.length ? `模型列表已整理，保留 ${configs.length} 个模型。` : "当前没有可整理的模型。", "success");
+}
+
+function setFetchButtonLoading(button, loading) {
+  button.disabled = loading;
+  button.textContent = loading ? "拉取中..." : "拉取模型";
+}
+
+async function fetchModelsForForm(form, button) {
+  writeModelConfigs(form);
+  const apiBase = form.elements.api_base?.value?.trim() || "";
+  const apiKey = form.elements.api_key?.value?.trim() || "";
+  const proxyMode = form.elements.proxy_mode?.value || "direct";
+  const proxy = form.elements.proxy?.value?.trim() || "";
+  const requestTimeout = form.elements.request_timeout?.value || "30";
+  const sslVerify = form.elements.ssl_verify?.checked ? "on" : "off";
+  if (!apiBase) {
+    showToast("请先填写 API 地址。", "error");
+    return;
+  }
+  if (proxyMode === "custom" && !proxy) {
+    showToast("自定义代理模式需要填写代理地址。", "error");
+    return;
+  }
+
+  const params = new URLSearchParams({
+    api_base: apiBase,
+    proxy_mode: proxyMode,
+    request_timeout: requestTimeout,
+    ssl_verify: sslVerify,
+  });
+  if (apiKey) {
+    params.set("api_key", apiKey);
+  }
+  if (proxy) {
+    params.set("proxy", proxy);
+  }
+
+  setFetchButtonLoading(button, true);
+  try {
+    const response = await fetch(`${form.dataset.fetchModelsUrl}?${params.toString()}`, {
+      credentials: "same-origin",
+      headers: {
+        "Accept": "application/json",
+        "X-Requested-With": "fetch",
+      },
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "拉取模型失败");
+    }
+    openFetchModelPicker(form, result.fetched_models || []);
+    showToast(`已获取到 ${(result.fetched_models || []).length} 个模型。`, "success");
+  } catch (error) {
+    showToast(error?.message || "拉取模型失败。", "error");
+  } finally {
+    setFetchButtonLoading(button, false);
+  }
+}
+
+function filteredFetchedModels() {
+  const query = document.querySelector("[data-fetch-model-search]")?.value?.trim().toLowerCase() || "";
+  if (!query) {
+    return fetchedModelCandidates;
+  }
+  return fetchedModelCandidates.filter((model) => model.toLowerCase().includes(query));
+}
+
+function syncFetchedSelectAll(filtered = filteredFetchedModels()) {
+  const checkbox = document.querySelector("[data-fetch-model-select-all]");
+  if (!(checkbox instanceof HTMLInputElement)) {
+    return;
+  }
+  const selectedCount = filtered.filter((model) => fetchedModelSelection.has(model)).length;
+  checkbox.disabled = filtered.length === 0;
+  checkbox.checked = filtered.length > 0 && selectedCount === filtered.length;
+  checkbox.indeterminate = selectedCount > 0 && selectedCount < filtered.length;
+}
+
+function renderFetchModelPicker() {
+  const list = document.querySelector("[data-fetch-model-list]");
+  const summary = document.querySelector("[data-fetch-model-summary]");
+  if (!list || !summary) {
+    return;
+  }
+  const filtered = filteredFetchedModels();
+  summary.textContent = `共拉取 ${fetchedModelCandidates.length} 个模型，当前显示 ${filtered.length} 个，已选 ${fetchedModelSelection.size} 个`;
+  syncFetchedSelectAll(filtered);
+  list.replaceChildren();
+  if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.className = "model-editor-empty";
+    empty.textContent = "没有匹配的模型";
+    list.appendChild(empty);
+    return;
+  }
+  filtered.forEach((model) => {
+    const label = document.createElement("label");
+    label.className = `fetch-model-item${fetchedModelSelection.has(model) ? " is-selected" : ""}`;
+    const main = document.createElement("span");
+    main.className = "fetch-model-item-main";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.fetchModelItem = model;
+    checkbox.checked = fetchedModelSelection.has(model);
+    const name = document.createElement("span");
+    name.className = "fetch-model-name";
+    name.textContent = model;
+    main.append(checkbox, name);
+    label.appendChild(main);
+    if (fetchedModelExistingSelection.has(model)) {
+      const badge = document.createElement("span");
+      badge.className = "fetch-model-badge";
+      badge.textContent = "已在清单";
+      label.appendChild(badge);
+    }
+    list.appendChild(label);
+  });
+}
+
+function openFetchModelPicker(form, models) {
+  const currentModels = collectModelConfigs(form);
+  const currentNames = new Set(currentModels.map((item) => item.model_name));
+  fetchedModelCandidates = normalizeModelConfigs(models).map((item) => item.model_name);
+  fetchedModelExistingSelection = new Set(fetchedModelCandidates.filter((model) => currentNames.has(model)));
+  fetchedModelSelection = new Set(fetchedModelExistingSelection);
+  activeFetchModelForm = form;
+  const search = document.querySelector("[data-fetch-model-search]");
+  if (search instanceof HTMLInputElement) {
+    search.value = "";
+  }
+  renderFetchModelPicker();
+  openModal("fetch-model-modal");
+}
+
+function applyFetchedModelsSelection() {
+  if (!activeFetchModelForm) {
+    return;
+  }
+  const currentModels = collectModelConfigs(activeFetchModelForm);
+  const currentByName = new Map(currentModels.map((item) => [item.model_name, item]));
+  const fetchedSet = new Set(fetchedModelCandidates);
+  const nextModels = [];
+  const seen = new Set();
+
+  currentModels.forEach((model) => {
+    if (fetchedSet.has(model.model_name) && !fetchedModelSelection.has(model.model_name)) {
+      return;
+    }
+    seen.add(model.model_name);
+    nextModels.push(model);
+  });
+
+  fetchedModelCandidates.forEach((modelName) => {
+    if (!fetchedModelSelection.has(modelName) || seen.has(modelName)) {
+      return;
+    }
+    seen.add(modelName);
+    nextModels.push(currentByName.get(modelName) || { model_name: modelName, force_disable_thinking: false });
+  });
+
+  renderModelRows(activeFetchModelForm, nextModels);
+  const modal = document.getElementById("fetch-model-modal");
+  if (modal instanceof HTMLDialogElement && typeof modal.close === "function") {
+    modal.close();
+  } else {
+    modal?.removeAttribute("open");
+  }
+  showToast("模型列表已更新。", "success");
+}
+
+document.addEventListener("click", (event) => {
+  const addButton = event.target.closest("[data-model-row-add]");
+  if (addButton) {
+    event.preventDefault();
+    const form = addButton.closest(".provider-modal-form");
+    if (form) {
+      addModelRow(form);
+    }
+    return;
+  }
+
+  const tidyButton = event.target.closest("[data-model-list-tidy]");
+  if (tidyButton) {
+    event.preventDefault();
+    const form = tidyButton.closest(".provider-modal-form");
+    if (form) {
+      tidyModelRows(form);
+    }
+    return;
+  }
+
+  const deleteButton = event.target.closest("[data-model-row-delete]");
+  if (deleteButton) {
+    event.preventDefault();
+    const form = deleteButton.closest(".provider-modal-form");
+    const row = deleteButton.closest("[data-model-row]");
+    row?.remove();
+    if (form) {
+      writeModelConfigs(form);
+      if (!form.querySelector("[data-model-row]")) {
+        renderModelRows(form, []);
+      }
+    }
+    return;
+  }
+
+  const fetchButton = event.target.closest("[data-fetch-models]");
+  if (fetchButton) {
+    event.preventDefault();
+    const form = fetchButton.closest(".provider-modal-form");
+    if (form) {
+      fetchModelsForForm(form, fetchButton);
+    }
+    return;
+  }
+
+  const applyButton = event.target.closest("[data-fetch-model-apply]");
+  if (applyButton) {
+    event.preventDefault();
+    applyFetchedModelsSelection();
+  }
+});
+
+document.addEventListener("input", (event) => {
+  const input = event.target;
+  const form = input.closest?.(".provider-modal-form");
+  if (form && input.matches?.("[data-model-name]")) {
+    writeModelConfigs(form);
+    return;
+  }
+  if (input.matches?.("[data-fetch-model-search]")) {
+    renderFetchModelPicker();
+  }
+});
+
+document.addEventListener("change", (event) => {
+  const input = event.target;
+  const form = input.closest?.(".provider-modal-form");
+  if (form && input.matches?.("[data-model-thinking]")) {
+    writeModelConfigs(form);
+    return;
+  }
+  if (input.matches?.("[data-fetch-model-item]")) {
+    const modelName = input.dataset.fetchModelItem;
+    if (input.checked) {
+      fetchedModelSelection.add(modelName);
+    } else {
+      fetchedModelSelection.delete(modelName);
+    }
+    renderFetchModelPicker();
+    return;
+  }
+  if (input.matches?.("[data-fetch-model-select-all]")) {
+    filteredFetchedModels().forEach((modelName) => {
+      if (input.checked) {
+        fetchedModelSelection.add(modelName);
+      } else {
+        fetchedModelSelection.delete(modelName);
+      }
+    });
+    renderFetchModelPicker();
+  }
+});
+
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (form instanceof HTMLFormElement && form.classList.contains("provider-modal-form")) {
+    writeModelConfigs(form);
+  }
+});
+
 const LAST_MODEL_KEY = "document-check:last-model-id";
 
 function readLastModelId() {

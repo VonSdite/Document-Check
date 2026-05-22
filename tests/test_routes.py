@@ -1,9 +1,11 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from flask import Flask
 
+from app.config import load_local_config
 from app.db import get_setting, init_db, seed_defaults
 from app.routes import register_routes
 
@@ -75,6 +77,37 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"llm_stream_trace_enabled": True})
+
+    def test_admin_models_saves_model_force_disable_thinking(self):
+        response = self.client.post(
+            "/admin/models",
+            data={
+                "name": "测试提供商",
+                "api_base": "https://example.test/v1/chat/completions",
+                "api_key": "",
+                "proxy_mode": "direct",
+                "request_timeout": "30",
+                "max_input_chars": "80000",
+                "is_active": "on",
+                "model_configs": json.dumps(
+                    [
+                        {"model_name": "model-a", "force_disable_thinking": True},
+                        {"model_name": "model-b", "force_disable_thinking": False},
+                    ],
+                    ensure_ascii=False,
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        config = load_local_config(self.app.config["ROOT_DIR"])
+        self.assertEqual(
+            config["providers"][0]["models"],
+            [
+                {"model_name": "model-a", "force_disable_thinking": True},
+                {"model_name": "model-b", "force_disable_thinking": False},
+            ],
+        )
 
 
 if __name__ == "__main__":

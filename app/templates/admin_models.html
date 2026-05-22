@@ -9,7 +9,7 @@
       <h2>{{ title }}</h2>
       <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
     </div>
-    <form method="post" class="stack-form provider-modal-form" data-proxy-mode="{{ provider.proxy_mode if provider else 'direct' }}">
+    <form method="post" class="stack-form provider-modal-form" data-proxy-mode="{{ provider.proxy_mode if provider else 'direct' }}" data-fetch-models-url="{{ url_for('admin_fetch_models') }}">
       {% if provider %}<input type="hidden" name="provider_id" value="{{ provider.id }}">{% endif %}
       <div class="form-grid">
         <label>提供商名称<input name="name" value="{{ provider.name if provider else '' }}" placeholder="例如 OpenAI 兼容服务" required></label>
@@ -38,8 +38,43 @@
           <span class="help-tip" tabindex="0" data-tip="开启后校验 HTTPS 证书；默认关闭，适合自签名证书或内网服务。">?</span>
         </label>
       </div>
-      <label>模型列表<textarea name="models" rows="5" placeholder="每行一个模型名称" required>{% if provider %}{% for model in models if model.enabled %}{{ model.model_name }}
-{% endfor %}{% endif %}</textarea></label>
+      <div class="model-editor" data-model-editor>
+        <div class="model-editor-head">
+          <div>
+            <span class="field-with-help">
+              <span class="field-label">模型列表</span>
+              <span class="help-tip" tabindex="0" data-tip="每行模型会保存名称和是否强制关闭思考。关闭思考会在请求中附加 enable_thinking=false，适用于支持该参数的思考模型。">?</span>
+            </span>
+            <div class="subline">可手动新增，也可从当前 API 地址拉取后选择加入。</div>
+          </div>
+          <div class="model-editor-actions">
+            <button class="secondary-button small-button" type="button" data-model-list-tidy>整理</button>
+            <button class="secondary-button small-button" type="button" data-fetch-models>拉取模型</button>
+            <button class="primary-button small-button" type="button" data-model-row-add>新增模型</button>
+          </div>
+        </div>
+        <input type="hidden" name="model_configs" data-model-configs value='{{ models|tojson }}'>
+        <textarea name="models" data-model-list-fallback hidden>{% if provider %}{% for model in models if model.enabled %}{{ model.model_name }}
+{% endfor %}{% endif %}</textarea>
+        <div class="model-editor-summary" data-model-summary>共 0 个模型</div>
+        <div class="model-editor-table-wrap">
+          <table class="model-editor-table">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>
+                  <span class="table-heading-help">
+                    强制关闭思考
+                    <span class="help-tip" tabindex="0" data-tip="开启后，请求该模型时会附加 enable_thinking=false，用于关闭部分思考模型的思考输出或思考模式；不支持该参数的服务可能忽略或返回错误。">?</span>
+                  </span>
+                </th>
+                <th class="right">操作</th>
+              </tr>
+            </thead>
+            <tbody data-model-rows></tbody>
+          </table>
+        </div>
+      </div>
       <div class="form-actions modal-actions">
         <label class="switch-line"><input type="checkbox" name="is_active" {{ "checked" if not provider or provider.is_active else "" }}><span>启用</span></label>
         <div class="modal-action-buttons">
@@ -91,7 +126,10 @@
           <td>
             <div class="model-chips">
               {% for model in models_by_provider[provider.id] %}
-              <span class="chip">{{ model.model_name }}</span>
+              <span class="chip">
+                {{ model.model_name }}
+                {% if model.force_disable_thinking %}<span class="model-chip-meta">关闭思考</span>{% endif %}
+              </span>
               {% else %}
               <span class="muted">无模型</span>
               {% endfor %}
@@ -143,4 +181,31 @@
 {% for provider in providers %}
 {{ provider_modal("provider-modal-" ~ provider.id, "编辑提供商", provider, models_by_provider[provider.id]) }}
 {% endfor %}
+
+<dialog class="modal fetch-model-modal" id="fetch-model-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <h2>选择拉取模型</h2>
+        <div class="subline">已在当前清单的模型会自动勾选；取消勾选会从当前清单移除，未出现在本次拉取结果里的现有模型会保留。</div>
+      </div>
+      <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <div class="fetch-model-body">
+      <input class="fetch-model-search" type="search" data-fetch-model-search placeholder="搜索模型">
+      <div class="fetch-model-summary" data-fetch-model-summary>共拉取 0 个模型，已选 0 个</div>
+      <div class="fetch-model-list">
+        <label class="fetch-model-list-head">
+          <input type="checkbox" data-fetch-model-select-all>
+          <span>模型名称</span>
+        </label>
+        <div class="fetch-model-list-body" data-fetch-model-list></div>
+      </div>
+      <div class="form-actions modal-actions">
+        <button class="secondary-button" type="button" data-modal-close>取消</button>
+        <button class="primary-button" type="button" data-fetch-model-apply>加入当前清单</button>
+      </div>
+    </div>
+  </div>
+</dialog>
 {% endblock %}

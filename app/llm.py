@@ -41,6 +41,7 @@ def run_check(
     ssl_verify: bool = False,
     request_timeout: int = 3600,
     model_name: str,
+    force_disable_thinking: bool = False,
     check_name: str,
     prompt: str,
     document_text: str,
@@ -75,9 +76,11 @@ def run_check(
         ],
         "temperature": 0.2,
     }
+    if force_disable_thinking:
+        payload["enable_thinking"] = False
 
     logger.info(
-        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s prompt_chars=%s document_chars=%s",
+        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s document_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -86,6 +89,7 @@ def run_check(
         proxy_mode,
         ssl_verify,
         request_timeout,
+        force_disable_thinking,
         len(prompt),
         len(document_text),
     )

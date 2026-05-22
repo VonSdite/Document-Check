@@ -38,7 +38,7 @@
         <option value="">暂无可用模型</option>
         {% else %}
           {% for model in models %}
-          <option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}</option>
+          <option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}{{ "（关闭思考）" if model.force_disable_thinking else "" }}</option>
           {% endfor %}
         {% endif %}
       </select>
