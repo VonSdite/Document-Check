@@ -637,6 +637,21 @@ function updateModelSummary(form, count = collectModelConfigs(form).length) {
   }
 }
 
+function appendModelAddRow(body) {
+  const row = document.createElement("tr");
+  row.className = "model-editor-add-row";
+  const cell = document.createElement("td");
+  cell.colSpan = 3;
+  const button = document.createElement("button");
+  button.className = "model-editor-add-button";
+  button.type = "button";
+  button.dataset.modelRowAdd = "1";
+  button.textContent = "+ 新增模型";
+  cell.appendChild(button);
+  row.appendChild(cell);
+  body.appendChild(row);
+}
+
 function renderModelRows(form, configs) {
   const body = form.querySelector("[data-model-rows]");
   if (!body) {
@@ -647,19 +662,6 @@ function renderModelRows(form, configs) {
     model_name: String(item?.model_name || item?.id || item || "").trim(),
     force_disable_thinking: Boolean(item?.force_disable_thinking),
   }));
-  if (!rows.length) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 3;
-    const empty = document.createElement("div");
-    empty.className = "model-editor-empty";
-    empty.textContent = "当前没有模型";
-    cell.appendChild(empty);
-    row.appendChild(cell);
-    body.appendChild(row);
-    writeModelConfigs(form, []);
-    return;
-  }
 
   rows.forEach((model) => {
     const row = document.createElement("tr");
@@ -698,6 +700,7 @@ function renderModelRows(form, configs) {
     row.append(nameCell, thinkingCell, actionCell);
     body.appendChild(row);
   });
+  appendModelAddRow(body);
   writeModelConfigs(form, rows);
 }
 

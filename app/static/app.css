@@ -2092,6 +2092,31 @@ td {
   text-align: center;
 }
 
+.model-editor-add-row td {
+  padding: 0;
+}
+
+.model-editor-add-button {
+  width: 100%;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  background: #f8fbff;
+  color: var(--primary-strong);
+  font-size: 14px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.model-editor-add-button:hover,
+.model-editor-add-button:focus-visible {
+  background: #f0f6ff;
+  outline: none;
+}
+
 .model-name-input {
   width: 100%;
   min-width: 0;
