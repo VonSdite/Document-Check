@@ -2096,6 +2096,21 @@ td {
   padding: 0;
 }
 
+.model-editor-add-row.is-empty td {
+  background: #fbfdff;
+}
+
+.model-editor-empty-state {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 18px 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
 .model-editor-add-button {
   width: 100%;
   min-height: 48px;
@@ -2109,6 +2124,15 @@ td {
   font-size: 14px;
   font-weight: 850;
   cursor: pointer;
+}
+
+.model-editor-add-row.is-empty .model-editor-add-button {
+  width: auto;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 8px;
+  background: #fff;
 }
 
 .model-editor-add-button:hover,

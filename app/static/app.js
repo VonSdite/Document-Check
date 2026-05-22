@@ -633,13 +633,13 @@ function writeModelConfigs(form, configs = collectModelConfigs(form)) {
 function updateModelSummary(form, count = collectModelConfigs(form).length) {
   const summary = form.querySelector("[data-model-summary]");
   if (summary) {
-    summary.textContent = `共 ${count} 个模型`;
+    summary.textContent = count ? `共 ${count} 个模型` : "暂无模型";
   }
 }
 
-function appendModelAddRow(body) {
+function appendModelAddRow(body, { empty = false } = {}) {
   const row = document.createElement("tr");
-  row.className = "model-editor-add-row";
+  row.className = `model-editor-add-row${empty ? " is-empty" : ""}`;
   const cell = document.createElement("td");
   cell.colSpan = 3;
   const button = document.createElement("button");
@@ -647,7 +647,16 @@ function appendModelAddRow(body) {
   button.type = "button";
   button.dataset.modelRowAdd = "1";
   button.textContent = "+ 新增模型";
-  cell.appendChild(button);
+  if (empty) {
+    const emptyState = document.createElement("div");
+    emptyState.className = "model-editor-empty-state";
+    const text = document.createElement("span");
+    text.textContent = "暂无模型";
+    emptyState.append(text, button);
+    cell.appendChild(emptyState);
+  } else {
+    cell.appendChild(button);
+  }
   row.appendChild(cell);
   body.appendChild(row);
 }
@@ -662,6 +671,12 @@ function renderModelRows(form, configs) {
     model_name: String(item?.model_name || item?.id || item || "").trim(),
     force_disable_thinking: Boolean(item?.force_disable_thinking),
   }));
+
+  if (!rows.length) {
+    appendModelAddRow(body, { empty: true });
+    writeModelConfigs(form, rows);
+    return;
+  }
 
   rows.forEach((model) => {
     const row = document.createElement("tr");
