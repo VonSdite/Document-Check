@@ -77,7 +77,7 @@ def run_check(
         "temperature": 0.2,
     }
     if force_disable_thinking:
-        payload["enable_thinking"] = False
+        _disable_thinking_in_payload(payload)
 
     logger.info(
         "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s document_chars=%s",
@@ -244,6 +244,11 @@ def _chat_completions_endpoint(api_base: str) -> str:
             "例如 https://api.example.com/v1/chat/completions"
         )
     return endpoint
+
+
+def _disable_thinking_in_payload(payload: dict):
+    payload["enable_thinking"] = False
+    payload["chat_template_kwargs"] = {"enable_thinking": False}
 
 
 def _read_stream_response(

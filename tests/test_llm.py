@@ -257,7 +257,9 @@ class LLMResponseParsingTest(unittest.TestCase):
             )
 
         self.assertEqual(result, "完成")
-        self.assertIs(fake_session.calls[0][1]["json"]["enable_thinking"], False)
+        payload = fake_session.calls[0][1]["json"]
+        self.assertIs(payload["enable_thinking"], False)
+        self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
 
     def test_retries_llm_errors_twice_before_success(self):
         fake_session = FakeSession(
