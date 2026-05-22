@@ -2044,7 +2044,8 @@ td {
 
 .model-editor-table-wrap {
   max-height: min(42vh, 420px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #fff;
@@ -2052,7 +2053,7 @@ td {
 
 .model-editor-table {
   width: 100%;
-  min-width: 620px;
+  table-layout: fixed;
   border-collapse: collapse;
 }
 
@@ -2072,13 +2073,13 @@ td {
 
 .model-editor-table th:nth-child(2),
 .model-editor-table td:nth-child(2) {
-  width: 180px;
+  width: 150px;
   text-align: center;
 }
 
 .model-editor-table th:nth-child(3),
 .model-editor-table td:nth-child(3) {
-  width: 92px;
+  width: 82px;
 }
 
 .model-editor-table tbody tr:last-child td {
@@ -2093,6 +2094,8 @@ td {
 
 .model-name-input {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 13px;
 }
@@ -2105,6 +2108,7 @@ td {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .fetch-model-body {
@@ -2138,11 +2142,22 @@ td {
   position: sticky;
   top: 0;
   z-index: 1;
+  justify-content: flex-start;
   border-bottom: 1px solid var(--line);
   background: #f8fbff;
   color: var(--text);
   font-size: 13px;
   font-weight: 850;
+}
+
+.fetch-model-list-head input,
+.fetch-model-item-main input {
+  flex: 0 0 auto;
+}
+
+.fetch-model-list-head span {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .fetch-model-list-body {
@@ -2167,6 +2182,7 @@ td {
 }
 
 .fetch-model-item-main {
+  flex: 1 1 auto;
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -2174,7 +2190,10 @@ td {
 }
 
 .fetch-model-name {
+  flex: 1 1 auto;
+  min-width: 0;
   word-break: break-all;
+  overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   font-weight: 700;
