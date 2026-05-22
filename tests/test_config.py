@@ -10,6 +10,13 @@ from app.config import load_local_config
 
 
 class ProviderConfigTest(unittest.TestCase):
+    def test_default_admin_url_and_port(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["admin_url"], "/console")
+        self.assertEqual(config["server"]["port"], 31945)
+
     def test_provider_ssl_verify_defaults_to_false(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.local.json"

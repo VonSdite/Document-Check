@@ -55,7 +55,7 @@ $ReadmePath = Join-Path $DistDir "README-Windows.txt"
 7. 上传文件、SQLite 数据库和日志会保存在 instance/。
 
 如果使用默认端口和默认管理入口，浏览器没有自动打开时可手动访问：
-http://127.0.0.1:5000/_gate_ops_9f2c7a/login
+http://127.0.0.1:31945/console/login
 "@ | Set-Content -Path $ReadmePath -Encoding UTF8
 
 Write-Host ""

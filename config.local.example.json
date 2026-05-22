@@ -4,10 +4,10 @@
     "username": "admin",
     "password": "请替换为强密码"
   },
-  "admin_url": "/_gate_ops_9f2c7a",
+  "admin_url": "/console",
   "server": {
     "host": "0.0.0.0",
-    "port": 5000
+    "port": 31945
   },
   "providers": []
 }

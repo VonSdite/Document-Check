@@ -22,13 +22,13 @@ uv run python run.py
 用户面地址：
 
 ```text
-http://127.0.0.1:5000/
+http://127.0.0.1:31945/
 ```
 
 首次启动会自动生成 `config.local.json`，默认管理员为 `admin / admin123`，管理入口默认是：
 
 ```text
-http://127.0.0.1:5000/_gate_ops_9f2c7a/login
+http://127.0.0.1:31945/console/login
 ```
 
 上线或给他人使用前，请修改 `config.local.json` 中的管理员密码、`secret_key` 和 `admin_url`。
@@ -62,15 +62,15 @@ dist\windows\DocumentCheck.exe
     "username": "admin",
     "password": "请替换为强密码"
   },
-  "admin_url": "/_gate_ops_9f2c7a",
+  "admin_url": "/console",
   "server": {
     "host": "0.0.0.0",
-    "port": 5000
+    "port": 31945
   }
 }
 ```
 
-`admin_url` 可以写成 `/_gate_ops_9f2c7a` 或 `_gate_ops_9f2c7a`，启动时会自动规范为合法路径。临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
+`admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
 
 模型提供商配置也保存在 `config.local.json` 的 `providers` 列表中，管理页面的交互不变；新增、编辑、删除提供商都会直接更新本地配置文件，不写入 SQLite。
 
