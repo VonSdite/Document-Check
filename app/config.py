@@ -134,9 +134,10 @@ def _normalize_models(value) -> list[dict]:
         else:
             model_name = str(item or "").strip()
             force_disable_thinking = False
-        if not model_name or model_name in seen:
+        key = (model_name, force_disable_thinking)
+        if not model_name or key in seen:
             continue
-        seen.add(model_name)
+        seen.add(key)
         models.append(
             {
                 "model_name": model_name,

@@ -573,19 +573,25 @@ let fetchedModelCandidates = [];
 let fetchedModelSelection = new Set();
 let fetchedModelExistingSelection = new Set();
 
+function modelConfigKey(modelName, forceDisableThinking) {
+  return `${forceDisableThinking ? "1" : "0"}:${modelName}`;
+}
+
 function normalizeModelConfigs(value) {
   const source = Array.isArray(value) ? value : [];
   const models = [];
   const seen = new Set();
   source.forEach((item) => {
     const modelName = String(item?.model_name || item?.id || item || "").trim();
-    if (!modelName || seen.has(modelName)) {
+    const forceDisableThinking = Boolean(item?.force_disable_thinking);
+    const key = modelConfigKey(modelName, forceDisableThinking);
+    if (!modelName || seen.has(key)) {
       return;
     }
-    seen.add(modelName);
+    seen.add(key);
     models.push({
       model_name: modelName,
-      force_disable_thinking: Boolean(item?.force_disable_thinking),
+      force_disable_thinking: forceDisableThinking,
     });
   });
   return models;
@@ -732,7 +738,11 @@ function addModelRow(form) {
 
 function tidyModelRows(form) {
   const configs = collectModelConfigs(form).sort((left, right) => {
-    return left.model_name.localeCompare(right.model_name);
+    const nameOrder = left.model_name.localeCompare(right.model_name);
+    if (nameOrder !== 0) {
+      return nameOrder;
+    }
+    return Number(left.force_disable_thinking) - Number(right.force_disable_thinking);
   });
   renderModelRows(form, configs);
   showToast(configs.length ? `模型列表已整理，保留 ${configs.length} 个模型。` : "当前没有可整理的模型。", "success");
@@ -861,9 +871,11 @@ function renderFetchModelPicker() {
 
 function openFetchModelPicker(form, models) {
   const currentModels = collectModelConfigs(form);
-  const currentNames = new Set(currentModels.map((item) => item.model_name));
+  const currentDefaultNames = new Set(
+    currentModels.filter((item) => !item.force_disable_thinking).map((item) => item.model_name),
+  );
   fetchedModelCandidates = normalizeModelConfigs(models).map((item) => item.model_name);
-  fetchedModelExistingSelection = new Set(fetchedModelCandidates.filter((model) => currentNames.has(model)));
+  fetchedModelExistingSelection = new Set(fetchedModelCandidates.filter((model) => currentDefaultNames.has(model)));
   fetchedModelSelection = new Set(fetchedModelExistingSelection);
   activeFetchModelForm = form;
   const search = document.querySelector("[data-fetch-model-search]");
@@ -879,25 +891,32 @@ function applyFetchedModelsSelection() {
     return;
   }
   const currentModels = collectModelConfigs(activeFetchModelForm);
-  const currentByName = new Map(currentModels.map((item) => [item.model_name, item]));
+  const currentDefaultByName = new Map(
+    currentModels.filter((item) => !item.force_disable_thinking).map((item) => [item.model_name, item]),
+  );
   const fetchedSet = new Set(fetchedModelCandidates);
   const nextModels = [];
   const seen = new Set();
 
   currentModels.forEach((model) => {
-    if (fetchedSet.has(model.model_name) && !fetchedModelSelection.has(model.model_name)) {
+    if (
+      !model.force_disable_thinking &&
+      fetchedSet.has(model.model_name) &&
+      !fetchedModelSelection.has(model.model_name)
+    ) {
       return;
     }
-    seen.add(model.model_name);
+    seen.add(modelConfigKey(model.model_name, model.force_disable_thinking));
     nextModels.push(model);
   });
 
   fetchedModelCandidates.forEach((modelName) => {
-    if (!fetchedModelSelection.has(modelName) || seen.has(modelName)) {
+    const key = modelConfigKey(modelName, false);
+    if (!fetchedModelSelection.has(modelName) || seen.has(key)) {
       return;
     }
-    seen.add(modelName);
-    nextModels.push(currentByName.get(modelName) || { model_name: modelName, force_disable_thinking: false });
+    seen.add(key);
+    nextModels.push(currentDefaultByName.get(modelName) || { model_name: modelName, force_disable_thinking: false });
   });
 
   renderModelRows(activeFetchModelForm, nextModels);

@@ -542,7 +542,10 @@ def register_routes(app):
 
         providers = sorted(providers, key=lambda provider: (provider["updated_at"], provider["id"]), reverse=True)
         models_by_provider = {
-            provider["id"]: sorted(_provider_model_options(provider), key=lambda model: model["model_name"])
+            provider["id"]: sorted(
+                _provider_model_options(provider),
+                key=lambda model: (model["model_name"], model["force_disable_thinking"]),
+            )
             for provider in providers
         }
         return render_template("admin_models.html", providers=providers, models_by_provider=models_by_provider)
@@ -774,7 +777,7 @@ def get_enabled_models():
             continue
         for model_config in provider["models"]:
             models.append(_model_option(provider, model_config))
-    return sorted(models, key=lambda model: (model["provider_name"], model["model_name"]))
+    return sorted(models, key=lambda model: (model["provider_name"], model["model_name"], model["force_disable_thinking"]))
 
 
 def _load_providers() -> list[dict]:
@@ -857,13 +860,15 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
     seen = set()
     for config in configs:
         model_name = str(config.get("model_name") or "").strip()
-        if not model_name or model_name in seen:
+        force_disable_thinking = bool(config.get("force_disable_thinking"))
+        key = (model_name, force_disable_thinking)
+        if not model_name or key in seen:
             continue
-        seen.add(model_name)
+        seen.add(key)
         result.append(
             {
                 "model_name": model_name,
-                "force_disable_thinking": bool(config.get("force_disable_thinking")),
+                "force_disable_thinking": force_disable_thinking,
             }
         )
     return result
@@ -900,7 +905,7 @@ def _model_option(provider: dict, model_name) -> dict:
         model_name = str(model_name or "").strip()
         force_disable_thinking = False
     return {
-        "id": f"{provider['id']}:{model_name}",
+        "id": f"{provider['id']}:{1 if force_disable_thinking else 0}:{model_name}",
         "provider_id": provider["id"],
         "provider_name": provider["name"],
         "model_name": model_name,
@@ -923,13 +928,22 @@ def _is_chat_completions_endpoint(value: str) -> bool:
 def _find_enabled_model(model_id: str) -> dict | None:
     if ":" not in model_id:
         return None
-    provider_id, model_name = model_id.split(":", 1)
+    force_disable_thinking = None
+    parts = model_id.split(":", 2)
+    if len(parts) == 3 and parts[1] in {"0", "1"}:
+        provider_id, thinking_flag, model_name = parts
+        force_disable_thinking = thinking_flag == "1"
+    else:
+        provider_id, model_name = model_id.split(":", 1)
     for provider in _load_providers():
         if provider["id"] != provider_id or not provider["is_active"]:
             continue
         for model_config in provider["models"]:
-            if _model_config_name(model_config) == model_name:
-                return _model_option(provider, model_config)
+            option = _model_option(provider, model_config)
+            if option["model_name"] == model_name and (
+                force_disable_thinking is None or option["force_disable_thinking"] == force_disable_thinking
+            ):
+                return option
         return None
     return None
 

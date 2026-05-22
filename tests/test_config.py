@@ -137,6 +137,47 @@ class ProviderConfigTest(unittest.TestCase):
             ],
         )
 
+    def test_provider_models_allow_same_name_for_distinct_thinking_modes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.local.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "secret_key": "test",
+                        "admin": {"username": "admin", "password": "password"},
+                        "admin_url": "/admin",
+                        "server": {"host": "127.0.0.1", "port": 5000},
+                        "providers": [
+                            {
+                                "id": "provider-1",
+                                "name": "测试提供商",
+                                "api_base": "https://example.test/v1/chat/completions",
+                                "models": [
+                                    {"model_name": "same-model", "force_disable_thinking": False},
+                                    {"model_name": "same-model", "force_disable_thinking": True},
+                                    {"model_name": "same-model", "force_disable_thinking": False},
+                                    {"model_name": "same-model", "force_disable_thinking": True},
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(
+            config["providers"][0]["models"],
+            [
+                {"model_name": "same-model", "force_disable_thinking": False},
+                {"model_name": "same-model", "force_disable_thinking": True},
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
