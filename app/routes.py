@@ -71,6 +71,7 @@ def register_routes(app):
         user = get_ip_user(ip)
         username = user["username"] if user and user["username"] else ""
         return {
+            "platform_mode": _platform_enabled(),
             "status_labels": STATUS_LABELS,
             "nav_identity": f"{ip}-{username}" if username else ip,
             "task_type_label": task_type_label,
@@ -78,6 +79,12 @@ def register_routes(app):
 
     @app.route("/", methods=["GET", "POST"])
     def user_tasks():
+        if not _platform_enabled():
+            if request.method == "POST":
+                ip = client_ip()
+                return create_task_for_ip(ip, get_ip_user(ip), admin_created=True)
+            return _render_admin_tasks_page()
+
         ip = client_ip()
         user = get_ip_user(ip)
         if request.method == "POST":
@@ -116,6 +123,12 @@ def register_routes(app):
 
     @app.route("/tasks/new", methods=["GET", "POST"])
     def user_new_task():
+        if not _platform_enabled():
+            if request.method == "POST":
+                ip = client_ip()
+                return create_task_for_ip(ip, get_ip_user(ip), admin_created=True)
+            return redirect(url_for("user_tasks"))
+
         ip = client_ip()
         user = get_ip_user(ip)
         if user and user["is_disabled"]:
@@ -127,6 +140,12 @@ def register_routes(app):
 
     @app.route("/consistency", methods=["GET", "POST"])
     def user_consistency():
+        if not _platform_enabled():
+            if request.method == "POST":
+                ip = client_ip()
+                return create_consistency_task_for_ip(ip, get_ip_user(ip), admin_created=True)
+            return _render_admin_consistency_page()
+
         ip = client_ip()
         user = get_ip_user(ip)
         if request.method == "POST":
@@ -166,37 +185,37 @@ def register_routes(app):
 
     @app.get("/tasks/<int:task_id>")
     def user_task_detail(task_id):
-        task = _get_user_task(task_id)
+        task = _get_user_task_or_local_admin(task_id)
         return render_template(
             "task_detail.html",
-            mode="user",
+            mode="admin" if not _platform_enabled() else "user",
             task=task,
             results=_task_results(task),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
-            back_endpoint=_task_list_endpoint(False, task["task_type"]),
+            back_endpoint=_task_list_endpoint(not _platform_enabled(), task["task_type"]),
         )
 
     @app.get("/tasks/<int:task_id>/export")
     def user_export_task(task_id):
-        task = _get_user_task(task_id)
+        task = _get_user_task_or_local_admin(task_id)
         return _export_task_report(task)
 
     @app.get("/tasks/<int:task_id>/document")
     def user_download_task_document(task_id):
-        task = _get_user_task(task_id)
+        task = _get_user_task_or_local_admin(task_id)
         return _download_task_document(task, "user_task_detail")
 
     @app.post("/tasks/<int:task_id>/cancel")
     def user_cancel_task(task_id):
-        task = _get_user_task(task_id)
+        task = _get_user_task_or_local_admin(task_id)
         _cancel_task(task)
         flash("已提交取消请求。", "success")
         return redirect(_task_action_redirect("user_tasks"))
 
     @app.post("/tasks/<int:task_id>/delete")
     def user_delete_task(task_id):
-        task = _get_user_task(task_id)
+        task = _get_user_task_or_local_admin(task_id)
         if _delete_task(task):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(False, task["task_type"])))
@@ -205,6 +224,8 @@ def register_routes(app):
 
     @app.route(f"{admin_prefix}/login", methods=["GET", "POST"])
     def admin_login():
+        if not _platform_enabled():
+            return redirect(url_for("user_tasks"))
         if request.method == "POST":
             username = request.form.get("username", "")
             password = request.form.get("password", "")
@@ -221,6 +242,8 @@ def register_routes(app):
     @app.post(f"{admin_prefix}/logout")
     def admin_logout():
         session.pop("admin_logged_in", None)
+        if not _platform_enabled():
+            return redirect(url_for("user_tasks"))
         flash("管理员已退出。", "success")
         return redirect(url_for("admin_login"))
 
@@ -235,50 +258,7 @@ def register_routes(app):
         if request.method == "POST":
             ip = client_ip()
             return create_task_for_ip(ip, get_ip_user(ip), admin_created=True)
-
-        status = request.args.get("status", "")
-        ip = request.args.get("ip", "").strip()
-        page = _page_arg()
-        params = []
-        clauses = []
-        if status:
-            clauses.append("t.status = ?")
-            params.append(status)
-        if ip:
-            clauses.append("t.ip LIKE ?")
-            params.append(f"%{ip}%")
-        clauses.append("t.task_type = ?")
-        params.append(DOCUMENT_TASK_TYPE)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        total = get_db().execute(
-            f"SELECT COUNT(*) AS total FROM tasks t {where}",
-            tuple(params),
-        ).fetchone()["total"]
-        page = _bounded_page(page, total, TASKS_PER_PAGE)
-        rows = get_db().execute(
-            f"""
-            SELECT t.*, u.username AS current_username
-            FROM tasks t
-            LEFT JOIN ip_users u ON u.ip = t.ip
-            {where}
-            ORDER BY t.created_at DESC, t.id DESC
-            LIMIT ? OFFSET ?
-            """,
-            tuple(params + [TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE]),
-        ).fetchall()
-        return render_template(
-            "admin_tasks.html",
-            tasks=rows,
-            status=status,
-            ip=ip,
-            pagination=_pagination(page, total, TASKS_PER_PAGE),
-            totals=_admin_totals(DOCUMENT_TASK_TYPE),
-            global_concurrency=get_setting("global_concurrency", 3),
-            user_concurrency=get_setting("user_concurrency", 1),
-            check_items=get_enabled_check_items(),
-            models=get_enabled_models(),
-            active_nav=DOCUMENT_TASK_TYPE,
-        )
+        return _render_admin_tasks_page()
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
     @admin_required
@@ -294,48 +274,7 @@ def register_routes(app):
         if request.method == "POST":
             ip = client_ip()
             return create_consistency_task_for_ip(ip, get_ip_user(ip), admin_created=True)
-
-        status = request.args.get("status", "")
-        ip = request.args.get("ip", "").strip()
-        page = _page_arg()
-        params = []
-        clauses = []
-        if status:
-            clauses.append("t.status = ?")
-            params.append(status)
-        if ip:
-            clauses.append("t.ip LIKE ?")
-            params.append(f"%{ip}%")
-        clauses.append("t.task_type = ?")
-        params.append(CONSISTENCY_TASK_TYPE)
-        where = f"WHERE {' AND '.join(clauses)}"
-        total = get_db().execute(
-            f"SELECT COUNT(*) AS total FROM tasks t {where}",
-            tuple(params),
-        ).fetchone()["total"]
-        page = _bounded_page(page, total, TASKS_PER_PAGE)
-        rows = get_db().execute(
-            f"""
-            SELECT t.*, u.username AS current_username
-            FROM tasks t
-            LEFT JOIN ip_users u ON u.ip = t.ip
-            {where}
-            ORDER BY t.created_at DESC, t.id DESC
-            LIMIT ? OFFSET ?
-            """,
-            tuple(params + [TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE]),
-        ).fetchall()
-        return render_template(
-            "admin_consistency.html",
-            tasks=rows,
-            status=status,
-            ip=ip,
-            pagination=_pagination(page, total, TASKS_PER_PAGE),
-            totals=_admin_totals(CONSISTENCY_TASK_TYPE),
-            check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
-            models=get_enabled_models(),
-            active_nav=CONSISTENCY_TASK_TYPE,
-        )
+        return _render_admin_consistency_page()
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>")
     @admin_required
@@ -382,6 +321,9 @@ def register_routes(app):
     @app.route(f"{admin_prefix}/users", methods=["GET", "POST"])
     @admin_required
     def admin_users():
+        if not _platform_enabled():
+            abort(404)
+
         db = get_db()
         if request.method == "POST":
             action = request.form.get("action", "save")
@@ -759,8 +701,76 @@ def _form_bool(value) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _platform_enabled() -> bool:
+    return bool(current_app.config.get("PLATFORM", True))
+
+
 def get_ip_user(ip: str):
     return get_db().execute("SELECT * FROM ip_users WHERE ip = ?", (ip,)).fetchone()
+
+
+def _render_admin_tasks_page():
+    return _render_admin_task_list(
+        task_type=DOCUMENT_TASK_TYPE,
+        template_name="admin_tasks.html",
+        totals_task_type=DOCUMENT_TASK_TYPE,
+        check_items=get_enabled_check_items(),
+    )
+
+
+def _render_admin_consistency_page():
+    return _render_admin_task_list(
+        task_type=CONSISTENCY_TASK_TYPE,
+        template_name="admin_consistency.html",
+        totals_task_type=CONSISTENCY_TASK_TYPE,
+        check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
+    )
+
+
+def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_type: str, check_items):
+    status = request.args.get("status", "")
+    ip = request.args.get("ip", "").strip()
+    page = _page_arg()
+    params = []
+    clauses = []
+    if status:
+        clauses.append("t.status = ?")
+        params.append(status)
+    if ip:
+        clauses.append("t.ip LIKE ?")
+        params.append(f"%{ip}%")
+    clauses.append("t.task_type = ?")
+    params.append(task_type)
+    where = f"WHERE {' AND '.join(clauses)}"
+    total = get_db().execute(
+        f"SELECT COUNT(*) AS total FROM tasks t {where}",
+        tuple(params),
+    ).fetchone()["total"]
+    page = _bounded_page(page, total, TASKS_PER_PAGE)
+    rows = get_db().execute(
+        f"""
+        SELECT t.*, u.username AS current_username
+        FROM tasks t
+        LEFT JOIN ip_users u ON u.ip = t.ip
+        {where}
+        ORDER BY t.created_at DESC, t.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        tuple(params + [TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE]),
+    ).fetchall()
+    return render_template(
+        template_name,
+        tasks=rows,
+        status=status,
+        ip=ip,
+        pagination=_pagination(page, total, TASKS_PER_PAGE),
+        totals=_admin_totals(totals_task_type),
+        global_concurrency=get_setting("global_concurrency", 3),
+        user_concurrency=get_setting("user_concurrency", 1),
+        check_items=check_items,
+        models=get_enabled_models(),
+        active_nav=task_type,
+    )
 
 
 def _check_item_task_type(value: str | None) -> str:
@@ -1351,6 +1361,8 @@ def _persisted_file_info(file_info: dict) -> dict:
 def admin_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
+        if not _platform_enabled():
+            return view(*args, **kwargs)
         if not session.get("admin_logged_in"):
             return redirect(url_for("admin_login"))
         return view(*args, **kwargs)
@@ -1386,6 +1398,12 @@ def _get_user_task(task_id: int):
     if task is None:
         abort(404)
     return task
+
+
+def _get_user_task_or_local_admin(task_id: int):
+    if not _platform_enabled():
+        return _get_task_or_404(task_id)
+    return _get_user_task(task_id)
 
 
 def _cancel_task(task):

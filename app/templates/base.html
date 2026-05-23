@@ -8,10 +8,10 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
-  {% set is_admin = request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login' %}
+  {% set is_admin = (not platform_mode) or (request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login') %}
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="{{ url_for('admin_tasks') if is_admin else url_for('user_tasks') }}">
+      <a class="brand" href="{{ url_for('admin_tasks') if platform_mode and is_admin else url_for('user_tasks') }}">
         <span class="brand-mark">文</span>
         <span>
           <strong>文档智能门禁</strong>
@@ -19,17 +19,21 @@
       </a>
       {% if is_admin %}
       <nav class="nav">
-        <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_dashboard', 'admin_tasks', 'admin_new_task'] else '' }}">单文档检查</a>
-        <a href="{{ url_for('admin_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint == 'admin_consistency' else '' }}">多文档对照检查</a>
+        <a href="{{ url_for('admin_tasks') if platform_mode else url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_dashboard', 'admin_tasks', 'admin_new_task', 'user_tasks'] else '' }}">单文档检查</a>
+        <a href="{{ url_for('admin_consistency') if platform_mode else url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}">多文档对照检查</a>
+        {% if platform_mode %}
         <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户管理</a>
+        {% endif %}
         <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型管理</a>
         <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] else '' }}">系统设置</a>
       </nav>
       <div class="nav-identity">{{ nav_identity }}</div>
+      {% if platform_mode %}
       <div class="admin-tag">管理员</div>
       <form class="logout-form" method="post" action="{{ url_for('admin_logout') }}">
         <button class="logout-button" type="submit">退出</button>
       </form>
+      {% endif %}
       {% else %}
       <nav class="nav">
         <a href="{{ url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['user_tasks', 'user_new_task'] else '' }}">单文档检查</a>

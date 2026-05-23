@@ -20,10 +20,11 @@ def create_app():
     app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True)
     app.config.update(
         SECRET_KEY=local_config["secret_key"],
+        PLATFORM=local_config["platform"],
         ADMIN_USERNAME=local_config["admin"]["username"],
         ADMIN_PASSWORD=local_config["admin"]["password"],
         ADMIN_URL=local_config["admin_url"],
-        LISTEN_HOST=local_config["server"]["host"],
+        LISTEN_HOST=local_config["server"]["host"] if local_config["platform"] else "127.0.0.1",
         LISTEN_PORT=local_config["server"]["port"],
         ROOT_DIR=root_dir,
         DATABASE=str(root_dir / "instance" / "document_check.sqlite3"),

@@ -53,10 +53,11 @@ dist\windows\DocumentCheck.exe
 
 ## 本地配置
 
-`config.local.json` 支持配置管理入口、监听地址和端口：
+`config.local.json` 支持配置运行模式、管理入口、监听地址和端口：
 
 ```json
 {
+  "platform": true,
   "secret_key": "请替换为随机长字符串",
   "admin": {
     "username": "admin",
@@ -70,7 +71,9 @@ dist\windows\DocumentCheck.exe
 }
 ```
 
-`admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
+`platform` 默认为 `true`，此时保持平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。设置为 `false` 时进入本机模式：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录，不显示用户管理入口；该模式下 `HOST` 环境变量会被忽略，`PORT` 仍可临时覆盖端口。
+
+`admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。平台服务模式下临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
 
 模型提供商配置也保存在 `config.local.json` 的 `providers` 列表中，管理页面的交互不变；新增、编辑、删除提供商都会直接更新本地配置文件，不写入 SQLite。
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 DEFAULT_ADMIN_URL = "/console"
+DEFAULT_PLATFORM = True
 DEFAULT_LISTEN_HOST = "0.0.0.0"
 DEFAULT_LISTEN_PORT = 31945
 DEFAULT_REQUEST_TIMEOUT = 3600
@@ -56,6 +57,7 @@ def save_local_config(root_dir: Path, config: dict) -> dict:
 
 def _default_config() -> dict:
     return {
+        "platform": DEFAULT_PLATFORM,
         "secret_key": secrets.token_urlsafe(32),
         "admin": {
             "username": "admin",
@@ -71,6 +73,7 @@ def _default_config() -> dict:
 
 
 def _normalize_config(config: dict) -> dict:
+    config["platform"] = _normalize_bool(config.get("platform"), DEFAULT_PLATFORM)
     config.setdefault("secret_key", secrets.token_urlsafe(32))
     config.setdefault("admin", {})
     config["admin"].setdefault("username", "admin")

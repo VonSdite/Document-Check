@@ -55,6 +55,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def _logout_test_client(self):
+        with self.client.session_transaction() as session:
+            session.clear()
+
     def _configure_provider(self):
         root_dir = Path(self.app.config["ROOT_DIR"])
         config = load_local_config(root_dir)
@@ -123,6 +127,44 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("单文档检查-提示词设置", html)
         self.assertIn("多文档对照检查-提示词设置", html)
         self.assertIn("consistency_check", html)
+
+    def test_platform_mode_requires_admin_login(self):
+        self._logout_test_client()
+
+        response = self.client.get("/admin/models")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/admin/login"))
+
+    def test_local_mode_root_shows_admin_view_without_login(self):
+        self.app.config["PLATFORM"] = False
+        self._logout_test_client()
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("单文档检查任务", html)
+        self.assertIn("模型管理", html)
+        self.assertNotIn("用户管理", html)
+        self.assertNotIn("退出", html)
+
+    def test_local_mode_admin_pages_do_not_require_login(self):
+        self.app.config["PLATFORM"] = False
+        self._logout_test_client()
+
+        response = self.client.get("/admin/models")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("模型管理", response.get_data(as_text=True))
+
+    def test_local_mode_hides_user_management_route(self):
+        self.app.config["PLATFORM"] = False
+        self._logout_test_client()
+
+        response = self.client.get("/admin/users")
+
+        self.assertEqual(response.status_code, 404)
 
     def test_admin_models_saves_model_force_disable_thinking(self):
         response = self.client.post(
