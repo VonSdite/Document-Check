@@ -719,9 +719,9 @@ def register_routes(app):
             check_item_groups=[
                 {
                     "task_type": DOCUMENT_TASK_TYPE,
-                    "title": "文档检查-提示词设置",
+                    "title": "单文档检查-提示词设置",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除。",
-                    "new_title": "新增文档检查项",
+                    "new_title": "新增单文档检查项",
                     "name_placeholder": "例如：术语一致性检查",
                     "description_placeholder": "用于向用户说明该检查项的范围",
                     "prompt_placeholder": "描述该检查项的审查角色、关注范围和输出要求",
@@ -730,11 +730,11 @@ def register_routes(app):
                 },
                 {
                     "task_type": CONSISTENCY_TASK_TYPE,
-                    "title": "跨文档一致性检查-提示词设置",
-                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨文档任务时可多选。",
-                    "new_title": "新增跨文档检查项",
+                    "title": "多文档对照检查-提示词设置",
+                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。",
+                    "new_title": "新增多文档对照项",
                     "name_placeholder": "例如：关键参数一致性检查",
-                    "description_placeholder": "用于说明该跨文档检查项的比对范围",
+                    "description_placeholder": "用于说明该多文档对照项的比对范围",
                     "prompt_placeholder": "描述素材与资料的比对规则、关注范围和输出要求",
                     "items": consistency_check_items,
                     "default_check_codes": default_check_item_codes(CONSISTENCY_TASK_TYPE),
@@ -1180,11 +1180,11 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
 
     check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
     if not check_ids:
-        flash("请至少选择一个跨文档检查项。", "error")
+        flash("请至少选择一个多文档对照项。", "error")
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
     check_snapshots = _enabled_check_item_snapshots(db, check_ids, CONSISTENCY_TASK_TYPE)
     if len(check_snapshots) != len(set(check_ids)):
-        flash("请选择当前可用的跨文档检查项。", "error")
+        flash("请选择当前可用的多文档对照项。", "error")
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     model_id = request.form.get("model_id", "")
@@ -1231,7 +1231,7 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
     all_files = master_files + related_files
     first_file = all_files[0]
     file_size = sum(file_info["file_size"] for file_info in all_files)
-    original_filename = f"跨文档一致性检查：素材{len(master_files)}个 / 资料{len(related_files)}个"
+    original_filename = f"多文档对照检查：素材{len(master_files)}个 / 资料{len(related_files)}个"
     username = user["username"] if user and user["username"] else None
 
     db.execute(

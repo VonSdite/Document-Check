@@ -218,7 +218,7 @@ class TaskExecutionTest(unittest.TestCase):
                 status, progress, created_at, updated_at
             )
             VALUES (
-                ?, '127.0.0.1', '跨文档一致性检查：素材1个 / 资料1个', 'master.txt', '多文档', 1,
+                ?, '127.0.0.1', '多文档对照检查：素材1个 / 资料1个', 'master.txt', '多文档', 1,
                 '# 素材文档\n素材参数 10A\n\n# 资料\n资料参数 12A', ?, ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
                 'running', 0, ?, ?
             )
@@ -263,7 +263,7 @@ class TaskExecutionTest(unittest.TestCase):
         db.execute(
             """
             INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
-            VALUES (?, 'consistency-cross-document', '跨文档一致性检查', '', '默认跨文档提示词', 1, 10, ?, ?)
+            VALUES (?, 'consistency-cross-document', '多文档对照检查', '', '默认多文档对照提示词', 1, 10, ?, ?)
             """,
             (CONSISTENCY_TASK_TYPE, created_at, created_at),
         )
@@ -275,7 +275,7 @@ class TaskExecutionTest(unittest.TestCase):
                 status, progress, created_at, updated_at
             )
             VALUES (
-                ?, '127.0.0.1', '跨文档一致性检查：素材1个 / 资料1个', 'master.txt', '多文档', 1,
+                ?, '127.0.0.1', '多文档对照检查：素材1个 / 资料1个', 'master.txt', '多文档', 1,
                 '# 素材文档\n素材参数 10A\n\n# 资料\n资料参数 12A', ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
                 'running', 0, ?, ?
             )
@@ -298,8 +298,8 @@ class TaskExecutionTest(unittest.TestCase):
         with patch("app.tasks.run_check", side_effect=fake_run_check):
             TaskScheduler(self.app)._run_task(task_id)
 
-        self.assertEqual(calls[0]["check_name"], "跨文档一致性检查")
-        self.assertEqual(calls[0]["prompt"], "默认跨文档提示词")
+        self.assertEqual(calls[0]["check_name"], "多文档对照检查")
+        self.assertEqual(calls[0]["prompt"], "默认多文档对照提示词")
 
 
 if __name__ == "__main__":

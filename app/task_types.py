@@ -7,12 +7,12 @@ CONSISTENCY_MAX_MATERIAL_FILES = 5
 CONSISTENCY_MAX_DATA_FILES = 3
 
 TASK_TYPE_LABELS = {
-    DOCUMENT_TASK_TYPE: "文档检查",
-    CONSISTENCY_TASK_TYPE: "跨文档一致性检查",
+    DOCUMENT_TASK_TYPE: "单文档检查",
+    CONSISTENCY_TASK_TYPE: "多文档对照检查",
 }
 
 def task_type_label(task_type: str | None) -> str:
-    return TASK_TYPE_LABELS.get(task_type or DOCUMENT_TASK_TYPE, "文档检查")
+    return TASK_TYPE_LABELS.get(task_type or DOCUMENT_TASK_TYPE, "单文档检查")
 
 
 def document_groups_from_meta(raw: str | None) -> list[dict]:

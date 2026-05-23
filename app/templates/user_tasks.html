@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}文档检查 - 文档智能门禁{% endblock %}
+{% block title %}单文档检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
 {% set user_disabled = user and user.is_disabled %}
 {% set submit_disabled = user_disabled or not models or not check_items %}
 <form method="post" enctype="multipart/form-data" class="panel create-panel">
   <div class="panel-head compact-head">
-    <h1>创建文档检查</h1>
+    <h1>创建单文档检查</h1>
     {% if user_disabled %}
     <span class="status-pill status-failed">已禁用</span>
     {% endif %}

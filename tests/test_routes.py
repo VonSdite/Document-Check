@@ -120,8 +120,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("文档检查-提示词设置", html)
-        self.assertIn("跨文档一致性检查-提示词设置", html)
+        self.assertIn("单文档检查-提示词设置", html)
+        self.assertIn("多文档对照检查-提示词设置", html)
         self.assertIn("consistency_check", html)
 
     def test_admin_models_saves_model_force_disable_thinking(self):
