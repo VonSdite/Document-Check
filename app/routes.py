@@ -1158,7 +1158,7 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
     all_files = master_files + related_files
     first_file = all_files[0]
     file_size = sum(file_info["file_size"] for file_info in all_files)
-    original_filename = f"一致性检查：素材{len(master_files)}个 / 资料{len(related_files)}个"
+    original_filename = f"跨文档一致性检查：素材{len(master_files)}个 / 资料{len(related_files)}个"
     username = user["username"] if user and user["username"] else None
 
     db.execute(

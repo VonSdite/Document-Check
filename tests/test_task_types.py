@@ -33,7 +33,7 @@ class TaskTypesTest(unittest.TestCase):
         self.assertEqual(groups[0]["files"][0]["original_filename"], "a.txt")
 
     def test_task_type_label_for_consistency(self):
-        self.assertEqual(task_type_label(CONSISTENCY_TASK_TYPE), "一致性检查")
+        self.assertEqual(task_type_label(CONSISTENCY_TASK_TYPE), "跨文档一致性检查")
 
     def test_extracts_grouped_consistency_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:

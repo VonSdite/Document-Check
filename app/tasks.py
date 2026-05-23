@@ -205,7 +205,7 @@ class TaskScheduler:
 def _extract_consistency_document_text(app, task) -> str:
     groups = document_groups_from_meta(task["document_meta_json"])
     if not groups:
-        raise RuntimeError("一致性检查缺少文档组信息")
+        raise RuntimeError("跨文档一致性检查缺少文档组信息")
 
     upload_folder = Path(app.config["UPLOAD_FOLDER"])
     sections = []

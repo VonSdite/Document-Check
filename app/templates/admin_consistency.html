@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}一致性检查 - 文档智能门禁{% endblock %}
+{% block title %}跨文档一致性检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
 {% set submit_disabled = not models %}
 <form method="post" enctype="multipart/form-data" class="panel create-panel">
   <div class="panel-head compact-head">
-    <h1>创建一致性检查</h1>
+    <h1>创建跨文档一致性检查</h1>
   </div>
 
   <div class="consistency-form-grid">
@@ -77,7 +77,7 @@
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
-    <h2>一致性检查任务</h2>
+    <h2>跨文档一致性检查任务</h2>
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
       <span class="refresh-dot" aria-hidden="true"></span>
       <span data-refresh-label>刷新中</span>
