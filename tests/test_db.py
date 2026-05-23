@@ -7,11 +7,13 @@ from flask import Flask
 from app.db import (
     DEFAULT_CHECK_ITEMS_BY_CODE,
     default_check_item_codes,
+    get_bool_setting,
     get_db,
     get_setting,
     init_db,
     reset_default_check_item_prompt,
     seed_defaults,
+    set_setting,
 )
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
 from app.routes import _next_check_item_sort_order, _reorder_check_items
@@ -86,6 +88,11 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
     def test_llm_stream_trace_is_disabled_by_default(self):
         self.assertFalse(get_setting("llm_stream_trace_enabled"))
+
+    def test_bool_setting_treats_text_false_as_disabled(self):
+        set_setting("llm_stream_trace_enabled", "false")
+
+        self.assertFalse(get_bool_setting("llm_stream_trace_enabled", False))
 
     def test_default_check_items_are_grouped_by_task_type(self):
         db = get_db()

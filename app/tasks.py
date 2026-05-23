@@ -4,7 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .db import get_db, get_setting, now_text
+from .db import get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
 from .llm import LLMError, run_check
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, document_groups_from_meta
@@ -167,7 +167,7 @@ class TaskScheduler:
                     check_items,
                     document_text,
                     max_workers=max_workers,
-                    stream_trace_enabled=bool(get_setting("llm_stream_trace_enabled", False)),
+                    stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                 )
                 if _cancel_requested(db, task_id):
                     raise TaskCanceled

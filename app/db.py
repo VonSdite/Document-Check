@@ -138,6 +138,21 @@ def get_setting(key: str, default=None):
         return default
 
 
+def get_bool_setting(key: str, default: bool = False) -> bool:
+    value = get_setting(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return default
+
+
 DEFAULT_DOCUMENT_CHECK_ITEMS = (
     {
         "code": "compliance",

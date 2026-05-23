@@ -4,11 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from bs4 import BeautifulSoup
 from flask import Flask
 from openpyxl import Workbook
 
 from app.config import load_local_config, save_local_config
-from app.db import get_db, get_setting, init_db, seed_defaults
+from app.db import get_db, get_setting, init_db, seed_defaults, set_setting
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
 
@@ -112,6 +113,29 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.get_json(), {"llm_stream_trace_enabled": True})
         with self.app.app_context():
             self.assertTrue(get_setting("llm_stream_trace_enabled"))
+
+    def test_diagnostics_toggle_is_unchecked_by_default(self):
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        toggle = soup.find("input", {"name": "llm_stream_trace_enabled"})
+        self.assertIsNotNone(toggle)
+        self.assertEqual(toggle.get("data-saved-checked"), "false")
+        self.assertIsNone(toggle.get("checked"))
+
+    def test_diagnostics_toggle_treats_text_false_as_unchecked(self):
+        with self.app.app_context():
+            set_setting("llm_stream_trace_enabled", "false")
+
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        toggle = soup.find("input", {"name": "llm_stream_trace_enabled"})
+        self.assertIsNotNone(toggle)
+        self.assertEqual(toggle.get("data-saved-checked"), "false")
+        self.assertIsNone(toggle.get("checked"))
 
     def test_diagnostics_fetch_can_disable_setting(self):
         self.client.post(

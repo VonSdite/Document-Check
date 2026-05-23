@@ -25,6 +25,7 @@ from flask import (
 from .config import load_local_config, save_local_config
 from .db import (
     default_check_item_codes,
+    get_bool_setting,
     get_db,
     get_setting,
     now_text,
@@ -697,7 +698,7 @@ def register_routes(app):
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
-            llm_stream_trace_enabled=get_setting("llm_stream_trace_enabled", False),
+            llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
         )
 
 
