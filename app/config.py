@@ -8,7 +8,7 @@ import yaml
 
 
 DEFAULT_ADMIN_URL = "/console"
-DEFAULT_PLATFORM = True
+DEFAULT_PLATFORM = False
 DEFAULT_LISTEN_HOST = "0.0.0.0"
 DEFAULT_LOCAL_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 31945
@@ -20,10 +20,10 @@ _CONFIG_LOCK = threading.Lock()
 CONFIG_FILENAME = "config.yaml"
 
 
-def load_local_config(root_dir: Path, *, default_platform: bool = DEFAULT_PLATFORM) -> dict:
+def load_local_config(root_dir: Path) -> dict:
     config_path = root_dir / CONFIG_FILENAME
     if not config_path.exists():
-        config = _default_config(default_platform)
+        config = _default_config()
         _write_config(config_path, config)
         return config
 
@@ -48,9 +48,9 @@ def save_local_config(root_dir: Path, config: dict) -> dict:
         return config
 
 
-def _default_config(platform: bool = DEFAULT_PLATFORM) -> dict:
+def _default_config() -> dict:
     return {
-        "platform": platform,
+        "platform": DEFAULT_PLATFORM,
         "secret_key": secrets.token_urlsafe(32),
         "admin": {
             "username": "admin",
@@ -58,7 +58,7 @@ def _default_config(platform: bool = DEFAULT_PLATFORM) -> dict:
         },
         "admin_url": DEFAULT_ADMIN_URL,
         "server": {
-            "host": DEFAULT_LISTEN_HOST if platform else DEFAULT_LOCAL_LISTEN_HOST,
+            "host": DEFAULT_LISTEN_HOST if DEFAULT_PLATFORM else DEFAULT_LOCAL_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
         },
         "providers": [],
@@ -81,7 +81,8 @@ def _normalize_config(config: dict) -> dict:
     config["admin"].setdefault("password", "admin123")
     config["admin_url"] = _normalize_admin_url(config.get("admin_url", DEFAULT_ADMIN_URL))
     config.setdefault("server", {})
-    config["server"].setdefault("host", DEFAULT_LISTEN_HOST)
+    default_host = DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
+    config["server"].setdefault("host", default_host)
     config["server"]["port"] = _normalize_port(config["server"].get("port", DEFAULT_LISTEN_PORT))
     config["providers"] = _normalize_providers(config.get("providers", []))
     return config

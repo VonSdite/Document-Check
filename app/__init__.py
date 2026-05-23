@@ -15,7 +15,7 @@ from .tasks import TaskScheduler
 
 def create_app():
     root_dir = _runtime_root_dir()
-    local_config = load_local_config(root_dir, default_platform=not getattr(sys, "frozen", False))
+    local_config = load_local_config(root_dir)
 
     app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True)
     app.config.update(

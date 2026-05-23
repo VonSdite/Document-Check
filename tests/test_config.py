@@ -24,8 +24,9 @@ class ProviderConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = load_local_config(Path(temp_dir))
 
-        self.assertTrue(config["platform"])
+        self.assertFalse(config["platform"])
         self.assertEqual(config["admin_url"], "/console")
+        self.assertEqual(config["server"]["host"], "127.0.0.1")
         self.assertEqual(config["server"]["port"], 31945)
 
     def test_default_config_uses_yaml_filename(self):
@@ -79,12 +80,10 @@ class ProviderConfigTest(unittest.TestCase):
             finally:
                 created_app.extensions["task_scheduler"].stop()
 
-    def test_frozen_app_without_config_defaults_to_non_platform(self):
+    def test_app_without_config_defaults_to_non_platform(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            executable = Path(temp_dir) / "DocumentCheck.exe"
             with (
-                patch.object(sys, "frozen", True, create=True),
-                patch.object(sys, "executable", str(executable)),
+                patch("app._runtime_root_dir", return_value=Path(temp_dir)),
                 patch("app._configure_logging"),
             ):
                 created_app = create_app()
