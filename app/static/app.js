@@ -372,6 +372,7 @@ function moveCheckItemPair(row, reference) {
 function saveCheckItemOrder(table) {
   const formData = new FormData();
   formData.append("action", "reorder_check_items");
+  formData.append("task_type", table.dataset.checkItemTaskType || "document_check");
   table.querySelectorAll("[data-check-item-row]").forEach((row) => {
     formData.append("item_ids", row.dataset.checkItemId);
   });
@@ -419,7 +420,11 @@ document.addEventListener("dragover", (event) => {
     return;
   }
   const targetRow = event.target.closest("[data-check-item-row]");
-  if (!targetRow || targetRow === draggedCheckItemRow) {
+  if (
+    !targetRow ||
+    targetRow === draggedCheckItemRow ||
+    targetRow.closest("[data-check-item-table]") !== draggedCheckItemRow.closest("[data-check-item-table]")
+  ) {
     return;
   }
   event.preventDefault();
@@ -432,7 +437,12 @@ document.addEventListener("drop", (event) => {
   }
   const targetRow = event.target.closest("[data-check-item-row]");
   const table = draggedCheckItemRow.closest("[data-check-item-table]");
-  if (!targetRow || targetRow === draggedCheckItemRow || !table) {
+  if (
+    !targetRow ||
+    targetRow === draggedCheckItemRow ||
+    !table ||
+    targetRow.closest("[data-check-item-table]") !== table
+  ) {
     return;
   }
   event.preventDefault();

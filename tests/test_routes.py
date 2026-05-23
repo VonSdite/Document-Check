@@ -9,6 +9,7 @@ from flask import Flask
 from app.config import load_local_config, save_local_config
 from app.db import get_db, get_setting, init_db, seed_defaults
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
+from app.task_types import CONSISTENCY_TASK_TYPE
 
 
 class AdminSettingsRouteTest(unittest.TestCase):
@@ -99,6 +100,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"llm_stream_trace_enabled": True})
+
+    def test_admin_settings_shows_document_and_consistency_prompt_groups(self):
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("文档检查-提示词设置", html)
+        self.assertIn("跨文档一致性检查-提示词设置", html)
+        self.assertIn("consistency_check", html)
 
     def test_admin_models_saves_model_force_disable_thinking(self):
         response = self.client.post(
@@ -193,6 +203,35 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertFalse(_find_enabled_model(by_mode[False]["id"])["force_disable_thinking"])
             self.assertTrue(_find_enabled_model(by_mode[True]["id"])["force_disable_thinking"])
 
+    def test_admin_settings_creates_consistency_check_item(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "create_check_item",
+                "task_type": CONSISTENCY_TASK_TYPE,
+                "name": "遗漏内容检查",
+                "description": "检查资料是否遗漏素材关键内容",
+                "prompt": "只检查资料遗漏。",
+                "enabled": "on",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            item = get_db().execute(
+                """
+                SELECT task_type, code, name, description, prompt, enabled
+                FROM check_items
+                WHERE name = ?
+                """,
+                ("遗漏内容检查",),
+            ).fetchone()
+        self.assertEqual(item["task_type"], CONSISTENCY_TASK_TYPE)
+        self.assertTrue(item["code"].startswith("custom-consistency-"))
+        self.assertEqual(item["description"], "检查资料是否遗漏素材关键内容")
+        self.assertEqual(item["prompt"], "只检查资料遗漏。")
+        self.assertEqual(item["enabled"], 1)
+
     def test_upload_destination_uses_unique_name_for_same_second_uploads(self):
         with self.app.app_context():
             first_name, _ = _upload_destination("报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt")
@@ -259,12 +298,17 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_create_consistency_task_saves_combined_document_text(self):
         self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id, code, name, prompt FROM check_items WHERE code = 'consistency-cross-document'"
+            ).fetchone()
 
         response = self.client.post(
             "/consistency",
             data={
                 "master_documents": (io.BytesIO("素材参数 10A".encode("utf-8")), "master.txt"),
                 "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
+                "checks": [str(item["id"])],
                 "model_id": "provider-1:0:model-a",
             },
             content_type="multipart/form-data",
@@ -272,10 +316,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute("SELECT task_type, document_text FROM tasks").fetchone()
+            task = get_db().execute("SELECT task_type, document_text, checks_snapshot_json FROM tasks").fetchone()
         self.assertEqual(task["task_type"], "consistency_check")
         self.assertIn("## 素材文档1：master.txt", task["document_text"])
         self.assertIn("## 资料1：related.txt", task["document_text"])
+        self.assertEqual(
+            json.loads(task["checks_snapshot_json"]),
+            [
+                {
+                    "id": item["id"],
+                    "code": item["code"],
+                    "name": item["name"],
+                    "prompt": item["prompt"],
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

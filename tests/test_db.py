@@ -6,12 +6,14 @@ from flask import Flask
 
 from app.db import (
     DEFAULT_CHECK_ITEMS_BY_CODE,
+    default_check_item_codes,
     get_db,
     get_setting,
     init_db,
     reset_default_check_item_prompt,
     seed_defaults,
 )
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
 from app.routes import _next_check_item_sort_order, _reorder_check_items
 
 
@@ -85,6 +87,27 @@ class CheckItemDefaultsTest(unittest.TestCase):
     def test_llm_stream_trace_is_disabled_by_default(self):
         self.assertFalse(get_setting("llm_stream_trace_enabled"))
 
+    def test_default_check_items_are_grouped_by_task_type(self):
+        db = get_db()
+        document_codes = [
+            row["code"]
+            for row in db.execute(
+                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                (DOCUMENT_TASK_TYPE,),
+            ).fetchall()
+        ]
+        consistency_codes = [
+            row["code"]
+            for row in db.execute(
+                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                (CONSISTENCY_TASK_TYPE,),
+            ).fetchall()
+        ]
+
+        self.assertIn("typo", document_codes)
+        self.assertEqual(consistency_codes, ["consistency-cross-document"])
+        self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
+
     def test_next_custom_check_item_sort_order_goes_before_first_item(self):
         self.assertEqual(_next_check_item_sort_order(get_db()), 0)
 
@@ -92,7 +115,10 @@ class CheckItemDefaultsTest(unittest.TestCase):
         db = get_db()
         original_ids = [
             row["id"]
-            for row in db.execute("SELECT id FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
+            for row in db.execute(
+                "SELECT id FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                (DOCUMENT_TASK_TYPE,),
+            ).fetchall()
         ]
         requested_ids = list(reversed(original_ids))
 
@@ -101,7 +127,10 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         updated_ids = [
             row["id"]
-            for row in db.execute("SELECT id FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
+            for row in db.execute(
+                "SELECT id FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                (DOCUMENT_TASK_TYPE,),
+            ).fetchall()
         ]
         self.assertEqual(updated_ids, requested_ids)
 

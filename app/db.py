@@ -4,7 +4,7 @@ from datetime import datetime
 
 from flask import current_app, g
 
-from .task_types import DOCUMENT_TASK_TYPE
+from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
 
 
 def now_text() -> str:
@@ -48,6 +48,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS check_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_type TEXT NOT NULL DEFAULT 'document_check',
             code TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             description TEXT,
@@ -97,6 +98,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         """
     )
+    _ensure_column(db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")
     _ensure_column(db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")
     _ensure_column(db, "tasks", "document_text", "TEXT")
     _ensure_column(db, "tasks", "document_meta_json", "TEXT")
@@ -136,7 +138,7 @@ def get_setting(key: str, default=None):
         return default
 
 
-DEFAULT_CHECK_ITEMS = (
+DEFAULT_DOCUMENT_CHECK_ITEMS = (
     {
         "code": "compliance",
         "name": "文档规范性检查",
@@ -172,11 +174,44 @@ DEFAULT_CHECK_ITEMS = (
         "sort_order": 30,
     },
 )
+
+DEFAULT_CONSISTENCY_CHECK_ITEMS = (
+    {
+        "code": "consistency-cross-document",
+        "name": "跨文档一致性检查",
+        "description": "以素材文档为依据，检查资料是否存在偏差、遗漏、冲突或缺少依据的说法。",
+        "prompt": """你是一名跨文档一致性审查专家。用户会提供两组内容：素材文档和资料。资料是根据素材文档写作生成的，请以素材文档作为依据，检查资料内容是否与素材内容一致，是否存在偏差、遗漏或需要人工确认的地方。
+重点关注：
+1. 产品/项目/组织/人名/地点/日期/版本/编号/术语是否一致。
+2. 指标、参数、规格、数量、单位、阈值、流程步骤和限制条件是否一致。
+3. 资料是否遗漏素材文档中的关键约束，或新增了素材文档没有支撑的说法。
+4. 多份资料之间如存在互相冲突，也请标注，但优先说明它们与素材文档的关系。
+
+输出要求：
+1. 先给出总体结论，说明一致性风险等级。
+2. 按条列出偏差：资料名称、位置线索、资料表述、素材文档依据、偏差说明、修改建议。
+3. 对证据不足或需要业务判断的问题标注“需人工确认”。
+4. 如果未发现明显偏差，明确说明“未发现资料内容与素材文档存在明显不一致”。不要编造文档中不存在的内容。""",
+        "sort_order": 10,
+    },
+)
+
+DEFAULT_CHECK_ITEMS = tuple(
+    {**item, "task_type": DOCUMENT_TASK_TYPE}
+    for item in DEFAULT_DOCUMENT_CHECK_ITEMS
+) + tuple(
+    {**item, "task_type": CONSISTENCY_TASK_TYPE}
+    for item in DEFAULT_CONSISTENCY_CHECK_ITEMS
+)
 DEFAULT_CHECK_ITEMS_BY_CODE = {item["code"]: item for item in DEFAULT_CHECK_ITEMS}
 
 
-def default_check_item_codes() -> set[str]:
-    return set(DEFAULT_CHECK_ITEMS_BY_CODE)
+def default_check_item_codes(task_type: str | None = None) -> set[str]:
+    return {
+        item["code"]
+        for item in DEFAULT_CHECK_ITEMS
+        if task_type is None or item["task_type"] == task_type
+    }
 
 
 def reset_default_check_item_prompt(item_id: int) -> bool:
@@ -218,10 +253,11 @@ def seed_defaults():
         if exists is None:
             db.execute(
                 """
-                INSERT INTO check_items(code, name, description, prompt, enabled, sort_order, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
                 """,
                 (
+                    item["task_type"],
                     item["code"],
                     item["name"],
                     item["description"],

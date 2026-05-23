@@ -7,12 +7,7 @@ from pathlib import Path
 from .db import get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
 from .llm import LLMError, run_check
-from .task_types import (
-    CONSISTENCY_CHECK_ITEM,
-    CONSISTENCY_TASK_TYPE,
-    DOCUMENT_TASK_TYPE,
-    document_groups_from_meta,
-)
+from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, document_groups_from_meta
 
 
 class TaskCanceled(Exception):
@@ -137,8 +132,11 @@ class TaskScheduler:
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
                 if task_type == CONSISTENCY_TASK_TYPE:
                     document_text = _task_value(task, "document_text") or _extract_consistency_document_text(self.app, task)
-                    check_items = [CONSISTENCY_CHECK_ITEM]
-                    max_workers = 1
+                    check_items = _task_check_items(db, task, CONSISTENCY_TASK_TYPE)
+                    max_workers = max(
+                        1,
+                        int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
+                    )
                 else:
                     document_text = _task_value(task, "document_text")
                     if not document_text:
@@ -230,28 +228,48 @@ def _extract_consistency_document_text(app, task) -> str:
 
 
 def _document_check_items(db, task) -> list[dict]:
+    return _task_check_items(db, task, DOCUMENT_TASK_TYPE)
+
+
+def _task_check_items(db, task, task_type: str) -> list[dict]:
     snapshot = _check_items_from_snapshot(_task_value(task, "checks_snapshot_json"))
     if snapshot:
         return snapshot
 
     try:
-        check_ids = json.loads(task["checks_json"])
+        check_values = json.loads(task["checks_json"])
     except (TypeError, json.JSONDecodeError) as exc:
         raise RuntimeError("检查项数据无效") from exc
-    if not isinstance(check_ids, list) or not check_ids:
+    if not isinstance(check_values, list) or not check_values:
         return []
 
-    placeholders = ",".join("?" for _ in check_ids)
+    check_ids = [int(value) for value in check_values if isinstance(value, int)]
+    check_codes = [
+        str(value).strip()
+        for value in check_values
+        if isinstance(value, str) and str(value).strip()
+    ]
+    clauses = []
+    params = []
+    if check_ids:
+        clauses.append(f"id IN ({','.join('?' for _ in check_ids)})")
+        params.extend(check_ids)
+    if check_codes:
+        clauses.append(f"code IN ({','.join('?' for _ in check_codes)})")
+        params.extend(check_codes)
+    if not clauses:
+        return []
+    params.append(task_type)
     return [
         dict(row)
         for row in db.execute(
             f"""
             SELECT *
             FROM check_items
-            WHERE id IN ({placeholders}) AND enabled = 1
+            WHERE ({' OR '.join(clauses)}) AND task_type = ? AND enabled = 1
             ORDER BY sort_order ASC, id ASC
             """,
-            tuple(check_ids),
+            tuple(params),
         ).fetchall()
     ]
 

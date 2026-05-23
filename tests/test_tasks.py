@@ -7,6 +7,7 @@ from unittest.mock import patch
 from flask import Flask
 
 from app.db import get_db, init_db, now_text
+from app.task_types import CONSISTENCY_TASK_TYPE
 from app.tasks import TaskScheduler, _document_check_items, _run_check_items_concurrently
 
 
@@ -205,6 +206,100 @@ class TaskExecutionTest(unittest.TestCase):
         updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(calls[0]["document_text"], "file: missing.txt\n\n缓存文本")
+
+    def test_consistency_task_uses_selected_check_snapshot(self):
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                ?, '127.0.0.1', '跨文档一致性检查：素材1个 / 资料1个', 'master.txt', '多文档', 1,
+                '# 素材文档\n素材参数 10A\n\n# 资料\n资料参数 12A', ?, ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                CONSISTENCY_TASK_TYPE,
+                json.dumps([7]),
+                json.dumps(
+                    [
+                        {
+                            "id": 7,
+                            "code": "custom-consistency",
+                            "name": "参数一致性检查",
+                            "prompt": "只检查参数是否一致",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+        calls = []
+
+        def fake_run_check(**kwargs):
+            calls.append(kwargs)
+            return "发现参数不一致"
+
+        with patch("app.tasks.run_check", side_effect=fake_run_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(calls[0]["check_name"], "参数一致性检查")
+        self.assertEqual(calls[0]["prompt"], "只检查参数是否一致")
+
+    def test_consistency_task_supports_legacy_code_checks_json(self):
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+            VALUES (?, 'consistency-cross-document', '跨文档一致性检查', '', '默认跨文档提示词', 1, 10, ?, ?)
+            """,
+            (CONSISTENCY_TASK_TYPE, created_at, created_at),
+        )
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                ?, '127.0.0.1', '跨文档一致性检查：素材1个 / 资料1个', 'master.txt', '多文档', 1,
+                '# 素材文档\n素材参数 10A\n\n# 资料\n资料参数 12A', ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                CONSISTENCY_TASK_TYPE,
+                json.dumps(["consistency-cross-document"], ensure_ascii=False),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+        calls = []
+
+        def fake_run_check(**kwargs):
+            calls.append(kwargs)
+            return "完成"
+
+        with patch("app.tasks.run_check", side_effect=fake_run_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        self.assertEqual(calls[0]["check_name"], "跨文档一致性检查")
+        self.assertEqual(calls[0]["prompt"], "默认跨文档提示词")
 
 
 if __name__ == "__main__":

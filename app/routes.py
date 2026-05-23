@@ -51,7 +51,6 @@ STATUS_LABELS = {
 }
 TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
-CONSISTENCY_CHECKS_JSON = json.dumps(["consistency-cross-document"], ensure_ascii=False)
 PROXY_MODES = {"direct", "system", "custom"}
 PROVIDER_TIMEOUT_DEFAULT = 3600
 PROVIDER_TIMEOUT_MIN = 30
@@ -160,6 +159,7 @@ def register_routes(app):
             tasks=rows,
             stats=stats,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
+            check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(),
             active_nav=CONSISTENCY_TASK_TYPE,
         )
@@ -332,6 +332,7 @@ def register_routes(app):
             ip=ip,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             totals=_admin_totals(CONSISTENCY_TASK_TYPE),
+            check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(),
             active_nav=CONSISTENCY_TASK_TYPE,
         )
@@ -611,6 +612,7 @@ def register_routes(app):
                 return redirect(url_for("admin_settings"))
 
             if action == "create_check_item":
+                task_type = _check_item_task_type(request.form.get("task_type"))
                 name = request.form.get("name", "").strip()
                 description = request.form.get("description", "").strip()
                 prompt = request.form.get("prompt", "").strip()
@@ -621,16 +623,17 @@ def register_routes(app):
                 now = now_text()
                 db.execute(
                     """
-                    INSERT INTO check_items(code, name, description, prompt, enabled, sort_order, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        f"custom-{uuid.uuid4().hex}",
+                        task_type,
+                        f"{_check_item_code_prefix(task_type)}-{uuid.uuid4().hex}",
                         name,
                         description,
                         prompt,
                         enabled,
-                        _next_check_item_sort_order(db),
+                        _next_check_item_sort_order(db, task_type),
                         now,
                         now,
                     ),
@@ -640,13 +643,14 @@ def register_routes(app):
                 return redirect(url_for("admin_settings"))
 
             if action == "reorder_check_items":
+                task_type = _check_item_task_type(request.form.get("task_type"))
                 item_ids = [int(value) for value in request.form.getlist("item_ids") if value.isdigit()]
                 if not item_ids:
                     if request.headers.get("X-Requested-With") == "fetch":
                         return Response("检查项顺序不能为空。", status=400)
                     flash("检查项顺序不能为空。", "error")
                     return redirect(url_for("admin_settings"))
-                _reorder_check_items(db, item_ids)
+                _reorder_check_items(db, item_ids, task_type)
                 db.commit()
                 if request.headers.get("X-Requested-With") == "fetch":
                     return Response(status=204)
@@ -708,11 +712,34 @@ def register_routes(app):
             flash("检查项提示词已保存。", "success")
             return redirect(url_for("admin_settings"))
 
-        items = db.execute("SELECT * FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
+        document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
+        consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
         return render_template(
             "admin_settings.html",
-            items=items,
-            default_check_codes=default_check_item_codes(),
+            check_item_groups=[
+                {
+                    "task_type": DOCUMENT_TASK_TYPE,
+                    "title": "文档检查-提示词设置",
+                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除。",
+                    "new_title": "新增文档检查项",
+                    "name_placeholder": "例如：术语一致性检查",
+                    "description_placeholder": "用于向用户说明该检查项的范围",
+                    "prompt_placeholder": "描述该检查项的审查角色、关注范围和输出要求",
+                    "items": document_check_items,
+                    "default_check_codes": default_check_item_codes(DOCUMENT_TASK_TYPE),
+                },
+                {
+                    "task_type": CONSISTENCY_TASK_TYPE,
+                    "title": "跨文档一致性检查-提示词设置",
+                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨文档任务时可多选。",
+                    "new_title": "新增跨文档检查项",
+                    "name_placeholder": "例如：关键参数一致性检查",
+                    "description_placeholder": "用于说明该跨文档检查项的比对范围",
+                    "prompt_placeholder": "描述素材与资料的比对规则、关注范围和输出要求",
+                    "items": consistency_check_items,
+                    "default_check_codes": default_check_item_codes(CONSISTENCY_TASK_TYPE),
+                },
+            ],
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
@@ -736,13 +763,39 @@ def get_ip_user(ip: str):
     return get_db().execute("SELECT * FROM ip_users WHERE ip = ?", (ip,)).fetchone()
 
 
-def get_enabled_check_items():
-    return get_db().execute(
-        "SELECT * FROM check_items WHERE enabled = 1 ORDER BY sort_order ASC, id ASC"
+def _check_item_task_type(value: str | None) -> str:
+    return CONSISTENCY_TASK_TYPE if value == CONSISTENCY_TASK_TYPE else DOCUMENT_TASK_TYPE
+
+
+def _check_item_code_prefix(task_type: str) -> str:
+    return "custom-consistency" if task_type == CONSISTENCY_TASK_TYPE else "custom"
+
+
+def _check_items_for_task_type(db, task_type: str):
+    return db.execute(
+        """
+        SELECT *
+        FROM check_items
+        WHERE task_type = ?
+        ORDER BY sort_order ASC, id ASC
+        """,
+        (task_type,),
     ).fetchall()
 
 
-def _enabled_check_item_snapshots(db, check_ids: list[int]) -> list[dict]:
+def get_enabled_check_items(task_type: str = DOCUMENT_TASK_TYPE):
+    return get_db().execute(
+        """
+        SELECT *
+        FROM check_items
+        WHERE task_type = ? AND enabled = 1
+        ORDER BY sort_order ASC, id ASC
+        """,
+        (task_type,),
+    ).fetchall()
+
+
+def _enabled_check_item_snapshots(db, check_ids: list[int], task_type: str) -> list[dict]:
     unique_ids = []
     seen = set()
     for check_id in check_ids:
@@ -757,10 +810,10 @@ def _enabled_check_item_snapshots(db, check_ids: list[int]) -> list[dict]:
         f"""
         SELECT id, code, name, prompt
         FROM check_items
-        WHERE id IN ({placeholders}) AND enabled = 1
+        WHERE id IN ({placeholders}) AND task_type = ? AND enabled = 1
         ORDER BY sort_order ASC, id ASC
         """,
-        tuple(unique_ids),
+        tuple(unique_ids + [task_type]),
     ).fetchall()
     return [
         {
@@ -773,15 +826,26 @@ def _enabled_check_item_snapshots(db, check_ids: list[int]) -> list[dict]:
     ]
 
 
-def _next_check_item_sort_order(db) -> int:
-    row = db.execute("SELECT MIN(sort_order) AS value FROM check_items").fetchone()
+def _next_check_item_sort_order(db, task_type: str = DOCUMENT_TASK_TYPE) -> int:
+    row = db.execute(
+        "SELECT MIN(sort_order) AS value FROM check_items WHERE task_type = ?",
+        (task_type,),
+    ).fetchone()
     if row is None or row["value"] is None:
         return 10
     return int(row["value"]) - 10
 
 
-def _reorder_check_items(db, item_ids: list[int]) -> list[int]:
-    rows = db.execute("SELECT id FROM check_items ORDER BY sort_order ASC, id ASC").fetchall()
+def _reorder_check_items(db, item_ids: list[int], task_type: str = DOCUMENT_TASK_TYPE) -> list[int]:
+    rows = db.execute(
+        """
+        SELECT id
+        FROM check_items
+        WHERE task_type = ?
+        ORDER BY sort_order ASC, id ASC
+        """,
+        (task_type,),
+    ).fetchall()
     existing_ids = [int(row["id"]) for row in rows]
     existing_set = set(existing_ids)
     ordered_ids = []
@@ -1025,7 +1089,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
     if not check_ids:
         flash("请至少选择一个检查项。", "error")
         return _back_to_task_form(admin_created)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids)
+    check_snapshots = _enabled_check_item_snapshots(db, check_ids, DOCUMENT_TASK_TYPE)
     if len(check_snapshots) != len(set(check_ids)):
         flash("请选择当前可用的检查项。", "error")
         return _back_to_task_form(admin_created)
@@ -1114,6 +1178,15 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
     if not _validate_consistency_uploads(related_uploads, "资料", CONSISTENCY_MAX_DATA_FILES):
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
+    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
+    if not check_ids:
+        flash("请至少选择一个跨文档检查项。", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+    check_snapshots = _enabled_check_item_snapshots(db, check_ids, CONSISTENCY_TASK_TYPE)
+    if len(check_snapshots) != len(set(check_ids)):
+        flash("请选择当前可用的跨文档检查项。", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+
     model_id = request.form.get("model_id", "")
     model = _find_enabled_model(model_id)
     if model is None:
@@ -1165,11 +1238,11 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
         """
         INSERT INTO tasks(
             task_type, ip, username_snapshot, original_filename, stored_filename, file_type, file_size,
-            document_text, document_meta_json, checks_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
+            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
             ssl_verify, request_timeout, max_input_chars, force_disable_thinking,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             CONSISTENCY_TASK_TYPE,
@@ -1181,7 +1254,8 @@ def create_consistency_task_for_ip(ip: str, user, *, admin_created: bool):
             file_size,
             validation_text,
             json.dumps(document_meta, ensure_ascii=False),
-            CONSISTENCY_CHECKS_JSON,
+            json.dumps(check_ids, ensure_ascii=False),
+            json.dumps(check_snapshots, ensure_ascii=False),
             model["provider_name"],
             model["model_name"],
             model["api_base"],

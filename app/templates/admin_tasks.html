@@ -3,7 +3,7 @@
 {% block title %}文档检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
-{% set submit_disabled = not models %}
+{% set submit_disabled = not models or not check_items %}
 <form method="post" enctype="multipart/form-data" class="panel create-panel">
   <div class="panel-head compact-head">
     <h1>创建文档检查</h1>

@@ -51,18 +51,20 @@
   </form>
 </section>
 
+{% for group in check_item_groups %}
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
-      <h2>文档检查-提示词设置</h2>
-      <p>内置检查项不可删除；扩展检查项可新增、停用或删除。</p>
+      <h2>{{ group.title }}</h2>
+      <p>{{ group.description }}</p>
     </div>
   </div>
   <form method="post" class="settings-new-check-form stack-form">
     <input type="hidden" name="action" value="create_check_item">
+    <input type="hidden" name="task_type" value="{{ group.task_type }}">
     <div class="panel-head compact-head">
       <div>
-        <h2>新增扩展检查项</h2>
+        <h2>{{ group.new_title }}</h2>
       </div>
       <label class="switch-line">
         <input type="checkbox" name="enabled" checked>
@@ -70,23 +72,23 @@
       </label>
     </div>
     <div class="form-grid">
-      <label>检查项名称<input name="name" placeholder="例如：术语一致性检查" required></label>
+      <label>检查项名称<input name="name" placeholder="{{ group.name_placeholder }}" required></label>
       <div class="form-field">
         <span class="field-with-help">
           <span class="field-label">说明</span>
           <button class="help-tip" type="button" aria-label="说明用途" data-tip="显示在创建检查页，鼠标悬浮检查项时可查看。">?</button>
         </span>
-        <input name="description" placeholder="用于向用户说明该检查项的范围">
+        <input name="description" placeholder="{{ group.description_placeholder }}">
       </div>
     </div>
-    <label>提示词<textarea name="prompt" rows="6" placeholder="描述该检查项的审查角色、关注范围和输出要求" required></textarea></label>
+    <label>提示词<textarea name="prompt" rows="6" placeholder="{{ group.prompt_placeholder }}" required></textarea></label>
     <div class="form-actions">
       <button class="primary-button settings-save-button" type="submit">创建检查项</button>
     </div>
   </form>
 
   <div class="table-wrap">
-    <table class="check-item-table" data-check-item-table>
+    <table class="check-item-table" data-check-item-table data-check-item-task-type="{{ group.task_type }}">
       <thead>
         <tr>
           <th class="check-item-drag-column"></th>
@@ -94,8 +96,8 @@
         </tr>
       </thead>
       <tbody>
-        {% for item in items %}
-        {% set is_builtin = item.code in default_check_codes %}
+        {% for item in group["items"] %}
+        {% set is_builtin = item.code in group["default_check_codes"] %}
         <tr class="check-item-row" draggable="true" data-check-item-row data-check-item-id="{{ item.id }}">
           <td class="check-item-drag-cell">
             <button class="drag-handle" type="button" data-check-item-drag aria-label="拖动排序">
@@ -175,4 +177,5 @@
     </table>
   </div>
 </section>
+{% endfor %}
 {% endblock %}
