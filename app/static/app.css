@@ -1744,7 +1744,7 @@ td {
   margin: 16px 0 0;
 }
 
-.meta-list div {
+.meta-list > div {
   display: grid;
   grid-template-columns: 92px 1fr;
   gap: 10px;
@@ -1770,7 +1770,8 @@ td {
 
 .report-document-groups {
   display: grid;
-  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  align-items: stretch;
   gap: 14px;
 }
 
