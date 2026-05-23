@@ -5,6 +5,7 @@ import os
 import re
 import uuid
 import zipfile
+from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -235,7 +236,7 @@ def register_routes(app):
             if ok:
                 session["admin_logged_in"] = True
                 flash("管理员已登录。", "success")
-                return redirect(url_for("admin_tasks"))
+                return redirect(url_for("admin_dashboard"))
             flash("账号或密码不正确。", "error")
         return render_template("admin_login.html")
 
@@ -250,7 +251,18 @@ def register_routes(app):
     @app.get(admin_prefix)
     @admin_required
     def admin_dashboard():
-        return redirect(url_for("admin_tasks"))
+        if not _platform_enabled():
+            return redirect(url_for("user_tasks"))
+        selected_range = _admin_overview_range()
+        overview = _admin_overview_data(selected_range["start_at"], selected_range["end_at"])
+        return render_template(
+            "admin_overview.html",
+            selected_range=selected_range,
+            totals=overview["totals"],
+            daily_rows=overview["daily_rows"],
+            user_rows=overview["user_rows"],
+            active_nav="overview",
+        )
 
     @app.route(f"{admin_prefix}/tasks", methods=["GET", "POST"])
     @admin_required
@@ -1051,6 +1063,92 @@ def _find_enabled_model(model_id: str) -> dict | None:
                 return option
         return None
     return None
+
+
+def _admin_overview_range() -> dict:
+    today = date.today()
+    default_start = today - timedelta(days=29)
+    start_date = _date_arg("start_date", default_start)
+    end_date = _date_arg("end_date", today)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    return {
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "start_at": f"{start_date.isoformat()} 00:00:00",
+        "end_at": f"{(end_date + timedelta(days=1)).isoformat()} 00:00:00",
+        "days": (end_date - start_date).days + 1,
+    }
+
+
+def _date_arg(name: str, default: date) -> date:
+    value = request.args.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return default
+
+
+def _admin_overview_data(start_at: str, end_at: str) -> dict:
+    db = get_db()
+    params = (start_at, end_at)
+    totals = db.execute(
+        """
+        SELECT
+            COUNT(*) AS tasks,
+            COUNT(DISTINCT ip) AS users,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
+            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+            COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0) AS canceled
+        FROM tasks
+        WHERE created_at >= ? AND created_at < ?
+        """,
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, *params),
+    ).fetchone()
+    daily_rows = db.execute(
+        """
+        SELECT
+            substr(created_at, 1, 10) AS day,
+            COUNT(DISTINCT ip) AS users,
+            COUNT(*) AS tasks,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks
+        FROM tasks
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY day
+        ORDER BY day DESC
+        """,
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, *params),
+    ).fetchall()
+    user_rows = db.execute(
+        """
+        SELECT
+            t.ip,
+            COALESCE(NULLIF(u.username, ''), NULLIF(MAX(t.username_snapshot), ''), '') AS username,
+            COUNT(*) AS tasks,
+            COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
+            COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            MAX(t.created_at) AS last_task_at
+        FROM tasks t
+        LEFT JOIN ip_users u ON u.ip = t.ip
+        WHERE t.created_at >= ? AND t.created_at < ?
+        GROUP BY t.ip
+        ORDER BY tasks DESC, last_task_at DESC, t.ip ASC
+        LIMIT 10
+        """,
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, *params),
+    ).fetchall()
+    return {
+        "totals": totals,
+        "daily_rows": daily_rows,
+        "user_rows": user_rows,
+    }
 
 
 def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:

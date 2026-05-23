@@ -530,6 +530,36 @@ td {
   line-height: 1;
 }
 
+.metric.slim {
+  padding: 14px 16px;
+}
+
+.metric.slim strong {
+  font-size: 22px;
+}
+
+.overview-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin: -8px 0 22px;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.overview-table {
+  min-width: 620px;
+}
+
+.user-overview-table {
+  min-width: 760px;
+}
+
 .panel {
   padding: 20px;
   margin-bottom: 20px;
@@ -1914,6 +1944,14 @@ td {
   gap: 12px;
   align-items: end;
   margin-bottom: 16px;
+}
+
+.overview-filter {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 240px)) auto auto;
+  gap: 12px;
+  align-items: end;
+  justify-content: start;
 }
 
 .switch-line {

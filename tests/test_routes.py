@@ -10,7 +10,7 @@ from openpyxl import Workbook
 from app.config import load_local_config, save_local_config
 from app.db import get_db, get_setting, init_db, seed_defaults
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
-from app.task_types import CONSISTENCY_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
 
 
 def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
@@ -79,6 +79,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
         ]
         save_local_config(root_dir, config)
 
+    def _insert_task(
+        self,
+        *,
+        task_type: str = DOCUMENT_TASK_TYPE,
+        ip: str = "127.0.0.1",
+        status: str = "completed",
+        created_at: str = "2026-05-01 10:00:00",
+        username_snapshot: str | None = None,
+    ):
+        with self.app.app_context():
+            get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, username_snapshot, original_filename, stored_filename, file_type,
+                    file_size, checks_json, model_name, api_base, status, progress, created_at, updated_at
+                )
+                VALUES (?, ?, ?, '测试文档.txt', 'stored.txt', 'txt', 12, '[]', 'model-a', 'https://example.test/v1/chat/completions', ?, 100, ?, ?)
+                """,
+                (task_type, ip, username_snapshot, status, created_at, created_at),
+            )
+            get_db().commit()
+
     def test_diagnostics_fetch_returns_saved_state(self):
         response = self.client.post(
             "/admin/settings",
@@ -127,6 +149,51 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("单文档检查-提示词设置", html)
         self.assertIn("多文档对照检查-提示词设置", html)
         self.assertIn("consistency_check", html)
+
+    def test_admin_overview_counts_tasks_in_selected_range(self):
+        with self.app.app_context():
+            db = get_db()
+            db.execute(
+                """
+                INSERT INTO ip_users(ip, username, is_disabled, created_at, updated_at)
+                VALUES ('10.0.0.1', '测试用户A', 0, '2026-05-01 09:00:00', '2026-05-01 09:00:00')
+                """
+            )
+            db.commit()
+        self._insert_task(ip="10.0.0.1", created_at="2026-05-01 10:00:00")
+        self._insert_task(
+            task_type=CONSISTENCY_TASK_TYPE,
+            ip="10.0.0.1",
+            status="failed",
+            created_at="2026-05-01 11:00:00",
+        )
+        self._insert_task(ip="10.0.0.2", status="queued", created_at="2026-05-02 08:00:00")
+        self._insert_task(ip="10.0.0.3", created_at="2026-04-30 23:59:59")
+
+        response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-02")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("统计概览", html)
+        self.assertIn("2026-05-01 至 2026-05-02", html)
+        self.assertIn("<span>活跃用户</span><strong>2</strong>", html)
+        self.assertIn("<span>提交任务</span><strong>3</strong>", html)
+        self.assertIn("<span>单文档检查任务</span><strong>2</strong>", html)
+        self.assertIn("<span>多文档对照任务</span><strong>1</strong>", html)
+        self.assertIn("<span>排队</span><strong>1</strong>", html)
+        self.assertIn("<span>失败</span><strong>1</strong>", html)
+        self.assertIn("测试用户A", html)
+        self.assertIn("10.0.0.2", html)
+        self.assertNotIn("10.0.0.3", html)
+
+    def test_local_mode_admin_root_redirects_to_management_view(self):
+        self.app.config["PLATFORM"] = False
+        self._logout_test_client()
+
+        response = self.client.get("/admin")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/"))
 
     def test_platform_mode_requires_admin_login(self):
         self._logout_test_client()

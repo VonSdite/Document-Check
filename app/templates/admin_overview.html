@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}统计概览 - 文档智能门禁{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <div>
+    <p class="eyebrow">平台统计</p>
+    <h1>统计概览</h1>
+    <p class="muted">{{ selected_range.start_date }} 至 {{ selected_range.end_date }} · {{ selected_range.days }} 天</p>
+  </div>
+</div>
+
+<section class="panel">
+  <form method="get" class="overview-filter">
+    <label>
+      开始日期
+      <input type="date" name="start_date" value="{{ selected_range.start_date }}">
+    </label>
+    <label>
+      结束日期
+      <input type="date" name="end_date" value="{{ selected_range.end_date }}">
+    </label>
+    <button class="primary-button" type="submit">查看统计</button>
+    <a class="secondary-button" href="{{ url_for('admin_dashboard') }}">近30天</a>
+  </form>
+</section>
+
+<section class="metric-grid five">
+  <div class="metric"><span>活跃用户</span><strong>{{ totals.users }}</strong></div>
+  <div class="metric"><span>提交任务</span><strong>{{ totals.tasks }}</strong></div>
+  <div class="metric"><span>单文档检查任务</span><strong>{{ totals.document_tasks }}</strong></div>
+  <div class="metric"><span>多文档对照任务</span><strong>{{ totals.consistency_tasks }}</strong></div>
+  <div class="metric"><span>已完成</span><strong>{{ totals.completed }}</strong></div>
+</section>
+
+<section class="overview-status-grid">
+  <div class="metric slim"><span>排队</span><strong>{{ totals.queued }}</strong></div>
+  <div class="metric slim"><span>检查中</span><strong>{{ totals.running }}</strong></div>
+  <div class="metric slim"><span>失败</span><strong>{{ totals.failed }}</strong></div>
+  <div class="metric slim"><span>已取消</span><strong>{{ totals.canceled }}</strong></div>
+</section>
+
+<div class="overview-grid">
+  <section class="panel">
+    <div class="panel-head compact-head">
+      <h2>每日提交趋势</h2>
+    </div>
+    {% if daily_rows %}
+    <div class="table-wrap">
+      <table class="overview-table">
+        <thead>
+          <tr>
+            <th>日期</th>
+            <th>活跃用户</th>
+            <th>提交任务</th>
+            <th>单文档检查</th>
+            <th>多文档对照</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in daily_rows %}
+          <tr>
+            <td>{{ row.day }}</td>
+            <td>{{ row.users }}</td>
+            <td>{{ row.tasks }}</td>
+            <td>{{ row.document_tasks }}</td>
+            <td>{{ row.consistency_tasks }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state compact">
+      <h3>暂无统计数据</h3>
+      <p>当前时间段内没有任务提交。</p>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact-head">
+      <h2>用户使用排行</h2>
+    </div>
+    {% if user_rows %}
+    <div class="table-wrap">
+      <table class="overview-table user-overview-table">
+        <thead>
+          <tr>
+            <th>用户</th>
+            <th>提交任务</th>
+            <th>单文档</th>
+            <th>多文档</th>
+            <th>最近提交</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in user_rows %}
+          <tr>
+            <td>
+              <strong>{{ row.username or row.ip }}</strong>
+              {% if row.username %}<div class="subline">{{ row.ip }}</div>{% endif %}
+            </td>
+            <td>{{ row.tasks }}</td>
+            <td>{{ row.document_tasks }}</td>
+            <td>{{ row.consistency_tasks }}</td>
+            <td>{{ row.last_task_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state compact">
+      <h3>暂无用户使用记录</h3>
+      <p>当前时间段内没有用户提交任务。</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
