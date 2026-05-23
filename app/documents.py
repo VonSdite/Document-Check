@@ -2,10 +2,12 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 from docx import Document
+from openpyxl import load_workbook
 from pypdf import PdfReader
+import xlrd
 
 
-ALLOWED_EXTENSIONS = {"docx", "pdf", "txt", "md", "html"}
+ALLOWED_EXTENSIONS = {"docx", "pdf", "txt", "md", "html", "xlsx", "xlsm", "xls"}
 
 
 class DocumentReadError(Exception):
@@ -30,6 +32,10 @@ def extract_text(path: Path, file_type: str) -> str:
             return _read_text(path)
         if file_type == "html":
             return _extract_html(path)
+        if file_type in {"xlsx", "xlsm"}:
+            return _extract_openpyxl_workbook(path)
+        if file_type == "xls":
+            return _extract_xls(path)
     except Exception as exc:
         raise DocumentReadError(str(exc)) from exc
     raise DocumentReadError(f"不支持的文件类型：{file_type}")
@@ -86,3 +92,57 @@ def _extract_html(path: Path) -> str:
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     return soup.get_text("\n", strip=True)
+
+
+def _extract_openpyxl_workbook(path: Path) -> str:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        parts = []
+        for sheet in workbook.worksheets:
+            rows = _spreadsheet_rows_text(sheet.iter_rows(values_only=True))
+            if rows:
+                parts.append(f"# 工作表：{sheet.title}\n" + "\n".join(rows))
+        return "\n\n".join(parts)
+    finally:
+        workbook.close()
+
+
+def _extract_xls(path: Path) -> str:
+    workbook = xlrd.open_workbook(str(path), on_demand=True)
+    try:
+        parts = []
+        for sheet in workbook.sheets():
+            rows = []
+            for row_index in range(sheet.nrows):
+                values = [sheet.cell_value(row_index, column_index) for column_index in range(sheet.ncols)]
+                row_text = _spreadsheet_row_text(values)
+                if row_text:
+                    rows.append(row_text)
+            if rows:
+                parts.append(f"# 工作表：{sheet.name}\n" + "\n".join(rows))
+        return "\n\n".join(parts)
+    finally:
+        workbook.release_resources()
+
+
+def _spreadsheet_rows_text(rows) -> list[str]:
+    result = []
+    for row in rows:
+        row_text = _spreadsheet_row_text(row)
+        if row_text:
+            result.append(row_text)
+    return result
+
+
+def _spreadsheet_row_text(values) -> str:
+    cells = [_spreadsheet_cell_text(value) for value in values]
+    cells = [cell for cell in cells if cell]
+    return " | ".join(cells)
+
+
+def _spreadsheet_cell_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()

@@ -18,7 +18,7 @@
       <span class="field-label">文档</span>
       <span class="field-with-help">
         <label class="file-upload-control {{ 'is-disabled' if user_disabled else '' }}">
-          <input class="file-input" name="document" type="file" accept=".docx,.pdf,.txt,.md,.html" required {{ "disabled" if user_disabled else "" }}>
+          <input class="file-input" name="document" type="file" accept=".docx,.pdf,.txt,.md,.html,.xlsx,.xlsm,.xls" required {{ "disabled" if user_disabled else "" }}>
           <span class="file-name">未选择文件</span>
           <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
           <span class="file-button" aria-hidden="true">
@@ -28,7 +28,7 @@
             </svg>
           </span>
         </label>
-        <span class="help-tip" tabindex="0" data-tip="支持 docx、pdf、txt、md、html，单文件最大 50MB。">?</span>
+        <span class="help-tip" tabindex="0" data-tip="支持 docx、pdf、txt、md、html、xlsx、xlsm、xls，单文件最大 50MB。">?</span>
       </span>
     </div>
     <label>

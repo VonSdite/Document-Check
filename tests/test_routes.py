@@ -5,11 +5,25 @@ import unittest
 from pathlib import Path
 
 from flask import Flask
+from openpyxl import Workbook
 
 from app.config import load_local_config, save_local_config
 from app.db import get_db, get_setting, init_db, seed_defaults
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE
+
+
+def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
+    output = io.BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = title
+    for row in rows:
+        sheet.append(row)
+    workbook.save(output)
+    workbook.close()
+    output.seek(0)
+    return output
 
 
 class AdminSettingsRouteTest(unittest.TestCase):
@@ -306,7 +320,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         response = self.client.post(
             "/consistency",
             data={
-                "master_documents": (io.BytesIO("素材参数 10A".encode("utf-8")), "master.txt"),
+                "master_documents": (_xlsx_bytes([["项目", "参数"], ["素材参数", "10A"]], title="素材参数表"), "master.xlsx"),
                 "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
                 "checks": [str(item["id"])],
                 "model_id": "provider-1:0:model-a",
@@ -318,7 +332,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             task = get_db().execute("SELECT task_type, document_text, checks_snapshot_json FROM tasks").fetchone()
         self.assertEqual(task["task_type"], "consistency_check")
-        self.assertIn("## 素材文档1：master.txt", task["document_text"])
+        self.assertIn("## 素材文档1：master.xlsx", task["document_text"])
+        self.assertIn("# 工作表：素材参数表", task["document_text"])
+        self.assertIn("素材参数 | 10A", task["document_text"])
         self.assertIn("## 资料1：related.txt", task["document_text"])
         self.assertEqual(
             json.loads(task["checks_snapshot_json"]),

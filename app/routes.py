@@ -1082,7 +1082,7 @@ def create_task_for_ip(ip: str, user, *, admin_created: bool):
         flash("请选择要上传的文档。", "error")
         return _back_to_task_form(admin_created)
     if not allowed_file(upload.filename):
-        flash("仅支持 docx、pdf、txt、md、html 文件。", "error")
+        flash("仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
         return _back_to_task_form(admin_created)
 
     check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
@@ -1297,7 +1297,7 @@ def _validate_consistency_uploads(uploads: list, label: str, max_files: int) -> 
         return False
     for upload in uploads:
         if not allowed_file(upload.filename):
-            flash(f"{label}仅支持 docx、pdf、txt、md、html 文件。", "error")
+            flash(f"{label}仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
             return False
     return True
 
