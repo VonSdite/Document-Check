@@ -95,16 +95,20 @@ def _extract_html(path: Path) -> str:
 
 
 def _extract_openpyxl_workbook(path: Path) -> str:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    value_workbook = load_workbook(path, read_only=True, data_only=True)
+    formula_workbook = load_workbook(path, read_only=True, data_only=False)
     try:
         parts = []
-        for sheet in workbook.worksheets:
-            rows = _spreadsheet_rows_text(sheet.iter_rows(values_only=True))
+        formula_sheets = {sheet.title: sheet for sheet in formula_workbook.worksheets}
+        for sheet in value_workbook.worksheets:
+            formula_sheet = formula_sheets.get(sheet.title)
+            rows = _openpyxl_sheet_rows_text(sheet, formula_sheet)
             if rows:
                 parts.append(f"# 工作表：{sheet.title}\n" + "\n".join(rows))
         return "\n\n".join(parts)
     finally:
-        workbook.close()
+        value_workbook.close()
+        formula_workbook.close()
 
 
 def _extract_xls(path: Path) -> str:
@@ -125,6 +129,25 @@ def _extract_xls(path: Path) -> str:
         workbook.release_resources()
 
 
+def _openpyxl_sheet_rows_text(sheet, formula_sheet) -> list[str]:
+    rows = []
+    max_row = max(sheet.max_row or 0, getattr(formula_sheet, "max_row", 0) or 0)
+    max_column = max(sheet.max_column or 0, getattr(formula_sheet, "max_column", 0) or 0)
+    for row_index in range(1, max_row + 1):
+        values = []
+        for column_index in range(1, max_column + 1):
+            value = sheet.cell(row_index, column_index).value
+            if value is None and formula_sheet is not None:
+                formula_value = formula_sheet.cell(row_index, column_index).value
+                if isinstance(formula_value, str) and formula_value.startswith("="):
+                    value = formula_value
+            values.append(value)
+        row_text = _spreadsheet_row_text(values)
+        if row_text:
+            rows.append(row_text)
+    return rows
+
+
 def _spreadsheet_rows_text(rows) -> list[str]:
     result = []
     for row in rows:
@@ -136,7 +159,8 @@ def _spreadsheet_rows_text(rows) -> list[str]:
 
 def _spreadsheet_row_text(values) -> str:
     cells = [_spreadsheet_cell_text(value) for value in values]
-    cells = [cell for cell in cells if cell]
+    while cells and not cells[-1]:
+        cells.pop()
     return " | ".join(cells)
 
 

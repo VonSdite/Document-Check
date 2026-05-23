@@ -30,6 +30,8 @@ class DocumentFormattingTest(unittest.TestCase):
             sheet.title = "参数表"
             sheet.append(["项目", "参数", "单位"])
             sheet.append(["额定电流", 10, "A"])
+            sheet.append(["空列示例", None, "保留位置"])
+            sheet["D5"] = "=SUM(1,2)"
             workbook.save(path)
             workbook.close()
 
@@ -38,6 +40,8 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("# 工作表：参数表", text)
         self.assertIn("项目 | 参数 | 单位", text)
         self.assertIn("额定电流 | 10 | A", text)
+        self.assertIn("空列示例 |  | 保留位置", text)
+        self.assertIn(" |  |  | =SUM(1,2)", text)
 
 
 if __name__ == "__main__":
