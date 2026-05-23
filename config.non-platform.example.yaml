@@ -1,0 +1,10 @@
+platform: false
+secret_key: 请替换为随机长字符串
+admin:
+  username: admin
+  password: 请替换为强密码
+admin_url: /console
+server:
+  host: 127.0.0.1
+  port: 31945
+providers: []

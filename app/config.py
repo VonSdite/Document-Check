@@ -1,63 +1,56 @@
-import json
 import secrets
 import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 
 DEFAULT_ADMIN_URL = "/console"
 DEFAULT_PLATFORM = True
 DEFAULT_LISTEN_HOST = "0.0.0.0"
+DEFAULT_LOCAL_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 31945
 DEFAULT_REQUEST_TIMEOUT = 3600
 DEFAULT_MAX_INPUT_CHARS = 80000
 DEFAULT_SSL_VERIFY = False
 PROXY_MODES = {"direct", "system", "custom"}
 _CONFIG_LOCK = threading.Lock()
+CONFIG_FILENAME = "config.yaml"
 
 
-def load_local_config(root_dir: Path) -> dict:
-    config_path = root_dir / "config.local.json"
+def load_local_config(root_dir: Path, *, default_platform: bool = DEFAULT_PLATFORM) -> dict:
+    config_path = root_dir / CONFIG_FILENAME
     if not config_path.exists():
-        config = _default_config()
-        config_path.write_text(
-            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        config = _default_config(default_platform)
+        _write_config(config_path, config)
         return config
 
     with config_path.open("r", encoding="utf-8") as file:
-        config = json.load(file)
+        config = yaml.safe_load(file) or {}
+    if not isinstance(config, dict):
+        config = {}
 
-    original = json.dumps(config, ensure_ascii=False, sort_keys=True)
+    original = _dump_config(config)
     config = _normalize_config(config)
-    normalized = json.dumps(config, ensure_ascii=False, sort_keys=True)
+    normalized = _dump_config(config)
     if normalized != original:
-        config_path.write_text(
-            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        _write_config(config_path, config)
     return config
 
 
 def save_local_config(root_dir: Path, config: dict) -> dict:
     with _CONFIG_LOCK:
         config = _normalize_config(config)
-        config_path = root_dir / "config.local.json"
-        config_path.write_text(
-            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        config_path = root_dir / CONFIG_FILENAME
+        _write_config(config_path, config)
         return config
 
 
-def _default_config() -> dict:
+def _default_config(platform: bool = DEFAULT_PLATFORM) -> dict:
     return {
-        "platform": DEFAULT_PLATFORM,
+        "platform": platform,
         "secret_key": secrets.token_urlsafe(32),
         "admin": {
             "username": "admin",
@@ -65,11 +58,19 @@ def _default_config() -> dict:
         },
         "admin_url": DEFAULT_ADMIN_URL,
         "server": {
-            "host": DEFAULT_LISTEN_HOST,
+            "host": DEFAULT_LISTEN_HOST if platform else DEFAULT_LOCAL_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
         },
         "providers": [],
     }
+
+
+def _write_config(config_path: Path, config: dict):
+    config_path.write_text(_dump_config(config), encoding="utf-8", newline="\n")
+
+
+def _dump_config(config: dict) -> str:
+    return yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
 
 
 def _normalize_config(config: dict) -> dict:

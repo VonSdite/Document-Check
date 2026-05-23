@@ -16,9 +16,9 @@ from app.network import access_urls
 
 def main():
     app = create_app()
-    host = os.environ.get("HOST", app.config["LISTEN_HOST"])
+    host = os.environ.get("HOST", app.config["LISTEN_HOST"]) if app.config["PLATFORM"] else "127.0.0.1"
     port = int(os.environ.get("PORT", app.config["LISTEN_PORT"]))
-    open_path = os.environ.get("OPEN_PATH") or f"{app.config['ADMIN_URL']}/login"
+    open_path = os.environ.get("OPEN_PATH") or (f"{app.config['ADMIN_URL']}/login" if app.config["PLATFORM"] else "/")
     open_url = _browser_url(host, port, open_path)
 
     app.logger.info("服务监听：http://%s:%s", host, port)

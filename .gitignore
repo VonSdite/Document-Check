@@ -12,6 +12,7 @@ uploads/
 *.db
 
 .env
+config.yaml
 config.local.json
 
 node_modules/

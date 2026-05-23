@@ -13,7 +13,8 @@ a = Analysis(
     datas=[
         (str(ROOT_DIR / "app" / "templates"), "app/templates"),
         (str(ROOT_DIR / "app" / "static"), "app/static"),
-        (str(ROOT_DIR / "config.local.example.json"), "."),
+        (str(ROOT_DIR / "config.platform.example.yaml"), "."),
+        (str(ROOT_DIR / "config.non-platform.example.yaml"), "."),
     ],
     hiddenimports=[],
     hookspath=[],

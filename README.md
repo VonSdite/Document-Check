@@ -7,7 +7,7 @@
 - 用户面：创建单文档检查和多文档对照检查任务、查看当前 IP 的任务、取消任务、删除历史任务、显示当前 IP 与管理员标识的用户名。
 - 管理面：隐藏 URL 登录，查看和管理全部任务，维护 IP 用户标识与禁用状态，配置模型提供商、模型列表、检查项提示词、扩展检查项和任务并发度。
 - 任务执行：后台线程从 SQLite 队列拉取任务，默认全局并发 3、单 IP 并发 1、单任务检查项并发 1，可在管理面调整；文档文本会作为全文一次送入模型，超过所选模型文本上限时拒绝提交或执行失败。
-- 本地存储：SQLite 数据库、上传文件和运行日志保存在 `instance/`，本地管理员配置和模型提供商配置保存在 `config.local.json`。
+- 本地存储：SQLite 数据库、上传文件和运行日志保存在 `instance/`，本地管理员配置和模型提供商配置保存在 `config.yaml`。
 - 服务运行：使用 gevent WSGI 单进程运行，并在启动入口执行 monkey patch 以提升 I/O 并发吞吐。
 
 ## 快速启动
@@ -25,13 +25,13 @@ uv run python run.py
 http://127.0.0.1:31945/
 ```
 
-首次启动会自动生成 `config.local.json`，默认管理员为 `admin / admin123`，管理入口默认是：
+源码运行首次启动会自动生成平台模式的 `config.yaml`，默认管理员为 `admin / admin123`，管理入口默认是：
 
 ```text
 http://127.0.0.1:31945/console/login
 ```
 
-上线或给他人使用前，请修改 `config.local.json` 中的管理员密码、`secret_key` 和 `admin_url`。
+上线或给他人使用前，请修改 `config.yaml` 中的管理员密码、`secret_key` 和 `admin_url`。
 
 ## Windows 打包
 
@@ -47,35 +47,56 @@ scripts\build_windows.bat
 dist\windows\DocumentCheck.exe
 ```
 
-把 `DocumentCheck.exe` 发给其他 Windows 用户即可运行，对方不需要安装 Python 或项目依赖。双击后会启动本地服务并自动打开浏览器进入管理登录页。首次启动会在 exe 同目录生成 `config.local.json` 和 `instance/`；上传文件、SQLite 数据库和日志也会保存在同目录的 `instance/` 中。
+把 `DocumentCheck.exe` 发给其他 Windows 用户即可运行，对方不需要安装 Python 或项目依赖。双击后会启动本地服务并自动打开浏览器进入本机管理视图。首次启动会在 exe 同目录生成非平台模式的 `config.yaml` 和 `instance/`；上传文件、SQLite 数据库和日志也会保存在同目录的 `instance/` 中。
 
-注意：PyInstaller 不能从 Linux/macOS 交叉打包 Windows exe，以上脚本需要在 Windows 上运行。交付前建议先在打包机运行一次，修改 exe 同目录的 `config.local.json` 中的管理员密码、`secret_key`、管理入口、端口和模型提供商配置，再把 exe 及需要预置的本地配置一起交付。
+注意：PyInstaller 不能从 Linux/macOS 交叉打包 Windows exe，以上脚本需要在 Windows 上运行。交付前建议先在打包机运行一次，修改 exe 同目录的 `config.yaml` 中的管理员密码、`secret_key`、管理入口、端口和模型提供商配置，再把 exe 及需要预置的本地配置一起交付。
 
 ## 本地配置
 
-`config.local.json` 支持配置运行模式、管理入口、监听地址和端口：
+`config.yaml` 支持配置运行模式、管理入口、监听地址和端口。仓库中提供两份示例：
 
-```json
-{
-  "platform": true,
-  "secret_key": "请替换为随机长字符串",
-  "admin": {
-    "username": "admin",
-    "password": "请替换为强密码"
-  },
-  "admin_url": "/console",
-  "server": {
-    "host": "0.0.0.0",
-    "port": 31945
-  }
-}
+```text
+config.platform.example.yaml
+config.non-platform.example.yaml
 ```
 
-`platform` 默认为 `true`，此时保持平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。设置为 `false` 时进入本机模式：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录，不显示用户管理入口；该模式下 `HOST` 环境变量会被忽略，`PORT` 仍可临时覆盖端口。
+选择对应模式的示例复制为 `config.yaml` 后再修改真实账号、密码、密钥和模型提供商配置。
+
+平台服务模式示例：
+
+```yaml
+platform: true
+secret_key: 请替换为随机长字符串
+admin:
+  username: admin
+  password: 请替换为强密码
+admin_url: /console
+server:
+  host: 0.0.0.0
+  port: 31945
+providers: []
+```
+
+本机非平台模式示例：
+
+```yaml
+platform: false
+secret_key: 请替换为随机长字符串
+admin:
+  username: admin
+  password: 请替换为强密码
+admin_url: /console
+server:
+  host: 127.0.0.1
+  port: 31945
+providers: []
+```
+
+`platform` 默认为 `true`，源码运行首次生成配置时会使用平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。Windows 可执行文件首次启动没有配置时，会生成非平台模式配置。设置为 `false` 时进入本机模式：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录，不显示用户管理入口；该模式下 `HOST` 环境变量会被忽略，`PORT` 仍可临时覆盖端口。
 
 `admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。平台服务模式下临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
 
-模型提供商配置也保存在 `config.local.json` 的 `providers` 列表中，管理页面的交互不变；新增、编辑、删除提供商都会直接更新本地配置文件，不写入 SQLite。
+模型提供商配置也保存在 `config.yaml` 的 `providers` 列表中，管理页面的交互不变；新增、编辑、删除提供商都会直接更新本地配置文件，不写入 SQLite。
 
 ## 模型配置
 
@@ -125,6 +146,6 @@ dist\windows\DocumentCheck.exe
 - `instance/document_check.sqlite3`：SQLite 数据库。
 - `instance/uploads/`：上传文档。
 - `instance/logs/app.log`：本地运行日志。
-- `config.local.json`：本地管理员账号、密码、隐藏管理入口、监听地址、启动端口、密钥和模型提供商配置。
+- `config.yaml`：本地管理员账号、密码、隐藏管理入口、监听地址、启动端口、密钥和模型提供商配置。
 
 以上文件均被 `.gitignore` 忽略，不应提交到仓库。
