@@ -66,7 +66,7 @@ config.non-platform.example.yaml
 
 ```yaml
 # 平台服务模式：适合部署到服务器或让局域网/公司入口访问。
-# 管理入口需要登录；用户身份可先用 ip，后续按公司 SSO 情况切到 trusted_header 或 saml。
+# 管理入口需要登录；用户身份可先用 ip，后续按公司 SSO 情况切到 trusted_header、saml 或 saml1。
 platform: true
 secret_key: 请替换为随机长字符串
 admin:
@@ -79,9 +79,9 @@ server:
   host: 0.0.0.0
   port: 31945
 auth:
-  # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
-  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户；saml：直接对接 SAML 2.0。
-  # 当前 saml 模式只支持 SAML 2.0；如果公司只有 SAML 1.0，请优先让公司网关转换为 trusted_header。
+  # 可选值：ip、trusted_header、saml、saml1。默认先用 ip，确认公司 SSO 接入方式后再切换。
+  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
+  # saml：直接对接 SAML 2.0；saml1：直接接收 SAML 1.x Browser/POST 回调。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:
@@ -104,6 +104,22 @@ auth:
     # user_id_attribute 是 SAML Attribute 中稳定唯一用户 ID 的字段名；留空时使用 SAML NameID。
     user_id_attribute: ""
     # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
+    username_attribute: ""
+  # mode: saml1 时填写；公司 SSO 只能提供 SAML 1.0/1.1 Browser/POST 时使用。
+  saml1:
+    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，通常是 https://你的域名/auth/saml1/acs。
+    acs_url: ""
+    # idp_issuer 是 SAML 1.x Assertion 的 Issuer，由公司 SSO 管理员提供。
+    idp_issuer: ""
+    # idp_sso_url 是公司 SSO 的入口地址；SAML 1.x 常见为 IdP 发起，若无入口可留空并从公司门户访问。
+    idp_sso_url: ""
+    # idp_x509_cert 是公司 SSO 用于签名 SAML 1.x 响应或断言的公钥证书内容，不是私钥。
+    idp_x509_cert: ""
+    # audience 是本系统期望的 Audience；公司未配置 Audience 时可留空。
+    audience: ""
+    # user_id_attribute 是 SAML 1.x Attribute 中稳定唯一用户 ID 的字段名；留空时使用 NameIdentifier。
+    user_id_attribute: ""
+    # username_attribute 是 SAML 1.x Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
 providers: []
 ```
@@ -125,9 +141,9 @@ server:
   host: 127.0.0.1
   port: 31945
 auth:
-  # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
-  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户；saml：直接对接 SAML 2.0。
-  # 当前 saml 模式只支持 SAML 2.0；如果公司只有 SAML 1.0，请优先让公司网关转换为 trusted_header。
+  # 可选值：ip、trusted_header、saml、saml1。默认先用 ip，本机模式通常不需要切换。
+  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
+  # saml：直接对接 SAML 2.0；saml1：直接接收 SAML 1.x Browser/POST 回调。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:
@@ -151,6 +167,22 @@ auth:
     user_id_attribute: ""
     # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
+  # mode: saml1 时填写；公司 SSO 只能提供 SAML 1.0/1.1 Browser/POST 时使用。
+  saml1:
+    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，通常是 https://你的域名/auth/saml1/acs。
+    acs_url: ""
+    # idp_issuer 是 SAML 1.x Assertion 的 Issuer，由公司 SSO 管理员提供。
+    idp_issuer: ""
+    # idp_sso_url 是公司 SSO 的入口地址；SAML 1.x 常见为 IdP 发起，若无入口可留空并从公司门户访问。
+    idp_sso_url: ""
+    # idp_x509_cert 是公司 SSO 用于签名 SAML 1.x 响应或断言的公钥证书内容，不是私钥。
+    idp_x509_cert: ""
+    # audience 是本系统期望的 Audience；公司未配置 Audience 时可留空。
+    audience: ""
+    # user_id_attribute 是 SAML 1.x Attribute 中稳定唯一用户 ID 的字段名；留空时使用 NameIdentifier。
+    user_id_attribute: ""
+    # username_attribute 是 SAML 1.x Attribute 中显示名的字段名；留空时显示 user_id。
+    username_attribute: ""
 providers: []
 ```
 
@@ -160,13 +192,14 @@ providers: []
 
 ## 用户身份与 SSO 预留
 
-系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。配置里保留三种 `auth.mode`，默认先用 `ip` 方便本机运行、临时测试和先把平台跑起来；确认公司 SSO 接入方式后，再把 `mode` 切到对应模式。IP 仍会记录在任务中用于审计。
+系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。配置里保留四种 `auth.mode`，默认先用 `ip` 方便本机运行、临时测试和先把平台跑起来；确认公司 SSO 接入方式后，再把 `mode` 切到对应模式。IP 仍会记录在任务中用于审计。
 
 - `ip`：不接 SSO，用户主体为 `ip:<访问 IP>`。
 - `trusted_header`：公司网关或反向代理已经完成 SSO 登录，并把用户 ID/用户名注入可信 HTTP header。
-- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接；当前不支持直接接 SAML 1.0。
+- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接。
+- `saml1`：公司 SSO 只能提供 SAML 1.0/1.1 Browser/POST，本系统直接接收 SAML 1.x 回调。
 
-如果公司口径是 SAML 1.0，需要先确认是否能提供 SAML 2.0 入口。若确实只有 SAML 1.0，建议让公司统一网关、身份平台或反向代理先完成登录，再转换为可信 header 给本系统，此时使用 `auth.mode: trusted_header`；直接在本系统内解析 SAML 1.0 需要另做新的认证模式，当前版本没有实现。
+如果公司口径是 SAML 1.0，建议先确认是否能提供 SAML 2.0 入口；能提供 SAML 2.0 时优先用 `saml`。若确实只有 SAML 1.0/1.1，可使用 `saml1`，但它按传统 Browser/POST 方式接收 IdP 发起或 IdP 入口跳转后的 `SAMLResponse`，不提供 SAML 2.0 那种标准 SP metadata 和 AuthnRequest 能力。若公司已有统一网关，也可以让网关先完成登录并转换为可信 header，此时用 `trusted_header` 更简单。
 
 常用字段含义：
 
@@ -179,6 +212,13 @@ providers: []
 - `saml.idp_x509_cert`：公司 SSO 用来签名 SAML 响应的公钥证书内容，不是私钥。
 - `saml.user_id_attribute`：SAML Attribute 中稳定唯一用户 ID 的字段名，留空时使用 SAML `NameID`。
 - `saml.username_attribute`：SAML Attribute 中显示名的字段名，留空时显示用户 ID。
+- `saml1.acs_url`：公司 SSO POST SAML 1.x `SAMLResponse` 的回调地址，通常是 `https://你的域名/auth/saml1/acs`。
+- `saml1.idp_issuer`：SAML 1.x Assertion 的 `Issuer`，由公司 SSO 管理员提供。
+- `saml1.idp_sso_url`：公司 SSO 入口地址；SAML 1.x 常见为 IdP 发起，若公司只能从门户发起可留空。
+- `saml1.idp_x509_cert`：公司 SSO 用来签名 SAML 1.x 响应或断言的公钥证书内容，不是私钥。
+- `saml1.audience`：本系统期望的 Audience；公司未配置 Audience 时可留空。
+- `saml1.user_id_attribute`：SAML 1.x Attribute 中稳定唯一用户 ID 的字段名，留空时使用 `NameIdentifier`。
+- `saml1.username_attribute`：SAML 1.x Attribute 中显示名的字段名，留空时显示用户 ID。
 
 `trusted_header` 只有在公司已有统一网关或反向代理，并且网关已经完成 SSO 登录、能把登录用户写入可信请求头时才需要；直接对接 SAML 2.0 时不需要配置它。网关模式可以这样写：
 
@@ -217,6 +257,51 @@ auth:
 ```
 
 SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、ACS URL、SP metadata URL（`https://文档门禁域名/auth/saml/metadata`），并请对方把稳定唯一用户 ID 映射到 `user_id_attribute`，把显示名映射到 `username_attribute`。如果 `user_id_attribute` 留空，系统会使用 SAML `NameID` 作为用户 ID；不建议使用姓名作为用户 ID，因为同名用户无法区分。SAML 登录成功后仍会存为 `owner_subject = sso:<用户ID>`，管理员入口继续使用本系统本地管理员账号密码，不需要在公司 SSO 里设置管理员。
+
+如果公司只能提供 SAML 1.0/1.1 Browser/POST，可以改为：
+
+```yaml
+auth:
+  mode: saml1
+  saml1:
+    acs_url: https://文档门禁域名/auth/saml1/acs
+    idp_issuer: 公司 SSO 提供的 SAML 1.x Issuer
+    idp_sso_url: 公司 SSO 提供的入口地址
+    idp_x509_cert: |
+      公司 SSO 提供的签名证书内容
+    audience: https://文档门禁域名/saml1
+    user_id_attribute: uid
+    username_attribute: displayName
+```
+
+SAML 1.x 接入时需要把 ACS URL（`https://文档门禁域名/auth/saml1/acs`）和期望 Audience 交给公司 SSO 管理员。对方需要返回 SAMLResponse，并使用证书签名 Response 或 Assertion；本系统会校验签名、Issuer、Recipient、Conditions 和 Audience。若 `user_id_attribute` 留空，系统会使用 SAML 1.x `NameIdentifier` 作为用户 ID。
+
+咨询公司 SSO 管理员时可以直接发送下面这段：
+
+```text
+我们要把“文档智能门禁”接入公司 SSO，用于识别普通用户并按用户 ID 归属任务；管理员入口仍使用系统本地管理员账号，不需要通过 SSO 授权管理员。
+
+请帮忙确认公司 SSO 支持哪种接入方式：
+1. 是否有统一网关/反向代理可先完成 SSO 登录，再向后端注入可信 HTTP header？如果可以，我们倾向使用 trusted_header。
+2. 如果不能注入 header，是否支持 SAML 2.0？如果支持，我们使用 SAML 2.0 SP。
+3. 如果只能提供 SAML 1.0/1.1，请确认是否是 Browser/POST，并提供 SAMLResponse 到我们的 ACS 地址。
+
+我们需要给你们的信息：
+- 系统访问域名：https://文档门禁域名
+- 管理员入口：/console，是否需要从 SSO 网关放行请一起确认
+- trusted_header 模式：请告知你们希望注入的 header 名称；我们需要唯一用户 ID 和显示名
+- SAML 2.0 模式：SP Entity ID = https://文档门禁域名/auth/saml/metadata，ACS URL = https://文档门禁域名/auth/saml/acs，Metadata URL = https://文档门禁域名/auth/saml/metadata
+- SAML 1.x 模式：ACS URL = https://文档门禁域名/auth/saml1/acs，Audience 可按你们要求设置
+
+请你们提供给我们的信息：
+- 推荐接入模式：trusted_header / SAML 2.0 / SAML 1.0 或 1.1
+- 唯一用户 ID 字段：不能是姓名，要稳定且唯一，例如工号、账号 ID、uid
+- 显示名字段：例如 displayName、cn、name
+- trusted_header 模式：用户 ID header 名称、显示名 header 名称，并确认网关会清理外部伪造的同名 header
+- SAML 2.0 模式：IdP Entity ID、SSO 登录地址、X509 签名证书、用户 ID Attribute、显示名 Attribute
+- SAML 1.x 模式：Issuer、入口地址、X509 签名证书、是否签名 Response 或 Assertion、Audience、用户 ID Attribute 或 NameIdentifier、显示名 Attribute
+- 是否要求 HTTPS、内网/VPN、回调域名白名单、证书轮换周期
+```
 
 模型提供商配置也保存在 `config.yaml` 的 `providers` 列表中，管理页面的交互不变；新增、编辑、删除提供商都会直接更新本地配置文件，不写入 SQLite。
 

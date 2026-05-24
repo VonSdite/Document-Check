@@ -38,6 +38,7 @@ from .db import (
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
 from .model_discovery import ModelDiscoveryError, fetch_models
 from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
+from .saml1 import Saml1ConfigError, Saml1ResponseError, process_saml1_response, saml1_login_url
 from .task_types import (
     CONSISTENCY_MAX_DATA_FILES,
     CONSISTENCY_MAX_MATERIAL_FILES,
@@ -87,11 +88,12 @@ def register_routes(app):
 
     @app.before_request
     def require_saml_user_session():
-        if not _platform_enabled() or not _saml_mode_enabled() or not _is_user_endpoint(request.endpoint):
+        if not _platform_enabled() or not _sso_session_mode_enabled() or not _is_user_endpoint(request.endpoint):
             return None
         if _has_saml_user_session():
             return None
-        return redirect(url_for("saml_login", next=_current_relative_url()))
+        login_endpoint = "saml1_login" if _saml1_mode_enabled() else "saml_login"
+        return redirect(url_for(login_endpoint, next=_current_relative_url()))
 
     @app.get("/auth/saml/login")
     def saml_login():
@@ -132,6 +134,36 @@ def register_routes(app):
         session[SAML_USER_SESSION_KEY] = {"user_id": user_id, "username": username or user_id}
         return redirect(_safe_next_path(request.form.get("RelayState")))
 
+    @app.get("/auth/saml1/login")
+    def saml1_login():
+        if not _saml1_mode_enabled():
+            abort(404)
+        try:
+            redirect_url = saml1_login_url(_safe_next_path(request.args.get("next")))
+        except Saml1ConfigError as error:
+            abort(503, description=str(error))
+        except Exception:
+            current_app.logger.exception("生成 SAML 1.x 登录跳转失败")
+            abort(503, description="SAML 1.x 登录配置无效，请联系管理员。")
+        return redirect(redirect_url)
+
+    @app.post("/auth/saml1/acs")
+    def saml1_acs():
+        if not _saml1_mode_enabled():
+            abort(404)
+        try:
+            user_id, username = process_saml1_response()
+        except Saml1ConfigError as error:
+            abort(503, description=str(error))
+        except Saml1ResponseError as error:
+            current_app.logger.warning("SAML 1.x 回调校验失败：%s", error)
+            abort(401, description="SAML 1.x 登录失败，请重新从公司统一入口访问。")
+        except Exception:
+            current_app.logger.exception("处理 SAML 1.x 回调失败")
+            abort(401, description="SAML 1.x 登录失败，请重新从公司统一入口访问。")
+        session[SAML_USER_SESSION_KEY] = {"user_id": user_id, "username": username or user_id}
+        return redirect(_safe_next_path(request.form.get("TARGET")))
+
     @app.get("/auth/saml/metadata")
     def saml_metadata():
         if not _saml_mode_enabled():
@@ -147,7 +179,7 @@ def register_routes(app):
 
     @app.post("/auth/saml/logout")
     def saml_logout():
-        if not _saml_mode_enabled():
+        if not _sso_session_mode_enabled():
             abort(404)
         session.pop(SAML_USER_SESSION_KEY, None)
         session.pop("saml_request_id", None)
@@ -726,6 +758,14 @@ def _auth_mode() -> str:
 
 def _saml_mode_enabled() -> bool:
     return _auth_mode() == "saml"
+
+
+def _saml1_mode_enabled() -> bool:
+    return _auth_mode() == "saml1"
+
+
+def _sso_session_mode_enabled() -> bool:
+    return _auth_mode() in {"saml", "saml1"}
 
 
 def _is_user_endpoint(endpoint: str | None) -> bool:

@@ -31,6 +31,7 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["auth"]["mode"], "ip")
         self.assertEqual(config["auth"]["trusted_header"], {"user_id": "", "username": ""})
         self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "")
+        self.assertEqual(config["auth"]["saml1"]["acs_url"], "")
 
     def test_auth_trusted_header_config_is_normalized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -71,6 +72,15 @@ class ProviderConfigTest(unittest.TestCase):
                     "user_id_attribute": "",
                     "username_attribute": "",
                 },
+                "saml1": {
+                    "acs_url": "",
+                    "idp_issuer": "",
+                    "idp_sso_url": "",
+                    "idp_x509_cert": "",
+                    "audience": "",
+                    "user_id_attribute": "",
+                    "username_attribute": "",
+                },
             },
         )
 
@@ -105,6 +115,38 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "https://doc.example.com/auth/saml/metadata")
         self.assertEqual(config["auth"]["saml"]["idp_x509_cert"], "test-cert")
         self.assertEqual(config["auth"]["saml"]["user_id_attribute"], "uid")
+
+    def test_auth_saml1_config_is_normalized(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {"host": "127.0.0.1", "port": 5000},
+                    "auth": {
+                        "mode": "saml1",
+                        "saml1": {
+                            "acs_url": " https://doc.example.com/auth/saml1/acs ",
+                            "idp_issuer": " company-saml1 ",
+                            "idp_sso_url": "https://sso.example.com/saml1",
+                            "idp_x509_cert": " test-cert ",
+                            "audience": " https://doc.example.com/saml1 ",
+                            "user_id_attribute": " uid ",
+                            "username_attribute": "displayName",
+                        },
+                    },
+                    "providers": [],
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["auth"]["mode"], "saml1")
+        self.assertEqual(config["auth"]["saml1"]["acs_url"], "https://doc.example.com/auth/saml1/acs")
+        self.assertEqual(config["auth"]["saml1"]["idp_issuer"], "company-saml1")
+        self.assertEqual(config["auth"]["saml1"]["audience"], "https://doc.example.com/saml1")
 
     def test_default_config_uses_yaml_filename(self):
         with tempfile.TemporaryDirectory() as temp_dir:

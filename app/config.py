@@ -17,7 +17,7 @@ DEFAULT_MAX_INPUT_CHARS = 80000
 DEFAULT_SSL_VERIFY = False
 DEFAULT_AUTH_MODE = "ip"
 PROXY_MODES = {"direct", "system", "custom"}
-AUTH_MODES = {"ip", "trusted_header", "saml"}
+AUTH_MODES = {"ip", "trusted_header", "saml", "saml1"}
 _CONFIG_LOCK = threading.Lock()
 CONFIG_FILENAME = "config.yaml"
 
@@ -78,6 +78,15 @@ def _default_config() -> dict:
                 "user_id_attribute": "",
                 "username_attribute": "",
             },
+            "saml1": {
+                "acs_url": "",
+                "idp_issuer": "",
+                "idp_sso_url": "",
+                "idp_x509_cert": "",
+                "audience": "",
+                "user_id_attribute": "",
+                "username_attribute": "",
+            },
         },
         "providers": [],
     }
@@ -119,6 +128,9 @@ def _normalize_auth(value) -> dict:
     saml = value.get("saml", {})
     if not isinstance(saml, dict):
         saml = {}
+    saml1 = value.get("saml1", {})
+    if not isinstance(saml1, dict):
+        saml1 = {}
     return {
         "mode": mode,
         "trusted_header": {
@@ -133,6 +145,15 @@ def _normalize_auth(value) -> dict:
             "idp_x509_cert": str(saml.get("idp_x509_cert") or "").strip(),
             "user_id_attribute": str(saml.get("user_id_attribute") or "").strip(),
             "username_attribute": str(saml.get("username_attribute") or "").strip(),
+        },
+        "saml1": {
+            "acs_url": str(saml1.get("acs_url") or "").strip(),
+            "idp_issuer": str(saml1.get("idp_issuer") or "").strip(),
+            "idp_sso_url": str(saml1.get("idp_sso_url") or "").strip(),
+            "idp_x509_cert": str(saml1.get("idp_x509_cert") or "").strip(),
+            "audience": str(saml1.get("audience") or "").strip(),
+            "user_id_attribute": str(saml1.get("user_id_attribute") or "").strip(),
+            "username_attribute": str(saml1.get("username_attribute") or "").strip(),
         },
     }
 
