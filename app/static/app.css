@@ -633,16 +633,32 @@ td {
   align-items: end;
 }
 
+.settings-network-mode-field {
+  grid-column: 1;
+}
+
 .settings-network-form .settings-network-proxy-field {
-  visibility: hidden;
+  display: none;
+  grid-column: 2;
 }
 
 .settings-network-form[data-network-proxy-mode="custom"] .settings-network-proxy-field {
-  visibility: visible;
+  display: grid;
 }
 
 .settings-network-toggle {
+  grid-column: 2;
   min-height: 43px;
+}
+
+.settings-network-form[data-network-proxy-mode="custom"] .settings-network-toggle {
+  grid-column: 3;
+}
+
+.settings-network-save-button {
+  grid-column: 4;
+  width: 100%;
+  min-width: 0;
 }
 
 .settings-diagnostic-form {

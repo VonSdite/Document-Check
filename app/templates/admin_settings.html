@@ -19,7 +19,7 @@
   </div>
   <form method="post" class="settings-network-form" data-network-proxy-mode="{{ network.proxy_mode }}">
     <input type="hidden" name="action" value="network">
-    <label>代理模式
+    <label class="settings-network-mode-field">代理模式
       <select name="proxy_mode">
         <option value="direct" {{ "selected" if network.proxy_mode == "direct" else "" }}>直连</option>
         <option value="system" {{ "selected" if network.proxy_mode == "system" else "" }}>系统代理</option>
@@ -38,7 +38,7 @@
       <span>SSL 校验</span>
       <button class="help-tip" type="button" aria-label="SSL 校验说明" data-tip="开启后校验 HTTPS 证书；默认关闭，适合内网或自签名证书服务。">?</button>
     </label>
-    <button class="primary-button settings-save-button" type="submit">保存网络设置</button>
+    <button class="primary-button settings-save-button settings-network-save-button" type="submit">保存网络设置</button>
   </form>
 </section>
 
