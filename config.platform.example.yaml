@@ -10,7 +10,6 @@ server:
 auth:
   mode: ip
   trusted_header:
-    user: ""
-    name: ""
-    email: ""
+    user_id: ""
+    username: ""
 providers: []

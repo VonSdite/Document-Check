@@ -77,9 +77,8 @@ server:
 auth:
   mode: ip
   trusted_header:
-    user: ""
-    name: ""
-    email: ""
+    user_id: ""
+    username: ""
 providers: []
 ```
 
@@ -98,9 +97,8 @@ server:
 auth:
   mode: ip
   trusted_header:
-    user: ""
-    name: ""
-    email: ""
+    user_id: ""
+    username: ""
 providers: []
 ```
 
@@ -118,16 +116,15 @@ providers: []
 auth:
   mode: trusted_header
   trusted_header:
-    user: X-SSO-User
-    name: X-SSO-Name
-    email: X-SSO-Email
+    user_id: X-SSO-User-Id
+    username: X-SSO-User-Name
 ```
 
-此时系统会把 `X-SSO-User` 解析为 `sso:<账号>`，优先用 `X-SSO-Name` 或 `X-SSO-Email` 作为显示名称；用户入口没有收到 `X-SSO-User` 时会返回 401，避免绕过 SSO 后退回 IP 身份。只有在该服务位于可信 SSO 网关之后、外部用户无法伪造这些请求头时才应启用该模式。用户启停、组织、角色等用户管理职责应放在公司 SSO 或身份平台中处理；本系统只保存任务归属快照、审计 IP、统计和并发控制所需的用户主体。后续如果公司提供 OIDC、SAML 或 CAS 接口，也只需要把认证回调解析出的账号映射到同一个用户主体格式即可。
+此时系统会把 `X-SSO-User-Id` 解析为 `sso:<用户ID>`，用 `X-SSO-User-Name` 作为显示名；用户入口没有收到 `X-SSO-User-Id` 时会返回 401，避免绕过 SSO 后退回 IP 身份。只有在该服务位于可信 SSO 网关之后、外部用户无法伪造这些请求头时才应启用该模式。用户启停、组织、角色等用户管理职责应放在公司 SSO 或身份平台中处理；本系统只保存任务归属快照、审计 IP、统计和并发控制所需的用户主体。后续如果公司提供 OIDC、SAML 或 CAS 接口，也只需要把认证回调解析出的用户 ID 和显示名映射到同一个用户主体格式即可。
 
 实际接入时按下面顺序操作：
 
-1. 向公司 SSO 管理员确认是否已有统一网关或反向代理能在登录后注入请求头，例如 `X-SSO-User`、`X-SSO-Name`、`X-SSO-Email`。
+1. 向公司 SSO 管理员确认是否已有统一网关或反向代理能在登录后注入请求头，并确认“唯一用户 ID”和“显示名”分别对应哪个 header，例如 `X-SSO-User-Id`、`X-SSO-User-Name`。
 2. 将本服务部署在该网关之后，禁止用户绕过网关直连 Flask 服务；网关转发前应清理外部请求自带的同名 header，再写入可信 header。
 3. 把 `config.yaml` 的 `platform` 设为 `true`，`auth.mode` 设为 `trusted_header`，并按公司网关实际 header 名称填写 `trusted_header`。
 4. 访问用户入口验证任务归属：提交任务后，管理端任务列表应显示 `sso:<账号>` 和显示名称。

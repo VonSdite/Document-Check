@@ -33,15 +33,15 @@ def current_identity(*, require_sso: bool = False) -> UserIdentity:
 
 def _identity_from_trusted_header(auth_config: dict, ip: str) -> UserIdentity | None:
     header_config = auth_config.get("trusted_header", {})
-    user_header = str(header_config.get("user") or "").strip()
-    if not user_header:
+    user_id_header = str(header_config.get("user_id") or "").strip()
+    if not user_id_header:
         return None
 
-    user_id = _header_value(user_header)
+    user_id = _header_value(user_id_header)
     if not user_id:
         return None
 
-    display_name = _header_value(header_config.get("name")) or _header_value(header_config.get("email")) or user_id
+    display_name = _header_value(header_config.get("username")) or user_id
     return UserIdentity(subject=f"sso:{user_id}", display_name=display_name, source="sso", ip=ip)
 
 

@@ -66,9 +66,8 @@ def _default_config() -> dict:
         "auth": {
             "mode": DEFAULT_AUTH_MODE,
             "trusted_header": {
-                "user": "",
-                "name": "",
-                "email": "",
+                "user_id": "",
+                "username": "",
             },
         },
         "providers": [],
@@ -111,9 +110,8 @@ def _normalize_auth(value) -> dict:
     return {
         "mode": mode,
         "trusted_header": {
-            "user": str(trusted_header.get("user") or "").strip(),
-            "name": str(trusted_header.get("name") or "").strip(),
-            "email": str(trusted_header.get("email") or "").strip(),
+            "user_id": str(trusted_header.get("user_id") or "").strip(),
+            "username": str(trusted_header.get("username") or "").strip(),
         },
     }
 

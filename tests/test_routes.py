@@ -452,9 +452,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
             "trusted_header": {
-                "user": "X-SSO-User",
-                "name": "X-SSO-Name",
-                "email": "",
+                "user_id": "X-SSO-User-Id",
+                "username": "X-SSO-User-Name",
             },
         }
         with self.app.app_context():
@@ -467,14 +466,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "checks": [str(item["id"])],
                 "model_id": "provider-1:0:model-a",
             },
-            headers={"X-SSO-User": "zhangsan", "X-SSO-Name": "张三"},
+            headers={"X-SSO-User-Id": "100086", "X-SSO-User-Name": "张三"},
             content_type="multipart/form-data",
         )
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source, ip FROM tasks").fetchone()
-        self.assertEqual(task["owner_subject"], "sso:zhangsan")
+        self.assertEqual(task["owner_subject"], "sso:100086")
         self.assertEqual(task["owner_name_snapshot"], "张三")
         self.assertEqual(task["owner_source"], "sso")
         self.assertEqual(task["ip"], "127.0.0.1")
@@ -483,9 +482,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
             "trusted_header": {
-                "user": "X-SSO-User",
-                "name": "X-SSO-Name",
-                "email": "",
+                "user_id": "X-SSO-User-Id",
+                "username": "X-SSO-User-Name",
             },
         }
 
@@ -498,9 +496,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
             "trusted_header": {
-                "user": "X-SSO-User",
-                "name": "X-SSO-Name",
-                "email": "",
+                "user_id": "X-SSO-User-Id",
+                "username": "X-SSO-User-Name",
             },
         }
 

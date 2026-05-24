@@ -42,9 +42,8 @@ class ProviderConfigTest(unittest.TestCase):
                     "auth": {
                         "mode": "trusted_header",
                         "trusted_header": {
-                            "user": " X-SSO-User ",
-                            "name": "X-SSO-Name",
-                            "email": "X-SSO-Email",
+                            "user_id": " X-SSO-User-Id ",
+                            "username": "X-SSO-User-Name",
                         },
                     },
                     "providers": [],
@@ -58,9 +57,8 @@ class ProviderConfigTest(unittest.TestCase):
             {
                 "mode": "trusted_header",
                 "trusted_header": {
-                    "user": "X-SSO-User",
-                    "name": "X-SSO-Name",
-                    "email": "X-SSO-Email",
+                    "user_id": "X-SSO-User-Id",
+                    "username": "X-SSO-User-Name",
                 },
             },
         )
