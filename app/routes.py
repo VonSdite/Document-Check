@@ -26,11 +26,9 @@ from .auth import UserIdentity, current_identity, subject_label
 from .config import load_local_config, save_local_config
 from .db import (
     default_check_item_codes,
-    ensure_user_profile,
     get_bool_setting,
     get_db,
     get_setting,
-    get_user_profile,
     now_text,
     owner_subject_from_ip,
     reset_default_check_item_prompt,
@@ -76,11 +74,10 @@ def register_routes(app):
     @app.context_processor
     def inject_globals():
         identity = current_identity()
-        user = get_user_profile(identity.subject)
         return {
             "platform_mode": _platform_enabled(),
             "status_labels": STATUS_LABELS,
-            "nav_identity": _identity_label(identity, user),
+            "nav_identity": _identity_label(identity),
             "task_type_label": task_type_label,
         }
 
@@ -88,16 +85,12 @@ def register_routes(app):
     def user_tasks():
         if not _platform_enabled():
             if request.method == "POST":
-                identity, user = _current_user_context()
-                return create_task_for_identity(identity, user, admin_created=True)
+                return create_task_for_identity(current_identity(), admin_created=True)
             return _render_admin_tasks_page()
 
-        identity, user = _current_user_context()
+        identity = current_identity()
         if request.method == "POST":
-            if user and user["is_disabled"]:
-                flash("当前用户已被管理员禁用，不能提交任务。", "error")
-                return redirect(url_for("user_tasks"))
-            return create_task_for_identity(identity, user, admin_created=False)
+            return create_task_for_identity(identity, admin_created=False)
         page = _page_arg()
         total = get_db().execute(
             "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
@@ -107,11 +100,10 @@ def register_routes(app):
         rows = get_db().execute(
             """
             SELECT t.*,
-                   COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-                   COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                    COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
             FROM tasks t
-            LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
             WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
             ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
@@ -123,7 +115,6 @@ def register_routes(app):
             "user_tasks.html",
             ip=identity.ip,
             identity=identity,
-            user=user,
             tasks=rows,
             stats=stats,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
@@ -136,32 +127,24 @@ def register_routes(app):
     def user_new_task():
         if not _platform_enabled():
             if request.method == "POST":
-                identity, user = _current_user_context()
-                return create_task_for_identity(identity, user, admin_created=True)
+                return create_task_for_identity(current_identity(), admin_created=True)
             return redirect(url_for("user_tasks"))
 
-        identity, user = _current_user_context()
-        if user and user["is_disabled"]:
-            flash("当前用户已被管理员禁用，不能提交任务。", "error")
-            return redirect(url_for("user_tasks"))
+        identity = current_identity()
         if request.method == "POST":
-            return create_task_for_identity(identity, user, admin_created=False)
+            return create_task_for_identity(identity, admin_created=False)
         return redirect(url_for("user_tasks"))
 
     @app.route("/consistency", methods=["GET", "POST"])
     def user_consistency():
         if not _platform_enabled():
             if request.method == "POST":
-                identity, user = _current_user_context()
-                return create_consistency_task_for_identity(identity, user, admin_created=True)
+                return create_consistency_task_for_identity(current_identity(), admin_created=True)
             return _render_admin_consistency_page()
 
-        identity, user = _current_user_context()
+        identity = current_identity()
         if request.method == "POST":
-            if user and user["is_disabled"]:
-                flash("当前用户已被管理员禁用，不能提交任务。", "error")
-                return redirect(url_for("user_consistency"))
-            return create_consistency_task_for_identity(identity, user, admin_created=False)
+            return create_consistency_task_for_identity(identity, admin_created=False)
 
         page = _page_arg()
         total = get_db().execute(
@@ -172,11 +155,10 @@ def register_routes(app):
         rows = get_db().execute(
             """
             SELECT t.*,
-                   COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-                   COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                    COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
             FROM tasks t
-            LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
             WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
             ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
@@ -188,7 +170,6 @@ def register_routes(app):
             "user_consistency.html",
             ip=identity.ip,
             identity=identity,
-            user=user,
             tasks=rows,
             stats=stats,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
@@ -281,24 +262,21 @@ def register_routes(app):
     @admin_required
     def admin_tasks():
         if request.method == "POST":
-            identity, user = _current_user_context()
-            return create_task_for_identity(identity, user, admin_created=True)
+            return create_task_for_identity(current_identity(), admin_created=True)
         return _render_admin_tasks_page()
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
     @admin_required
     def admin_new_task():
         if request.method == "POST":
-            identity, user = _current_user_context()
-            return create_task_for_identity(identity, user, admin_created=True)
+            return create_task_for_identity(current_identity(), admin_created=True)
         return redirect(url_for("admin_tasks"))
 
     @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
     @admin_required
     def admin_consistency():
         if request.method == "POST":
-            identity, user = _current_user_context()
-            return create_consistency_task_for_identity(identity, user, admin_created=True)
+            return create_consistency_task_for_identity(current_identity(), admin_created=True)
         return _render_admin_consistency_page()
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>")
@@ -342,77 +320,6 @@ def register_routes(app):
         if _delete_task(task):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(True, task["task_type"])))
-
-    @app.route(f"{admin_prefix}/users", methods=["GET", "POST"])
-    @admin_required
-    def admin_users():
-        if not _platform_enabled():
-            abort(404)
-
-        db = get_db()
-        if request.method == "POST":
-            action = request.form.get("action", "save")
-            subject = request.form.get("subject", "").strip()
-            if not subject:
-                legacy_ip = request.form.get("ip", "").strip()
-                subject = owner_subject_from_ip(legacy_ip) if legacy_ip else ""
-            if not subject:
-                flash("用户主体不能为空。", "error")
-                return redirect(url_for("admin_users"))
-            if action == "delete":
-                db.execute("DELETE FROM user_profiles WHERE subject = ?", (subject,))
-                db.commit()
-                flash("用户配置已删除。", "success")
-                return redirect(url_for("admin_users"))
-
-            display_name = request.form.get("display_name", request.form.get("username", "")).strip()
-            source = request.form.get("source", "").strip() or ("ip" if subject.startswith("ip:") else "sso")
-            if request.form.get("permission_submitted") == "1":
-                is_disabled = 0 if request.form.get("is_enabled") == "1" else 1
-            else:
-                is_disabled = 0
-            db.execute(
-                """
-                INSERT INTO user_profiles(subject, display_name, source, is_disabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(subject) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    source = excluded.source,
-                    is_disabled = excluded.is_disabled,
-                    updated_at = excluded.updated_at
-                """,
-                (subject, display_name, source, is_disabled, now_text(), now_text()),
-            )
-            db.commit()
-            flash("用户配置已保存。", "success")
-            return redirect(url_for("admin_users"))
-
-        users = db.execute(
-            """
-            SELECT u.*,
-                   COUNT(t.id) AS task_count,
-                   SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END) AS running_count
-            FROM user_profiles u
-            LEFT JOIN tasks t ON COALESCE(t.owner_subject, 'ip:' || t.ip) = u.subject
-            GROUP BY u.subject
-            ORDER BY u.updated_at DESC
-            """
-        ).fetchall()
-        unmanaged_users = db.execute(
-            """
-            SELECT COALESCE(t.owner_subject, 'ip:' || t.ip) AS subject,
-                   MAX(COALESCE(t.owner_name_snapshot, t.username_snapshot, '')) AS display_name_snapshot,
-                   MAX(COALESCE(t.owner_source, 'ip')) AS source,
-                   COUNT(*) AS task_count,
-                   MAX(t.created_at) AS last_task_at
-            FROM tasks t
-            LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
-            WHERE u.subject IS NULL
-            GROUP BY COALESCE(t.owner_subject, 'ip:' || t.ip)
-            ORDER BY last_task_at DESC
-            """
-        ).fetchall()
-        return render_template("admin_users.html", users=users, unmanaged_users=unmanaged_users)
 
     @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
     @admin_required
@@ -720,15 +627,9 @@ def register_routes(app):
         )
 
 
-def _current_user_context() -> tuple[UserIdentity, object]:
-    identity = current_identity()
-    user = ensure_user_profile(identity.subject, identity.display_name, identity.source)
-    return identity, user
-
-
-def _identity_label(identity: UserIdentity, user) -> str:
-    if user and user["display_name"]:
-        return f"{identity.subject}-{user['display_name']}"
+def _identity_label(identity: UserIdentity) -> str:
+    if identity.display_name:
+        return f"{identity.subject}-{identity.display_name}"
     return identity.label
 
 
@@ -802,7 +703,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
             (
                 COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ?
                 OR t.ip LIKE ?
-                OR COALESCE(u.display_name, t.owner_name_snapshot, t.username_snapshot, '') LIKE ?
+                OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ?
             )
             """
         )
@@ -815,7 +716,6 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         f"""
         SELECT COUNT(*) AS total
         FROM tasks t
-        LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
         {where}
         """,
         tuple(params),
@@ -824,11 +724,10 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     rows = get_db().execute(
         f"""
         SELECT t.*,
-               COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-               COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
-        LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
         {where}
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ? OFFSET ?
@@ -1197,14 +1096,12 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         SELECT
             COALESCE(t.owner_subject, 'ip:' || t.ip) AS subject,
             MIN(t.ip) AS ip,
-            COALESCE(NULLIF(u.display_name, ''), NULLIF(MAX(t.owner_name_snapshot), ''), NULLIF(MAX(iu.username), ''), NULLIF(MAX(t.username_snapshot), '')) AS username,
+            COALESCE(NULLIF(MAX(t.owner_name_snapshot), ''), NULLIF(MAX(t.username_snapshot), '')) AS username,
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
             MAX(t.created_at) AS last_task_at
         FROM tasks t
-        LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
-        LEFT JOIN ip_users iu ON iu.ip = t.ip
         WHERE t.created_at >= ? AND t.created_at < ?
         GROUP BY COALESCE(t.owner_subject, 'ip:' || t.ip)
         ORDER BY tasks DESC, last_task_at DESC, COALESCE(t.owner_subject, 'ip:' || t.ip) ASC
@@ -1249,14 +1146,8 @@ def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
     }
 
 
-def create_task_for_identity(identity: UserIdentity, user, *, admin_created: bool):
+def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     db = get_db()
-    if not admin_created:
-        current_user = get_user_profile(identity.subject)
-        if current_user and current_user["is_disabled"]:
-            flash("当前用户已被管理员禁用，不能提交任务。", "error")
-            return redirect(url_for("user_tasks"))
-
     upload = request.files.get("document")
     if upload is None or not upload.filename:
         flash("请选择要上传的文档。", "error")
@@ -1301,7 +1192,7 @@ def create_task_for_identity(identity: UserIdentity, user, *, admin_created: boo
         _remove_uploaded_file(destination)
         flash(f"文档文本 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
         return _back_to_task_form(admin_created)
-    owner_name = user["display_name"] if user and user["display_name"] else identity.display_name or None
+    owner_name = identity.display_name or None
     db.execute(
         """
         INSERT INTO tasks(
@@ -1347,14 +1238,8 @@ def create_task_for_identity(identity: UserIdentity, user, *, admin_created: boo
     return redirect(url_for("user_tasks"))
 
 
-def create_consistency_task_for_identity(identity: UserIdentity, user, *, admin_created: bool):
+def create_consistency_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     db = get_db()
-    if not admin_created:
-        current_user = get_user_profile(identity.subject)
-        if current_user and current_user["is_disabled"]:
-            flash("当前用户已被管理员禁用，不能提交任务。", "error")
-            return redirect(url_for("user_consistency"))
-
     master_uploads = _selected_uploads("master_documents")
     related_uploads = _selected_uploads("related_documents")
     if not _validate_consistency_uploads(master_uploads, "素材文档", CONSISTENCY_MAX_MATERIAL_FILES):
@@ -1416,7 +1301,7 @@ def create_consistency_task_for_identity(identity: UserIdentity, user, *, admin_
     first_file = all_files[0]
     file_size = sum(file_info["file_size"] for file_info in all_files)
     original_filename = f"多文档对照检查：素材{len(master_files)}个 / 资料{len(related_files)}个"
-    owner_name = user["display_name"] if user and user["display_name"] else identity.display_name or None
+    owner_name = identity.display_name or None
 
     db.execute(
         """
@@ -1552,11 +1437,10 @@ def _get_task_or_404(task_id: int):
     task = get_db().execute(
         """
         SELECT t.*,
-               COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-               COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
-        LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
         WHERE t.id = ?
         """,
         (task_id,),
@@ -1571,11 +1455,10 @@ def _get_user_task(task_id: int):
     task = get_db().execute(
         """
         SELECT t.*,
-               COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-               COALESCE(NULLIF(u.display_name, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
-        LEFT JOIN user_profiles u ON u.subject = COALESCE(t.owner_subject, 'ip:' || t.ip)
         WHERE t.id = ? AND COALESCE(t.owner_subject, 'ip:' || t.ip) = ?
         """,
         (task_id, identity.subject),

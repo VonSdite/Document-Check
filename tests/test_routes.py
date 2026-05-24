@@ -185,19 +185,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。", visible_descriptions)
 
     def test_admin_overview_counts_tasks_in_selected_range(self):
-        with self.app.app_context():
-            db = get_db()
-            db.execute(
-                """
-                INSERT INTO ip_users(ip, username, is_disabled, created_at, updated_at)
-                VALUES ('10.0.0.1', '测试用户A', 0, '2026-05-01 09:00:00', '2026-05-01 09:00:00')
-                """
-            )
-            db.commit()
-        self._insert_task(ip="10.0.0.1", created_at="2026-05-01 10:00:00")
+        self._insert_task(ip="10.0.0.1", username_snapshot="测试用户A", created_at="2026-05-01 10:00:00")
         self._insert_task(
             task_type=CONSISTENCY_TASK_TYPE,
             ip="10.0.0.1",
+            username_snapshot="测试用户A",
             status="failed",
             created_at="2026-05-01 11:00:00",
         )
@@ -259,13 +251,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("模型管理", response.get_data(as_text=True))
 
-    def test_local_mode_hides_user_management_route(self):
+    def test_user_management_route_is_not_registered(self):
+        platform_response = self.client.get("/admin/users")
+
         self.app.config["PLATFORM"] = False
         self._logout_test_client()
+        local_response = self.client.get("/admin/users")
 
-        response = self.client.get("/admin/users")
-
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(platform_response.status_code, 404)
+        self.assertEqual(local_response.status_code, 404)
 
     def test_admin_models_saves_model_force_disable_thinking(self):
         response = self.client.post(
@@ -480,12 +474,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source, ip FROM tasks").fetchone()
-            user = get_db().execute("SELECT * FROM user_profiles WHERE subject = 'sso:zhangsan'").fetchone()
         self.assertEqual(task["owner_subject"], "sso:zhangsan")
         self.assertEqual(task["owner_name_snapshot"], "张三")
         self.assertEqual(task["owner_source"], "sso")
         self.assertEqual(task["ip"], "127.0.0.1")
-        self.assertEqual(user["display_name"], "张三")
 
     def test_create_consistency_task_saves_combined_document_text(self):
         self._configure_provider()

@@ -1972,62 +1972,6 @@ td {
   min-width: 82px;
 }
 
-.stack-list,
-.admin-user-stack,
-.user-list {
-  display: grid;
-  gap: 10px;
-}
-
-.new-user-form {
-  display: grid;
-  gap: 16px;
-}
-
-.new-user-actions {
-  justify-content: space-between;
-}
-
-.new-user-actions .primary-button {
-  min-width: 128px;
-}
-
-.admin-user-stack {
-  gap: 20px;
-  margin-bottom: 20px;
-}
-
-.inline-edit,
-.user-row,
-.user-edit-form {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.inline-edit,
-.user-row {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-soft);
-}
-
-.inline-edit > div,
-.user-main {
-  min-width: 170px;
-  flex: 1;
-}
-
-.inline-edit input,
-.user-edit-form input[name="username"] {
-  max-width: 240px;
-}
-
-.user-edit-form {
-  flex: 1;
-}
-
 .model-chips {
   display: flex;
   flex-wrap: wrap;

@@ -38,23 +38,6 @@ def init_db():
             updated_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS ip_users (
-            ip TEXT PRIMARY KEY,
-            username TEXT,
-            is_disabled INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS user_profiles (
-            subject TEXT PRIMARY KEY,
-            display_name TEXT,
-            source TEXT NOT NULL DEFAULT 'ip',
-            is_disabled INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS check_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_type TEXT NOT NULL DEFAULT 'document_check',
@@ -121,7 +104,6 @@ def init_db():
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")
     _ensure_column(db, "tasks", "owner_source", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
-    _migrate_ip_users_to_profiles(db)
     _migrate_task_owners(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
@@ -131,21 +113,6 @@ def _ensure_column(db, table: str, column: str, definition: str):
     columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in columns:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-
-
-def _migrate_ip_users_to_profiles(db):
-    for row in db.execute("SELECT * FROM ip_users").fetchall():
-        subject = f"ip:{row['ip']}"
-        exists = db.execute("SELECT 1 FROM user_profiles WHERE subject = ?", (subject,)).fetchone()
-        if exists is not None:
-            continue
-        db.execute(
-            """
-            INSERT INTO user_profiles(subject, display_name, source, is_disabled, created_at, updated_at)
-            VALUES (?, ?, 'ip', ?, ?, ?)
-            """,
-            (subject, row["username"], row["is_disabled"], row["created_at"], row["updated_at"]),
-        )
 
 
 def _migrate_task_owners(db):
@@ -208,38 +175,6 @@ def get_bool_setting(key: str, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "off", ""}:
             return False
     return default
-
-
-def get_user_profile(subject: str):
-    return get_db().execute("SELECT * FROM user_profiles WHERE subject = ?", (subject,)).fetchone()
-
-
-def ensure_user_profile(subject: str, display_name: str = "", source: str = "ip"):
-    subject = str(subject or "").strip()
-    if not subject:
-        return None
-    db = get_db()
-    existing = db.execute("SELECT * FROM user_profiles WHERE subject = ?", (subject,)).fetchone()
-    if existing is not None:
-        if display_name and not existing["display_name"]:
-            db.execute(
-                "UPDATE user_profiles SET display_name = ?, source = ?, updated_at = ? WHERE subject = ?",
-                (display_name, source, now_text(), subject),
-            )
-            db.commit()
-            return db.execute("SELECT * FROM user_profiles WHERE subject = ?", (subject,)).fetchone()
-        return existing
-
-    now = now_text()
-    db.execute(
-        """
-        INSERT INTO user_profiles(subject, display_name, source, is_disabled, created_at, updated_at)
-        VALUES (?, ?, ?, 0, ?, ?)
-        """,
-        (subject, display_name, source, now, now),
-    )
-    db.commit()
-    return db.execute("SELECT * FROM user_profiles WHERE subject = ?", (subject,)).fetchone()
 
 
 def owner_subject_from_ip(ip: str) -> str:

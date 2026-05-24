@@ -86,18 +86,6 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("owner_name_snapshot", columns)
         self.assertIn("owner_source", columns)
 
-    def test_user_profiles_table_exists(self):
-        db = get_db()
-        columns = {
-            row["name"]
-            for row in db.execute("PRAGMA table_info(user_profiles)").fetchall()
-        }
-
-        self.assertIn("subject", columns)
-        self.assertIn("display_name", columns)
-        self.assertIn("source", columns)
-        self.assertIn("is_disabled", columns)
-
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 1)
 

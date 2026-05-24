@@ -24,9 +24,6 @@
         {% endif %}
         <a href="{{ url_for('admin_tasks') if platform_mode else url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks'] else '' }}">单文档检查</a>
         <a href="{{ url_for('admin_consistency') if platform_mode else url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}">多文档对照检查</a>
-        {% if platform_mode %}
-        <a href="{{ url_for('admin_users') }}" class="{{ 'active' if request.endpoint == 'admin_users' else '' }}">用户管理</a>
-        {% endif %}
         <a href="{{ url_for('admin_models') }}" class="{{ 'active' if request.endpoint == 'admin_models' else '' }}">模型管理</a>
         <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] else '' }}">系统设置</a>
       </nav>
