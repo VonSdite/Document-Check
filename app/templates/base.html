@@ -40,6 +40,11 @@
         <a href="{{ url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint == 'user_consistency' else '' }}">多文档对照检查</a>
       </nav>
       <div class="nav-identity">{{ nav_identity }}</div>
+      {% if platform_mode and auth_mode == 'saml' %}
+      <form class="logout-form" method="post" action="{{ url_for('saml_logout') }}">
+        <button class="logout-button" type="submit">退出</button>
+      </form>
+      {% endif %}
       {% endif %}
     </div>
   </header>

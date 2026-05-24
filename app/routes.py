@@ -8,6 +8,7 @@ import zipfile
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import (
     abort,
@@ -22,7 +23,7 @@ from flask import (
     url_for,
 )
 
-from .auth import AuthenticationRequired, UserIdentity, current_identity, subject_label
+from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, current_identity, subject_label
 from .config import load_local_config, save_local_config
 from .db import (
     default_check_item_codes,
@@ -36,6 +37,7 @@ from .db import (
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
 from .model_discovery import ModelDiscoveryError, fetch_models
+from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
 from .task_types import (
     CONSISTENCY_MAX_DATA_FILES,
     CONSISTENCY_MAX_MATERIAL_FILES,
@@ -74,12 +76,82 @@ def register_routes(app):
     @app.context_processor
     def inject_globals():
         identity = current_identity()
+        auth_config = current_app.config.get("AUTH", {})
         return {
             "platform_mode": _platform_enabled(),
+            "auth_mode": auth_config.get("mode", "ip"),
             "status_labels": STATUS_LABELS,
             "nav_identity": _identity_label(identity),
             "task_type_label": task_type_label,
         }
+
+    @app.before_request
+    def require_saml_user_session():
+        if not _platform_enabled() or not _saml_mode_enabled() or not _is_user_endpoint(request.endpoint):
+            return None
+        if _has_saml_user_session():
+            return None
+        return redirect(url_for("saml_login", next=_current_relative_url()))
+
+    @app.get("/auth/saml/login")
+    def saml_login():
+        if not _saml_mode_enabled():
+            abort(404)
+        try:
+            auth = create_saml_auth()
+            redirect_url = auth.login(return_to=_safe_next_path(request.args.get("next")))
+        except SamlConfigError as error:
+            abort(503, description=str(error))
+        except Exception:
+            current_app.logger.exception("生成 SAML 登录请求失败")
+            abort(503, description="SAML 登录配置无效，请联系管理员。")
+        session["saml_request_id"] = auth.get_last_request_id()
+        return redirect(redirect_url)
+
+    @app.post("/auth/saml/acs")
+    def saml_acs():
+        if not _saml_mode_enabled():
+            abort(404)
+        try:
+            auth = create_saml_auth()
+            request_id = session.pop("saml_request_id", None)
+            auth.process_response(request_id=request_id)
+        except SamlConfigError as error:
+            abort(503, description=str(error))
+        except Exception:
+            current_app.logger.exception("处理 SAML 回调失败")
+            abort(401, description="SAML 登录失败，请重新从公司统一入口访问。")
+
+        if auth.get_errors() or not auth.is_authenticated():
+            current_app.logger.warning("SAML 回调校验失败：%s", ", ".join(auth.get_errors()))
+            abort(401, description="SAML 登录失败，请重新从公司统一入口访问。")
+
+        user_id, username = _saml_user_from_response(auth)
+        if not user_id:
+            abort(401, description="SAML 响应缺少用户 ID，请联系管理员检查 SSO 属性映射。")
+        session[SAML_USER_SESSION_KEY] = {"user_id": user_id, "username": username or user_id}
+        return redirect(_safe_next_path(request.form.get("RelayState")))
+
+    @app.get("/auth/saml/metadata")
+    def saml_metadata():
+        if not _saml_mode_enabled():
+            abort(404)
+        try:
+            metadata = saml_sp_metadata()
+        except SamlConfigError as error:
+            abort(503, description=str(error))
+        except Exception:
+            current_app.logger.exception("生成 SAML metadata 失败")
+            abort(503, description="SAML SP metadata 配置无效，请联系管理员。")
+        return Response(metadata, mimetype="application/samlmetadata+xml")
+
+    @app.post("/auth/saml/logout")
+    def saml_logout():
+        if not _saml_mode_enabled():
+            abort(404)
+        session.pop(SAML_USER_SESSION_KEY, None)
+        session.pop("saml_request_id", None)
+        return redirect(url_for("user_tasks"))
 
     @app.route("/", methods=["GET", "POST"])
     def user_tasks():
@@ -643,6 +715,69 @@ def _form_bool(value) -> bool:
 
 def _platform_enabled() -> bool:
     return bool(current_app.config.get("PLATFORM", True))
+
+
+def _auth_mode() -> str:
+    auth_config = current_app.config.get("AUTH", {})
+    if not isinstance(auth_config, dict):
+        return "ip"
+    return str(auth_config.get("mode") or "ip").strip().lower()
+
+
+def _saml_mode_enabled() -> bool:
+    return _auth_mode() == "saml"
+
+
+def _is_user_endpoint(endpoint: str | None) -> bool:
+    return bool(endpoint and endpoint.startswith("user_"))
+
+
+def _has_saml_user_session() -> bool:
+    saml_user = session.get(SAML_USER_SESSION_KEY)
+    return isinstance(saml_user, dict) and bool(str(saml_user.get("user_id") or "").strip())
+
+
+def _current_relative_url() -> str:
+    path = request.full_path if request.query_string else request.path
+    return path.rstrip("?") or url_for("user_tasks")
+
+
+def _safe_next_path(value) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return url_for("user_tasks")
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or not value.startswith("/") or value.startswith("//"):
+        return url_for("user_tasks")
+    return value
+
+
+def _saml_user_from_response(auth) -> tuple[str, str]:
+    saml_config = current_app.config.get("AUTH", {}).get("saml", {})
+    user_id_attribute = str(saml_config.get("user_id_attribute") or "").strip()
+    username_attribute = str(saml_config.get("username_attribute") or "").strip()
+    attributes = auth.get_attributes() or {}
+    friendly_attributes = getattr(auth, "get_friendlyname_attributes", lambda: {})() or {}
+
+    if user_id_attribute:
+        user_id = _saml_attribute_value(attributes, user_id_attribute) or _saml_attribute_value(
+            friendly_attributes, user_id_attribute
+        )
+    else:
+        user_id = str(auth.get_nameid() or "").strip()
+    username = ""
+    if username_attribute:
+        username = _saml_attribute_value(attributes, username_attribute) or _saml_attribute_value(
+            friendly_attributes, username_attribute
+        )
+    return user_id, username or user_id
+
+
+def _saml_attribute_value(attributes: dict, name: str) -> str:
+    value = attributes.get(name) if isinstance(attributes, dict) else None
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value or "").strip()
 
 
 def _current_user_identity() -> UserIdentity:

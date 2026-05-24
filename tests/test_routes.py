@@ -3,11 +3,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bs4 import BeautifulSoup
 from flask import Flask
 from openpyxl import Workbook
 
+from app.auth import SAML_USER_SESSION_KEY
 from app.config import load_local_config, save_local_config
 from app.db import get_db, get_setting, init_db, seed_defaults, set_setting
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
@@ -25,6 +27,55 @@ def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
     workbook.close()
     output.seek(0)
     return output
+
+
+def _saml_auth_config() -> dict:
+    return {
+        "mode": "saml",
+        "trusted_header": {
+            "user_id": "",
+            "username": "",
+        },
+        "saml": {
+            "sp_entity_id": "https://doc.example.com/auth/saml/metadata",
+            "acs_url": "https://doc.example.com/auth/saml/acs",
+            "idp_entity_id": "https://sso.example.com/idp",
+            "idp_sso_url": "https://sso.example.com/login",
+            "idp_x509_cert": "test-cert",
+            "user_id_attribute": "uid",
+            "username_attribute": "displayName",
+        },
+    }
+
+
+class _FakeSamlAuth:
+    def __init__(self):
+        self.processed_request_id = None
+
+    def login(self, return_to=None):
+        self.return_to = return_to
+        return "https://sso.example.com/login?SAMLRequest=test"
+
+    def process_response(self, request_id=None):
+        self.processed_request_id = request_id
+
+    def get_last_request_id(self):
+        return "REQ-1"
+
+    def get_errors(self):
+        return []
+
+    def is_authenticated(self):
+        return True
+
+    def get_nameid(self):
+        return "nameid-1"
+
+    def get_attributes(self):
+        return {"uid": ["100086"], "displayName": ["张三"]}
+
+    def get_friendlyname_attributes(self):
+        return {}
 
 
 class AdminSettingsRouteTest(unittest.TestCase):
@@ -500,6 +551,90 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "username": "X-SSO-User-Name",
             },
         }
+
+        response = self.client.get("/admin/tasks")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("单文档检查任务", response.get_data(as_text=True))
+
+    def test_saml_user_page_redirects_to_saml_login(self):
+        self.app.config["AUTH"] = _saml_auth_config()
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/auth/saml/login?next=/", response.headers["Location"])
+
+    def test_saml_login_stores_request_id(self):
+        self.app.config["AUTH"] = _saml_auth_config()
+        fake_auth = _FakeSamlAuth()
+
+        with patch("app.routes.create_saml_auth", return_value=fake_auth):
+            response = self.client.get("/auth/saml/login?next=/consistency")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "https://sso.example.com/login?SAMLRequest=test")
+        self.assertEqual(fake_auth.return_to, "/consistency")
+        with self.client.session_transaction() as session:
+            self.assertEqual(session["saml_request_id"], "REQ-1")
+
+    def test_saml_acs_saves_session_identity(self):
+        self.app.config["AUTH"] = _saml_auth_config()
+        fake_auth = _FakeSamlAuth()
+        with self.client.session_transaction() as session:
+            session["saml_request_id"] = "REQ-1"
+
+        with patch("app.routes.create_saml_auth", return_value=fake_auth):
+            response = self.client.post(
+                "/auth/saml/acs",
+                data={"SAMLResponse": "test", "RelayState": "/consistency"},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/consistency")
+        self.assertEqual(fake_auth.processed_request_id, "REQ-1")
+        with self.client.session_transaction() as session:
+            self.assertEqual(session[SAML_USER_SESSION_KEY], {"user_id": "100086", "username": "张三"})
+            self.assertNotIn("saml_request_id", session)
+
+    def test_create_task_uses_saml_session_identity(self):
+        self._configure_provider()
+        self.app.config["AUTH"] = _saml_auth_config()
+        with self.client.session_transaction() as session:
+            session[SAML_USER_SESSION_KEY] = {"user_id": "100086", "username": "张三"}
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
+                "checks": [str(item["id"])],
+                "model_id": "provider-1:0:model-a",
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source FROM tasks").fetchone()
+        self.assertEqual(task["owner_subject"], "sso:100086")
+        self.assertEqual(task["owner_name_snapshot"], "张三")
+        self.assertEqual(task["owner_source"], "sso")
+
+    def test_saml_metadata_uses_sp_config_only(self):
+        self.app.config["AUTH"] = _saml_auth_config()
+
+        response = self.client.get("/auth/saml/metadata")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("EntityDescriptor", html)
+        self.assertIn("https://doc.example.com/auth/saml/metadata", html)
+        self.assertIn("https://doc.example.com/auth/saml/acs", html)
+
+    def test_saml_does_not_replace_admin_login(self):
+        self.app.config["AUTH"] = _saml_auth_config()
 
         response = self.client.get("/admin/tasks")
 

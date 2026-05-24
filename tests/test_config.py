@@ -60,8 +60,49 @@ class ProviderConfigTest(unittest.TestCase):
                     "user_id": "X-SSO-User-Id",
                     "username": "X-SSO-User-Name",
                 },
+                "saml": {
+                    "sp_entity_id": "",
+                    "acs_url": "",
+                    "idp_entity_id": "",
+                    "idp_sso_url": "",
+                    "idp_x509_cert": "",
+                    "user_id_attribute": "",
+                    "username_attribute": "",
+                },
             },
         )
+
+    def test_auth_saml_config_is_normalized(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {"host": "127.0.0.1", "port": 5000},
+                    "auth": {
+                        "mode": "saml",
+                        "saml": {
+                            "sp_entity_id": " https://doc.example.com/auth/saml/metadata ",
+                            "acs_url": "https://doc.example.com/auth/saml/acs",
+                            "idp_entity_id": " https://sso.example.com/idp ",
+                            "idp_sso_url": "https://sso.example.com/login",
+                            "idp_x509_cert": " test-cert ",
+                            "user_id_attribute": " uid ",
+                            "username_attribute": "displayName",
+                        },
+                    },
+                    "providers": [],
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["auth"]["mode"], "saml")
+        self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "https://doc.example.com/auth/saml/metadata")
+        self.assertEqual(config["auth"]["saml"]["idp_x509_cert"], "test-cert")
+        self.assertEqual(config["auth"]["saml"]["user_id_attribute"], "uid")
 
     def test_default_config_uses_yaml_filename(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -79,6 +79,14 @@ auth:
   trusted_header:
     user_id: ""
     username: ""
+  saml:
+    sp_entity_id: ""
+    acs_url: ""
+    idp_entity_id: ""
+    idp_sso_url: ""
+    idp_x509_cert: ""
+    user_id_attribute: ""
+    username_attribute: ""
 providers: []
 ```
 
@@ -99,6 +107,14 @@ auth:
   trusted_header:
     user_id: ""
     username: ""
+  saml:
+    sp_entity_id: ""
+    acs_url: ""
+    idp_entity_id: ""
+    idp_sso_url: ""
+    idp_x509_cert: ""
+    user_id_attribute: ""
+    username_attribute: ""
 providers: []
 ```
 
@@ -120,7 +136,7 @@ auth:
     username: X-SSO-User-Name
 ```
 
-此时系统会把 `X-SSO-User-Id` 解析为 `sso:<用户ID>`，用 `X-SSO-User-Name` 作为显示名；用户入口没有收到 `X-SSO-User-Id` 时会返回 401，避免绕过 SSO 后退回 IP 身份。只有在该服务位于可信 SSO 网关之后、外部用户无法伪造这些请求头时才应启用该模式。用户启停、组织、角色等用户管理职责应放在公司 SSO 或身份平台中处理；本系统只保存任务归属快照、审计 IP、统计和并发控制所需的用户主体。后续如果公司提供 OIDC、SAML 或 CAS 接口，也只需要把认证回调解析出的用户 ID 和显示名映射到同一个用户主体格式即可。
+此时系统会把 `X-SSO-User-Id` 解析为 `sso:<用户ID>`，用 `X-SSO-User-Name` 作为显示名；用户入口没有收到 `X-SSO-User-Id` 时会返回 401，避免绕过 SSO 后退回 IP 身份。只有在该服务位于可信 SSO 网关之后、外部用户无法伪造这些请求头时才应启用该模式。用户启停、组织、角色等用户管理职责应放在公司 SSO 或身份平台中处理；本系统只保存任务归属快照、审计 IP、统计和并发控制所需的用户主体。后续如果公司提供 OIDC 或 CAS 接口，也只需要把认证回调解析出的用户 ID 和显示名映射到同一个用户主体格式即可。
 
 实际接入时按下面顺序操作：
 
@@ -129,6 +145,24 @@ auth:
 3. 把 `config.yaml` 的 `platform` 设为 `true`，`auth.mode` 设为 `trusted_header`，并按公司网关实际 header 名称填写 `trusted_header`。
 4. 访问用户入口验证任务归属：提交任务后，管理端任务列表应显示 `sso:<账号>` 和显示名称。
 5. 管理员入口仍使用本系统 `admin.username`、`admin.password` 和 `admin_url` 登录，不依赖公司 SSO。若网关默认保护全部路径，需要让网关对 `admin_url` 放行或单独做管理员访问控制；建议同时限制为内网、VPN 或管理员来源 IP。
+
+如果公司 SSO 提供的是 SAML 2.0，并且没有现成网关负责把 SAML 转成可信 header，可以让本系统作为 SAML SP 直接对接：
+
+```yaml
+auth:
+  mode: saml
+  saml:
+    sp_entity_id: https://文档门禁域名/auth/saml/metadata
+    acs_url: https://文档门禁域名/auth/saml/acs
+    idp_entity_id: 公司 SSO 提供的 IdP Entity ID
+    idp_sso_url: 公司 SSO 提供的 SSO 登录地址
+    idp_x509_cert: |
+      公司 SSO 提供的签名证书内容
+    user_id_attribute: uid
+    username_attribute: displayName
+```
+
+SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、ACS URL、SP metadata URL（`https://文档门禁域名/auth/saml/metadata`），并请对方把稳定唯一用户 ID 映射到 `user_id_attribute`，把显示名映射到 `username_attribute`。如果 `user_id_attribute` 留空，系统会使用 SAML `NameID` 作为用户 ID；不建议使用姓名作为用户 ID，因为同名用户无法区分。SAML 登录成功后仍会存为 `owner_subject = sso:<用户ID>`，管理员入口继续使用本系统本地管理员账号密码，不需要在公司 SSO 里设置管理员。
 
 模型提供商配置也保存在 `config.yaml` 的 `providers` 列表中，管理页面的交互不变；新增、编辑、删除提供商都会直接更新本地配置文件，不写入 SQLite。
 
