@@ -8,5 +8,19 @@ server:
   host: 127.0.0.1
   port: 31945
 auth:
+  # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
   mode: ip
+  # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
+  trusted_header:
+    user_id: ""
+    username: ""
+  # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
+  saml:
+    sp_entity_id: ""
+    acs_url: ""
+    idp_entity_id: ""
+    idp_sso_url: ""
+    idp_x509_cert: ""
+    user_id_attribute: ""
+    username_attribute: ""
 providers: []

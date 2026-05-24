@@ -8,14 +8,19 @@ server:
   host: 0.0.0.0
   port: 31945
 auth:
-  mode: saml
+  # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
+  mode: ip
+  # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
+  trusted_header:
+    user_id: ""
+    username: ""
+  # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
   saml:
-    sp_entity_id: https://文档门禁域名/auth/saml/metadata
-    acs_url: https://文档门禁域名/auth/saml/acs
-    idp_entity_id: 公司 SSO 提供的 IdP Entity ID
-    idp_sso_url: 公司 SSO 提供的 SSO 登录地址
-    idp_x509_cert: |
-      公司 SSO 提供的签名证书内容
-    user_id_attribute: uid
-    username_attribute: displayName
+    sp_entity_id: ""
+    acs_url: ""
+    idp_entity_id: ""
+    idp_sso_url: ""
+    idp_x509_cert: ""
+    user_id_attribute: ""
+    username_attribute: ""
 providers: []

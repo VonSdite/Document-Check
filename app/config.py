@@ -65,6 +65,19 @@ def _default_config() -> dict:
         },
         "auth": {
             "mode": DEFAULT_AUTH_MODE,
+            "trusted_header": {
+                "user_id": "",
+                "username": "",
+            },
+            "saml": {
+                "sp_entity_id": "",
+                "acs_url": "",
+                "idp_entity_id": "",
+                "idp_sso_url": "",
+                "idp_x509_cert": "",
+                "user_id_attribute": "",
+                "username_attribute": "",
+            },
         },
         "providers": [],
     }
@@ -106,25 +119,22 @@ def _normalize_auth(value) -> dict:
     saml = value.get("saml", {})
     if not isinstance(saml, dict):
         saml = {}
-    normalized = {"mode": mode}
-    normalized_trusted_header = {
-        "user_id": str(trusted_header.get("user_id") or "").strip(),
-        "username": str(trusted_header.get("username") or "").strip(),
+    return {
+        "mode": mode,
+        "trusted_header": {
+            "user_id": str(trusted_header.get("user_id") or "").strip(),
+            "username": str(trusted_header.get("username") or "").strip(),
+        },
+        "saml": {
+            "sp_entity_id": str(saml.get("sp_entity_id") or "").strip(),
+            "acs_url": str(saml.get("acs_url") or "").strip(),
+            "idp_entity_id": str(saml.get("idp_entity_id") or "").strip(),
+            "idp_sso_url": str(saml.get("idp_sso_url") or "").strip(),
+            "idp_x509_cert": str(saml.get("idp_x509_cert") or "").strip(),
+            "user_id_attribute": str(saml.get("user_id_attribute") or "").strip(),
+            "username_attribute": str(saml.get("username_attribute") or "").strip(),
+        },
     }
-    normalized_saml = {
-        "sp_entity_id": str(saml.get("sp_entity_id") or "").strip(),
-        "acs_url": str(saml.get("acs_url") or "").strip(),
-        "idp_entity_id": str(saml.get("idp_entity_id") or "").strip(),
-        "idp_sso_url": str(saml.get("idp_sso_url") or "").strip(),
-        "idp_x509_cert": str(saml.get("idp_x509_cert") or "").strip(),
-        "user_id_attribute": str(saml.get("user_id_attribute") or "").strip(),
-        "username_attribute": str(saml.get("username_attribute") or "").strip(),
-    }
-    if mode == "trusted_header" or any(normalized_trusted_header.values()):
-        normalized["trusted_header"] = normalized_trusted_header
-    if mode == "saml" or any(normalized_saml.values()):
-        normalized["saml"] = normalized_saml
-    return normalized
 
 
 def _normalize_providers(value) -> list[dict]:

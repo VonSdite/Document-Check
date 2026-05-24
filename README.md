@@ -75,16 +75,21 @@ server:
   host: 0.0.0.0
   port: 31945
 auth:
-  mode: saml
+  # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
+  mode: ip
+  # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
+  trusted_header:
+    user_id: ""
+    username: ""
+  # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
   saml:
-    sp_entity_id: https://文档门禁域名/auth/saml/metadata
-    acs_url: https://文档门禁域名/auth/saml/acs
-    idp_entity_id: 公司 SSO 提供的 IdP Entity ID
-    idp_sso_url: 公司 SSO 提供的 SSO 登录地址
-    idp_x509_cert: |
-      公司 SSO 提供的签名证书内容
-    user_id_attribute: uid
-    username_attribute: displayName
+    sp_entity_id: ""
+    acs_url: ""
+    idp_entity_id: ""
+    idp_sso_url: ""
+    idp_x509_cert: ""
+    user_id_attribute: ""
+    username_attribute: ""
 providers: []
 ```
 
@@ -101,7 +106,21 @@ server:
   host: 127.0.0.1
   port: 31945
 auth:
+  # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
   mode: ip
+  # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
+  trusted_header:
+    user_id: ""
+    username: ""
+  # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
+  saml:
+    sp_entity_id: ""
+    acs_url: ""
+    idp_entity_id: ""
+    idp_sso_url: ""
+    idp_x509_cert: ""
+    user_id_attribute: ""
+    username_attribute: ""
 providers: []
 ```
 
@@ -111,7 +130,11 @@ providers: []
 
 ## 用户身份与 SSO 预留
 
-系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。`auth.mode: ip` 只适合本机或尚未接入 SSO 的临时部署，此时用户主体为 `ip:<访问 IP>`；IP 仍会记录在任务中用于审计。正式平台接入公司 SAML 2.0 时应使用 `auth.mode: saml`。
+系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。配置里保留三种 `auth.mode`，默认先用 `ip` 方便本机运行、临时测试和先把平台跑起来；确认公司 SSO 接入方式后，再把 `mode` 切到对应模式。IP 仍会记录在任务中用于审计。
+
+- `ip`：不接 SSO，用户主体为 `ip:<访问 IP>`。
+- `trusted_header`：公司网关或反向代理已经完成 SSO 登录，并把用户 ID/用户名注入可信 HTTP header。
+- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接。
 
 `trusted_header` 只有在公司已有统一网关或反向代理，并且网关已经完成 SSO 登录、能把登录用户写入可信请求头时才需要；直接对接 SAML 2.0 时不需要配置它。网关模式可以这样写：
 
