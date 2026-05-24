@@ -380,7 +380,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn("统计概览", html)
-        self.assertIn("2026-05-01 至 2026-05-02", html)
+        self.assertNotIn("平台统计", html)
+        self.assertNotIn("2026-05-01 至 2026-05-02", html)
         self.assertIn("<span>活跃用户</span><strong>2</strong>", html)
         self.assertIn("<span>提交任务</span><strong>3</strong>", html)
         self.assertIn("<span>单文档检查任务</span><strong>2</strong>", html)
@@ -403,7 +404,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn("张三", html)
-        self.assertIn("ip:10.0.0.8", html)
+        self.assertIn("IP 10.0.0.8", html)
+        self.assertNotIn("ip:10.0.0.8", html)
 
     def test_admin_overview_filters_tasks_by_auth_mode(self):
         self._insert_task(

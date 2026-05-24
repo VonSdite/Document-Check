@@ -5,9 +5,7 @@
 {% block content %}
 <div class="page-title">
   <div>
-    <p class="eyebrow">平台统计</p>
     <h1>统计概览</h1>
-    <p class="muted">{{ selected_range.start_date }} 至 {{ selected_range.end_date }} · {{ selected_range.days }} 天</p>
   </div>
 </div>
 
@@ -100,7 +98,13 @@
           <tr>
             <td>
               <strong>{{ row.username or subject_label(row.subject) }}</strong>
+              {% if row.subject.startswith('ip:') %}
+                {% if row.username %}
+                <div class="subline">IP {{ row.ip }}</div>
+                {% endif %}
+              {% else %}
               <div class="subline">{{ row.subject }} · IP {{ row.ip }}</div>
+              {% endif %}
             </td>
             <td>{{ row.tasks }}</td>
             <td>{{ row.document_tasks }}</td>
