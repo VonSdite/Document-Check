@@ -9,7 +9,7 @@
       <h2>{{ title }}</h2>
       <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
     </div>
-    <form method="post" class="stack-form provider-modal-form" data-proxy-mode="{{ provider.proxy_mode if provider else 'direct' }}" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}">
+    <form method="post" class="stack-form provider-modal-form" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}">
       {% if provider %}<input type="hidden" name="provider_id" value="{{ provider.id }}">{% endif %}
       <div class="form-grid">
         <label>提供商名称<input name="name" value="{{ provider.name if provider else '' }}" placeholder="例如 OpenAI 兼容服务" required></label>
@@ -21,22 +21,8 @@
           <input name="api_base" value="{{ provider.api_base if provider else '' }}" placeholder="https://api.example.com/v1/chat/completions" required>
         </div>
         <label>API Key<input name="api_key" type="password" value="{{ provider.api_key if provider and provider.api_key else '' }}" autocomplete="new-password"></label>
-        <label>代理模式
-          <select name="proxy_mode" class="proxy-mode-select">
-            {% set proxy_mode = provider.proxy_mode if provider else 'direct' %}
-            <option value="direct" {{ "selected" if proxy_mode == "direct" else "" }}>直连</option>
-            <option value="system" {{ "selected" if proxy_mode == "system" else "" }}>系统代理</option>
-            <option value="custom" {{ "selected" if proxy_mode == "custom" else "" }}>自定义代理</option>
-          </select>
-        </label>
-        <label class="proxy-custom-field">自定义代理<input name="proxy" value="{{ provider.proxy if provider and provider.proxy else '' }}" placeholder="http://127.0.0.1:7890"></label>
         <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout if provider and provider.request_timeout else 3600 }}" required></label>
         <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="1000000" step="1" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 80000 }}" required></label>
-        <label class="switch-line form-switch">
-          <input type="checkbox" name="ssl_verify" {{ "checked" if provider and provider.ssl_verify else "" }}>
-          <span>SSL 校验</span>
-          <span class="help-tip" tabindex="0" data-tip="开启后校验 HTTPS 证书；默认关闭，适合自签名证书或内网服务。">?</span>
-        </label>
       </div>
       <div class="model-editor" data-model-editor>
         <div class="model-editor-head">
@@ -105,8 +91,7 @@
               <span class="help-tip" tabindex="0" data-tip="填写完整 OpenAI Chat Completions 请求地址，例如 https://api.example.com/v1/chat/completions。">?</span>
             </span>
           </th>
-              <th>模型 ID</th>
-          <th>代理</th>
+          <th>模型 ID</th>
           <th>限制</th>
           <th>状态</th>
           <th class="right">操作</th>
@@ -134,17 +119,6 @@
             </div>
           </td>
           <td>
-            {% if provider.proxy_mode == "system" %}
-            系统代理
-            {% elif provider.proxy_mode == "custom" %}
-            自定义代理
-            <div class="subline">{{ provider.proxy or "-" }}</div>
-            {% else %}
-            直连
-            {% endif %}
-            <div class="subline">SSL校验：{{ "开启" if provider.ssl_verify else "关闭" }}</div>
-          </td>
-          <td>
             {{ provider.request_timeout or 3600 }} 秒
             <div class="subline">{{ provider.max_input_chars or 80000 }} 字</div>
           </td>
@@ -163,7 +137,7 @@
         {% endfor %}
         {% else %}
         <tr>
-          <td colspan="7">
+          <td colspan="6">
             <div class="empty-state compact">
               <h3>暂无提供商</h3>
             </div>
@@ -195,7 +169,7 @@
       <div class="fetch-model-list">
         <label class="fetch-model-list-head">
           <input type="checkbox" data-fetch-model-select-all>
-                <span>模型 ID</span>
+          <span>模型 ID</span>
           <span>状态</span>
         </label>
         <div class="fetch-model-list-body" data-fetch-model-list></div>

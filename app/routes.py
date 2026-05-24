@@ -37,6 +37,7 @@ from .db import (
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
 from .llm import LLMError, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
+from .network import outbound_network_config
 from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
 from .task_types import (
     CONSISTENCY_MAX_DATA_FILES,
@@ -57,7 +58,6 @@ STATUS_LABELS = {
 }
 TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
-PROXY_MODES = {"direct", "system", "custom"}
 PROVIDER_TIMEOUT_DEFAULT = 3600
 PROVIDER_TIMEOUT_MIN = 30
 PROVIDER_TIMEOUT_MAX = 7200
@@ -333,13 +333,14 @@ def register_routes(app):
         provider_data = _provider_query_data()
         if isinstance(provider_data, str):
             return {"error": provider_data}, 400
+        network = outbound_network_config()
         try:
             models = fetch_models(
                 api_base=provider_data["api_base"],
                 api_key=provider_data["api_key"],
-                proxy_mode=provider_data["proxy_mode"],
-                proxy=provider_data["proxy"],
-                ssl_verify=provider_data["ssl_verify"],
+                proxy_mode=network["proxy_mode"],
+                proxy=network["proxy"],
+                ssl_verify=network["ssl_verify"],
                 request_timeout=provider_data["request_timeout"],
             )
         except ModelDiscoveryError as exc:
@@ -358,13 +359,14 @@ def register_routes(app):
         model_name = str(data.get("model_name") or "").strip()
         if not model_name:
             return {"ok": False, "error": "请先填写模型 ID。"}, 400
+        network = outbound_network_config()
         try:
             message = test_model_connection(
                 api_base=provider_data["api_base"],
                 api_key=provider_data["api_key"],
-                proxy_mode=provider_data["proxy_mode"],
-                proxy=provider_data["proxy"],
-                ssl_verify=provider_data["ssl_verify"],
+                proxy_mode=network["proxy_mode"],
+                proxy=network["proxy"],
+                ssl_verify=network["ssl_verify"],
                 request_timeout=min(provider_data["request_timeout"], MODEL_TEST_TIMEOUT_MAX),
                 model_name=model_name,
                 force_disable_thinking=_form_bool(data.get("force_disable_thinking")),
@@ -958,9 +960,6 @@ def _provider_form_data() -> dict | str:
             "name": request.form.get("name", ""),
             "api_base": request.form.get("api_base", ""),
             "api_key": request.form.get("api_key", ""),
-            "proxy_mode": request.form.get("proxy_mode", "direct"),
-            "proxy": request.form.get("proxy", ""),
-            "ssl_verify": request.form.get("ssl_verify") == "on",
             "request_timeout": request.form.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
             "max_input_chars": request.form.get("max_input_chars", str(PROVIDER_INPUT_LIMIT_DEFAULT)),
             "is_active": request.form.get("is_active") == "on",
@@ -979,9 +978,6 @@ def _provider_query_data() -> dict | str:
             "name": "模型拉取",
             "api_base": request.args.get("api_base", ""),
             "api_key": request.args.get("api_key", ""),
-            "proxy_mode": request.args.get("proxy_mode", "direct"),
-            "proxy": request.args.get("proxy", ""),
-            "ssl_verify": _form_bool(request.args.get("ssl_verify")),
             "request_timeout": request.args.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
             "max_input_chars": str(PROVIDER_INPUT_LIMIT_DEFAULT),
             "is_active": True,
@@ -997,9 +993,6 @@ def _provider_payload_data(data: dict) -> dict | str:
             "name": "模型测试",
             "api_base": data.get("api_base", ""),
             "api_key": data.get("api_key", ""),
-            "proxy_mode": data.get("proxy_mode", "direct"),
-            "proxy": data.get("proxy", ""),
-            "ssl_verify": _form_bool(data.get("ssl_verify")),
             "request_timeout": data.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
             "max_input_chars": str(PROVIDER_INPUT_LIMIT_DEFAULT),
             "is_active": True,
@@ -1013,14 +1006,6 @@ def _normalize_provider_input(value: dict, *, require_models: bool) -> dict | st
     name = str(value.get("name") or "").strip()
     api_base = str(value.get("api_base") or "").strip().rstrip("/")
     api_key = str(value.get("api_key") or "").strip()
-    proxy_mode = str(value.get("proxy_mode") or "direct").strip()
-    proxy = str(value.get("proxy") or "").strip()
-    if proxy_mode not in PROXY_MODES:
-        proxy_mode = "direct"
-    if proxy_mode == "custom" and not proxy:
-        return "自定义代理模式需要填写代理地址。"
-    if proxy_mode != "custom":
-        proxy = ""
     if not name or not api_base:
         return "提供商名称和 API 地址不能为空。"
     if not _is_chat_completions_endpoint(api_base):
@@ -1044,9 +1029,6 @@ def _normalize_provider_input(value: dict, *, require_models: bool) -> dict | st
         "name": name,
         "api_base": api_base,
         "api_key": api_key,
-        "proxy_mode": proxy_mode,
-        "proxy": proxy,
-        "ssl_verify": bool(value.get("ssl_verify")),
         "request_timeout": request_timeout,
         "max_input_chars": max_input_chars,
         "is_active": bool(value.get("is_active")),
@@ -1093,9 +1075,6 @@ def _provider_from_row(row, models: list[dict]) -> dict:
         "name": row["name"],
         "api_base": row["api_base"],
         "api_key": row["api_key"] or "",
-        "proxy_mode": row["proxy_mode"],
-        "proxy": row["proxy"] or "",
-        "ssl_verify": bool(row["ssl_verify"]),
         "request_timeout": row["request_timeout"],
         "max_input_chars": row["max_input_chars"],
         "is_active": bool(row["is_active"]),
@@ -1124,17 +1103,14 @@ def _save_user_model_provider(owner_subject: str, provider_id, provider_data: di
         db.execute(
             """
             UPDATE user_model_providers
-            SET name = ?, api_base = ?, api_key = ?, proxy_mode = ?, proxy = ?,
-                ssl_verify = ?, request_timeout = ?, max_input_chars = ?, is_active = ?, updated_at = ?
+            SET name = ?, api_base = ?, api_key = ?,
+                request_timeout = ?, max_input_chars = ?, is_active = ?, updated_at = ?
             WHERE id = ? AND owner_subject = ?
             """,
             (
                 provider_data["name"],
                 provider_data["api_base"],
                 provider_data["api_key"],
-                provider_data["proxy_mode"],
-                provider_data["proxy"],
-                1 if provider_data["ssl_verify"] else 0,
                 provider_data["request_timeout"],
                 provider_data["max_input_chars"],
                 1 if provider_data["is_active"] else 0,
@@ -1148,19 +1124,16 @@ def _save_user_model_provider(owner_subject: str, provider_id, provider_data: di
         cursor = db.execute(
             """
             INSERT INTO user_model_providers(
-                owner_subject, name, api_base, api_key, proxy_mode, proxy,
-                ssl_verify, request_timeout, max_input_chars, is_active, created_at, updated_at
+                owner_subject, name, api_base, api_key,
+                request_timeout, max_input_chars, is_active, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 owner_subject,
                 provider_data["name"],
                 provider_data["api_base"],
                 provider_data["api_key"],
-                provider_data["proxy_mode"],
-                provider_data["proxy"],
-                1 if provider_data["ssl_verify"] else 0,
                 provider_data["request_timeout"],
                 provider_data["max_input_chars"],
                 1 if provider_data["is_active"] else 0,
@@ -1303,9 +1276,6 @@ def _model_option(provider: dict, model_name) -> dict:
         "force_disable_thinking": force_disable_thinking,
         "api_base": provider["api_base"],
         "api_key": provider["api_key"],
-        "proxy_mode": provider["proxy_mode"],
-        "proxy": provider["proxy"],
-        "ssl_verify": provider["ssl_verify"],
         "request_timeout": provider["request_timeout"],
         "max_input_chars": provider["max_input_chars"],
     }
@@ -1509,11 +1479,11 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
         INSERT INTO tasks(
             task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
             original_filename, stored_filename, file_type, file_size,
-            document_text, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
-            ssl_verify, request_timeout, max_input_chars, force_disable_thinking,
+            document_text, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+            request_timeout, max_input_chars, force_disable_thinking,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             DOCUMENT_TASK_TYPE,
@@ -1533,9 +1503,6 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
             model["model_name"],
             model["api_base"],
             model["api_key"],
-            model["proxy_mode"],
-            model["proxy"],
-            1 if model["ssl_verify"] else 0,
             model["request_timeout"],
             model["max_input_chars"],
             1 if model["force_disable_thinking"] else 0,
@@ -1619,11 +1586,11 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
         INSERT INTO tasks(
             task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
             original_filename, stored_filename, file_type, file_size,
-            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key, proxy_mode, proxy,
-            ssl_verify, request_timeout, max_input_chars, force_disable_thinking,
+            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+            request_timeout, max_input_chars, force_disable_thinking,
             status, progress, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (
             CONSISTENCY_TASK_TYPE,
@@ -1644,9 +1611,6 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
             model["model_name"],
             model["api_base"],
             model["api_key"],
-            model["proxy_mode"],
-            model["proxy"],
-            1 if model["ssl_verify"] else 0,
             model["request_timeout"],
             model["max_input_chars"],
             1 if model["force_disable_thinking"] else 0,

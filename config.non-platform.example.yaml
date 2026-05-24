@@ -11,6 +11,14 @@ server:
   # 如果需要局域网或服务器访问，请改用 config.platform.example.yaml 的 platform: true。
   host: 127.0.0.1
   port: 31945
+network:
+  # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
+  # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
+  proxy_mode: direct
+  # proxy 仅在 proxy_mode: custom 时填写，例如 http://127.0.0.1:7890；用户模型配置里不允许再填写代理。
+  proxy: ""
+  # 是否校验 HTTPS 证书；默认 false，适合内网或自签名证书服务。公网正式证书环境建议改为 true。
+  ssl_verify: false
 auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
   # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。

@@ -28,6 +28,7 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["admin_url"], "/console")
         self.assertEqual(config["server"]["host"], "127.0.0.1")
         self.assertEqual(config["server"]["port"], 31945)
+        self.assertEqual(config["network"], {"proxy_mode": "direct", "proxy": "", "ssl_verify": False})
         self.assertEqual(config["auth"]["mode"], "ip")
         self.assertEqual(config["auth"]["trusted_header"], {"user_id": "", "username": ""})
         self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "")
@@ -105,6 +106,51 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "https://doc.example.com/auth/saml/metadata")
         self.assertEqual(config["auth"]["saml"]["idp_x509_cert"], "test-cert")
         self.assertEqual(config["auth"]["saml"]["user_id_attribute"], "uid")
+
+    def test_network_config_is_normalized(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {"host": "127.0.0.1", "port": 5000},
+                    "network": {
+                        "proxy_mode": " CUSTOM ",
+                        "proxy": " http://127.0.0.1:7890 ",
+                        "ssl_verify": "true",
+                    },
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(
+            config["network"],
+            {
+                "proxy_mode": "custom",
+                "proxy": "http://127.0.0.1:7890",
+                "ssl_verify": True,
+            },
+        )
+
+    def test_custom_network_proxy_without_address_falls_back_to_direct(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {"host": "127.0.0.1", "port": 5000},
+                    "network": {"proxy_mode": "custom", "proxy": "", "ssl_verify": "off"},
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["network"], {"proxy_mode": "direct", "proxy": "", "ssl_verify": False})
 
     def test_default_config_uses_yaml_filename(self):
         with tempfile.TemporaryDirectory() as temp_dir:

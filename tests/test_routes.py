@@ -89,6 +89,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ROOT_DIR=root_dir,
             DATABASE=str(root_dir / "test.sqlite3"),
             UPLOAD_FOLDER=str(root_dir / "uploads"),
+            NETWORK={"proxy_mode": "direct", "proxy": "", "ssl_verify": False},
         )
         Path(self.app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
         with self.app.app_context():
@@ -112,11 +113,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
             cursor = get_db().execute(
                 """
                 INSERT INTO user_model_providers(
-                    owner_subject, name, api_base, api_key, proxy_mode, proxy,
-                    ssl_verify, request_timeout, max_input_chars, is_active, created_at, updated_at
+                    owner_subject, name, api_base, api_key,
+                    request_timeout, max_input_chars, is_active, created_at, updated_at
                 )
-                VALUES (?, '测试提供商', 'https://example.test/v1/chat/completions', '', 'direct', '',
-                        0, 30, 80000, 1, ?, ?)
+                VALUES (?, '测试提供商', 'https://example.test/v1/chat/completions', '',
+                        30, 80000, 1, ?, ?)
                 """,
                 (owner_subject, now, now),
             )
@@ -318,7 +319,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "name": "测试提供商",
                 "api_base": "https://example.test/v1/chat/completions",
                 "api_key": "",
-                "proxy_mode": "direct",
                 "request_timeout": "30",
                 "max_input_chars": "80000",
                 "is_active": "on",
@@ -359,7 +359,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "name": "测试提供商",
                 "api_base": "https://example.test/v1/chat/completions",
                 "api_key": "",
-                "proxy_mode": "direct",
                 "request_timeout": "30",
                 "max_input_chars": "1000000",
                 "is_active": "on",
@@ -382,7 +381,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "name": "测试提供商",
                 "api_base": "https://example.test/v1/chat/completions",
                 "api_key": "",
-                "proxy_mode": "direct",
                 "request_timeout": "30",
                 "max_input_chars": "80000",
                 "is_active": "on",
@@ -423,15 +421,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertTrue(_find_enabled_model(by_mode[True]["id"], "ip:127.0.0.1")["force_disable_thinking"])
 
     def test_user_model_test_endpoint_uses_submitted_model_config(self):
+        self.app.config["NETWORK"] = {
+            "proxy_mode": "custom",
+            "proxy": "http://127.0.0.1:7890",
+            "ssl_verify": True,
+        }
         with patch("app.routes.test_model_connection", return_value="模型连通性测试通过。") as mocked_test:
             response = self.client.post(
                 "/models/test",
                 json={
                     "api_base": "https://example.test/v1/chat/completions",
                     "api_key": "sk-test",
-                    "proxy_mode": "direct",
                     "request_timeout": "30",
-                    "ssl_verify": "on",
                     "model_name": "model-a",
                     "force_disable_thinking": True,
                 },
@@ -442,12 +443,39 @@ class AdminSettingsRouteTest(unittest.TestCase):
         mocked_test.assert_called_once_with(
             api_base="https://example.test/v1/chat/completions",
             api_key="sk-test",
-            proxy_mode="direct",
-            proxy="",
+            proxy_mode="custom",
+            proxy="http://127.0.0.1:7890",
             ssl_verify=True,
             request_timeout=30,
             model_name="model-a",
             force_disable_thinking=True,
+        )
+
+    def test_user_fetch_models_uses_system_network_config(self):
+        self.app.config["NETWORK"] = {
+            "proxy_mode": "system",
+            "proxy": "",
+            "ssl_verify": True,
+        }
+        with patch("app.routes.fetch_models", return_value=["model-a"]) as mocked_fetch:
+            response = self.client.get(
+                "/models/fetch",
+                query_string={
+                    "api_base": "https://example.test/v1/chat/completions",
+                    "api_key": "sk-test",
+                    "request_timeout": "30",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"fetched_models": ["model-a"], "fetched_count": 1})
+        mocked_fetch.assert_called_once_with(
+            api_base="https://example.test/v1/chat/completions",
+            api_key="sk-test",
+            proxy_mode="system",
+            proxy="",
+            ssl_verify=True,
+            request_timeout=30,
         )
 
     def test_admin_settings_creates_consistency_check_item(self):

@@ -1,6 +1,10 @@
 import socket
 import struct
 
+from flask import current_app
+
+from .config import normalize_network_config
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows fallback.
@@ -8,6 +12,10 @@ except ImportError:  # pragma: no cover - Windows fallback.
 
 
 SIOCGIFADDR = 0x8915
+
+
+def outbound_network_config() -> dict:
+    return normalize_network_config(current_app.config.get("NETWORK", {}))
 
 
 def access_urls(host: str, port: int) -> list[str]:

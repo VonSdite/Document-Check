@@ -71,9 +71,6 @@ def init_db():
             model_name TEXT NOT NULL,
             api_base TEXT NOT NULL,
             api_key TEXT,
-            proxy_mode TEXT NOT NULL DEFAULT 'direct',
-            proxy TEXT,
-            ssl_verify INTEGER NOT NULL DEFAULT 0,
             request_timeout INTEGER NOT NULL DEFAULT 3600,
             max_input_chars INTEGER NOT NULL DEFAULT 80000,
             force_disable_thinking INTEGER NOT NULL DEFAULT 0,
@@ -95,9 +92,6 @@ def init_db():
             name TEXT NOT NULL,
             api_base TEXT NOT NULL,
             api_key TEXT,
-            proxy_mode TEXT NOT NULL DEFAULT 'direct',
-            proxy TEXT,
-            ssl_verify INTEGER NOT NULL DEFAULT 0,
             request_timeout INTEGER NOT NULL DEFAULT 3600,
             max_input_chars INTEGER NOT NULL DEFAULT 80000,
             is_active INTEGER NOT NULL DEFAULT 1,
@@ -128,7 +122,6 @@ def init_db():
     _ensure_column(db, "tasks", "document_text", "TEXT")
     _ensure_column(db, "tasks", "document_meta_json", "TEXT")
     _ensure_column(db, "tasks", "checks_snapshot_json", "TEXT")
-    _ensure_column(db, "tasks", "ssl_verify", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(db, "tasks", "force_disable_thinking", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(db, "tasks", "owner_subject", "TEXT")
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")

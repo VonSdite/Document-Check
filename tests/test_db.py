@@ -60,15 +60,16 @@ class CheckItemDefaultsTest(unittest.TestCase):
         updated = db.execute("SELECT prompt FROM check_items WHERE id = ?", (item["id"],)).fetchone()
         self.assertEqual(updated["prompt"], item["prompt"])
 
-    def test_tasks_table_has_ssl_verify_default_off(self):
+    def test_tasks_table_does_not_store_network_config(self):
         db = get_db()
         columns = {
             row["name"]: row
             for row in db.execute("PRAGMA table_info(tasks)").fetchall()
         }
 
-        self.assertIn("ssl_verify", columns)
-        self.assertEqual(columns["ssl_verify"]["dflt_value"], "0")
+        self.assertNotIn("proxy_mode", columns)
+        self.assertNotIn("proxy", columns)
+        self.assertNotIn("ssl_verify", columns)
 
     def test_tasks_table_has_task_type_and_document_meta(self):
         db = get_db()
@@ -99,6 +100,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertIn("owner_subject", provider_columns)
         self.assertIn("api_base", provider_columns)
+        self.assertNotIn("proxy_mode", provider_columns)
+        self.assertNotIn("proxy", provider_columns)
+        self.assertNotIn("ssl_verify", provider_columns)
         self.assertIn("model_name", model_columns)
         self.assertIn("force_disable_thinking", model_columns)
 

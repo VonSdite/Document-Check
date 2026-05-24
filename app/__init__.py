@@ -26,6 +26,7 @@ def create_app():
         ADMIN_URL=local_config["admin_url"],
         LISTEN_HOST=local_config["server"]["host"] if local_config["platform"] else "127.0.0.1",
         LISTEN_PORT=local_config["server"]["port"],
+        NETWORK=local_config["network"],
         AUTH=local_config["auth"],
         ROOT_DIR=root_dir,
         DATABASE=str(root_dir / "instance" / "document_check.sqlite3"),

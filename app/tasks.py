@@ -7,6 +7,7 @@ from pathlib import Path
 from .db import get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
 from .llm import LLMError, run_check
+from .network import outbound_network_config
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, document_groups_from_meta
 
 
@@ -404,12 +405,13 @@ def _run_check_items_concurrently(
                     return
                 save_snapshot(db, summary, current_progress())
 
+            network = outbound_network_config()
             content = run_check(
                 api_base=task["api_base"],
                 api_key=task["api_key"],
-                proxy_mode=task["proxy_mode"],
-                proxy=task["proxy"],
-                ssl_verify=bool(task["ssl_verify"]),
+                proxy_mode=network["proxy_mode"],
+                proxy=network["proxy"],
+                ssl_verify=network["ssl_verify"],
                 request_timeout=task["request_timeout"],
                 model_name=task["model_name"],
                 force_disable_thinking=_task_flag(task, "force_disable_thinking"),

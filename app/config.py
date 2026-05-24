@@ -11,6 +11,9 @@ DEFAULT_LOCAL_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 31945
 DEFAULT_AUTH_MODE = "ip"
 AUTH_MODES = {"ip", "trusted_header", "saml"}
+DEFAULT_PROXY_MODE = "direct"
+PROXY_MODES = {"direct", "system", "custom"}
+DEFAULT_SSL_VERIFY = False
 CONFIG_FILENAME = "config.yaml"
 
 
@@ -46,6 +49,11 @@ def _default_config() -> dict:
         "server": {
             "host": DEFAULT_LISTEN_HOST if DEFAULT_PLATFORM else DEFAULT_LOCAL_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
+        },
+        "network": {
+            "proxy_mode": DEFAULT_PROXY_MODE,
+            "proxy": "",
+            "ssl_verify": DEFAULT_SSL_VERIFY,
         },
         "auth": {
             "mode": DEFAULT_AUTH_MODE,
@@ -85,9 +93,28 @@ def _normalize_config(config: dict) -> dict:
     default_host = DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
     config["server"].setdefault("host", default_host)
     config["server"]["port"] = _normalize_port(config["server"].get("port", DEFAULT_LISTEN_PORT))
+    config["network"] = normalize_network_config(config.get("network", {}))
     config["auth"] = _normalize_auth(config.get("auth", {}))
     config.pop("providers", None)
     return config
+
+
+def normalize_network_config(value) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    proxy_mode = str(value.get("proxy_mode") or DEFAULT_PROXY_MODE).strip().lower()
+    if proxy_mode not in PROXY_MODES:
+        proxy_mode = DEFAULT_PROXY_MODE
+    proxy = str(value.get("proxy") or "").strip()
+    if proxy_mode != "custom":
+        proxy = ""
+    elif not proxy:
+        proxy_mode = DEFAULT_PROXY_MODE
+    return {
+        "proxy_mode": proxy_mode,
+        "proxy": proxy,
+        "ssl_verify": _normalize_bool(value.get("ssl_verify"), DEFAULT_SSL_VERIFY),
+    }
 
 
 def _normalize_auth(value) -> dict:

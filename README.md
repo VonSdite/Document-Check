@@ -78,6 +78,14 @@ server:
   # 对外开放前请务必修改 admin.password、secret_key 和 admin_url。
   host: 0.0.0.0
   port: 31945
+network:
+  # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
+  # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
+  proxy_mode: direct
+  # proxy 仅在 proxy_mode: custom 时填写，例如 http://127.0.0.1:7890；用户模型配置里不允许再填写代理。
+  proxy: ""
+  # 是否校验 HTTPS 证书；默认 false，适合内网或自签名证书服务。公网正式证书环境建议改为 true。
+  ssl_verify: false
 auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
   # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
@@ -123,6 +131,14 @@ server:
   # 如果需要局域网或服务器访问，请改用 config.platform.example.yaml 的 platform: true。
   host: 127.0.0.1
   port: 31945
+network:
+  # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
+  # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
+  proxy_mode: direct
+  # proxy 仅在 proxy_mode: custom 时填写，例如 http://127.0.0.1:7890；用户模型配置里不允许再填写代理。
+  proxy: ""
+  # 是否校验 HTTPS 证书；默认 false，适合内网或自签名证书服务。公网正式证书环境建议改为 true。
+  ssl_verify: false
 auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
   # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
@@ -155,6 +171,14 @@ auth:
 `platform` 默认为 `false`，首次启动没有配置文件时会生成非平台模式配置：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录；该模式下 `server.host` 和 `HOST` 环境变量都会被忽略，`PORT` 仍可临时覆盖端口。设置为 `true` 时进入平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。
 
 `admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。平台服务模式下临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
+
+## 系统出站网络配置
+
+`network` 控制本服务所有对外请求，包括拉取模型列表、测试模型连通性和后台执行检查任务。用户只能填写模型提供商、API 地址、API Key、超时、文本上限和模型 ID，不能在自己的模型配置里指定代理或 SSL 校验。
+
+- `network.proxy_mode`：`direct` 为直连，默认值；`system` 读取运行本服务的机器上的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 等环境变量；`custom` 使用 `network.proxy` 指定的代理地址。
+- `network.proxy`：仅 `proxy_mode: custom` 时填写，例如 `http://127.0.0.1:7890`；其他模式会忽略该字段。
+- `network.ssl_verify`：统一控制 HTTPS 证书校验，默认 `false`。如果模型服务使用公网正式证书，建议改为 `true`；如果是内网或自签名证书，可保持 `false`。
 
 ## 用户身份与 SSO 预留
 
@@ -246,12 +270,11 @@ SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、A
 
 - API 地址填写完整 OpenAI Chat Completions 请求地址，例如 `https://api.example.com/v1/chat/completions`。
 - API Key 可为空，非空时会以 `Authorization: Bearer ...` 发送。
-- 代理模式支持直连、系统代理和自定义代理。默认直连；系统代理模式会读取系统代理环境变量；自定义代理模式使用用户填写的代理地址。
-- SSL 校验按提供商单独设置，默认关闭；开启后会校验 HTTPS 证书。
+- 代理和 SSL 校验不允许用户单独配置，统一由 `config.yaml` 的 `network` 控制。
 - 请求超时时间按提供商单独设置，默认 3600 秒。
 - 单次请求文本上限按提供商单独设置，默认 80000 字。
 - 模型 ID 列表使用表格维护，可手动新增、整理，也可从当前 API 地址拉取模型后在弹窗中选择加入。
-- 每个模型 ID 行都有“测试”按钮，用于从平台服务端按当前 API 地址、API Key、代理、SSL 设置和模型 ID 发起一次 Chat Completions 连通性测试。
+- 每个模型 ID 行都有“测试”按钮，用于从平台服务端按当前 API 地址、API Key、系统出站网络配置和模型 ID 发起一次 Chat Completions 连通性测试。
 - 每个模型可单独开启“强制关闭思考”。开启后，请求该模型时会附加 `enable_thinking=false`，并同时写入 `chat_template_kwargs: {"enable_thinking": false}`，用于关闭部分思考模型的思考模式；不支持这些参数的服务可能忽略或返回错误。
 
 ## 检查流程

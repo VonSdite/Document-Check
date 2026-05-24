@@ -787,30 +787,18 @@ async function fetchModelsForForm(form, button) {
   writeModelConfigs(form);
   const apiBase = form.elements.api_base?.value?.trim() || "";
   const apiKey = form.elements.api_key?.value?.trim() || "";
-  const proxyMode = form.elements.proxy_mode?.value || "direct";
-  const proxy = form.elements.proxy?.value?.trim() || "";
   const requestTimeout = form.elements.request_timeout?.value || "30";
-  const sslVerify = form.elements.ssl_verify?.checked ? "on" : "off";
   if (!apiBase) {
     showToast("请先填写 API 地址。", "error");
-    return;
-  }
-  if (proxyMode === "custom" && !proxy) {
-    showToast("自定义代理模式需要填写代理地址。", "error");
     return;
   }
 
   const params = new URLSearchParams({
     api_base: apiBase,
-    proxy_mode: proxyMode,
     request_timeout: requestTimeout,
-    ssl_verify: sslVerify,
   });
   if (apiKey) {
     params.set("api_key", apiKey);
-  }
-  if (proxy) {
-    params.set("proxy", proxy);
   }
 
   setFetchButtonLoading(button, true);
@@ -841,20 +829,13 @@ async function testModelForRow(form, row, button) {
   const modelName = nameInput instanceof HTMLInputElement ? nameInput.value.trim() : "";
   const apiBase = form.elements.api_base?.value?.trim() || "";
   const apiKey = form.elements.api_key?.value?.trim() || "";
-  const proxyMode = form.elements.proxy_mode?.value || "direct";
-  const proxy = form.elements.proxy?.value?.trim() || "";
   const requestTimeout = form.elements.request_timeout?.value || "30";
-  const sslVerify = form.elements.ssl_verify?.checked ? "on" : "off";
   if (!apiBase) {
     showToast("请先填写 API 地址。", "error");
     return;
   }
   if (!modelName) {
     showToast("请先填写模型 ID。", "error");
-    return;
-  }
-  if (proxyMode === "custom" && !proxy) {
-    showToast("自定义代理模式需要填写代理地址。", "error");
     return;
   }
 
@@ -871,10 +852,7 @@ async function testModelForRow(form, row, button) {
       body: JSON.stringify({
         api_base: apiBase,
         api_key: apiKey,
-        proxy_mode: proxyMode,
-        proxy,
         request_timeout: requestTimeout,
-        ssl_verify: sslVerify,
         model_name: modelName,
         force_disable_thinking: thinkingInput instanceof HTMLInputElement && thinkingInput.checked,
       }),
@@ -1446,13 +1424,6 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
-  if (input instanceof HTMLSelectElement && input.classList.contains("proxy-mode-select")) {
-    const form = input.closest("form");
-    if (form) {
-      form.dataset.proxyMode = input.value;
-    }
-    return;
-  }
   if (input instanceof HTMLSelectElement && input.name === "model_id") {
     writeLastModelId(input.value);
     return;

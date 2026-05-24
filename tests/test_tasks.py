@@ -17,6 +17,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.app = Flask(__name__)
         self.app.config["DATABASE"] = str(Path(self.temp_dir.name) / "test.sqlite3")
         self.app.config["UPLOAD_FOLDER"] = str(Path(self.temp_dir.name) / "uploads")
+        self.app.config["NETWORK"] = {"proxy_mode": "direct", "proxy": "", "ssl_verify": False}
         Path(self.app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
         self.context = self.app.app_context()
         self.context.push()
@@ -110,6 +111,52 @@ class TaskExecutionTest(unittest.TestCase):
             )
 
         self.assertTrue(calls[0]["force_disable_thinking"])
+
+    def test_task_execution_uses_system_network_config(self):
+        self.app.config["NETWORK"] = {
+            "proxy_mode": "custom",
+            "proxy": "http://127.0.0.1:7890",
+            "ssl_verify": True,
+        }
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                checks_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'doc.txt', 'doc.txt', 'txt', 1,
+                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (json.dumps([1]), created_at, created_at),
+        )
+        db.commit()
+        task = db.execute("SELECT * FROM tasks").fetchone()
+        check_items = [{"code": "typo", "name": "错别字检查", "prompt": "检查错别字"}]
+        calls = []
+
+        def fake_run_check(**kwargs):
+            calls.append(kwargs)
+            return "完成"
+
+        with patch("app.tasks.run_check", side_effect=fake_run_check):
+            _run_check_items_concurrently(
+                self.app,
+                task,
+                check_items,
+                "文档",
+                max_workers=1,
+                stream_trace_enabled=False,
+            )
+
+        self.assertEqual(calls[0]["proxy_mode"], "custom")
+        self.assertEqual(calls[0]["proxy"], "http://127.0.0.1:7890")
+        self.assertTrue(calls[0]["ssl_verify"])
 
     def test_document_check_items_prefers_snapshot_over_current_database(self):
         db = get_db()
