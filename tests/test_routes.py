@@ -5,11 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
 from bs4 import BeautifulSoup
 from flask import Flask
 from openpyxl import Workbook
 
 from app.auth import SAML_USER_SESSION_KEY
+from app.config import CONFIG_FILENAME
 from app.db import get_db, get_setting, init_db, seed_defaults, set_setting
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
@@ -216,6 +218,40 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"llm_stream_trace_enabled": True})
+
+    def test_admin_settings_shows_network_config(self):
+        self.app.config["NETWORK"] = {
+            "proxy_mode": "custom",
+            "proxy": "http://127.0.0.1:7890",
+            "ssl_verify": True,
+        }
+
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        self.assertEqual(soup.find("select", {"name": "proxy_mode"}).find("option", selected=True)["value"], "custom")
+        self.assertEqual(soup.find("input", {"name": "proxy"}).get("value"), "http://127.0.0.1:7890")
+        self.assertIsNotNone(soup.find("input", {"name": "ssl_verify"}).get("checked"))
+
+    def test_admin_settings_saves_network_to_yaml_config(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "network",
+                "proxy_mode": "custom",
+                "proxy": " http://127.0.0.1:7890 ",
+                "ssl_verify": "on",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        expected = {"proxy_mode": "custom", "proxy": "http://127.0.0.1:7890", "ssl_verify": True}
+        self.assertEqual(self.app.config["NETWORK"], expected)
+        config = yaml.safe_load((self.app.config["ROOT_DIR"] / CONFIG_FILENAME).read_text(encoding="utf-8"))
+        self.assertEqual(config["network"], expected)
+        with self.app.app_context():
+            self.assertIsNone(get_setting("network"))
 
     def test_admin_settings_shows_document_and_consistency_prompt_groups(self):
         response = self.client.get("/admin/settings")

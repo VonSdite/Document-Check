@@ -12,6 +12,39 @@
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
+      <h2 class="title-with-help">系统出站网络
+        <button class="help-tip" type="button" aria-label="系统出站网络说明" data-tip="控制本服务访问模型 API、拉取模型列表、测试模型连通性和后台任务执行时使用的代理与 HTTPS 证书校验。">?</button>
+      </h2>
+    </div>
+  </div>
+  <form method="post" class="settings-network-form">
+    <input type="hidden" name="action" value="network">
+    <label>代理模式
+      <select name="proxy_mode">
+        <option value="direct" {{ "selected" if network.proxy_mode == "direct" else "" }}>直连</option>
+        <option value="system" {{ "selected" if network.proxy_mode == "system" else "" }}>系统代理</option>
+        <option value="custom" {{ "selected" if network.proxy_mode == "custom" else "" }}>自定义代理</option>
+      </select>
+    </label>
+    <div class="form-field">
+      <span class="field-with-help">
+        <span class="field-label">代理地址</span>
+        <button class="help-tip" type="button" aria-label="代理地址说明" data-tip="仅代理模式为自定义代理时生效，例如 http://127.0.0.1:7890。">?</button>
+      </span>
+      <input name="proxy" value="{{ network.proxy or '' }}" placeholder="http://127.0.0.1:7890">
+    </div>
+    <label class="switch-line settings-network-toggle">
+      <input type="checkbox" name="ssl_verify" {{ "checked" if network.ssl_verify else "" }}>
+      <span>SSL 校验</span>
+      <button class="help-tip" type="button" aria-label="SSL 校验说明" data-tip="开启后校验 HTTPS 证书；默认关闭，适合内网或自签名证书服务。">?</button>
+    </label>
+    <button class="primary-button settings-save-button" type="submit">保存网络设置</button>
+  </form>
+</section>
+
+<section class="panel settings-section">
+  <div class="settings-section-head">
+    <div>
       <h2>任务并发度</h2>
       <p>控制任务队列和单个任务内检查项的并行数量。</p>
     </div>

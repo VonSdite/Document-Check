@@ -7,7 +7,7 @@ from unittest.mock import patch
 import yaml
 
 from app import _runtime_root_dir, create_app
-from app.config import CONFIG_FILENAME, load_local_config
+from app.config import CONFIG_FILENAME, load_local_config, save_network_config
 
 
 def _write_config(root_dir: str, config: dict):
@@ -151,6 +151,33 @@ class ProviderConfigTest(unittest.TestCase):
             config = load_local_config(Path(temp_dir))
 
         self.assertEqual(config["network"], {"proxy_mode": "direct", "proxy": "", "ssl_verify": False})
+
+    def test_save_network_config_writes_yaml_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "platform": True,
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {"host": "0.0.0.0", "port": 5000},
+                    "network": {"proxy_mode": "direct", "proxy": "", "ssl_verify": False},
+                },
+            )
+
+            network = save_network_config(
+                Path(temp_dir),
+                {"proxy_mode": "custom", "proxy": " http://127.0.0.1:7890 ", "ssl_verify": True},
+            )
+            config = yaml.safe_load((Path(temp_dir) / CONFIG_FILENAME).read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            network,
+            {"proxy_mode": "custom", "proxy": "http://127.0.0.1:7890", "ssl_verify": True},
+        )
+        self.assertTrue(config["platform"])
+        self.assertEqual(config["network"], network)
 
     def test_default_config_uses_yaml_filename(self):
         with tempfile.TemporaryDirectory() as temp_dir:

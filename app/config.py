@@ -24,16 +24,29 @@ def load_local_config(root_dir: Path) -> dict:
         _write_config(config_path, config)
         return config
 
-    with config_path.open("r", encoding="utf-8") as file:
-        config = yaml.safe_load(file) or {}
-    if not isinstance(config, dict):
-        config = {}
-
+    config = _read_config(config_path)
     original = _dump_config(config)
     config = _normalize_config(config)
     normalized = _dump_config(config)
     if normalized != original:
         _write_config(config_path, config)
+    return config
+
+
+def save_network_config(root_dir: Path, value) -> dict:
+    config_path = root_dir / CONFIG_FILENAME
+    config = _read_config(config_path) if config_path.exists() else _default_config()
+    config["network"] = normalize_network_config(value)
+    config = _normalize_config(config)
+    _write_config(config_path, config)
+    return config["network"]
+
+
+def _read_config(config_path: Path) -> dict:
+    with config_path.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file) or {}
+    if not isinstance(config, dict):
+        config = {}
     return config
 
 

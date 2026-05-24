@@ -626,6 +626,17 @@ td {
   align-items: end;
 }
 
+.settings-network-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.9fr) minmax(220px, 1.4fr) minmax(150px, 0.8fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.settings-network-toggle {
+  min-height: 43px;
+}
+
 .settings-diagnostic-form {
   display: inline-flex;
   align-items: center;

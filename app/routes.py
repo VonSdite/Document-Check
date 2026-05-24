@@ -24,6 +24,7 @@ from flask import (
 )
 
 from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, current_identity, subject_label
+from .config import save_network_config
 from .db import (
     default_check_item_codes,
     get_bool_setting,
@@ -517,6 +518,24 @@ def register_routes(app):
                 flash("定位日志设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
+            if action == "network":
+                proxy_mode = request.form.get("proxy_mode", "direct")
+                proxy = request.form.get("proxy", "")
+                if proxy_mode == "custom" and not str(proxy or "").strip():
+                    flash("自定义代理模式需要填写代理地址。", "error")
+                    return redirect(url_for("admin_settings"))
+                network = save_network_config(
+                    current_app.config["ROOT_DIR"],
+                    {
+                        "proxy_mode": proxy_mode,
+                        "proxy": proxy,
+                        "ssl_verify": request.form.get("ssl_verify") == "on",
+                    },
+                )
+                current_app.config["NETWORK"] = network
+                flash("系统出站网络配置已保存。", "success")
+                return redirect(url_for("admin_settings"))
+
             if action == "create_check_item":
                 task_type = _check_item_task_type(request.form.get("task_type"))
                 name = request.form.get("name", "").strip()
@@ -649,6 +668,7 @@ def register_routes(app):
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
+            network=current_app.config["NETWORK"],
             llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
         )
 
