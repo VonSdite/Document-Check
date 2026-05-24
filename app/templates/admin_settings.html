@@ -9,40 +9,14 @@
   </div>
 </section>
 
-<section class="panel settings-section">
-  <div class="settings-section-head">
-    <div>
-      <h2 class="title-with-help">系统出站网络
-        <button class="help-tip" type="button" aria-label="系统出站网络说明" data-tip="控制本服务访问模型 API、拉取模型列表、测试模型连通性和后台任务执行时使用的代理与 HTTPS 证书校验。">?</button>
-      </h2>
-    </div>
-  </div>
-  <form method="post" class="settings-network-form" data-network-proxy-mode="{{ network.proxy_mode }}">
-    <input type="hidden" name="action" value="network">
-    <label class="settings-network-mode-field">代理模式
-      <select name="proxy_mode">
-        <option value="direct" {{ "selected" if network.proxy_mode == "direct" else "" }}>直连</option>
-        <option value="system" {{ "selected" if network.proxy_mode == "system" else "" }}>系统代理</option>
-        <option value="custom" {{ "selected" if network.proxy_mode == "custom" else "" }}>自定义代理</option>
-      </select>
-    </label>
-    <div class="form-field settings-network-proxy-field">
-      <span class="field-with-help">
-        <span class="field-label">代理地址</span>
-        <button class="help-tip" type="button" aria-label="代理地址说明" data-tip="仅代理模式为自定义代理时生效，例如 http://127.0.0.1:7890。">?</button>
-      </span>
-      <input name="proxy" value="{{ network.proxy or '' }}" placeholder="http://127.0.0.1:7890" {{ "required" if network.proxy_mode == "custom" else "" }}>
-    </div>
-    <label class="switch-line settings-network-toggle">
-      <input type="checkbox" name="ssl_verify" {{ "checked" if network.ssl_verify else "" }}>
-      <span>SSL 校验</span>
-      <button class="help-tip" type="button" aria-label="SSL 校验说明" data-tip="开启后校验 HTTPS 证书；默认关闭，适合内网或自签名证书服务。">?</button>
-    </label>
-    <button class="primary-button settings-save-button settings-network-save-button" type="submit">保存网络设置</button>
-  </form>
-</section>
+<nav class="settings-tabs" aria-label="系统设置页签">
+  <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if settings_tab == 'general' else '' }}">基础设置</a>
+  {% if ip_username_management_enabled %}
+  <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if settings_tab == 'ip_users' else '' }}">IP 用户标记</a>
+  {% endif %}
+</nav>
 
-{% if ip_username_management_enabled %}
+{% if settings_tab == 'ip_users' %}
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
@@ -93,7 +67,40 @@
   </div>
   {% endif %}
 </section>
-{% endif %}
+{% else %}
+
+<section class="panel settings-section">
+  <div class="settings-section-head">
+    <div>
+      <h2 class="title-with-help">系统出站网络
+        <button class="help-tip" type="button" aria-label="系统出站网络说明" data-tip="控制本服务访问模型 API、拉取模型列表、测试模型连通性和后台任务执行时使用的代理与 HTTPS 证书校验。">?</button>
+      </h2>
+    </div>
+  </div>
+  <form method="post" class="settings-network-form" data-network-proxy-mode="{{ network.proxy_mode }}">
+    <input type="hidden" name="action" value="network">
+    <label class="settings-network-mode-field">代理模式
+      <select name="proxy_mode">
+        <option value="direct" {{ "selected" if network.proxy_mode == "direct" else "" }}>直连</option>
+        <option value="system" {{ "selected" if network.proxy_mode == "system" else "" }}>系统代理</option>
+        <option value="custom" {{ "selected" if network.proxy_mode == "custom" else "" }}>自定义代理</option>
+      </select>
+    </label>
+    <div class="form-field settings-network-proxy-field">
+      <span class="field-with-help">
+        <span class="field-label">代理地址</span>
+        <button class="help-tip" type="button" aria-label="代理地址说明" data-tip="仅代理模式为自定义代理时生效，例如 http://127.0.0.1:7890。">?</button>
+      </span>
+      <input name="proxy" value="{{ network.proxy or '' }}" placeholder="http://127.0.0.1:7890" {{ "required" if network.proxy_mode == "custom" else "" }}>
+    </div>
+    <label class="switch-line settings-network-toggle">
+      <input type="checkbox" name="ssl_verify" {{ "checked" if network.ssl_verify else "" }}>
+      <span>SSL 校验</span>
+      <button class="help-tip" type="button" aria-label="SSL 校验说明" data-tip="开启后校验 HTTPS 证书；默认关闭，适合内网或自签名证书服务。">?</button>
+    </label>
+    <button class="primary-button settings-save-button settings-network-save-button" type="submit">保存网络设置</button>
+  </form>
+</section>
 
 <section class="panel settings-section">
   <div class="settings-section-head">
@@ -265,4 +272,5 @@
   </div>
 </section>
 {% endfor %}
+{% endif %}
 {% endblock %}

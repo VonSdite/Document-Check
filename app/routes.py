@@ -519,10 +519,10 @@ def register_routes(app):
                 username = request.form.get("username", "").strip()
                 if not _valid_ip(ip):
                     flash("请输入有效的 IP 地址。", "error")
-                    return redirect(url_for("admin_settings"))
+                    return redirect(url_for("admin_settings", tab="ip_users"))
                 set_ip_username(ip, username)
                 flash("IP 用户名已保存。" if username else "IP 用户名已清除。", "success")
-                return redirect(url_for("admin_settings"))
+                return redirect(url_for("admin_settings", tab="ip_users"))
 
             if action == "create_check_item":
                 task_type = _check_item_task_type(request.form.get("task_type"))
@@ -627,6 +627,7 @@ def register_routes(app):
 
         document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
         consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
+        settings_tab = _settings_tab()
         return render_template(
             "admin_settings.html",
             check_item_groups=[
@@ -658,6 +659,7 @@ def register_routes(app):
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
             network=current_app.config["NETWORK"],
             llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
+            settings_tab=settings_tab,
             ip_username_management_enabled=_ip_username_management_enabled(),
             ip_username_rows=_ip_username_rows() if _ip_username_management_enabled() else [],
         )
@@ -708,6 +710,13 @@ def _mode_subject_filter(table_alias: str = "t") -> tuple[str, tuple[str]]:
 
 def _ip_username_management_enabled() -> bool:
     return _platform_enabled() and _auth_mode() == "ip"
+
+
+def _settings_tab() -> str:
+    tab = request.args.get("tab", "general").strip()
+    if tab == "ip_users" and _ip_username_management_enabled():
+        return tab
+    return "general"
 
 
 def _valid_ip(value: str) -> bool:

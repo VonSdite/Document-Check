@@ -292,12 +292,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/admin/settings?tab=ip_users"))
         with self.app.app_context():
             self.assertEqual(get_ip_username("10.0.0.8"), "张三")
 
         settings_response = self.client.get("/admin/settings")
-        self.assertIn("IP 用户标记", settings_response.get_data(as_text=True))
-        self.assertIn("张三", settings_response.get_data(as_text=True))
+        settings_html = settings_response.get_data(as_text=True)
+        self.assertIn("IP 用户标记", settings_html)
+        self.assertNotIn("张三", settings_html)
+
+        ip_tab_response = self.client.get("/admin/settings?tab=ip_users")
+        self.assertIn("张三", ip_tab_response.get_data(as_text=True))
+        self.assertNotIn("系统出站网络", ip_tab_response.get_data(as_text=True))
 
     def test_admin_settings_hides_ip_username_mapping_outside_ip_mode(self):
         self.app.config["AUTH"] = {
