@@ -633,7 +633,7 @@ td {
   align-items: end;
 }
 
-.settings-network-proxy-field {
+.settings-network-form .settings-network-proxy-field {
   display: none;
 }
 
