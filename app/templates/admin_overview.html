@@ -99,8 +99,8 @@
           {% for row in user_rows %}
           <tr>
             <td>
-              <strong>{{ row.username or row.ip }}</strong>
-              {% if row.username %}<div class="subline">{{ row.ip }}</div>{% endif %}
+              <strong>{{ row.username or subject_label(row.subject) }}</strong>
+              <div class="subline">{{ row.subject }} · IP {{ row.ip }}</div>
             </td>
             <td>{{ row.tasks }}</td>
             <td>{{ row.document_tasks }}</td>

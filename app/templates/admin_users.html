@@ -5,7 +5,7 @@
 {% block content %}
 <section class="page-title">
   <div>
-    <h1>IP 用户标识</h1>
+    <h1>用户管理</h1>
   </div>
 </section>
 
@@ -13,19 +13,23 @@
   <div class="panel">
     <div class="panel-head">
       <div>
-        <h2>新增用户</h2>
+        <h2>新增用户配置</h2>
       </div>
     </div>
     <form method="post" class="new-user-form">
       <input type="hidden" name="permission_submitted" value="1">
       <div class="form-grid">
         <label>
-          IP
-          <input name="ip" placeholder="例如 192.168.1.10" required>
+          用户主体
+          <input name="subject" placeholder="例如 sso:zhangsan" required>
         </label>
         <label>
-          用户名
-          <input name="username" placeholder="例如 财务部-张三">
+          显示名称
+          <input name="display_name" placeholder="例如 财务部-张三">
+        </label>
+        <label>
+          来源
+          <input name="source" placeholder="例如 sso">
         </label>
       </div>
       <div class="form-actions new-user-actions">
@@ -41,26 +45,27 @@
   <div class="panel">
     <div class="panel-head">
       <div>
-        <h2>未标识 IP</h2>
+        <h2>未配置用户</h2>
       </div>
     </div>
-    {% if ips %}
+    {% if unmanaged_users %}
     <div class="stack-list">
-      {% for item in ips %}
+      {% for item in unmanaged_users %}
       <form method="post" class="inline-edit">
-        <input type="hidden" name="ip" value="{{ item.ip }}">
+        <input type="hidden" name="subject" value="{{ item.subject }}">
+        <input type="hidden" name="source" value="{{ item.source or 'sso' }}">
         <div>
-          <strong>{{ item.ip }}</strong>
-          <div class="subline">{{ item.task_count }} 个任务 · 最近 {{ item.last_task_at }}</div>
+          <strong>{{ item.display_name_snapshot or subject_label(item.subject) }}</strong>
+          <div class="subline">{{ item.subject }} · {{ item.task_count }} 个任务 · 最近 {{ item.last_task_at }}</div>
         </div>
-        <input name="username" placeholder="用户名">
-        <button class="small-button" type="submit">标识</button>
+        <input name="display_name" value="{{ item.display_name_snapshot or '' }}" placeholder="显示名称">
+        <button class="small-button" type="submit">配置</button>
       </form>
       {% endfor %}
     </div>
     {% else %}
     <div class="empty-state compact subtle-empty">
-      <span>无未标识 IP</span>
+      <span>无未配置用户</span>
     </div>
     {% endif %}
   </div>
@@ -69,7 +74,7 @@
 <section class="panel">
   <div class="panel-head">
     <div>
-      <h2>已标识用户</h2>
+      <h2>已配置用户</h2>
     </div>
   </div>
   {% if users %}
@@ -77,22 +82,23 @@
     {% for user in users %}
     <div class="user-row">
       <form method="post" class="user-edit-form">
-        <input type="hidden" name="ip" value="{{ user.ip }}">
+        <input type="hidden" name="subject" value="{{ user.subject }}">
+        <input type="hidden" name="source" value="{{ user.source }}">
         <input type="hidden" name="permission_submitted" value="1">
         <div class="user-main">
-          <strong>{{ user.ip }}</strong>
-          <span class="subline">{{ user.task_count or 0 }} 个任务{% if user.running_count %} · {{ user.running_count }} 个检查中{% endif %}</span>
+          <strong>{{ user.display_name or subject_label(user.subject) }}</strong>
+          <span class="subline">{{ user.subject }} · {{ user.source }} · {{ user.task_count or 0 }} 个任务{% if user.running_count %} · {{ user.running_count }} 个检查中{% endif %}</span>
         </div>
-        <input name="username" value="{{ user.username or '' }}" placeholder="用户名">
+        <input name="display_name" value="{{ user.display_name or '' }}" placeholder="显示名称">
         <label class="switch-line compact-switch">
           <input type="checkbox" name="is_enabled" value="1" {{ "checked" if not user.is_disabled else "" }}>
           <span>允许提交</span>
         </label>
         <button class="small-button" type="submit">保存</button>
       </form>
-      <form method="post" data-confirm="确认删除该 IP 的用户标识？任务记录不会删除。">
+      <form method="post" data-confirm="确认删除该用户配置？任务记录不会删除。">
         <input type="hidden" name="action" value="delete">
-        <input type="hidden" name="ip" value="{{ user.ip }}">
+        <input type="hidden" name="subject" value="{{ user.subject }}">
         <button class="small-button danger" type="submit">删除</button>
       </form>
     </div>

@@ -15,7 +15,9 @@ DEFAULT_LISTEN_PORT = 31945
 DEFAULT_REQUEST_TIMEOUT = 3600
 DEFAULT_MAX_INPUT_CHARS = 80000
 DEFAULT_SSL_VERIFY = False
+DEFAULT_AUTH_MODE = "ip"
 PROXY_MODES = {"direct", "system", "custom"}
+AUTH_MODES = {"ip", "trusted_header"}
 _CONFIG_LOCK = threading.Lock()
 CONFIG_FILENAME = "config.yaml"
 
@@ -61,6 +63,14 @@ def _default_config() -> dict:
             "host": DEFAULT_LISTEN_HOST if DEFAULT_PLATFORM else DEFAULT_LOCAL_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
         },
+        "auth": {
+            "mode": DEFAULT_AUTH_MODE,
+            "trusted_header": {
+                "user": "",
+                "name": "",
+                "email": "",
+            },
+        },
         "providers": [],
     }
 
@@ -84,8 +94,28 @@ def _normalize_config(config: dict) -> dict:
     default_host = DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
     config["server"].setdefault("host", default_host)
     config["server"]["port"] = _normalize_port(config["server"].get("port", DEFAULT_LISTEN_PORT))
+    config["auth"] = _normalize_auth(config.get("auth", {}))
     config["providers"] = _normalize_providers(config.get("providers", []))
     return config
+
+
+def _normalize_auth(value) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    mode = str(value.get("mode") or DEFAULT_AUTH_MODE).strip().lower()
+    if mode not in AUTH_MODES:
+        mode = DEFAULT_AUTH_MODE
+    trusted_header = value.get("trusted_header", {})
+    if not isinstance(trusted_header, dict):
+        trusted_header = {}
+    return {
+        "mode": mode,
+        "trusted_header": {
+            "user": str(trusted_header.get("user") or "").strip(),
+            "name": str(trusted_header.get("name") or "").strip(),
+            "email": str(trusted_header.get("email") or "").strip(),
+        },
+    }
 
 
 def _normalize_providers(value) -> list[dict]:

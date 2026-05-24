@@ -71,7 +71,7 @@ class TaskScheduler:
 
         queued = db.execute(
             """
-            SELECT id, ip
+            SELECT id, ip, COALESCE(owner_subject, 'ip:' || ip) AS owner_subject
             FROM tasks
             WHERE status = 'queued'
             ORDER BY created_at ASC, id ASC
@@ -83,11 +83,15 @@ class TaskScheduler:
         for task in queued:
             if launched >= slots:
                 break
-            running_for_ip = db.execute(
-                "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running' AND ip = ?",
-                (task["ip"],),
+            running_for_user = db.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM tasks
+                WHERE status = 'running' AND COALESCE(owner_subject, 'ip:' || ip) = ?
+                """,
+                (task["owner_subject"],),
             ).fetchone()["total"]
-            if running_for_ip >= user_limit:
+            if running_for_user >= user_limit:
                 continue
 
             db.execute(
@@ -118,8 +122,9 @@ class TaskScheduler:
             results = []
             try:
                 self.app.logger.info(
-                    "任务开始 task_id=%s ip=%s file=%s model=%s/%s",
+                    "任务开始 task_id=%s owner=%s ip=%s file=%s model=%s/%s",
                     task_id,
+                    task["owner_subject"] if "owner_subject" in task.keys() and task["owner_subject"] else f"ip:{task['ip']}",
                     task["ip"],
                     task["original_filename"],
                     task["provider_name"],

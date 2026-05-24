@@ -7,4 +7,10 @@ admin_url: /console
 server:
   host: 0.0.0.0
   port: 31945
+auth:
+  mode: ip
+  trusted_header:
+    user: ""
+    name: ""
+    email: ""
 providers: []

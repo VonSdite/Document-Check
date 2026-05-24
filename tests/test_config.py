@@ -28,6 +28,42 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["admin_url"], "/console")
         self.assertEqual(config["server"]["host"], "127.0.0.1")
         self.assertEqual(config["server"]["port"], 31945)
+        self.assertEqual(config["auth"]["mode"], "ip")
+
+    def test_auth_trusted_header_config_is_normalized(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {"host": "127.0.0.1", "port": 5000},
+                    "auth": {
+                        "mode": "trusted_header",
+                        "trusted_header": {
+                            "user": " X-SSO-User ",
+                            "name": "X-SSO-Name",
+                            "email": "X-SSO-Email",
+                        },
+                    },
+                    "providers": [],
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(
+            config["auth"],
+            {
+                "mode": "trusted_header",
+                "trusted_header": {
+                    "user": "X-SSO-User",
+                    "name": "X-SSO-Name",
+                    "email": "X-SSO-Email",
+                },
+            },
+        )
 
     def test_default_config_uses_yaml_filename(self):
         with tempfile.TemporaryDirectory() as temp_dir:

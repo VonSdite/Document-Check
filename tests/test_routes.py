@@ -453,6 +453,40 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ],
         )
 
+    def test_create_task_uses_trusted_header_identity(self):
+        self._configure_provider()
+        self.app.config["AUTH"] = {
+            "mode": "trusted_header",
+            "trusted_header": {
+                "user": "X-SSO-User",
+                "name": "X-SSO-Name",
+                "email": "",
+            },
+        }
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
+                "checks": [str(item["id"])],
+                "model_id": "provider-1:0:model-a",
+            },
+            headers={"X-SSO-User": "zhangsan", "X-SSO-Name": "张三"},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source, ip FROM tasks").fetchone()
+            user = get_db().execute("SELECT * FROM user_profiles WHERE subject = 'sso:zhangsan'").fetchone()
+        self.assertEqual(task["owner_subject"], "sso:zhangsan")
+        self.assertEqual(task["owner_name_snapshot"], "张三")
+        self.assertEqual(task["owner_source"], "sso")
+        self.assertEqual(task["ip"], "127.0.0.1")
+        self.assertEqual(user["display_name"], "张三")
+
     def test_create_consistency_task_saves_combined_document_text(self):
         self._configure_provider()
         with self.app.app_context():

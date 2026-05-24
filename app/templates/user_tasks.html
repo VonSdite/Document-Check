@@ -44,7 +44,7 @@
       </select>
     </label>
     <div class="submit-slot">
-      <span class="{{ 'disabled-submit-tip' if user_disabled else '' }}" {% if user_disabled %}data-tip="当前 IP 已禁用，请联系管理员"{% endif %}>
+      <span class="{{ 'disabled-submit-tip' if user_disabled else '' }}" {% if user_disabled %}data-tip="当前用户已禁用，请联系管理员"{% endif %}>
         <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
       </span>
     </div>

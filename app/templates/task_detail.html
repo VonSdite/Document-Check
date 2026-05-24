@@ -50,7 +50,7 @@
       <dd>{{ task.original_filename }}</dd>
     </div>
     {% endif %}
-    <div><dt>归属 IP</dt><dd>{{ task.ip }}{% if task.current_username %} · {{ task.current_username }}{% endif %}</dd></div>
+    <div><dt>归属用户</dt><dd>{{ owner_display(task) }}<div class="subline">{{ task.effective_owner_subject or task.ip }} · IP {{ task.ip }}</div></dd></div>
     <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
     <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>
     <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>

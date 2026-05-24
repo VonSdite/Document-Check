@@ -92,7 +92,7 @@
   <div class="metric"><span>排队</span><strong>{{ totals.queued }}</strong></div>
   <div class="metric"><span>检查中</span><strong>{{ totals.running }}</strong></div>
   <div class="metric"><span>已完成</span><strong>{{ totals.completed }}</strong></div>
-  <div class="metric"><span>IP数</span><strong>{{ totals.ips }}</strong></div>
+  <div class="metric"><span>用户数</span><strong>{{ totals.users }}</strong></div>
 </section>
 
 <section class="panel">
@@ -114,8 +114,8 @@
       </select>
     </label>
     <label>
-      IP
-      <input name="ip" value="{{ ip }}" placeholder="按 IP 过滤">
+      用户
+      <input name="owner" value="{{ owner }}" placeholder="按用户、账号或 IP 过滤">
     </label>
     <button class="secondary-button" type="submit">筛选</button>
   </form>
@@ -150,7 +150,7 @@
             </div>
             <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</div>
           </td>
-          <td class="task-owner-cell">{{ task.ip }}{% if task.current_username %}<div class="subline">{{ task.current_username }}</div>{% endif %}</td>
+          <td class="task-owner-cell">{{ owner_display(task) }}<div class="subline">{{ task.effective_owner_subject or task.ip }} · IP {{ task.ip }}</div></td>
           <td class="task-model-cell">{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
           <td class="task-status-cell">
             <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
@@ -182,9 +182,9 @@
   <nav class="pagination" aria-label="任务分页">
     <span>共 {{ pagination.total }} 条，每页 {{ pagination.per_page }} 条</span>
     <div>
-      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('admin_consistency', status=status, ip=ip, page=pagination.prev_page) }}">上一页</a>
+      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('admin_consistency', status=status, owner=owner, page=pagination.prev_page) }}">上一页</a>
       <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
-      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('admin_consistency', status=status, ip=ip, page=pagination.next_page) }}">下一页</a>
+      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('admin_consistency', status=status, owner=owner, page=pagination.next_page) }}">下一页</a>
     </div>
   </nav>
   {% endif %}
