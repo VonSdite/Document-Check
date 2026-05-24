@@ -518,9 +518,13 @@ def register_routes(app):
                 ip = request.form.get("ip", "").strip()
                 username = request.form.get("username", "").strip()
                 if not _valid_ip(ip):
+                    if _wants_json_response():
+                        return {"ok": False, "error": "请输入有效的 IP 地址。"}, 400
                     flash("请输入有效的 IP 地址。", "error")
                     return redirect(url_for("admin_settings", tab="ip_users"))
                 set_ip_username(ip, username)
+                if _wants_json_response():
+                    return {"ok": True, "ip": ip, "username": username}
                 flash("IP 用户名已保存。" if username else "IP 用户名已清除。", "success")
                 return redirect(url_for("admin_settings", tab="ip_users"))
 

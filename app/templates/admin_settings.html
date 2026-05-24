@@ -44,11 +44,10 @@
         <tr>
           <td>{{ row.ip }}</td>
           <td>
-            <form method="post" class="settings-ip-row-form">
+            <form method="post" class="settings-ip-row-form" data-ip-username-form>
               <input type="hidden" name="action" value="ip_username">
               <input type="hidden" name="ip" value="{{ row.ip }}">
-              <input name="username" value="{{ row.username }}" placeholder="{{ row.ip }}">
-              <button class="secondary-button" type="submit">保存</button>
+              <input name="username" value="{{ row.username }}" placeholder="{{ row.ip }}" data-ip-username-input data-saved-value="{{ row.username }}" aria-label="{{ row.ip }} 的用户名">
             </form>
           </td>
           <td>{{ row.task_count }}</td>

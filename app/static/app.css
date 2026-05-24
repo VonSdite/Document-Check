@@ -628,9 +628,10 @@ td {
 
 .settings-ip-username-form {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(180px, 320px) minmax(180px, 320px) 128px;
   gap: 14px;
   align-items: end;
+  justify-content: start;
   margin-bottom: 16px;
 }
 
@@ -638,11 +639,24 @@ td {
   min-width: 680px;
 }
 
+.settings-ip-table th:nth-child(1) {
+  width: 14%;
+}
+
+.settings-ip-table th:nth-child(2) {
+  width: 38%;
+}
+
+.settings-ip-table th:nth-child(3) {
+  width: 10%;
+}
+
+.settings-ip-table th:nth-child(4) {
+  width: 18%;
+}
+
 .settings-ip-row-form {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+  max-width: 320px;
 }
 
 .settings-network-form {

@@ -302,8 +302,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("张三", settings_html)
 
         ip_tab_response = self.client.get("/admin/settings?tab=ip_users")
-        self.assertIn("张三", ip_tab_response.get_data(as_text=True))
-        self.assertNotIn("系统出站网络", ip_tab_response.get_data(as_text=True))
+        ip_tab_html = ip_tab_response.get_data(as_text=True)
+        ip_tab_soup = BeautifulSoup(ip_tab_html, "html.parser")
+        row_form = ip_tab_soup.select_one(".settings-ip-row-form")
+        self.assertIn("张三", ip_tab_html)
+        self.assertNotIn("系统出站网络", ip_tab_html)
+        self.assertIsNone(row_form.find("button"))
+        self.assertIsNotNone(row_form.find("input", {"data-ip-username-input": ""}))
+
+        json_response = self.client.post(
+            "/admin/settings",
+            data={"action": "ip_username", "ip": "10.0.0.8", "username": "李四"},
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(json_response.status_code, 200)
+        self.assertEqual(json_response.get_json(), {"ok": True, "ip": "10.0.0.8", "username": "李四"})
 
     def test_admin_settings_hides_ip_username_mapping_outside_ip_mode(self):
         self.app.config["AUTH"] = {
