@@ -1,3 +1,5 @@
+# 本机非平台模式：适合单机使用，根路径直接进入管理视图，无需管理员登录。
+# 出于安全考虑，程序在 platform: false 时会强制监听 127.0.0.1。
 platform: false
 secret_key: 请替换为随机长字符串
 admin:
@@ -5,6 +7,8 @@ admin:
   password: 请替换为强密码
 admin_url: /console
 server:
+  # platform: false 时这里即使改成 0.0.0.0 或其他 IP，启动时也会被强制为 127.0.0.1。
+  # 如果需要局域网或服务器访问，请改用 config.platform.example.yaml 的 platform: true。
   host: 127.0.0.1
   port: 31945
 auth:

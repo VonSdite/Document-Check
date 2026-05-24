@@ -65,6 +65,8 @@ config.non-platform.example.yaml
 平台服务模式示例：
 
 ```yaml
+# 平台服务模式：适合部署到服务器或让局域网/公司入口访问。
+# 管理入口需要登录；用户身份可先用 ip，后续按公司 SSO 情况切到 trusted_header 或 saml。
 platform: true
 secret_key: 请替换为随机长字符串
 admin:
@@ -72,6 +74,8 @@ admin:
   password: 请替换为强密码
 admin_url: /console
 server:
+  # 0.0.0.0 表示监听所有网卡；也可以改成服务器指定内网 IP。
+  # 对外开放前请务必修改 admin.password、secret_key 和 admin_url。
   host: 0.0.0.0
   port: 31945
 auth:
@@ -96,6 +100,8 @@ providers: []
 本机非平台模式示例：
 
 ```yaml
+# 本机非平台模式：适合单机使用，根路径直接进入管理视图，无需管理员登录。
+# 出于安全考虑，程序在 platform: false 时会强制监听 127.0.0.1。
 platform: false
 secret_key: 请替换为随机长字符串
 admin:
@@ -103,6 +109,8 @@ admin:
   password: 请替换为强密码
 admin_url: /console
 server:
+  # platform: false 时这里即使改成 0.0.0.0 或其他 IP，启动时也会被强制为 127.0.0.1。
+  # 如果需要局域网或服务器访问，请改用 config.platform.example.yaml 的 platform: true。
   host: 127.0.0.1
   port: 31945
 auth:
@@ -124,7 +132,7 @@ auth:
 providers: []
 ```
 
-`platform` 默认为 `false`，首次启动没有配置文件时会生成非平台模式配置：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录；该模式下 `HOST` 环境变量会被忽略，`PORT` 仍可临时覆盖端口。设置为 `true` 时进入平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。
+`platform` 默认为 `false`，首次启动没有配置文件时会生成非平台模式配置：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录；该模式下 `server.host` 和 `HOST` 环境变量都会被忽略，`PORT` 仍可临时覆盖端口。设置为 `true` 时进入平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。
 
 `admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。平台服务模式下临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
 

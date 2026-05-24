@@ -1,3 +1,5 @@
+# 平台服务模式：适合部署到服务器或让局域网/公司入口访问。
+# 管理入口需要登录；用户身份可先用 ip，后续按公司 SSO 情况切到 trusted_header 或 saml。
 platform: true
 secret_key: 请替换为随机长字符串
 admin:
@@ -5,6 +7,8 @@ admin:
   password: 请替换为强密码
 admin_url: /console
 server:
+  # 0.0.0.0 表示监听所有网卡；也可以改成服务器指定内网 IP。
+  # 对外开放前请务必修改 admin.password、secret_key 和 admin_url。
   host: 0.0.0.0
   port: 31945
 auth:
