@@ -1,7 +1,4 @@
 import secrets
-import threading
-import uuid
-from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -12,13 +9,8 @@ DEFAULT_PLATFORM = False
 DEFAULT_LISTEN_HOST = "0.0.0.0"
 DEFAULT_LOCAL_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 31945
-DEFAULT_REQUEST_TIMEOUT = 3600
-DEFAULT_MAX_INPUT_CHARS = 80000
-DEFAULT_SSL_VERIFY = False
 DEFAULT_AUTH_MODE = "ip"
-PROXY_MODES = {"direct", "system", "custom"}
 AUTH_MODES = {"ip", "trusted_header", "saml"}
-_CONFIG_LOCK = threading.Lock()
 CONFIG_FILENAME = "config.yaml"
 
 
@@ -40,14 +32,6 @@ def load_local_config(root_dir: Path) -> dict:
     if normalized != original:
         _write_config(config_path, config)
     return config
-
-
-def save_local_config(root_dir: Path, config: dict) -> dict:
-    with _CONFIG_LOCK:
-        config = _normalize_config(config)
-        config_path = root_dir / CONFIG_FILENAME
-        _write_config(config_path, config)
-        return config
 
 
 def _default_config() -> dict:
@@ -79,7 +63,6 @@ def _default_config() -> dict:
                 "username_attribute": "",
             },
         },
-        "providers": [],
     }
 
 
@@ -103,7 +86,7 @@ def _normalize_config(config: dict) -> dict:
     config["server"].setdefault("host", default_host)
     config["server"]["port"] = _normalize_port(config["server"].get("port", DEFAULT_LISTEN_PORT))
     config["auth"] = _normalize_auth(config.get("auth", {}))
-    config["providers"] = _normalize_providers(config.get("providers", []))
+    config.pop("providers", None)
     return config
 
 
@@ -137,70 +120,6 @@ def _normalize_auth(value) -> dict:
     }
 
 
-def _normalize_providers(value) -> list[dict]:
-    if not isinstance(value, list):
-        return []
-    providers = []
-    seen_ids = set()
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        provider = _normalize_provider(item)
-        if provider["id"] in seen_ids:
-            provider["id"] = uuid.uuid4().hex
-        seen_ids.add(provider["id"])
-        providers.append(provider)
-    return providers
-
-
-def _normalize_provider(provider: dict) -> dict:
-    now = _now_text()
-    proxy_mode = str(provider.get("proxy_mode", "direct") or "direct")
-    if proxy_mode not in PROXY_MODES:
-        proxy_mode = "direct"
-    proxy = str(provider.get("proxy", "") or "").strip() if proxy_mode == "custom" else ""
-    return {
-        "id": str(provider.get("id") or uuid.uuid4().hex),
-        "name": str(provider.get("name", "") or "").strip(),
-        "api_base": str(provider.get("api_base", "") or "").strip(),
-        "api_key": str(provider.get("api_key", "") or ""),
-        "proxy_mode": proxy_mode,
-        "proxy": proxy,
-        "ssl_verify": _normalize_bool(provider.get("ssl_verify"), DEFAULT_SSL_VERIFY),
-        "request_timeout": _normalize_int(provider.get("request_timeout"), DEFAULT_REQUEST_TIMEOUT),
-        "max_input_chars": _normalize_int(provider.get("max_input_chars"), DEFAULT_MAX_INPUT_CHARS),
-        "is_active": bool(provider.get("is_active", True)),
-        "models": _normalize_models(provider.get("models", [])),
-        "created_at": str(provider.get("created_at") or now),
-        "updated_at": str(provider.get("updated_at") or now),
-    }
-
-
-def _normalize_models(value) -> list[dict]:
-    if not isinstance(value, list):
-        return []
-    models = []
-    seen = set()
-    for item in value:
-        if isinstance(item, dict):
-            model_name = str(item.get("model_name") or item.get("id") or "").strip()
-            force_disable_thinking = _normalize_bool(item.get("force_disable_thinking"), False)
-        else:
-            model_name = str(item or "").strip()
-            force_disable_thinking = False
-        key = (model_name, force_disable_thinking)
-        if not model_name or key in seen:
-            continue
-        seen.add(key)
-        models.append(
-            {
-                "model_name": model_name,
-                "force_disable_thinking": force_disable_thinking,
-            }
-        )
-    return models
-
-
 def _normalize_admin_url(value: str) -> str:
     value = str(value or DEFAULT_ADMIN_URL).strip().rstrip("/")
     if not value:
@@ -220,13 +139,6 @@ def _normalize_port(value) -> int:
     return DEFAULT_LISTEN_PORT
 
 
-def _normalize_int(value, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _normalize_bool(value, default: bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -240,7 +152,3 @@ def _normalize_bool(value, default: bool) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
-
-
-def _now_text() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

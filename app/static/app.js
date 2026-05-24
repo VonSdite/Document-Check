@@ -711,8 +711,16 @@ function renderModelRows(form, configs) {
     nameInput.type = "text";
     nameInput.dataset.modelName = "1";
     nameInput.value = model.model_name;
-    nameInput.placeholder = "请输入模型名称";
-    nameCell.appendChild(nameInput);
+    nameInput.placeholder = "请输入模型 ID";
+    const nameLine = document.createElement("div");
+    nameLine.className = "model-name-test-line";
+    const testButton = document.createElement("button");
+    testButton.className = "small-button";
+    testButton.type = "button";
+    testButton.dataset.modelRowTest = "1";
+    testButton.textContent = "测试";
+    nameLine.append(nameInput, testButton);
+    nameCell.appendChild(nameLine);
 
     const thinkingCell = document.createElement("td");
     const thinkingLabel = document.createElement("label");
@@ -770,6 +778,11 @@ function setFetchButtonLoading(button, loading) {
   button.textContent = loading ? "拉取中..." : "拉取模型";
 }
 
+function setTestButtonLoading(button, loading) {
+  button.disabled = loading;
+  button.textContent = loading ? "测试中..." : "测试";
+}
+
 async function fetchModelsForForm(form, button) {
   writeModelConfigs(form);
   const apiBase = form.elements.api_base?.value?.trim() || "";
@@ -819,6 +832,62 @@ async function fetchModelsForForm(form, button) {
     showToast(error?.message || "拉取模型失败。", "error");
   } finally {
     setFetchButtonLoading(button, false);
+  }
+}
+
+async function testModelForRow(form, row, button) {
+  const nameInput = row.querySelector("[data-model-name]");
+  const thinkingInput = row.querySelector("[data-model-thinking]");
+  const modelName = nameInput instanceof HTMLInputElement ? nameInput.value.trim() : "";
+  const apiBase = form.elements.api_base?.value?.trim() || "";
+  const apiKey = form.elements.api_key?.value?.trim() || "";
+  const proxyMode = form.elements.proxy_mode?.value || "direct";
+  const proxy = form.elements.proxy?.value?.trim() || "";
+  const requestTimeout = form.elements.request_timeout?.value || "30";
+  const sslVerify = form.elements.ssl_verify?.checked ? "on" : "off";
+  if (!apiBase) {
+    showToast("请先填写 API 地址。", "error");
+    return;
+  }
+  if (!modelName) {
+    showToast("请先填写模型 ID。", "error");
+    return;
+  }
+  if (proxyMode === "custom" && !proxy) {
+    showToast("自定义代理模式需要填写代理地址。", "error");
+    return;
+  }
+
+  setTestButtonLoading(button, true);
+  try {
+    const response = await fetch(form.dataset.testModelUrl, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Requested-With": "fetch",
+      },
+      body: JSON.stringify({
+        api_base: apiBase,
+        api_key: apiKey,
+        proxy_mode: proxyMode,
+        proxy,
+        request_timeout: requestTimeout,
+        ssl_verify: sslVerify,
+        model_name: modelName,
+        force_disable_thinking: thinkingInput instanceof HTMLInputElement && thinkingInput.checked,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "模型测试失败");
+    }
+    showToast(result.message || "模型连通性测试通过。", "success");
+  } catch (error) {
+    showToast(error?.message || "模型测试失败。", "error");
+  } finally {
+    setTestButtonLoading(button, false);
   }
 }
 
@@ -978,6 +1047,17 @@ document.addEventListener("click", (event) => {
       if (!form.querySelector("[data-model-row]")) {
         renderModelRows(form, []);
       }
+    }
+    return;
+  }
+
+  const testButton = event.target.closest("[data-model-row-test]");
+  if (testButton) {
+    event.preventDefault();
+    const form = testButton.closest(".provider-modal-form");
+    const row = testButton.closest("[data-model-row]");
+    if (form && row) {
+      testModelForRow(form, row, testButton);
     }
     return;
   }

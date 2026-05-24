@@ -38,4 +38,3 @@ auth:
     user_id_attribute: ""
     # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
-providers: []

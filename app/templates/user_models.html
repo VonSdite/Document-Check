@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}模型管理 - 文档智能门禁{% endblock %}
+{% block title %}我的模型 - 文档智能门禁{% endblock %}
 
 {% macro provider_modal(dialog_id, title, provider=None, models=[]) %}
 <dialog class="modal provider-modal" id="{{ dialog_id }}">
@@ -9,7 +9,7 @@
       <h2>{{ title }}</h2>
       <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
     </div>
-    <form method="post" class="stack-form provider-modal-form" data-proxy-mode="{{ provider.proxy_mode if provider else 'direct' }}" data-fetch-models-url="{{ url_for('admin_fetch_models') }}">
+    <form method="post" class="stack-form provider-modal-form" data-proxy-mode="{{ provider.proxy_mode if provider else 'direct' }}" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}">
       {% if provider %}<input type="hidden" name="provider_id" value="{{ provider.id }}">{% endif %}
       <div class="form-grid">
         <label>提供商名称<input name="name" value="{{ provider.name if provider else '' }}" placeholder="例如 OpenAI 兼容服务" required></label>
@@ -42,7 +42,7 @@
         <div class="model-editor-head">
           <div>
             <span class="field-with-help">
-              <span class="field-label">模型列表</span>
+              <span class="field-label">模型 ID 列表</span>
               <span class="help-tip" tabindex="0" data-tip="每行模型会保存名称和是否强制关闭思考。关闭思考会在请求中附加 enable_thinking=false，并同时写入 chat_template_kwargs，适用于支持这些参数的思考模型。">?</span>
             </span>
           </div>
@@ -59,7 +59,7 @@
           <table class="model-editor-table">
             <thead>
               <tr>
-                <th>模型</th>
+                <th>模型 ID</th>
                 <th>
                   <span class="table-heading-help">
                     强制关闭思考
@@ -88,7 +88,7 @@
 {% block content %}
 <section class="page-title">
   <div>
-    <h1>模型管理</h1>
+    <h1>我的模型</h1>
   </div>
   <button class="primary-button" type="button" data-modal-open="provider-modal-new">添加提供商</button>
 </section>
@@ -105,7 +105,7 @@
               <span class="help-tip" tabindex="0" data-tip="填写完整 OpenAI Chat Completions 请求地址，例如 https://api.example.com/v1/chat/completions。">?</span>
             </span>
           </th>
-          <th>模型</th>
+              <th>模型 ID</th>
           <th>代理</th>
           <th>限制</th>
           <th>状态</th>
@@ -195,7 +195,7 @@
       <div class="fetch-model-list">
         <label class="fetch-model-list-head">
           <input type="checkbox" data-fetch-model-select-all>
-          <span>模型名称</span>
+                <span>模型 ID</span>
           <span>状态</span>
         </label>
         <div class="fetch-model-list-body" data-fetch-model-list></div>

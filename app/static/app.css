@@ -2135,6 +2135,13 @@ td {
   font-size: 13px;
 }
 
+.model-name-test-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .model-thinking-toggle {
   display: inline-flex;
   align-items: center;

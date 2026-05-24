@@ -1,13 +1,13 @@
 # 文档智能门禁
 
-一个基于 Flask + SQLite 的文档智能门禁网站，支持用户上传 docx、pdf、txt、md、html、xlsx、xlsm、xls 文档，并通过管理员配置的 OpenAI Chat Completions 兼容模型执行单文档规范性、一致性、错别字检查和多文档对照检查。
+一个基于 Flask + SQLite 的文档智能门禁网站，支持用户上传 docx、pdf、txt、md、html、xlsx、xlsm、xls 文档，并通过用户自行配置的 OpenAI Chat Completions 兼容模型执行单文档规范性、一致性、错别字检查和多文档对照检查。
 
 ## 功能概览
 
-- 用户面：创建单文档检查和多文档对照检查任务、查看当前用户的任务、取消任务、删除历史任务，支持用 SSO 用户主体或 IP 兜底身份归属任务。
-- 管理面：隐藏 URL 登录，查看和管理全部任务，配置模型提供商、模型列表、检查项提示词、扩展检查项和任务并发度；用户身份由 SSO 系统统一管理。
+- 用户面：创建单文档检查和多文档对照检查任务、维护自己的模型提供商和模型 ID、测试模型连通性、查看当前用户的任务、取消任务、删除历史任务，支持用 SSO 用户主体或 IP 兜底身份归属任务。
+- 管理面：隐藏 URL 登录，查看和管理全部任务，配置检查项提示词、扩展检查项和任务并发度；用户身份和用户模型配置由用户侧管理。
 - 任务执行：后台线程从 SQLite 队列拉取任务，默认全局并发 3、单用户并发 1、单任务检查项并发 1，可在管理面调整；文档文本会作为全文一次送入模型，超过所选模型文本上限时拒绝提交或执行失败。
-- 本地存储：SQLite 数据库、上传文件和运行日志保存在 `instance/`，本地管理员配置和模型提供商配置保存在 `config.yaml`。
+- 本地存储：SQLite 数据库、用户模型配置、上传文件和运行日志保存在 `instance/`，本地管理员配置保存在 `config.yaml`。
 - 服务运行：使用 gevent WSGI 单进程运行，并在启动入口执行 monkey patch 以提升 I/O 并发吞吐。
 
 ## 快速启动
@@ -49,7 +49,7 @@ dist\windows\DocumentCheck.exe
 
 把 `DocumentCheck.exe` 发给其他 Windows 用户即可运行，对方不需要安装 Python 或项目依赖。双击后会启动本地服务并自动打开浏览器进入本机管理视图。首次启动会在 exe 同目录生成非平台模式的 `config.yaml` 和 `instance/`；上传文件、SQLite 数据库和日志也会保存在同目录的 `instance/` 中。
 
-注意：PyInstaller 不能从 Linux/macOS 交叉打包 Windows exe，以上脚本需要在 Windows 上运行。交付前建议先在打包机运行一次，修改 exe 同目录的 `config.yaml` 中的管理员密码、`secret_key`、管理入口、端口和模型提供商配置，再把 exe 及需要预置的本地配置一起交付。
+注意：PyInstaller 不能从 Linux/macOS 交叉打包 Windows exe，以上脚本需要在 Windows 上运行。交付前建议先在打包机运行一次，修改 exe 同目录的 `config.yaml` 中的管理员密码、`secret_key`、管理入口和端口；模型提供商由用户进入系统后在“模型管理”中自行配置。
 
 ## 本地配置
 
@@ -60,7 +60,7 @@ config.platform.example.yaml
 config.non-platform.example.yaml
 ```
 
-选择对应模式的示例复制为 `config.yaml` 后再修改真实账号、密码、密钥和模型提供商配置。
+选择对应模式的示例复制为 `config.yaml` 后再修改真实账号、密码和密钥。
 
 平台服务模式示例：
 
@@ -105,7 +105,6 @@ auth:
     user_id_attribute: ""
     # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
-providers: []
 ```
 
 本机非平台模式示例：
@@ -151,7 +150,6 @@ auth:
     user_id_attribute: ""
     # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
-providers: []
 ```
 
 `platform` 默认为 `false`，首次启动没有配置文件时会生成非平台模式配置：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录；该模式下 `server.host` 和 `HOST` 环境变量都会被忽略，`PORT` 仍可临时覆盖端口。设置为 `true` 时进入平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。
@@ -242,24 +240,23 @@ SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、A
 - 是否要求 HTTPS、内网/VPN、回调域名白名单、证书轮换周期
 ```
 
-模型提供商配置也保存在 `config.yaml` 的 `providers` 列表中，管理页面的交互不变；新增、编辑、删除提供商都会直接更新本地配置文件，不写入 SQLite。
-
 ## 模型配置
 
-进入管理面后，在“模型管理”页面创建提供商：
+进入用户侧“模型管理”页面创建自己的模型提供商。模型配置按当前用户主体存入 SQLite，不再写入 `config.yaml`；平台提交任务时只会使用当前用户自己启用的模型。
 
 - API 地址填写完整 OpenAI Chat Completions 请求地址，例如 `https://api.example.com/v1/chat/completions`。
 - API Key 可为空，非空时会以 `Authorization: Bearer ...` 发送。
-- 代理模式支持直连、系统代理和自定义代理。默认直连；系统代理模式会读取系统代理环境变量；自定义代理模式使用管理员填写的代理地址。
+- 代理模式支持直连、系统代理和自定义代理。默认直连；系统代理模式会读取系统代理环境变量；自定义代理模式使用用户填写的代理地址。
 - SSL 校验按提供商单独设置，默认关闭；开启后会校验 HTTPS 证书。
 - 请求超时时间按提供商单独设置，默认 3600 秒。
 - 单次请求文本上限按提供商单独设置，默认 80000 字。
-- 模型列表使用表格维护，可手动新增、整理，也可从当前 API 地址拉取模型后在弹窗中选择加入。
+- 模型 ID 列表使用表格维护，可手动新增、整理，也可从当前 API 地址拉取模型后在弹窗中选择加入。
+- 每个模型 ID 行都有“测试”按钮，用于从平台服务端按当前 API 地址、API Key、代理、SSL 设置和模型 ID 发起一次 Chat Completions 连通性测试。
 - 每个模型可单独开启“强制关闭思考”。开启后，请求该模型时会附加 `enable_thinking=false`，并同时写入 `chat_template_kwargs: {"enable_thinking": false}`，用于关闭部分思考模型的思考模式；不支持这些参数的服务可能忽略或返回错误。
 
 ## 检查流程
 
-1. 用户或管理员在“单文档检查”页面上传文档，选择模型和检查项后提交。
+1. 用户或管理员在“单文档检查”页面上传文档，选择当前用户已配置的模型和检查项后提交。
 2. 系统先保存上传文件，再按文档类型提取可检查文本：
    - `docx`：提取段落和表格文本。
    - `pdf`：提取 PDF 页面中的文本层。
@@ -292,6 +289,6 @@ SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、A
 - `instance/document_check.sqlite3`：SQLite 数据库。
 - `instance/uploads/`：上传文档。
 - `instance/logs/app.log`：本地运行日志。
-- `config.yaml`：本地管理员账号、密码、隐藏管理入口、监听地址、启动端口、密钥和模型提供商配置。
+- `config.yaml`：本地管理员账号、密码、隐藏管理入口、监听地址、启动端口和密钥。
 
 以上文件均被 `.gitignore` 忽略，不应提交到仓库。

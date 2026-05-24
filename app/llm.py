@@ -162,6 +162,63 @@ def run_check(
     raise last_error or LLMError("模型服务请求失败")
 
 
+def test_model_connection(
+    *,
+    api_base: str,
+    api_key: Optional[str],
+    proxy_mode: str = "direct",
+    proxy: Optional[str] = None,
+    ssl_verify: bool = False,
+    request_timeout: int = 30,
+    model_name: str,
+    force_disable_thinking: bool = False,
+) -> str:
+    endpoint = _chat_completions_endpoint(api_base)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": "请只回复 OK。"}],
+        "temperature": 0,
+        "max_tokens": 16,
+    }
+    if force_disable_thinking:
+        _disable_thinking_in_payload(payload)
+
+    try:
+        with requests.Session() as session:
+            session.trust_env = proxy_mode == "system"
+            request_kwargs = {
+                "headers": headers,
+                "timeout": request_timeout,
+                "verify": ssl_verify,
+            }
+            if proxy_mode == "custom":
+                if not proxy:
+                    raise LLMError("自定义代理模式需要填写代理地址")
+                session.trust_env = False
+                request_kwargs["proxies"] = {"http": proxy, "https": proxy}
+            elif proxy_mode != "system":
+                session.trust_env = False
+
+            response = session.post(endpoint, json=payload, **request_kwargs)
+            _force_utf8_response(response)
+            _raise_for_http_error(response)
+            try:
+                data = response.json()
+            except ValueError:
+                return "模型服务已返回 200，但响应不是 JSON。"
+            service_error = _extract_service_error(data)
+            if service_error:
+                raise LLMError(f"模型服务返回错误：{service_error}")
+            return "模型连通性测试通过。"
+    except requests.ReadTimeout as exc:
+        raise LLMError(f"模型服务测试超时：{request_timeout} 秒内没有返回结果") from exc
+    except requests.RequestException as exc:
+        raise LLMError(f"模型服务测试失败：{exc}") from exc
+
+
 def _run_check_attempt(
     *,
     endpoint: str,

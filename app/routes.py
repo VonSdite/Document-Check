@@ -24,7 +24,6 @@ from flask import (
 )
 
 from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, current_identity, subject_label
-from .config import load_local_config, save_local_config
 from .db import (
     default_check_item_codes,
     get_bool_setting,
@@ -36,6 +35,7 @@ from .db import (
     set_setting,
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
+from .llm import LLMError, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
 from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
 from .task_types import (
@@ -61,6 +61,7 @@ PROXY_MODES = {"direct", "system", "custom"}
 PROVIDER_TIMEOUT_DEFAULT = 3600
 PROVIDER_TIMEOUT_MIN = 30
 PROVIDER_TIMEOUT_MAX = 7200
+MODEL_TEST_TIMEOUT_MAX = 60
 PROVIDER_INPUT_LIMIT_DEFAULT = 80000
 PROVIDER_INPUT_LIMIT_MIN = 5000
 PROVIDER_INPUT_LIMIT_MAX = 1000000
@@ -191,7 +192,7 @@ def register_routes(app):
             stats=stats,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(),
-            models=get_enabled_models(),
+            models=get_enabled_models(identity.subject),
             active_nav=DOCUMENT_TASK_TYPE,
         )
 
@@ -246,7 +247,7 @@ def register_routes(app):
             stats=stats,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
-            models=get_enabled_models(),
+            models=get_enabled_models(identity.subject),
             active_nav=CONSISTENCY_TASK_TYPE,
         )
 
@@ -286,6 +287,91 @@ def register_routes(app):
         if _delete_task(task):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(False, task["task_type"])))
+
+    @app.route("/models", methods=["GET", "POST"])
+    def user_models():
+        identity = _model_page_identity()
+        if request.method == "POST":
+            action = request.form.get("action", "save")
+            provider_id = request.form.get("provider_id")
+            if action == "delete" and provider_id:
+                _delete_user_model_provider(identity.subject, provider_id)
+                flash("模型提供商已删除。", "success")
+                return redirect(url_for("user_models"))
+
+            provider_data = _provider_form_data()
+            if isinstance(provider_data, str):
+                flash(provider_data, "error")
+                return redirect(url_for("user_models"))
+
+            if provider_id and not _user_provider_exists(identity.subject, provider_id):
+                flash("模型提供商不存在。", "error")
+                return redirect(url_for("user_models"))
+
+            _save_user_model_provider(identity.subject, provider_id, provider_data)
+            flash("模型提供商已保存。", "success")
+            return redirect(url_for("user_models"))
+
+        providers = _load_user_model_providers(identity.subject)
+        models_by_provider = {
+            provider["id"]: sorted(
+                _provider_model_options(provider),
+                key=lambda model: (model["model_name"], model["force_disable_thinking"]),
+            )
+            for provider in providers
+        }
+        return render_template(
+            "user_models.html",
+            providers=providers,
+            models_by_provider=models_by_provider,
+            active_nav="models",
+        )
+
+    @app.get("/models/fetch")
+    def user_fetch_models():
+        _model_page_identity()
+        provider_data = _provider_query_data()
+        if isinstance(provider_data, str):
+            return {"error": provider_data}, 400
+        try:
+            models = fetch_models(
+                api_base=provider_data["api_base"],
+                api_key=provider_data["api_key"],
+                proxy_mode=provider_data["proxy_mode"],
+                proxy=provider_data["proxy"],
+                ssl_verify=provider_data["ssl_verify"],
+                request_timeout=provider_data["request_timeout"],
+            )
+        except ModelDiscoveryError as exc:
+            return {"error": str(exc)}, 400
+        return {"fetched_models": models, "fetched_count": len(models)}
+
+    @app.post("/models/test")
+    def user_test_model():
+        _model_page_identity()
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "请求数据格式不正确。"}, 400
+        provider_data = _provider_payload_data(data)
+        if isinstance(provider_data, str):
+            return {"ok": False, "error": provider_data}, 400
+        model_name = str(data.get("model_name") or "").strip()
+        if not model_name:
+            return {"ok": False, "error": "请先填写模型 ID。"}, 400
+        try:
+            message = test_model_connection(
+                api_base=provider_data["api_base"],
+                api_key=provider_data["api_key"],
+                proxy_mode=provider_data["proxy_mode"],
+                proxy=provider_data["proxy"],
+                ssl_verify=provider_data["ssl_verify"],
+                request_timeout=min(provider_data["request_timeout"], MODEL_TEST_TIMEOUT_MAX),
+                model_name=model_name,
+                force_disable_thinking=_form_bool(data.get("force_disable_thinking")),
+            )
+        except LLMError as exc:
+            return {"ok": False, "error": str(exc)}, 400
+        return {"ok": True, "message": message}
 
     admin_prefix = app.config["ADMIN_URL"]
 
@@ -392,140 +478,6 @@ def register_routes(app):
         if _delete_task(task):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(True, task["task_type"])))
-
-    @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
-    @admin_required
-    def admin_models():
-        providers = _load_providers()
-        if request.method == "POST":
-            action = request.form.get("action", "save")
-            provider_id = request.form.get("provider_id")
-            if action == "delete" and provider_id:
-                _save_providers([provider for provider in providers if provider["id"] != provider_id])
-                flash("模型提供商已删除。", "success")
-                return redirect(url_for("admin_models"))
-
-            name = request.form.get("name", "").strip()
-            api_base = request.form.get("api_base", "").strip()
-            api_key = request.form.get("api_key", "").strip()
-            proxy_mode = request.form.get("proxy_mode", "direct")
-            proxy = request.form.get("proxy", "").strip()
-            ssl_verify = request.form.get("ssl_verify") == "on"
-            try:
-                request_timeout = int(request.form.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)))
-            except ValueError:
-                flash("超时时间必须是整数秒。", "error")
-                return redirect(url_for("admin_models"))
-            try:
-                max_input_chars = int(request.form.get("max_input_chars", str(PROVIDER_INPUT_LIMIT_DEFAULT)))
-            except ValueError:
-                flash("文本上限必须是整数。", "error")
-                return redirect(url_for("admin_models"))
-            is_active = 1 if request.form.get("is_active") == "on" else 0
-            model_configs = _parse_model_configs(
-                request.form.get("model_configs", ""),
-                request.form.get("models", ""),
-            )
-            if proxy_mode not in PROXY_MODES:
-                proxy_mode = "direct"
-            if proxy_mode == "custom" and not proxy:
-                flash("自定义代理模式需要填写代理地址。", "error")
-                return redirect(url_for("admin_models"))
-            if proxy_mode != "custom":
-                proxy = ""
-            if not name or not api_base:
-                flash("提供商名称和 API 地址不能为空。", "error")
-                return redirect(url_for("admin_models"))
-            api_base = api_base.rstrip("/")
-            if not _is_chat_completions_endpoint(api_base):
-                flash("API 地址必须填写完整的 /chat/completions 请求地址。", "error")
-                return redirect(url_for("admin_models"))
-            if request_timeout < PROVIDER_TIMEOUT_MIN or request_timeout > PROVIDER_TIMEOUT_MAX:
-                flash(f"超时时间需在 {PROVIDER_TIMEOUT_MIN}-{PROVIDER_TIMEOUT_MAX} 秒之间。", "error")
-                return redirect(url_for("admin_models"))
-            if max_input_chars < PROVIDER_INPUT_LIMIT_MIN or max_input_chars > PROVIDER_INPUT_LIMIT_MAX:
-                flash(f"文本上限需在 {PROVIDER_INPUT_LIMIT_MIN}-{PROVIDER_INPUT_LIMIT_MAX} 字之间。", "error")
-                return redirect(url_for("admin_models"))
-            if not model_configs:
-                flash("至少需要填写一个模型名称。", "error")
-                return redirect(url_for("admin_models"))
-
-            now = now_text()
-            if provider_id:
-                existing = next((provider for provider in providers if provider["id"] == provider_id), None)
-                if existing is None:
-                    flash("模型提供商不存在。", "error")
-                    return redirect(url_for("admin_models"))
-                saved_provider = _provider_config(
-                    provider_id=provider_id,
-                    name=name,
-                    api_base=api_base,
-                    api_key=api_key,
-                    proxy_mode=proxy_mode,
-                    proxy=proxy,
-                    ssl_verify=ssl_verify,
-                    request_timeout=request_timeout,
-                    max_input_chars=max_input_chars,
-                    is_active=bool(is_active),
-                    models=model_configs,
-                    created_at=existing.get("created_at") or now,
-                    updated_at=now,
-                )
-                providers = [saved_provider if provider["id"] == provider_id else provider for provider in providers]
-            else:
-                saved_provider = _provider_config(
-                    provider_id=uuid.uuid4().hex,
-                    name=name,
-                    api_base=api_base,
-                    api_key=api_key,
-                    proxy_mode=proxy_mode,
-                    proxy=proxy,
-                    ssl_verify=ssl_verify,
-                    request_timeout=request_timeout,
-                    max_input_chars=max_input_chars,
-                    is_active=bool(is_active),
-                    models=model_configs,
-                    created_at=now,
-                    updated_at=now,
-                )
-                providers.append(saved_provider)
-            _save_providers(providers)
-            flash("模型提供商已保存。", "success")
-            return redirect(url_for("admin_models"))
-
-        providers = sorted(providers, key=lambda provider: (provider["updated_at"], provider["id"]), reverse=True)
-        models_by_provider = {
-            provider["id"]: sorted(
-                _provider_model_options(provider),
-                key=lambda model: (model["model_name"], model["force_disable_thinking"]),
-            )
-            for provider in providers
-        }
-        return render_template("admin_models.html", providers=providers, models_by_provider=models_by_provider)
-
-    @app.route(f"{admin_prefix}/models/fetch", methods=["GET"])
-    @admin_required
-    def admin_fetch_models():
-        proxy_mode = request.args.get("proxy_mode", "direct")
-        if proxy_mode not in PROXY_MODES:
-            proxy_mode = "direct"
-        try:
-            request_timeout = int(request.args.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)))
-        except ValueError:
-            request_timeout = PROVIDER_TIMEOUT_DEFAULT
-
-        try:
-            models = fetch_models(
-                api_base=request.args.get("api_base", ""),
-                api_key=request.args.get("api_key", ""),
-                proxy_mode=proxy_mode,
-                proxy=request.args.get("proxy", ""),
-                ssl_verify=_form_bool(request.args.get("ssl_verify")),
-                request_timeout=request_timeout,
-            )
-        except ModelDiscoveryError as exc:
-            return {"error": str(exc)}, 400
-        return {"fetched_models": models, "fetched_count": len(models)}
 
     @app.route(f"{admin_prefix}/prompts", methods=["GET", "POST"])
     @admin_required
@@ -887,7 +839,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         global_concurrency=get_setting("global_concurrency", 3),
         user_concurrency=get_setting("user_concurrency", 1),
         check_items=check_items,
-        models=get_enabled_models(),
+        models=get_enabled_models(current_identity().subject),
         active_nav=task_type,
     )
 
@@ -994,58 +946,261 @@ def _reorder_check_items(db, item_ids: list[int], task_type: str = DOCUMENT_TASK
     return ordered_ids
 
 
-def get_enabled_models():
-    models = []
-    for provider in _load_providers():
-        if not provider["is_active"]:
-            continue
-        for model_config in provider["models"]:
-            models.append(_model_option(provider, model_config))
-    return sorted(models, key=lambda model: (model["provider_name"], model["model_name"], model["force_disable_thinking"]))
+def _model_page_identity() -> UserIdentity:
+    if _platform_enabled():
+        return _current_user_identity()
+    return current_identity()
 
 
-def _load_providers() -> list[dict]:
-    return load_local_config(Path(current_app.config["ROOT_DIR"]))["providers"]
+def _provider_form_data() -> dict | str:
+    return _normalize_provider_input(
+        {
+            "name": request.form.get("name", ""),
+            "api_base": request.form.get("api_base", ""),
+            "api_key": request.form.get("api_key", ""),
+            "proxy_mode": request.form.get("proxy_mode", "direct"),
+            "proxy": request.form.get("proxy", ""),
+            "ssl_verify": request.form.get("ssl_verify") == "on",
+            "request_timeout": request.form.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
+            "max_input_chars": request.form.get("max_input_chars", str(PROVIDER_INPUT_LIMIT_DEFAULT)),
+            "is_active": request.form.get("is_active") == "on",
+            "models": _parse_model_configs(
+                request.form.get("model_configs", ""),
+                request.form.get("models", ""),
+            ),
+        },
+        require_models=True,
+    )
 
 
-def _save_providers(providers: list[dict]):
-    root_dir = Path(current_app.config["ROOT_DIR"])
-    config = load_local_config(root_dir)
-    config["providers"] = providers
-    save_local_config(root_dir, config)
+def _provider_query_data() -> dict | str:
+    return _normalize_provider_input(
+        {
+            "name": "模型拉取",
+            "api_base": request.args.get("api_base", ""),
+            "api_key": request.args.get("api_key", ""),
+            "proxy_mode": request.args.get("proxy_mode", "direct"),
+            "proxy": request.args.get("proxy", ""),
+            "ssl_verify": _form_bool(request.args.get("ssl_verify")),
+            "request_timeout": request.args.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
+            "max_input_chars": str(PROVIDER_INPUT_LIMIT_DEFAULT),
+            "is_active": True,
+            "models": [{"model_name": "placeholder", "force_disable_thinking": False}],
+        },
+        require_models=False,
+    )
 
 
-def _provider_config(
-    *,
-    provider_id: str,
-    name: str,
-    api_base: str,
-    api_key: str,
-    proxy_mode: str,
-    proxy: str,
-    ssl_verify: bool,
-    request_timeout: int,
-    max_input_chars: int,
-    is_active: bool,
-    models: list[dict],
-    created_at: str,
-    updated_at: str,
-) -> dict:
+def _provider_payload_data(data: dict) -> dict | str:
+    return _normalize_provider_input(
+        {
+            "name": "模型测试",
+            "api_base": data.get("api_base", ""),
+            "api_key": data.get("api_key", ""),
+            "proxy_mode": data.get("proxy_mode", "direct"),
+            "proxy": data.get("proxy", ""),
+            "ssl_verify": _form_bool(data.get("ssl_verify")),
+            "request_timeout": data.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
+            "max_input_chars": str(PROVIDER_INPUT_LIMIT_DEFAULT),
+            "is_active": True,
+            "models": [{"model_name": "placeholder", "force_disable_thinking": False}],
+        },
+        require_models=False,
+    )
+
+
+def _normalize_provider_input(value: dict, *, require_models: bool) -> dict | str:
+    name = str(value.get("name") or "").strip()
+    api_base = str(value.get("api_base") or "").strip().rstrip("/")
+    api_key = str(value.get("api_key") or "").strip()
+    proxy_mode = str(value.get("proxy_mode") or "direct").strip()
+    proxy = str(value.get("proxy") or "").strip()
+    if proxy_mode not in PROXY_MODES:
+        proxy_mode = "direct"
+    if proxy_mode == "custom" and not proxy:
+        return "自定义代理模式需要填写代理地址。"
+    if proxy_mode != "custom":
+        proxy = ""
+    if not name or not api_base:
+        return "提供商名称和 API 地址不能为空。"
+    if not _is_chat_completions_endpoint(api_base):
+        return "API 地址必须填写完整的 /chat/completions 请求地址。"
+    try:
+        request_timeout = int(value.get("request_timeout") or PROVIDER_TIMEOUT_DEFAULT)
+    except (TypeError, ValueError):
+        return "超时时间必须是整数秒。"
+    try:
+        max_input_chars = int(value.get("max_input_chars") or PROVIDER_INPUT_LIMIT_DEFAULT)
+    except (TypeError, ValueError):
+        return "文本上限必须是整数。"
+    if request_timeout < PROVIDER_TIMEOUT_MIN or request_timeout > PROVIDER_TIMEOUT_MAX:
+        return f"超时时间需在 {PROVIDER_TIMEOUT_MIN}-{PROVIDER_TIMEOUT_MAX} 秒之间。"
+    if max_input_chars < PROVIDER_INPUT_LIMIT_MIN or max_input_chars > PROVIDER_INPUT_LIMIT_MAX:
+        return f"文本上限需在 {PROVIDER_INPUT_LIMIT_MIN}-{PROVIDER_INPUT_LIMIT_MAX} 字之间。"
+    model_configs = value.get("models") or []
+    if require_models and not model_configs:
+        return "至少需要填写一个模型 ID。"
     return {
-        "id": provider_id,
         "name": name,
         "api_base": api_base,
         "api_key": api_key,
         "proxy_mode": proxy_mode,
         "proxy": proxy,
-        "ssl_verify": ssl_verify,
+        "ssl_verify": bool(value.get("ssl_verify")),
         "request_timeout": request_timeout,
         "max_input_chars": max_input_chars,
-        "is_active": is_active,
-        "models": models,
-        "created_at": created_at,
-        "updated_at": updated_at,
+        "is_active": bool(value.get("is_active")),
+        "models": model_configs,
     }
+
+
+def _load_user_model_providers(owner_subject: str) -> list[dict]:
+    rows = get_db().execute(
+        """
+        SELECT *
+        FROM user_model_providers
+        WHERE owner_subject = ?
+        ORDER BY updated_at DESC, id DESC
+        """,
+        (owner_subject,),
+    ).fetchall()
+    return [_provider_from_row(row, _load_user_model_configs(row["id"])) for row in rows]
+
+
+def _load_user_model_configs(provider_id: int) -> list[dict]:
+    rows = get_db().execute(
+        """
+        SELECT model_name, force_disable_thinking
+        FROM user_model_configs
+        WHERE provider_id = ?
+        ORDER BY sort_order ASC, id ASC
+        """,
+        (provider_id,),
+    ).fetchall()
+    return [
+        {
+            "model_name": row["model_name"],
+            "force_disable_thinking": bool(row["force_disable_thinking"]),
+        }
+        for row in rows
+    ]
+
+
+def _provider_from_row(row, models: list[dict]) -> dict:
+    return {
+        "id": row["id"],
+        "owner_subject": row["owner_subject"],
+        "name": row["name"],
+        "api_base": row["api_base"],
+        "api_key": row["api_key"] or "",
+        "proxy_mode": row["proxy_mode"],
+        "proxy": row["proxy"] or "",
+        "ssl_verify": bool(row["ssl_verify"]),
+        "request_timeout": row["request_timeout"],
+        "max_input_chars": row["max_input_chars"],
+        "is_active": bool(row["is_active"]),
+        "models": models,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _user_provider_exists(owner_subject: str, provider_id) -> bool:
+    return (
+        get_db()
+        .execute(
+            "SELECT 1 FROM user_model_providers WHERE id = ? AND owner_subject = ?",
+            (provider_id, owner_subject),
+        )
+        .fetchone()
+        is not None
+    )
+
+
+def _save_user_model_provider(owner_subject: str, provider_id, provider_data: dict):
+    db = get_db()
+    now = now_text()
+    if provider_id:
+        db.execute(
+            """
+            UPDATE user_model_providers
+            SET name = ?, api_base = ?, api_key = ?, proxy_mode = ?, proxy = ?,
+                ssl_verify = ?, request_timeout = ?, max_input_chars = ?, is_active = ?, updated_at = ?
+            WHERE id = ? AND owner_subject = ?
+            """,
+            (
+                provider_data["name"],
+                provider_data["api_base"],
+                provider_data["api_key"],
+                provider_data["proxy_mode"],
+                provider_data["proxy"],
+                1 if provider_data["ssl_verify"] else 0,
+                provider_data["request_timeout"],
+                provider_data["max_input_chars"],
+                1 if provider_data["is_active"] else 0,
+                now,
+                provider_id,
+                owner_subject,
+            ),
+        )
+        saved_provider_id = int(provider_id)
+    else:
+        cursor = db.execute(
+            """
+            INSERT INTO user_model_providers(
+                owner_subject, name, api_base, api_key, proxy_mode, proxy,
+                ssl_verify, request_timeout, max_input_chars, is_active, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                owner_subject,
+                provider_data["name"],
+                provider_data["api_base"],
+                provider_data["api_key"],
+                provider_data["proxy_mode"],
+                provider_data["proxy"],
+                1 if provider_data["ssl_verify"] else 0,
+                provider_data["request_timeout"],
+                provider_data["max_input_chars"],
+                1 if provider_data["is_active"] else 0,
+                now,
+                now,
+            ),
+        )
+        saved_provider_id = cursor.lastrowid
+    _replace_user_model_configs(saved_provider_id, provider_data["models"], now)
+    db.commit()
+
+
+def _replace_user_model_configs(provider_id: int, model_configs: list[dict], updated_at: str):
+    db = get_db()
+    db.execute("DELETE FROM user_model_configs WHERE provider_id = ?", (provider_id,))
+    for index, model_config in enumerate(model_configs, start=1):
+        db.execute(
+            """
+            INSERT INTO user_model_configs(
+                provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                provider_id,
+                model_config["model_name"],
+                1 if model_config["force_disable_thinking"] else 0,
+                index * 10,
+                updated_at,
+                updated_at,
+            ),
+        )
+
+
+def _delete_user_model_provider(owner_subject: str, provider_id):
+    get_db().execute(
+        "DELETE FROM user_model_providers WHERE id = ? AND owner_subject = ?",
+        (provider_id, owner_subject),
+    )
+    get_db().commit()
 
 
 def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list[dict]:
@@ -1120,6 +1275,18 @@ def _model_config_force_disable_thinking(model_config) -> bool:
     return bool(isinstance(model_config, dict) and model_config.get("force_disable_thinking"))
 
 
+def get_enabled_models(owner_subject: str | None = None):
+    if owner_subject is None:
+        owner_subject = current_identity().subject
+    models = []
+    for provider in _load_user_model_providers(owner_subject):
+        if not provider["is_active"]:
+            continue
+        for model_config in provider["models"]:
+            models.append(_model_option(provider, model_config))
+    return sorted(models, key=lambda model: (model["provider_name"], model["model_name"], model["force_disable_thinking"]))
+
+
 def _model_option(provider: dict, model_name) -> dict:
     if isinstance(model_name, dict):
         model_config = model_name
@@ -1149,9 +1316,11 @@ def _is_chat_completions_endpoint(value: str) -> bool:
     return endpoint.startswith(("http://", "https://")) and endpoint.endswith("/chat/completions")
 
 
-def _find_enabled_model(model_id: str) -> dict | None:
+def _find_enabled_model(model_id: str, owner_subject: str | None = None) -> dict | None:
     if ":" not in model_id:
         return None
+    if owner_subject is None:
+        owner_subject = current_identity().subject
     force_disable_thinking = None
     parts = model_id.split(":", 2)
     if len(parts) == 3 and parts[1] in {"0", "1"}:
@@ -1159,8 +1328,8 @@ def _find_enabled_model(model_id: str) -> dict | None:
         force_disable_thinking = thinking_flag == "1"
     else:
         provider_id, model_name = model_id.split(":", 1)
-    for provider in _load_providers():
-        if provider["id"] != provider_id or not provider["is_active"]:
+    for provider in _load_user_model_providers(owner_subject):
+        if str(provider["id"]) != str(provider_id) or not provider["is_active"]:
             continue
         for model_config in provider["models"]:
             option = _model_option(provider, model_config)
@@ -1308,7 +1477,7 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
         return _back_to_task_form(admin_created)
 
     model_id = request.form.get("model_id", "")
-    model = _find_enabled_model(model_id)
+    model = _find_enabled_model(model_id, identity.subject)
     if model is None:
         flash("请选择可用模型。", "error")
         return _back_to_task_form(admin_created)
@@ -1399,7 +1568,7 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     model_id = request.form.get("model_id", "")
-    model = _find_enabled_model(model_id)
+    model = _find_enabled_model(model_id, identity.subject)
     if model is None:
         flash("请选择可用模型。", "error")
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)

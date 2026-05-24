@@ -86,6 +86,22 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("owner_name_snapshot", columns)
         self.assertIn("owner_source", columns)
 
+    def test_user_model_tables_exist(self):
+        db = get_db()
+        provider_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(user_model_providers)").fetchall()
+        }
+        model_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(user_model_configs)").fetchall()
+        }
+
+        self.assertIn("owner_subject", provider_columns)
+        self.assertIn("api_base", provider_columns)
+        self.assertIn("model_name", model_columns)
+        self.assertIn("force_disable_thinking", model_columns)
+
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 1)
 

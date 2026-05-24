@@ -175,80 +175,7 @@ class ProviderConfigTest(unittest.TestCase):
             finally:
                 created_app.extensions["task_scheduler"].stop()
 
-    def test_provider_ssl_verify_defaults_to_false(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            _write_config(
-                temp_dir,
-                {
-                    "secret_key": "test",
-                    "admin": {"username": "admin", "password": "password"},
-                    "admin_url": "/admin",
-                    "server": {"host": "127.0.0.1", "port": 5000},
-                    "providers": [
-                        {
-                            "id": "provider-1",
-                            "name": "测试提供商",
-                            "api_base": "https://example.test/v1",
-                            "models": ["model-a"],
-                        }
-                    ],
-                },
-            )
-
-            config = load_local_config(Path(temp_dir))
-
-        self.assertFalse(config["providers"][0]["ssl_verify"])
-
-    def test_provider_max_input_chars_defaults_to_80000(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            _write_config(
-                temp_dir,
-                {
-                    "secret_key": "test",
-                    "admin": {"username": "admin", "password": "password"},
-                    "admin_url": "/admin",
-                    "server": {"host": "127.0.0.1", "port": 5000},
-                    "providers": [
-                        {
-                            "id": "provider-1",
-                            "name": "测试提供商",
-                            "api_base": "https://example.test/v1",
-                            "models": ["model-a"],
-                        }
-                    ],
-                },
-            )
-
-            config = load_local_config(Path(temp_dir))
-
-        self.assertEqual(config["providers"][0]["max_input_chars"], 80000)
-
-    def test_provider_ssl_verify_accepts_form_like_values(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            _write_config(
-                temp_dir,
-                {
-                    "secret_key": "test",
-                    "admin": {"username": "admin", "password": "password"},
-                    "admin_url": "/admin",
-                    "server": {"host": "127.0.0.1", "port": 5000},
-                    "providers": [
-                        {
-                            "id": "provider-1",
-                            "name": "测试提供商",
-                            "api_base": "https://example.test/v1",
-                            "ssl_verify": "on",
-                            "models": ["model-a"],
-                        }
-                    ],
-                },
-            )
-
-            config = load_local_config(Path(temp_dir))
-
-        self.assertTrue(config["providers"][0]["ssl_verify"])
-
-    def test_provider_models_preserve_force_disable_thinking(self):
+    def test_config_drops_legacy_providers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             _write_config(
                 temp_dir,
@@ -262,10 +189,7 @@ class ProviderConfigTest(unittest.TestCase):
                             "id": "provider-1",
                             "name": "测试提供商",
                             "api_base": "https://example.test/v1/chat/completions",
-                            "models": [
-                                {"model_name": "model-a", "force_disable_thinking": "on"},
-                                "model-b",
-                            ],
+                            "models": ["model-a"],
                         }
                     ],
                 },
@@ -273,48 +197,7 @@ class ProviderConfigTest(unittest.TestCase):
 
             config = load_local_config(Path(temp_dir))
 
-        self.assertEqual(
-            config["providers"][0]["models"],
-            [
-                {"model_name": "model-a", "force_disable_thinking": True},
-                {"model_name": "model-b", "force_disable_thinking": False},
-            ],
-        )
-
-    def test_provider_models_allow_same_name_for_distinct_thinking_modes(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            _write_config(
-                temp_dir,
-                {
-                    "secret_key": "test",
-                    "admin": {"username": "admin", "password": "password"},
-                    "admin_url": "/admin",
-                    "server": {"host": "127.0.0.1", "port": 5000},
-                    "providers": [
-                        {
-                            "id": "provider-1",
-                            "name": "测试提供商",
-                            "api_base": "https://example.test/v1/chat/completions",
-                            "models": [
-                                {"model_name": "same-model", "force_disable_thinking": False},
-                                {"model_name": "same-model", "force_disable_thinking": True},
-                                {"model_name": "same-model", "force_disable_thinking": False},
-                                {"model_name": "same-model", "force_disable_thinking": True},
-                            ],
-                        }
-                    ],
-                },
-            )
-
-            config = load_local_config(Path(temp_dir))
-
-        self.assertEqual(
-            config["providers"][0]["models"],
-            [
-                {"model_name": "same-model", "force_disable_thinking": False},
-                {"model_name": "same-model", "force_disable_thinking": True},
-            ],
-        )
+        self.assertNotIn("providers", config)
 
     def test_frozen_runtime_root_uses_executable_directory(self):
         executable = Path(tempfile.gettempdir()) / "DocumentCheck" / "DocumentCheck.exe"

@@ -89,8 +89,38 @@ def init_db():
             finished_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS user_model_providers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_subject TEXT NOT NULL,
+            name TEXT NOT NULL,
+            api_base TEXT NOT NULL,
+            api_key TEXT,
+            proxy_mode TEXT NOT NULL DEFAULT 'direct',
+            proxy TEXT,
+            ssl_verify INTEGER NOT NULL DEFAULT 0,
+            request_timeout INTEGER NOT NULL DEFAULT 3600,
+            max_input_chars INTEGER NOT NULL DEFAULT 80000,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_model_configs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id INTEGER NOT NULL,
+            model_name TEXT NOT NULL,
+            force_disable_thinking INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(provider_id) REFERENCES user_model_providers(id) ON DELETE CASCADE,
+            UNIQUE(provider_id, model_name, force_disable_thinking)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_ip_created ON tasks(ip, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_user_model_providers_owner ON user_model_providers(owner_subject, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_user_model_configs_provider ON user_model_configs(provider_id, sort_order ASC, id ASC);
         """
     )
     _ensure_column(db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")

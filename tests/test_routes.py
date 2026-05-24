@@ -10,7 +10,6 @@ from flask import Flask
 from openpyxl import Workbook
 
 from app.auth import SAML_USER_SESSION_KEY
-from app.config import load_local_config, save_local_config
 from app.db import get_db, get_setting, init_db, seed_defaults, set_setting
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
@@ -107,25 +106,30 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             session.clear()
 
-    def _configure_provider(self):
-        root_dir = Path(self.app.config["ROOT_DIR"])
-        config = load_local_config(root_dir)
-        config["providers"] = [
-            {
-                "id": "provider-1",
-                "name": "测试提供商",
-                "api_base": "https://example.test/v1/chat/completions",
-                "api_key": "",
-                "proxy_mode": "direct",
-                "proxy": "",
-                "ssl_verify": False,
-                "request_timeout": 30,
-                "max_input_chars": 80000,
-                "is_active": True,
-                "models": [{"model_name": "model-a", "force_disable_thinking": False}],
-            }
-        ]
-        save_local_config(root_dir, config)
+    def _configure_provider(self, owner_subject: str = "ip:127.0.0.1") -> str:
+        with self.app.app_context():
+            now = "2026-05-01 09:00:00"
+            cursor = get_db().execute(
+                """
+                INSERT INTO user_model_providers(
+                    owner_subject, name, api_base, api_key, proxy_mode, proxy,
+                    ssl_verify, request_timeout, max_input_chars, is_active, created_at, updated_at
+                )
+                VALUES (?, '测试提供商', 'https://example.test/v1/chat/completions', '', 'direct', '',
+                        0, 30, 80000, 1, ?, ?)
+                """,
+                (owner_subject, now, now),
+            )
+            provider_id = cursor.lastrowid
+            get_db().execute(
+                """
+                INSERT INTO user_model_configs(provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at)
+                VALUES (?, 'model-a', 0, 10, ?, ?)
+                """,
+                (provider_id, now, now),
+            )
+            get_db().commit()
+        return f"{provider_id}:0:model-a"
 
     def _insert_task(
         self,
@@ -268,13 +272,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/"))
 
-    def test_platform_mode_requires_admin_login(self):
+    def test_admin_model_route_is_not_registered(self):
         self._logout_test_client()
 
         response = self.client.get("/admin/models")
 
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.headers["Location"].endswith("/admin/login"))
+        self.assertEqual(response.status_code, 404)
 
     def test_local_mode_root_shows_admin_view_without_login(self):
         self.app.config["PLATFORM"] = False
@@ -289,14 +292,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("用户管理", html)
         self.assertNotIn("退出", html)
 
-    def test_local_mode_admin_pages_do_not_require_login(self):
+    def test_local_mode_user_model_page_does_not_require_login(self):
         self.app.config["PLATFORM"] = False
         self._logout_test_client()
 
-        response = self.client.get("/admin/models")
+        response = self.client.get("/models")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("模型管理", response.get_data(as_text=True))
+        self.assertIn("我的模型", response.get_data(as_text=True))
 
     def test_user_management_route_is_not_registered(self):
         platform_response = self.client.get("/admin/users")
@@ -308,9 +311,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(platform_response.status_code, 404)
         self.assertEqual(local_response.status_code, 404)
 
-    def test_admin_models_saves_model_force_disable_thinking(self):
+    def test_user_models_saves_model_force_disable_thinking(self):
         response = self.client.post(
-            "/admin/models",
+            "/models",
             data={
                 "name": "测试提供商",
                 "api_base": "https://example.test/v1/chat/completions",
@@ -330,18 +333,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        config = load_local_config(self.app.config["ROOT_DIR"])
+        with self.app.app_context():
+            models = get_db().execute(
+                """
+                SELECT m.model_name, m.force_disable_thinking
+                FROM user_model_configs m
+                JOIN user_model_providers p ON p.id = m.provider_id
+                WHERE p.owner_subject = ?
+                ORDER BY m.sort_order
+                """,
+                ("ip:127.0.0.1",),
+            ).fetchall()
         self.assertEqual(
-            config["providers"][0]["models"],
+            [(row["model_name"], bool(row["force_disable_thinking"])) for row in models],
             [
-                {"model_name": "model-a", "force_disable_thinking": True},
-                {"model_name": "model-b", "force_disable_thinking": False},
+                ("model-a", True),
+                ("model-b", False),
             ],
         )
 
-    def test_admin_models_accepts_million_char_input_limit(self):
+    def test_user_models_accepts_million_char_input_limit(self):
         response = self.client.post(
-            "/admin/models",
+            "/models",
             data={
                 "name": "测试提供商",
                 "api_base": "https://example.test/v1/chat/completions",
@@ -358,12 +371,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        config = load_local_config(self.app.config["ROOT_DIR"])
-        self.assertEqual(config["providers"][0]["max_input_chars"], 1000000)
+        with self.app.app_context():
+            row = get_db().execute("SELECT max_input_chars FROM user_model_providers").fetchone()
+        self.assertEqual(row["max_input_chars"], 1000000)
 
-    def test_admin_models_allows_same_name_for_distinct_thinking_modes(self):
+    def test_user_models_allows_same_name_for_distinct_thinking_modes(self):
         response = self.client.post(
-            "/admin/models",
+            "/models",
             data={
                 "name": "测试提供商",
                 "api_base": "https://example.test/v1/chat/completions",
@@ -384,22 +398,57 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        config = load_local_config(self.app.config["ROOT_DIR"])
+        with self.app.app_context():
+            saved_models = get_db().execute(
+                """
+                SELECT m.model_name, m.force_disable_thinking
+                FROM user_model_configs m
+                ORDER BY m.sort_order
+                """
+            ).fetchall()
         self.assertEqual(
-            config["providers"][0]["models"],
+            [(row["model_name"], bool(row["force_disable_thinking"])) for row in saved_models],
             [
-                {"model_name": "same-model", "force_disable_thinking": False},
-                {"model_name": "same-model", "force_disable_thinking": True},
+                ("same-model", False),
+                ("same-model", True),
             ],
         )
 
         with self.app.app_context():
-            models = get_enabled_models()
+            models = get_enabled_models("ip:127.0.0.1")
             self.assertEqual(len(models), 2)
             self.assertEqual(len({model["id"] for model in models}), 2)
             by_mode = {model["force_disable_thinking"]: model for model in models}
-            self.assertFalse(_find_enabled_model(by_mode[False]["id"])["force_disable_thinking"])
-            self.assertTrue(_find_enabled_model(by_mode[True]["id"])["force_disable_thinking"])
+            self.assertFalse(_find_enabled_model(by_mode[False]["id"], "ip:127.0.0.1")["force_disable_thinking"])
+            self.assertTrue(_find_enabled_model(by_mode[True]["id"], "ip:127.0.0.1")["force_disable_thinking"])
+
+    def test_user_model_test_endpoint_uses_submitted_model_config(self):
+        with patch("app.routes.test_model_connection", return_value="模型连通性测试通过。") as mocked_test:
+            response = self.client.post(
+                "/models/test",
+                json={
+                    "api_base": "https://example.test/v1/chat/completions",
+                    "api_key": "sk-test",
+                    "proxy_mode": "direct",
+                    "request_timeout": "30",
+                    "ssl_verify": "on",
+                    "model_name": "model-a",
+                    "force_disable_thinking": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"ok": True, "message": "模型连通性测试通过。"})
+        mocked_test.assert_called_once_with(
+            api_base="https://example.test/v1/chat/completions",
+            api_key="sk-test",
+            proxy_mode="direct",
+            proxy="",
+            ssl_verify=True,
+            request_timeout=30,
+            model_name="model-a",
+            force_disable_thinking=True,
+        )
 
     def test_admin_settings_creates_consistency_check_item(self):
         response = self.client.post(
@@ -440,7 +489,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(second_name.endswith(".txt"))
 
     def test_create_task_rejects_disabled_check_item_before_saving_file(self):
-        self._configure_provider()
+        model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
             get_db().execute("UPDATE check_items SET enabled = 0 WHERE id = ?", (item["id"],))
@@ -451,7 +500,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             data={
                 "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
                 "checks": [str(item["id"])],
-                "model_id": "provider-1:0:model-a",
+                "model_id": model_id,
             },
             content_type="multipart/form-data",
         )
@@ -463,7 +512,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_task_saves_check_snapshot_and_extracted_text(self):
-        self._configure_provider()
+        model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute("SELECT id, code, name, prompt FROM check_items WHERE code = 'typo'").fetchone()
 
@@ -472,7 +521,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             data={
                 "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
                 "checks": [str(item["id"])],
-                "model_id": "provider-1:0:model-a",
+                "model_id": model_id,
             },
             content_type="multipart/form-data",
         )
@@ -495,7 +544,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
     def test_create_task_uses_trusted_header_identity(self):
-        self._configure_provider()
+        model_id = self._configure_provider("sso:100086")
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
             "trusted_header": {
@@ -511,7 +560,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             data={
                 "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
                 "checks": [str(item["id"])],
-                "model_id": "provider-1:0:model-a",
+                "model_id": model_id,
             },
             headers={"X-SSO-User-Id": "100086", "X-SSO-User-Name": "张三"},
             content_type="multipart/form-data",
@@ -594,7 +643,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertNotIn("saml_request_id", session)
 
     def test_create_task_uses_saml_session_identity(self):
-        self._configure_provider()
+        model_id = self._configure_provider("sso:100086")
         self.app.config["AUTH"] = _saml_auth_config()
         with self.client.session_transaction() as session:
             session[SAML_USER_SESSION_KEY] = {"user_id": "100086", "username": "张三"}
@@ -606,7 +655,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             data={
                 "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
                 "checks": [str(item["id"])],
-                "model_id": "provider-1:0:model-a",
+                "model_id": model_id,
             },
             content_type="multipart/form-data",
         )
@@ -638,7 +687,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("单文档检查任务", response.get_data(as_text=True))
 
     def test_create_consistency_task_saves_combined_document_text(self):
-        self._configure_provider()
+        model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'consistency-cross-document'"
@@ -650,7 +699,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "master_documents": (_xlsx_bytes([["项目", "参数"], ["素材参数", "10A"]], title="素材参数表"), "master.xlsx"),
                 "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
                 "checks": [str(item["id"])],
-                "model_id": "provider-1:0:model-a",
+                "model_id": model_id,
             },
             content_type="multipart/form-data",
         )
