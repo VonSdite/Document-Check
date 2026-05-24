@@ -720,7 +720,11 @@ function renderModelRows(form, configs) {
     testButton.dataset.modelRowTest = "1";
     testButton.textContent = "测试";
     nameLine.append(nameInput, testButton);
-    nameCell.appendChild(nameLine);
+    const testStatus = document.createElement("div");
+    testStatus.className = "model-test-status";
+    testStatus.dataset.modelTestStatus = "1";
+    testStatus.setAttribute("aria-live", "polite");
+    nameCell.append(nameLine, testStatus);
 
     const thinkingCell = document.createElement("td");
     const thinkingLabel = document.createElement("label");
@@ -783,6 +787,15 @@ function setTestButtonLoading(button, loading) {
   button.textContent = loading ? "测试中..." : "测试";
 }
 
+function setModelTestStatus(row, state, message) {
+  const status = row.querySelector("[data-model-test-status]");
+  if (!status) {
+    return;
+  }
+  status.className = `model-test-status${state ? ` is-${state}` : ""}`;
+  status.textContent = message || "";
+}
+
 async function fetchModelsForForm(form, button) {
   writeModelConfigs(form);
   const apiBase = form.elements.api_base?.value?.trim() || "";
@@ -831,14 +844,17 @@ async function testModelForRow(form, row, button) {
   const apiKey = form.elements.api_key?.value?.trim() || "";
   const requestTimeout = form.elements.request_timeout?.value || "30";
   if (!apiBase) {
+    setModelTestStatus(row, "error", "请先填写 API 地址。");
     showToast("请先填写 API 地址。", "error");
     return;
   }
   if (!modelName) {
+    setModelTestStatus(row, "error", "请先填写模型 ID。");
     showToast("请先填写模型 ID。", "error");
     return;
   }
 
+  setModelTestStatus(row, "pending", "正在测试模型连通性...");
   setTestButtonLoading(button, true);
   try {
     const response = await fetch(form.dataset.testModelUrl, {
@@ -861,9 +877,13 @@ async function testModelForRow(form, row, button) {
     if (!response.ok || !result.ok) {
       throw new Error(result.error || "模型测试失败");
     }
-    showToast(result.message || "模型连通性测试通过。", "success");
+    const message = result.message || "模型连通性测试通过。";
+    setModelTestStatus(row, "success", message);
+    showToast(message, "success");
   } catch (error) {
-    showToast(error?.message || "模型测试失败。", "error");
+    const message = error?.message || "模型测试失败。";
+    setModelTestStatus(row, "error", message);
+    showToast(message, "error");
   } finally {
     setTestButtonLoading(button, false);
   }
@@ -1061,6 +1081,10 @@ document.addEventListener("input", (event) => {
   const input = event.target;
   const form = input.closest?.(".provider-modal-form");
   if (form && input.matches?.("[data-model-name]")) {
+    const row = input.closest("[data-model-row]");
+    if (row) {
+      setModelTestStatus(row, "", "");
+    }
     writeModelConfigs(form);
     return;
   }

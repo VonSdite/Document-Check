@@ -2153,6 +2153,32 @@ td {
   gap: 8px;
 }
 
+.model-test-status {
+  min-height: 18px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.model-test-status:empty {
+  display: none;
+}
+
+.model-test-status.is-pending {
+  color: #55739d;
+}
+
+.model-test-status.is-success {
+  color: #1d7f4f;
+}
+
+.model-test-status.is-error {
+  color: #b73b37;
+}
+
 .model-thinking-toggle {
   display: inline-flex;
   align-items: center;
