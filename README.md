@@ -80,19 +80,30 @@ server:
   port: 31945
 auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
+  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户；saml：直接对接 SAML 2.0。
+  # 当前 saml 模式只支持 SAML 2.0；如果公司只有 SAML 1.0，请优先让公司网关转换为 trusted_header。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:
+    # user_id 是“唯一用户 ID”所在的 HTTP header 名称，例如 X-SSO-User-Id；不要填姓名。
     user_id: ""
+    # username 是“显示名”所在的 HTTP header 名称，例如 X-SSO-User-Name；可为空，空时显示 user_id。
     username: ""
   # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
   saml:
+    # sp_entity_id 是本系统作为 SP 的唯一标识，通常可使用 https://你的域名/auth/saml/metadata。
     sp_entity_id: ""
+    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，必须是外部可访问的 https://你的域名/auth/saml/acs。
     acs_url: ""
+    # idp_entity_id 是公司 SSO 作为 IdP 的唯一标识，由公司 SSO 管理员提供。
     idp_entity_id: ""
+    # idp_sso_url 是公司 SSO 的登录跳转地址，由公司 SSO 管理员提供。
     idp_sso_url: ""
+    # idp_x509_cert 是公司 SSO 用于签名 SAML 响应的公钥证书内容，不是私钥。
     idp_x509_cert: ""
+    # user_id_attribute 是 SAML Attribute 中稳定唯一用户 ID 的字段名；留空时使用 SAML NameID。
     user_id_attribute: ""
+    # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
 providers: []
 ```
@@ -115,19 +126,30 @@ server:
   port: 31945
 auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
+  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户；saml：直接对接 SAML 2.0。
+  # 当前 saml 模式只支持 SAML 2.0；如果公司只有 SAML 1.0，请优先让公司网关转换为 trusted_header。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:
+    # user_id 是“唯一用户 ID”所在的 HTTP header 名称，例如 X-SSO-User-Id；不要填姓名。
     user_id: ""
+    # username 是“显示名”所在的 HTTP header 名称，例如 X-SSO-User-Name；可为空，空时显示 user_id。
     username: ""
   # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
   saml:
+    # sp_entity_id 是本系统作为 SP 的唯一标识，通常可使用 https://你的域名/auth/saml/metadata。
     sp_entity_id: ""
+    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，必须是外部可访问的 https://你的域名/auth/saml/acs。
     acs_url: ""
+    # idp_entity_id 是公司 SSO 作为 IdP 的唯一标识，由公司 SSO 管理员提供。
     idp_entity_id: ""
+    # idp_sso_url 是公司 SSO 的登录跳转地址，由公司 SSO 管理员提供。
     idp_sso_url: ""
+    # idp_x509_cert 是公司 SSO 用于签名 SAML 响应的公钥证书内容，不是私钥。
     idp_x509_cert: ""
+    # user_id_attribute 是 SAML Attribute 中稳定唯一用户 ID 的字段名；留空时使用 SAML NameID。
     user_id_attribute: ""
+    # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
 providers: []
 ```
@@ -142,7 +164,21 @@ providers: []
 
 - `ip`：不接 SSO，用户主体为 `ip:<访问 IP>`。
 - `trusted_header`：公司网关或反向代理已经完成 SSO 登录，并把用户 ID/用户名注入可信 HTTP header。
-- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接。
+- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接；当前不支持直接接 SAML 1.0。
+
+如果公司口径是 SAML 1.0，需要先确认是否能提供 SAML 2.0 入口。若确实只有 SAML 1.0，建议让公司统一网关、身份平台或反向代理先完成登录，再转换为可信 header 给本系统，此时使用 `auth.mode: trusted_header`；直接在本系统内解析 SAML 1.0 需要另做新的认证模式，当前版本没有实现。
+
+常用字段含义：
+
+- `trusted_header.user_id`：保存唯一用户 ID 的 HTTP header 名称，例如 `X-SSO-User-Id`，用于生成 `owner_subject = sso:<用户ID>`。
+- `trusted_header.username`：保存显示名的 HTTP header 名称，例如 `X-SSO-User-Name`，只用于页面显示和任务快照，可为空。
+- `saml.sp_entity_id`：本系统作为 SP 的唯一标识，通常用 `https://你的域名/auth/saml/metadata`。
+- `saml.acs_url`：公司 SSO 登录成功后 POST 回调本系统的地址，通常是 `https://你的域名/auth/saml/acs`。
+- `saml.idp_entity_id`：公司 SSO 作为 IdP 的唯一标识，由公司 SSO 管理员提供。
+- `saml.idp_sso_url`：公司 SSO 登录跳转地址，由公司 SSO 管理员提供。
+- `saml.idp_x509_cert`：公司 SSO 用来签名 SAML 响应的公钥证书内容，不是私钥。
+- `saml.user_id_attribute`：SAML Attribute 中稳定唯一用户 ID 的字段名，留空时使用 SAML `NameID`。
+- `saml.username_attribute`：SAML Attribute 中显示名的字段名，留空时显示用户 ID。
 
 `trusted_header` 只有在公司已有统一网关或反向代理，并且网关已经完成 SSO 登录、能把登录用户写入可信请求头时才需要；直接对接 SAML 2.0 时不需要配置它。网关模式可以这样写：
 
