@@ -1,5 +1,5 @@
 # 平台服务模式：适合部署到服务器或让局域网/公司入口访问。
-# 管理入口需要登录；用户身份可先用 ip，后续按公司 SSO 情况切到 trusted_header、saml 或 saml1。
+# 管理入口需要登录；用户身份可先用 ip，后续按公司 SSO 情况切到 trusted_header 或 saml。
 platform: true
 secret_key: 请替换为随机长字符串
 admin:
@@ -12,9 +12,9 @@ server:
   host: 0.0.0.0
   port: 31945
 auth:
-  # 可选值：ip、trusted_header、saml、saml1。默认先用 ip，确认公司 SSO 接入方式后再切换。
+  # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
   # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
-  # saml：直接对接 SAML 2.0；saml1：直接接收 SAML 1.x Browser/POST 回调。
+  # saml：直接对接 SAML 2.0。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:
@@ -37,21 +37,5 @@ auth:
     # user_id_attribute 是 SAML Attribute 中稳定唯一用户 ID 的字段名；留空时使用 SAML NameID。
     user_id_attribute: ""
     # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
-    username_attribute: ""
-  # mode: saml1 时填写；公司 SSO 只能提供 SAML 1.0/1.1 Browser/POST 时使用。
-  saml1:
-    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，通常是 https://你的域名/auth/saml1/acs。
-    acs_url: ""
-    # idp_issuer 是 SAML 1.x Assertion 的 Issuer，由公司 SSO 管理员提供。
-    idp_issuer: ""
-    # idp_sso_url 是公司 SSO 的入口地址；SAML 1.x 常见为 IdP 发起，若无入口可留空并从公司门户访问。
-    idp_sso_url: ""
-    # idp_x509_cert 是公司 SSO 用于签名 SAML 1.x 响应或断言的公钥证书内容，不是私钥。
-    idp_x509_cert: ""
-    # audience 是本系统期望的 Audience；公司未配置 Audience 时可留空。
-    audience: ""
-    # user_id_attribute 是 SAML 1.x Attribute 中稳定唯一用户 ID 的字段名；留空时使用 NameIdentifier。
-    user_id_attribute: ""
-    # username_attribute 是 SAML 1.x Attribute 中显示名的字段名；留空时显示 user_id。
     username_attribute: ""
 providers: []

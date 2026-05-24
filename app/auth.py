@@ -31,7 +31,7 @@ def current_identity(*, require_sso: bool = False) -> UserIdentity:
             return identity
         if require_sso:
             raise AuthenticationRequired("未收到 SSO 用户信息")
-    if auth_config.get("mode") in {"saml", "saml1"}:
+    if auth_config.get("mode") == "saml":
         identity = _identity_from_saml_session(ip)
         if identity is not None:
             return identity

@@ -44,21 +44,6 @@ def _saml_auth_config() -> dict:
     }
 
 
-def _saml1_auth_config() -> dict:
-    return {
-        "mode": "saml1",
-        "saml1": {
-            "acs_url": "https://doc.example.com/auth/saml1/acs",
-            "idp_issuer": "company-saml1",
-            "idp_sso_url": "https://sso.example.com/saml1",
-            "idp_x509_cert": "test-cert",
-            "audience": "https://doc.example.com/saml1",
-            "user_id_attribute": "uid",
-            "username_attribute": "displayName",
-        },
-    }
-
-
 class _FakeSamlAuth:
     def __init__(self):
         self.processed_request_id = None
@@ -646,69 +631,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_saml_does_not_replace_admin_login(self):
         self.app.config["AUTH"] = _saml_auth_config()
-
-        response = self.client.get("/admin/tasks")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("单文档检查任务", response.get_data(as_text=True))
-
-    def test_saml1_user_page_redirects_to_saml1_login(self):
-        self.app.config["AUTH"] = _saml1_auth_config()
-
-        response = self.client.get("/")
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/auth/saml1/login?next=/", response.headers["Location"])
-
-    def test_saml1_login_redirects_to_idp_with_target(self):
-        self.app.config["AUTH"] = _saml1_auth_config()
-
-        response = self.client.get("/auth/saml1/login?next=/consistency")
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "https://sso.example.com/saml1?TARGET=%2Fconsistency")
-
-    def test_saml1_acs_saves_session_identity(self):
-        self.app.config["AUTH"] = _saml1_auth_config()
-
-        with patch("app.routes.process_saml1_response", return_value=("100086", "张三")):
-            response = self.client.post(
-                "/auth/saml1/acs",
-                data={"SAMLResponse": "test", "TARGET": "/consistency"},
-            )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/consistency")
-        with self.client.session_transaction() as session:
-            self.assertEqual(session[SAML_USER_SESSION_KEY], {"user_id": "100086", "username": "张三"})
-
-    def test_create_task_uses_saml1_session_identity(self):
-        self._configure_provider()
-        self.app.config["AUTH"] = _saml1_auth_config()
-        with self.client.session_transaction() as session:
-            session[SAML_USER_SESSION_KEY] = {"user_id": "100086", "username": "张三"}
-        with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
-
-        response = self.client.post(
-            "/",
-            data={
-                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                "checks": [str(item["id"])],
-                "model_id": "provider-1:0:model-a",
-            },
-            content_type="multipart/form-data",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        with self.app.app_context():
-            task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source FROM tasks").fetchone()
-        self.assertEqual(task["owner_subject"], "sso:100086")
-        self.assertEqual(task["owner_name_snapshot"], "张三")
-        self.assertEqual(task["owner_source"], "sso")
-
-    def test_saml1_does_not_replace_admin_login(self):
-        self.app.config["AUTH"] = _saml1_auth_config()
 
         response = self.client.get("/admin/tasks")
 
