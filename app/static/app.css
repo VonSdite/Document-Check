@@ -598,38 +598,6 @@ td {
   margin-bottom: 26px;
 }
 
-.settings-tabs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: -6px 0 18px;
-  border-bottom: 1px solid var(--line);
-}
-
-.settings-tabs a {
-  color: var(--muted);
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: var(--radius) var(--radius) 0 0;
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 800;
-  transform: translateY(1px);
-  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
-}
-
-.settings-tabs a:hover {
-  color: var(--primary-strong);
-  background: #fff;
-  border-color: #bfd2ec;
-}
-
-.settings-tabs a.active {
-  color: var(--primary-strong);
-  background: var(--panel);
-  border-color: var(--line);
-}
-
 .settings-section-head {
   display: flex;
   align-items: center;

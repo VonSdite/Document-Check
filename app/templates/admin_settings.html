@@ -1,20 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}系统设置 - 文档智能门禁{% endblock %}
+{% block title %}{{ "IP 用户标记" if settings_tab == "ip_users" else "系统设置" }} - 文档智能门禁{% endblock %}
 
 {% block content %}
 <section class="page-title">
   <div>
-    <h1>系统设置</h1>
+    <h1>{{ "IP 用户标记" if settings_tab == "ip_users" else "系统设置" }}</h1>
   </div>
 </section>
-
-<nav class="settings-tabs" aria-label="系统设置页签">
-  <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if settings_tab == 'general' else '' }}">基础设置</a>
-  {% if ip_username_management_enabled %}
-  <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if settings_tab == 'ip_users' else '' }}">IP 用户标记</a>
-  {% endif %}
-</nav>
 
 {% if settings_tab == 'ip_users' %}
 <section class="panel settings-section">
