@@ -9,10 +9,12 @@ from app.db import (
     default_check_item_codes,
     get_bool_setting,
     get_db,
+    get_ip_username,
     get_setting,
     init_db,
     reset_default_check_item_prompt,
     seed_defaults,
+    set_ip_username,
     set_setting,
 )
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
@@ -105,6 +107,24 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertNotIn("ssl_verify", provider_columns)
         self.assertIn("model_name", model_columns)
         self.assertIn("force_disable_thinking", model_columns)
+
+    def test_ip_username_table_exists(self):
+        db = get_db()
+        columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(ip_usernames)").fetchall()
+        }
+
+        self.assertEqual(columns, {"ip", "username", "created_at", "updated_at"})
+
+    def test_ip_username_mapping_can_be_saved_and_cleared(self):
+        set_ip_username("10.0.0.8", "张三")
+
+        self.assertEqual(get_ip_username("10.0.0.8"), "张三")
+
+        set_ip_username("10.0.0.8", "")
+
+        self.assertEqual(get_ip_username("10.0.0.8"), "")
 
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 1)

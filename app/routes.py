@@ -7,6 +7,7 @@ import uuid
 import zipfile
 from datetime import date, datetime, timedelta
 from functools import wraps
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -29,10 +30,12 @@ from .db import (
     default_check_item_codes,
     get_bool_setting,
     get_db,
+    get_ip_username,
     get_setting,
     now_text,
     owner_subject_from_ip,
     reset_default_check_item_prompt,
+    set_ip_username,
     set_setting,
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
@@ -509,6 +512,18 @@ def register_routes(app):
                 flash("系统出站网络配置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
+            if action == "ip_username":
+                if not _ip_username_management_enabled():
+                    abort(404)
+                ip = request.form.get("ip", "").strip()
+                username = request.form.get("username", "").strip()
+                if not _valid_ip(ip):
+                    flash("请输入有效的 IP 地址。", "error")
+                    return redirect(url_for("admin_settings"))
+                set_ip_username(ip, username)
+                flash("IP 用户名已保存。" if username else "IP 用户名已清除。", "success")
+                return redirect(url_for("admin_settings"))
+
             if action == "create_check_item":
                 task_type = _check_item_task_type(request.form.get("task_type"))
                 name = request.form.get("name", "").strip()
@@ -643,6 +658,8 @@ def register_routes(app):
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
             network=current_app.config["NETWORK"],
             llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
+            ip_username_management_enabled=_ip_username_management_enabled(),
+            ip_username_rows=_ip_username_rows() if _ip_username_management_enabled() else [],
         )
 
 
@@ -669,6 +686,64 @@ def _auth_mode() -> str:
     if not isinstance(auth_config, dict):
         return "ip"
     return str(auth_config.get("mode") or "ip").strip().lower()
+
+
+def _mode_subject_prefix() -> str:
+    mode = _auth_mode()
+    if mode == "trusted_header":
+        return "trusted_header:"
+    if mode == "saml":
+        return "saml:"
+    return "ip:"
+
+
+def _owner_subject_expr(table_alias: str = "t") -> str:
+    prefix = f"{table_alias}." if table_alias else ""
+    return f"COALESCE({prefix}owner_subject, 'ip:' || {prefix}ip)"
+
+
+def _mode_subject_filter(table_alias: str = "t") -> tuple[str, tuple[str]]:
+    return f"instr({_owner_subject_expr(table_alias)}, ?) = 1", (_mode_subject_prefix(),)
+
+
+def _ip_username_management_enabled() -> bool:
+    return _platform_enabled() and _auth_mode() == "ip"
+
+
+def _valid_ip(value: str) -> bool:
+    try:
+        ip_address(str(value or "").strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _ip_username_rows():
+    return get_db().execute(
+        """
+        WITH known_ips AS (
+            SELECT ip
+            FROM tasks
+            WHERE ip IS NOT NULL
+              AND ip != ''
+              AND instr(COALESCE(owner_subject, 'ip:' || ip), 'ip:') = 1
+            UNION
+            SELECT ip FROM ip_usernames
+        )
+        SELECT
+            k.ip,
+            COALESCE(u.username, '') AS username,
+            COUNT(t.id) AS task_count,
+            MAX(t.created_at) AS last_task_at
+        FROM known_ips k
+        LEFT JOIN ip_usernames u ON u.ip = k.ip
+        LEFT JOIN tasks t
+            ON t.ip = k.ip
+           AND instr(COALESCE(t.owner_subject, 'ip:' || t.ip), 'ip:') = 1
+        GROUP BY k.ip, u.username
+        ORDER BY COALESCE(MAX(t.created_at), '') DESC, k.ip ASC
+        """
+    ).fetchall()
 
 
 def _saml_mode_enabled() -> bool:
@@ -747,17 +822,21 @@ def _console_user_identity() -> UserIdentity:
 
 
 def _owner_display(task) -> str:
+    subject = (
+        _row_value(task, "effective_owner_subject")
+        or _row_value(task, "owner_subject")
+        or owner_subject_from_ip(_row_value(task, "ip"))
+    )
+    if subject.startswith("ip:"):
+        current_ip_username = get_ip_username(_row_value(task, "ip") or subject[3:])
+        if current_ip_username:
+            return current_ip_username
     if _row_value(task, "current_owner_name"):
         return _row_value(task, "current_owner_name")
     if _row_value(task, "owner_name_snapshot"):
         return _row_value(task, "owner_name_snapshot")
     if _row_value(task, "username_snapshot"):
         return _row_value(task, "username_snapshot")
-    subject = (
-        _row_value(task, "effective_owner_subject")
-        or _row_value(task, "owner_subject")
-        or owner_subject_from_ip(_row_value(task, "ip"))
-    )
     return subject_label(subject)
 
 
@@ -796,21 +875,35 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     page = _page_arg()
     params = []
     clauses = []
+    join_ip_usernames = _auth_mode() == "ip"
+    ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    owner_name_expr = (
+        "COALESCE(NULLIF(iu.username, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
+        if join_ip_usernames
+        else "COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
+    )
+    mode_clause, mode_params = _mode_subject_filter("t")
+    clauses.append(mode_clause)
+    params.extend(mode_params)
     if status:
         clauses.append("t.status = ?")
         params.append(status)
     if owner:
+        owner_name_filter = "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
         clauses.append(
-            """
+            f"""
             (
                 COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ?
                 OR t.ip LIKE ?
                 OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ?
+                {owner_name_filter}
             )
             """
         )
         owner_like = f"%{owner}%"
         params.extend([owner_like, owner_like, owner_like])
+        if join_ip_usernames:
+            params.append(owner_like)
     clauses.append("t.task_type = ?")
     params.append(task_type)
     where = f"WHERE {' AND '.join(clauses)}"
@@ -818,6 +911,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         f"""
         SELECT COUNT(*) AS total
         FROM tasks t
+        {ip_username_join}
         {where}
         """,
         tuple(params),
@@ -826,10 +920,11 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     rows = get_db().execute(
         f"""
         SELECT t.*,
-               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+               {owner_name_expr} AS current_owner_name,
+               {owner_name_expr} AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
+        {ip_username_join}
         {where}
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ? OFFSET ?
@@ -1383,9 +1478,9 @@ def _date_arg(name: str, default: date) -> date:
 
 def _admin_overview_data(start_at: str, end_at: str) -> dict:
     db = get_db()
-    params = (start_at, end_at)
+    mode_clause, mode_params = _mode_subject_filter("")
     totals = db.execute(
-        """
+        f"""
         SELECT
             COUNT(*) AS tasks,
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users,
@@ -1397,12 +1492,13 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
             COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0) AS canceled
         FROM tasks
-        WHERE created_at >= ? AND created_at < ?
+        WHERE created_at >= ? AND created_at < ? AND {mode_clause}
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, *params),
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, start_at, end_at, *mode_params),
     ).fetchone()
+    mode_clause, mode_params = _mode_subject_filter("")
     daily_rows = db.execute(
-        """
+        f"""
         SELECT
             substr(created_at, 1, 10) AS day,
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users,
@@ -1410,29 +1506,38 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks
         FROM tasks
-        WHERE created_at >= ? AND created_at < ?
+        WHERE created_at >= ? AND created_at < ? AND {mode_clause}
         GROUP BY day
         ORDER BY day DESC
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, *params),
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, start_at, end_at, *mode_params),
     ).fetchall()
+    join_ip_usernames = _auth_mode() == "ip"
+    ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    username_expr = (
+        "COALESCE(NULLIF(MAX(iu.username), ''), NULLIF(MAX(t.owner_name_snapshot), ''), NULLIF(MAX(t.username_snapshot), ''))"
+        if join_ip_usernames
+        else "COALESCE(NULLIF(MAX(t.owner_name_snapshot), ''), NULLIF(MAX(t.username_snapshot), ''))"
+    )
+    mode_clause, mode_params = _mode_subject_filter("t")
     user_rows = db.execute(
-        """
+        f"""
         SELECT
             COALESCE(t.owner_subject, 'ip:' || t.ip) AS subject,
             MIN(t.ip) AS ip,
-            COALESCE(NULLIF(MAX(t.owner_name_snapshot), ''), NULLIF(MAX(t.username_snapshot), '')) AS username,
+            {username_expr} AS username,
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
             MAX(t.created_at) AS last_task_at
         FROM tasks t
-        WHERE t.created_at >= ? AND t.created_at < ?
+        {ip_username_join}
+        WHERE t.created_at >= ? AND t.created_at < ? AND {mode_clause}
         GROUP BY COALESCE(t.owner_subject, 'ip:' || t.ip)
         ORDER BY tasks DESC, last_task_at DESC, COALESCE(t.owner_subject, 'ip:' || t.ip) ASC
         LIMIT 10
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, *params),
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, start_at, end_at, *mode_params),
     ).fetchall()
     return {
         "totals": totals,
@@ -1443,30 +1548,39 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
 
 def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
     db = get_db()
+    mode_clause, mode_params = _mode_subject_filter("")
     return {
         "tasks": db.execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE task_type = ?",
-            (task_type,),
+            f"SELECT COUNT(*) AS total FROM tasks WHERE task_type = ? AND {mode_clause}",
+            (task_type, *mode_params),
         ).fetchone()["total"],
         "queued": db.execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued' AND task_type = ?",
-            (task_type,),
+            f"SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued' AND task_type = ? AND {mode_clause}",
+            (task_type, *mode_params),
         ).fetchone()["total"],
         "running": db.execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running' AND task_type = ?",
-            (task_type,),
+            f"SELECT COUNT(*) AS total FROM tasks WHERE status = 'running' AND task_type = ? AND {mode_clause}",
+            (task_type, *mode_params),
         ).fetchone()["total"],
         "completed": db.execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'completed' AND task_type = ?",
-            (task_type,),
+            f"SELECT COUNT(*) AS total FROM tasks WHERE status = 'completed' AND task_type = ? AND {mode_clause}",
+            (task_type, *mode_params),
         ).fetchone()["total"],
         "users": db.execute(
-            "SELECT COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS total FROM tasks WHERE task_type = ?",
-            (task_type,),
+            f"""
+            SELECT COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS total
+            FROM tasks
+            WHERE task_type = ? AND {mode_clause}
+            """,
+            (task_type, *mode_params),
         ).fetchone()["total"],
         "ips": db.execute(
-            "SELECT COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS total FROM tasks WHERE task_type = ?",
-            (task_type,),
+            f"""
+            SELECT COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS total
+            FROM tasks
+            WHERE task_type = ? AND {mode_clause}
+            """,
+            (task_type, *mode_params),
         ).fetchone()["total"],
     }
 
@@ -1753,16 +1867,30 @@ def admin_required(view):
 
 
 def _get_task_or_404(task_id: int):
+    join_ip_usernames = _auth_mode() == "ip"
+    ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    owner_name_expr = (
+        "COALESCE(NULLIF(iu.username, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
+        if join_ip_usernames
+        else "COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
+    )
+    clauses = ["t.id = ?"]
+    params = [task_id]
+    if _platform_enabled():
+        mode_clause, mode_params = _mode_subject_filter("t")
+        clauses.append(mode_clause)
+        params.extend(mode_params)
     task = get_db().execute(
-        """
+        f"""
         SELECT t.*,
-               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+               {owner_name_expr} AS current_owner_name,
+               {owner_name_expr} AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
-        WHERE t.id = ?
+        {ip_username_join}
+        WHERE {' AND '.join(clauses)}
         """,
-        (task_id,),
+        tuple(params),
     ).fetchone()
     if task is None:
         abort(404)

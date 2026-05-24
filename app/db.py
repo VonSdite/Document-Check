@@ -111,6 +111,13 @@ def init_db():
             UNIQUE(provider_id, model_name, force_disable_thinking)
         );
 
+        CREATE TABLE IF NOT EXISTS ip_usernames (
+            ip TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_ip_created ON tasks(ip, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_user_model_providers_owner ON user_model_providers(owner_subject, updated_at DESC);
@@ -202,6 +209,36 @@ def get_bool_setting(key: str, default: bool = False) -> bool:
 
 def owner_subject_from_ip(ip: str) -> str:
     return f"ip:{str(ip or '0.0.0.0').strip() or '0.0.0.0'}"
+
+
+def get_ip_username(ip: str) -> str:
+    ip = str(ip or "").strip()
+    if not ip:
+        return ""
+    row = get_db().execute("SELECT username FROM ip_usernames WHERE ip = ?", (ip,)).fetchone()
+    return row["username"] if row is not None else ""
+
+
+def set_ip_username(ip: str, username: str):
+    ip = str(ip or "").strip()
+    username = str(username or "").strip()
+    if not ip:
+        return
+    db = get_db()
+    if not username:
+        db.execute("DELETE FROM ip_usernames WHERE ip = ?", (ip,))
+        db.commit()
+        return
+    now = now_text()
+    db.execute(
+        """
+        INSERT INTO ip_usernames(ip, username, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(ip) DO UPDATE SET username = excluded.username, updated_at = excluded.updated_at
+        """,
+        (ip, username, now, now),
+    )
+    db.commit()
 
 
 DEFAULT_DOCUMENT_CHECK_ITEMS = (

@@ -23,6 +23,8 @@ auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
   # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
   # saml：直接对接 SAML 2.0。
+  # 不同 mode 的用户数据相互隔离：ip:<IP>、trusted_header:<用户ID>、saml:<用户ID>。
+  # 平台 ip 模式可在管理员后台给 IP 设置显示用户名；SSO 模式不会显示该入口。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:

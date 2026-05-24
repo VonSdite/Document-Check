@@ -42,6 +42,59 @@
   </form>
 </section>
 
+{% if ip_username_management_enabled %}
+<section class="panel settings-section">
+  <div class="settings-section-head">
+    <div>
+      <h2 class="title-with-help">IP 用户标记
+        <button class="help-tip" type="button" aria-label="IP 用户标记说明" data-tip="仅在 ip 模式显示。这里设置的是 IP 的显示用户名，不改变认证身份；统计和任务列表会优先显示该用户名，未设置时显示 IP。">?</button>
+      </h2>
+    </div>
+  </div>
+  <form method="post" class="settings-ip-username-form">
+    <input type="hidden" name="action" value="ip_username">
+    <label>IP 地址
+      <input name="ip" placeholder="例如 192.168.1.10" required>
+    </label>
+    <label>用户名
+      <input name="username" placeholder="例如 张三">
+    </label>
+    <button class="primary-button settings-save-button" type="submit">保存</button>
+  </form>
+  {% if ip_username_rows %}
+  <div class="table-wrap">
+    <table class="settings-ip-table">
+      <thead>
+        <tr>
+          <th>IP</th>
+          <th>用户名</th>
+          <th>任务数</th>
+          <th>最近提交</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in ip_username_rows %}
+        <tr>
+          <td>{{ row.ip }}</td>
+          <td>
+            <form method="post" class="settings-ip-row-form">
+              <input type="hidden" name="action" value="ip_username">
+              <input type="hidden" name="ip" value="{{ row.ip }}">
+              <input name="username" value="{{ row.username }}" placeholder="{{ row.ip }}">
+              <button class="secondary-button" type="submit">保存</button>
+            </form>
+          </td>
+          <td>{{ row.task_count }}</td>
+          <td>{{ row.last_task_at or '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>

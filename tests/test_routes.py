@@ -12,7 +12,7 @@ from openpyxl import Workbook
 
 from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
-from app.db import get_db, get_setting, init_db, seed_defaults, set_setting
+from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
 
@@ -142,17 +142,31 @@ class AdminSettingsRouteTest(unittest.TestCase):
         status: str = "completed",
         created_at: str = "2026-05-01 10:00:00",
         username_snapshot: str | None = None,
+        owner_subject: str | None = None,
+        owner_name_snapshot: str | None = None,
+        owner_source: str | None = None,
     ):
         with self.app.app_context():
             get_db().execute(
                 """
                 INSERT INTO tasks(
-                    task_type, ip, username_snapshot, original_filename, stored_filename, file_type,
+                    task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+                    original_filename, stored_filename, file_type,
                     file_size, checks_json, model_name, api_base, status, progress, created_at, updated_at
                 )
-                VALUES (?, ?, ?, '测试文档.txt', 'stored.txt', 'txt', 12, '[]', 'model-a', 'https://example.test/v1/chat/completions', ?, 100, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, '测试文档.txt', 'stored.txt', 'txt', 12, '[]', 'model-a', 'https://example.test/v1/chat/completions', ?, 100, ?, ?)
                 """,
-                (task_type, ip, username_snapshot, status, created_at, created_at),
+                (
+                    task_type,
+                    ip,
+                    username_snapshot,
+                    owner_subject,
+                    owner_name_snapshot,
+                    owner_source,
+                    status,
+                    created_at,
+                    created_at,
+                ),
             )
             get_db().commit()
 
@@ -269,6 +283,48 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             self.assertIsNone(get_setting("network"))
 
+    def test_admin_settings_saves_ip_username_mapping_in_ip_mode(self):
+        self._insert_task(ip="10.0.0.8")
+
+        response = self.client.post(
+            "/admin/settings",
+            data={"action": "ip_username", "ip": "10.0.0.8", "username": "张三"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(get_ip_username("10.0.0.8"), "张三")
+
+        settings_response = self.client.get("/admin/settings")
+        self.assertIn("IP 用户标记", settings_response.get_data(as_text=True))
+        self.assertIn("张三", settings_response.get_data(as_text=True))
+
+    def test_admin_settings_hides_ip_username_mapping_outside_ip_mode(self):
+        self.app.config["AUTH"] = {
+            "mode": "trusted_header",
+            "trusted_header": {
+                "user_id": "X-SSO-User-Id",
+                "username": "X-SSO-User-Name",
+            },
+        }
+
+        response = self.client.get("/admin/settings")
+        blocked = self.client.post(
+            "/admin/settings",
+            data={"action": "ip_username", "ip": "10.0.0.8", "username": "张三"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("IP 用户标记", response.get_data(as_text=True))
+        self.assertEqual(blocked.status_code, 404)
+        with self.app.app_context():
+            self.assertEqual(get_ip_username("10.0.0.8"), "")
+
+        self.app.config["AUTH"] = _saml_auth_config()
+        saml_response = self.client.get("/admin/settings")
+        self.assertEqual(saml_response.status_code, 200)
+        self.assertNotIn("IP 用户标记", saml_response.get_data(as_text=True))
+
     def test_admin_settings_shows_document_and_consistency_prompt_groups(self):
         response = self.client.get("/admin/settings")
 
@@ -315,6 +371,59 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("测试用户A", html)
         self.assertIn("10.0.0.2", html)
         self.assertNotIn("10.0.0.3", html)
+
+    def test_admin_overview_uses_ip_username_mapping(self):
+        self._insert_task(ip="10.0.0.8", created_at="2026-05-01 10:00:00")
+        self.client.post(
+            "/admin/settings",
+            data={"action": "ip_username", "ip": "10.0.0.8", "username": "张三"},
+        )
+
+        response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-01")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("张三", html)
+        self.assertIn("ip:10.0.0.8", html)
+
+    def test_admin_overview_filters_tasks_by_auth_mode(self):
+        self._insert_task(
+            ip="10.0.0.1",
+            owner_subject="ip:10.0.0.1",
+            owner_source="ip",
+            created_at="2026-05-01 10:00:00",
+        )
+        self._insert_task(
+            ip="10.0.0.2",
+            owner_subject="trusted_header:100086",
+            owner_name_snapshot="张三",
+            owner_source="trusted_header",
+            created_at="2026-05-01 11:00:00",
+        )
+        self._insert_task(
+            ip="10.0.0.3",
+            owner_subject="saml:100086",
+            owner_name_snapshot="李四",
+            owner_source="saml",
+            created_at="2026-05-01 12:00:00",
+        )
+        self.app.config["AUTH"] = {
+            "mode": "trusted_header",
+            "trusted_header": {
+                "user_id": "X-SSO-User-Id",
+                "username": "X-SSO-User-Name",
+            },
+        }
+
+        response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-01")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("<span>活跃用户</span><strong>1</strong>", html)
+        self.assertIn("<span>提交任务</span><strong>1</strong>", html)
+        self.assertIn("张三", html)
+        self.assertNotIn("李四", html)
+        self.assertNotIn("ip:10.0.0.1", html)
 
     def test_local_mode_admin_root_redirects_to_management_view(self):
         self.app.config["PLATFORM"] = False
@@ -660,7 +769,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
     def test_create_task_uses_trusted_header_identity(self):
-        model_id = self._configure_provider("sso:100086")
+        model_id = self._configure_provider("trusted_header:100086")
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
             "trusted_header": {
@@ -685,9 +794,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source, ip FROM tasks").fetchone()
-        self.assertEqual(task["owner_subject"], "sso:100086")
+        self.assertEqual(task["owner_subject"], "trusted_header:100086")
         self.assertEqual(task["owner_name_snapshot"], "张三")
-        self.assertEqual(task["owner_source"], "sso")
+        self.assertEqual(task["owner_source"], "trusted_header")
         self.assertEqual(task["ip"], "127.0.0.1")
 
     def test_trusted_header_user_page_requires_sso_header(self):
@@ -733,7 +842,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("未收到 SSO 用户信息", response.get_data(as_text=True))
 
     def test_trusted_header_admin_task_page_uses_sso_user_models(self):
-        model_id = self._configure_provider("sso:100086")
+        model_id = self._configure_provider("trusted_header:100086")
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
             "trusted_header": {
@@ -793,7 +902,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertNotIn("saml_request_id", session)
 
     def test_create_task_uses_saml_session_identity(self):
-        model_id = self._configure_provider("sso:100086")
+        model_id = self._configure_provider("saml:100086")
         self.app.config["AUTH"] = _saml_auth_config()
         with self.client.session_transaction() as session:
             session[SAML_USER_SESSION_KEY] = {"user_id": "100086", "username": "张三"}
@@ -813,9 +922,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source FROM tasks").fetchone()
-        self.assertEqual(task["owner_subject"], "sso:100086")
+        self.assertEqual(task["owner_subject"], "saml:100086")
         self.assertEqual(task["owner_name_snapshot"], "张三")
-        self.assertEqual(task["owner_source"], "sso")
+        self.assertEqual(task["owner_source"], "saml")
 
     def test_saml_metadata_uses_sp_config_only(self):
         self.app.config["AUTH"] = _saml_auth_config()

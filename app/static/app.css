@@ -626,6 +626,25 @@ td {
   align-items: end;
 }
 
+.settings-ip-username-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.settings-ip-table {
+  min-width: 680px;
+}
+
+.settings-ip-row-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
 .settings-network-form {
   display: grid;
   grid-template-columns: minmax(160px, 0.9fr) minmax(220px, 1.4fr) minmax(150px, 0.8fr) 128px;

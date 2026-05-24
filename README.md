@@ -90,6 +90,8 @@ auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
   # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
   # saml：直接对接 SAML 2.0。
+  # 不同 mode 的用户数据相互隔离：ip:<IP>、trusted_header:<用户ID>、saml:<用户ID>。
+  # 平台 ip 模式可在管理员后台给 IP 设置显示用户名；SSO 模式不会显示该入口。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:
@@ -143,6 +145,8 @@ auth:
   # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
   # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
   # saml：直接对接 SAML 2.0。
+  # 不同 mode 的用户数据相互隔离：ip:<IP>、trusted_header:<用户ID>、saml:<用户ID>。
+  # 平台 ip 模式可在管理员后台给 IP 设置显示用户名；SSO 模式不会显示该入口。
   mode: ip
   # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
   trusted_header:
@@ -184,19 +188,21 @@ auth:
 
 ## 用户身份与 SSO 预留
 
-系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。配置里保留三种 `auth.mode`，默认先用 `ip` 方便本机运行、临时测试和先把平台跑起来；确认公司 SSO 接入方式后，再把 `mode` 切到对应模式。IP 仍会记录在任务中用于审计。
+系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。配置里保留三种 `auth.mode`，默认先用 `ip` 方便本机运行、临时测试和先把平台跑起来；确认公司 SSO 接入方式后，再把 `mode` 切到对应模式。不同模式使用不同用户命名空间，模型配置、任务列表和统计概览只在当前模式内生效，不会互相串数据。IP 仍会记录在任务中用于审计。
 
 - `ip`：不接 SSO，用户主体为 `ip:<访问 IP>`。
-- `trusted_header`：公司网关或反向代理已经完成 SSO 登录，并把用户 ID/用户名注入可信 HTTP header。
-- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接。
+- `trusted_header`：公司网关或反向代理已经完成 SSO 登录，并把用户 ID/用户名注入可信 HTTP header，用户主体为 `trusted_header:<用户ID>`。
+- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接，用户主体为 `saml:<用户ID>`。
 
 无论用户从 `/` 用户入口还是从 `admin_url` 对应的 console 入口创建任务、选择模型或进入“模型管理”，系统都会按同一套 `auth.mode` 解析当前用户，使用同一个 `owner_subject` 读写该用户自己的模型配置。
+
+平台模式且 `auth.mode: ip` 时，管理员后台“系统设置”会显示“IP 用户标记”，可以给 IP 设置显示用户名。该设置只改变页面显示和统计展示，不改变认证身份；统计概览会优先显示映射用户名，未设置时回退显示 IP。`trusted_header` 和 `saml` 模式不会显示这个入口。
 
 SAML 1.0/1.1 已经过老，当前不作为支持的接入模式；如果公司只提到旧版 SAML，优先请对方提供 SAML 2.0，或由公司网关先完成登录并转换为可信 header。
 
 常用字段含义：
 
-- `trusted_header.user_id`：保存唯一用户 ID 的 HTTP header 名称，例如 `X-SSO-User-Id`，用于生成 `owner_subject = sso:<用户ID>`。
+- `trusted_header.user_id`：保存唯一用户 ID 的 HTTP header 名称，例如 `X-SSO-User-Id`，用于生成 `owner_subject = trusted_header:<用户ID>`。
 - `trusted_header.username`：保存显示名的 HTTP header 名称，例如 `X-SSO-User-Name`，只用于页面显示和任务快照，可为空。
 - `saml.sp_entity_id`：本系统作为 SP 的唯一标识，通常用 `https://你的域名/auth/saml/metadata`。
 - `saml.acs_url`：公司 SSO 登录成功后 POST 回调本系统的地址，通常是 `https://你的域名/auth/saml/acs`。
@@ -216,14 +222,14 @@ auth:
     username: X-SSO-User-Name
 ```
 
-此时系统会把 `X-SSO-User-Id` 解析为 `sso:<用户ID>`，用 `X-SSO-User-Name` 作为显示名；用户入口没有收到 `X-SSO-User-Id` 时会返回 401，避免绕过 SSO 后退回 IP 身份。只有在该服务位于可信 SSO 网关之后、外部用户无法伪造这些请求头时才应启用该模式。用户启停、组织、角色等用户管理职责应放在公司 SSO 或身份平台中处理；本系统只保存任务归属快照、审计 IP、统计和并发控制所需的用户主体。后续如果公司提供 OIDC 或 CAS 接口，也只需要把认证回调解析出的用户 ID 和显示名映射到同一个用户主体格式即可。
+此时系统会把 `X-SSO-User-Id` 解析为 `trusted_header:<用户ID>`，用 `X-SSO-User-Name` 作为显示名；用户入口没有收到 `X-SSO-User-Id` 时会返回 401，避免绕过 SSO 后退回 IP 身份。只有在该服务位于可信 SSO 网关之后、外部用户无法伪造这些请求头时才应启用该模式。用户启停、组织、角色等用户管理职责应放在公司 SSO 或身份平台中处理；本系统只保存任务归属快照、审计 IP、统计和并发控制所需的用户主体。后续如果公司提供 OIDC 或 CAS 接口，也需要明确映射到单独的用户主体命名空间。
 
 实际接入时按下面顺序操作：
 
 1. 向公司 SSO 管理员确认是否已有统一网关或反向代理能在登录后注入请求头，并确认“唯一用户 ID”和“显示名”分别对应哪个 header，例如 `X-SSO-User-Id`、`X-SSO-User-Name`。
 2. 将本服务部署在该网关之后，禁止用户绕过网关直连 Flask 服务；网关转发前应清理外部请求自带的同名 header，再写入可信 header。
 3. 把 `config.yaml` 的 `platform` 设为 `true`，`auth.mode` 设为 `trusted_header`，并按公司网关实际 header 名称填写 `trusted_header`。
-4. 访问用户入口验证任务归属：提交任务后，管理端任务列表应显示 `sso:<账号>` 和显示名称。
+4. 访问用户入口验证任务归属：提交任务后，管理端任务列表应显示 `trusted_header:<账号>` 和显示名称。
 5. 管理员入口仍使用本系统 `admin.username`、`admin.password` 和 `admin_url` 登录；但在 console 内创建任务和管理模型时，仍会使用与 `/` 相同的 SSO 用户身份。若网关默认保护全部路径，需要让网关对 `admin_url` 放行或单独做管理员访问控制；建议同时限制为内网、VPN 或管理员来源 IP。
 
 如果公司 SSO 提供的是 SAML 2.0，并且没有现成网关负责把 SAML 转成可信 header，可以让本系统作为 SAML SP 直接对接：
@@ -242,7 +248,7 @@ auth:
     username_attribute: displayName
 ```
 
-SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、ACS URL、SP metadata URL（`https://文档门禁域名/auth/saml/metadata`），并请对方把稳定唯一用户 ID 映射到 `user_id_attribute`，把显示名映射到 `username_attribute`。如果 `user_id_attribute` 留空，系统会使用 SAML `NameID` 作为用户 ID；不建议使用姓名作为用户 ID，因为同名用户无法区分。SAML 登录成功后仍会存为 `owner_subject = sso:<用户ID>`。管理员入口继续使用本系统本地管理员账号密码，不需要在公司 SSO 里设置管理员；console 内涉及当前用户的任务提交和模型配置时，仍使用同一个 SAML 用户身份。
+SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、ACS URL、SP metadata URL（`https://文档门禁域名/auth/saml/metadata`），并请对方把稳定唯一用户 ID 映射到 `user_id_attribute`，把显示名映射到 `username_attribute`。如果 `user_id_attribute` 留空，系统会使用 SAML `NameID` 作为用户 ID；不建议使用姓名作为用户 ID，因为同名用户无法区分。SAML 登录成功后会存为 `owner_subject = saml:<用户ID>`。管理员入口继续使用本系统本地管理员账号密码，不需要在公司 SSO 里设置管理员；console 内涉及当前用户的任务提交和模型配置时，仍使用同一个 SAML 用户身份。
 
 咨询公司 SSO 管理员时可以直接发送下面这段：
 
