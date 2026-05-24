@@ -230,9 +230,25 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = soup.find("form", {"class": "settings-network-form"})
+        self.assertEqual(form.get("data-network-proxy-mode"), "custom")
         self.assertEqual(soup.find("select", {"name": "proxy_mode"}).find("option", selected=True)["value"], "custom")
-        self.assertEqual(soup.find("input", {"name": "proxy"}).get("value"), "http://127.0.0.1:7890")
+        proxy_input = soup.find("input", {"name": "proxy"})
+        self.assertEqual(proxy_input.get("value"), "http://127.0.0.1:7890")
+        self.assertIsNotNone(proxy_input.get("required"))
         self.assertIsNotNone(soup.find("input", {"name": "ssl_verify"}).get("checked"))
+
+    def test_admin_settings_marks_proxy_field_hidden_by_default(self):
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = soup.find("form", {"class": "settings-network-form"})
+        proxy_field = soup.select_one(".settings-network-proxy-field")
+        proxy_input = soup.find("input", {"name": "proxy"})
+        self.assertEqual(form.get("data-network-proxy-mode"), "direct")
+        self.assertIsNotNone(proxy_field)
+        self.assertIsNone(proxy_input.get("required"))
 
     def test_admin_settings_saves_network_to_yaml_config(self):
         response = self.client.post(

@@ -633,6 +633,14 @@ td {
   align-items: end;
 }
 
+.settings-network-proxy-field {
+  display: none;
+}
+
+.settings-network-form[data-network-proxy-mode="custom"] .settings-network-proxy-field {
+  display: grid;
+}
+
 .settings-network-toggle {
   min-height: 43px;
 }

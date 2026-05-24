@@ -1424,6 +1424,17 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input instanceof HTMLSelectElement && input.name === "proxy_mode") {
+    const form = input.closest(".settings-network-form");
+    if (form) {
+      form.dataset.networkProxyMode = input.value;
+      const proxyInput = form.querySelector('input[name="proxy"]');
+      if (proxyInput instanceof HTMLInputElement) {
+        proxyInput.required = input.value === "custom";
+      }
+      return;
+    }
+  }
   if (input instanceof HTMLSelectElement && input.name === "model_id") {
     writeLastModelId(input.value);
     return;
