@@ -22,7 +22,7 @@ from flask import (
     url_for,
 )
 
-from .auth import UserIdentity, current_identity, subject_label
+from .auth import AuthenticationRequired, UserIdentity, current_identity, subject_label
 from .config import load_local_config, save_local_config
 from .db import (
     default_check_item_codes,
@@ -88,7 +88,7 @@ def register_routes(app):
                 return create_task_for_identity(current_identity(), admin_created=True)
             return _render_admin_tasks_page()
 
-        identity = current_identity()
+        identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
         page = _page_arg()
@@ -130,7 +130,7 @@ def register_routes(app):
                 return create_task_for_identity(current_identity(), admin_created=True)
             return redirect(url_for("user_tasks"))
 
-        identity = current_identity()
+        identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
         return redirect(url_for("user_tasks"))
@@ -142,7 +142,7 @@ def register_routes(app):
                 return create_consistency_task_for_identity(current_identity(), admin_created=True)
             return _render_admin_consistency_page()
 
-        identity = current_identity()
+        identity = _current_user_identity()
         if request.method == "POST":
             return create_consistency_task_for_identity(identity, admin_created=False)
 
@@ -643,6 +643,13 @@ def _form_bool(value) -> bool:
 
 def _platform_enabled() -> bool:
     return bool(current_app.config.get("PLATFORM", True))
+
+
+def _current_user_identity() -> UserIdentity:
+    try:
+        return current_identity(require_sso=True)
+    except AuthenticationRequired:
+        abort(401, description="未收到 SSO 用户信息，请通过公司统一入口访问。")
 
 
 def _owner_display(task) -> str:
@@ -1451,7 +1458,7 @@ def _get_task_or_404(task_id: int):
 
 
 def _get_user_task(task_id: int):
-    identity = current_identity()
+    identity = _current_user_identity()
     task = get_db().execute(
         """
         SELECT t.*,

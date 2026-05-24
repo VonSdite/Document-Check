@@ -3,6 +3,10 @@ from dataclasses import dataclass
 from flask import current_app, request
 
 
+class AuthenticationRequired(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class UserIdentity:
     subject: str
@@ -15,13 +19,15 @@ class UserIdentity:
         return self.display_name or subject_label(self.subject)
 
 
-def current_identity() -> UserIdentity:
+def current_identity(*, require_sso: bool = False) -> UserIdentity:
     ip = request.remote_addr or "0.0.0.0"
     auth_config = current_app.config.get("AUTH", {})
     if auth_config.get("mode") == "trusted_header":
         identity = _identity_from_trusted_header(auth_config, ip)
         if identity is not None:
             return identity
+        if require_sso:
+            raise AuthenticationRequired("未收到 SSO 用户信息")
     return UserIdentity(subject=ip_subject(ip), display_name="", source="ip", ip=ip)
 
 

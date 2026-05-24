@@ -479,6 +479,36 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(task["owner_source"], "sso")
         self.assertEqual(task["ip"], "127.0.0.1")
 
+    def test_trusted_header_user_page_requires_sso_header(self):
+        self.app.config["AUTH"] = {
+            "mode": "trusted_header",
+            "trusted_header": {
+                "user": "X-SSO-User",
+                "name": "X-SSO-Name",
+                "email": "",
+            },
+        }
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("未收到 SSO 用户信息", response.get_data(as_text=True))
+
+    def test_trusted_header_does_not_replace_admin_login(self):
+        self.app.config["AUTH"] = {
+            "mode": "trusted_header",
+            "trusted_header": {
+                "user": "X-SSO-User",
+                "name": "X-SSO-Name",
+                "email": "",
+            },
+        }
+
+        response = self.client.get("/admin/tasks")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("单文档检查任务", response.get_data(as_text=True))
+
     def test_create_consistency_task_saves_combined_document_text(self):
         self._configure_provider()
         with self.app.app_context():
