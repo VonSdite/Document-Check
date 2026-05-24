@@ -29,6 +29,8 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["server"]["host"], "127.0.0.1")
         self.assertEqual(config["server"]["port"], 31945)
         self.assertEqual(config["auth"]["mode"], "ip")
+        self.assertNotIn("trusted_header", config["auth"])
+        self.assertNotIn("saml", config["auth"])
 
     def test_auth_trusted_header_config_is_normalized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -59,15 +61,6 @@ class ProviderConfigTest(unittest.TestCase):
                 "trusted_header": {
                     "user_id": "X-SSO-User-Id",
                     "username": "X-SSO-User-Name",
-                },
-                "saml": {
-                    "sp_entity_id": "",
-                    "acs_url": "",
-                    "idp_entity_id": "",
-                    "idp_sso_url": "",
-                    "idp_x509_cert": "",
-                    "user_id_attribute": "",
-                    "username_attribute": "",
                 },
             },
         )

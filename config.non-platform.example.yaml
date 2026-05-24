@@ -9,15 +9,4 @@ server:
   port: 31945
 auth:
   mode: ip
-  trusted_header:
-    user_id: ""
-    username: ""
-  saml:
-    sp_entity_id: ""
-    acs_url: ""
-    idp_entity_id: ""
-    idp_sso_url: ""
-    idp_x509_cert: ""
-    user_id_attribute: ""
-    username_attribute: ""
 providers: []

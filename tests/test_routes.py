@@ -32,10 +32,6 @@ def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
 def _saml_auth_config() -> dict:
     return {
         "mode": "saml",
-        "trusted_header": {
-            "user_id": "",
-            "username": "",
-        },
         "saml": {
             "sp_entity_id": "https://doc.example.com/auth/saml/metadata",
             "acs_url": "https://doc.example.com/auth/saml/acs",

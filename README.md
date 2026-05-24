@@ -75,18 +75,16 @@ server:
   host: 0.0.0.0
   port: 31945
 auth:
-  mode: ip
-  trusted_header:
-    user_id: ""
-    username: ""
+  mode: saml
   saml:
-    sp_entity_id: ""
-    acs_url: ""
-    idp_entity_id: ""
-    idp_sso_url: ""
-    idp_x509_cert: ""
-    user_id_attribute: ""
-    username_attribute: ""
+    sp_entity_id: https://文档门禁域名/auth/saml/metadata
+    acs_url: https://文档门禁域名/auth/saml/acs
+    idp_entity_id: 公司 SSO 提供的 IdP Entity ID
+    idp_sso_url: 公司 SSO 提供的 SSO 登录地址
+    idp_x509_cert: |
+      公司 SSO 提供的签名证书内容
+    user_id_attribute: uid
+    username_attribute: displayName
 providers: []
 ```
 
@@ -104,17 +102,6 @@ server:
   port: 31945
 auth:
   mode: ip
-  trusted_header:
-    user_id: ""
-    username: ""
-  saml:
-    sp_entity_id: ""
-    acs_url: ""
-    idp_entity_id: ""
-    idp_sso_url: ""
-    idp_x509_cert: ""
-    user_id_attribute: ""
-    username_attribute: ""
 providers: []
 ```
 
@@ -124,9 +111,9 @@ providers: []
 
 ## 用户身份与 SSO 预留
 
-系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。默认 `auth.mode: ip` 时，用户主体为 `ip:<访问 IP>`，适合本机或尚未接入 SSO 的部署；IP 仍会记录在任务中用于审计。
+系统内部使用 `owner_subject` 作为任务归属，不再把 IP 当成唯一用户身份。`auth.mode: ip` 只适合本机或尚未接入 SSO 的临时部署，此时用户主体为 `ip:<访问 IP>`；IP 仍会记录在任务中用于审计。正式平台接入公司 SAML 2.0 时应使用 `auth.mode: saml`。
 
-如果公司网关或反向代理已经完成 SSO 登录，并能把登录用户写入可信请求头，可以改为：
+`trusted_header` 只有在公司已有统一网关或反向代理，并且网关已经完成 SSO 登录、能把登录用户写入可信请求头时才需要；直接对接 SAML 2.0 时不需要配置它。网关模式可以这样写：
 
 ```yaml
 auth:
