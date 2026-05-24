@@ -170,9 +170,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
+        soup = BeautifulSoup(html, "html.parser")
         self.assertIn("单文档检查-提示词设置", html)
         self.assertIn("多文档对照检查-提示词设置", html)
         self.assertIn("consistency_check", html)
+        document_tip = soup.find("button", {"aria-label": "单文档检查-提示词设置说明"})
+        consistency_tip = soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"})
+        self.assertIsNotNone(document_tip)
+        self.assertIsNotNone(consistency_tip)
+        self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
+        self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
+        visible_descriptions = [item.get_text(strip=True) for item in soup.select(".settings-section-head p")]
+        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除。", visible_descriptions)
+        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。", visible_descriptions)
 
     def test_admin_overview_counts_tasks_in_selected_range(self):
         with self.app.app_context():

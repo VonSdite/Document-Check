@@ -55,8 +55,9 @@
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
-      <h2>{{ group.title }}</h2>
-      <p>{{ group.description }}</p>
+      <h2 class="title-with-help">{{ group.title }}
+        <button class="help-tip" type="button" aria-label="{{ group.title }}说明" data-tip="{{ group.description }}">?</button>
+      </h2>
     </div>
   </div>
   <form method="post" class="settings-new-check-form stack-form">
