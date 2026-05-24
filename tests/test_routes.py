@@ -309,12 +309,48 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/"))
 
-    def test_admin_model_route_is_not_registered(self):
+    def test_admin_model_route_requires_admin_login(self):
         self._logout_test_client()
 
         response = self.client.get("/admin/models")
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login", response.headers["Location"])
+
+    def test_admin_model_page_uses_same_identity_as_user_model_page(self):
+        self._configure_provider("ip:127.0.0.1")
+
+        admin_response = self.client.get("/admin/models")
+        user_response = self.client.get("/models")
+
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertEqual(user_response.status_code, 200)
+        self.assertIn("测试提供商", admin_response.get_data(as_text=True))
+        self.assertIn("测试提供商", user_response.get_data(as_text=True))
+        self.assertIn("模型管理", admin_response.get_data(as_text=True))
+
+    def test_admin_model_page_saves_same_user_model_config(self):
+        response = self.client.post(
+            "/admin/models",
+            data={
+                "name": "Console 提供商",
+                "api_base": "https://example.test/v1/chat/completions",
+                "api_key": "",
+                "request_timeout": "30",
+                "max_input_chars": "80000",
+                "is_active": "on",
+                "model_configs": json.dumps(
+                    [{"model_name": "console-model", "force_disable_thinking": False}],
+                    ensure_ascii=False,
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/admin/models"))
+        user_response = self.client.get("/models")
+        self.assertIn("Console 提供商", user_response.get_data(as_text=True))
+        self.assertIn("console-model", user_response.get_data(as_text=True))
 
     def test_local_mode_root_shows_admin_view_without_login(self):
         self.app.config["PLATFORM"] = False
@@ -652,7 +688,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("未收到 SSO 用户信息", response.get_data(as_text=True))
 
-    def test_trusted_header_does_not_replace_admin_login(self):
+    def test_trusted_header_admin_settings_still_uses_local_admin_login(self):
+        self.app.config["AUTH"] = {
+            "mode": "trusted_header",
+            "trusted_header": {
+                "user_id": "X-SSO-User-Id",
+                "username": "X-SSO-User-Name",
+            },
+        }
+
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("系统设置", response.get_data(as_text=True))
+
+    def test_trusted_header_admin_task_page_requires_same_sso_user(self):
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
             "trusted_header": {
@@ -663,8 +713,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         response = self.client.get("/admin/tasks")
 
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("未收到 SSO 用户信息", response.get_data(as_text=True))
+
+    def test_trusted_header_admin_task_page_uses_sso_user_models(self):
+        model_id = self._configure_provider("sso:100086")
+        self.app.config["AUTH"] = {
+            "mode": "trusted_header",
+            "trusted_header": {
+                "user_id": "X-SSO-User-Id",
+                "username": "X-SSO-User-Name",
+            },
+        }
+
+        response = self.client.get(
+            "/admin/tasks",
+            headers={"X-SSO-User-Id": "100086", "X-SSO-User-Name": "张三"},
+        )
+
         self.assertEqual(response.status_code, 200)
-        self.assertIn("单文档检查任务", response.get_data(as_text=True))
+        html = response.get_data(as_text=True)
+        self.assertIn("model-a", html)
+        self.assertIn(f'value="{model_id}"', html)
 
     def test_saml_user_page_redirects_to_saml_login(self):
         self.app.config["AUTH"] = _saml_auth_config()
@@ -742,13 +812,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("https://doc.example.com/auth/saml/metadata", html)
         self.assertIn("https://doc.example.com/auth/saml/acs", html)
 
-    def test_saml_does_not_replace_admin_login(self):
+    def test_saml_admin_settings_still_uses_local_admin_login(self):
+        self.app.config["AUTH"] = _saml_auth_config()
+
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("系统设置", response.get_data(as_text=True))
+
+    def test_saml_admin_task_page_redirects_to_saml_login_for_same_user(self):
         self.app.config["AUTH"] = _saml_auth_config()
 
         response = self.client.get("/admin/tasks")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("单文档检查任务", response.get_data(as_text=True))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/auth/saml/login?next=/admin/tasks", response.headers["Location"])
 
     def test_create_consistency_task_saves_combined_document_text(self):
         model_id = self._configure_provider()

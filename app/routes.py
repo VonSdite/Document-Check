@@ -66,6 +66,7 @@ MODEL_TEST_TIMEOUT_MAX = 60
 PROVIDER_INPUT_LIMIT_DEFAULT = 80000
 PROVIDER_INPUT_LIMIT_MIN = 5000
 PROVIDER_INPUT_LIMIT_MAX = 1000000
+CONSOLE_USER_ENDPOINTS = {"admin_tasks", "admin_new_task", "admin_consistency", "admin_models"}
 INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
 
 
@@ -89,7 +90,7 @@ def register_routes(app):
 
     @app.before_request
     def require_saml_user_session():
-        if not _platform_enabled() or not _saml_mode_enabled() or not _is_user_endpoint(request.endpoint):
+        if not _platform_enabled() or not _saml_mode_enabled() or not _needs_saml_user_session(request.endpoint):
             return None
         if _has_saml_user_session():
             return None
@@ -291,42 +292,7 @@ def register_routes(app):
 
     @app.route("/models", methods=["GET", "POST"])
     def user_models():
-        identity = _model_page_identity()
-        if request.method == "POST":
-            action = request.form.get("action", "save")
-            provider_id = request.form.get("provider_id")
-            if action == "delete" and provider_id:
-                _delete_user_model_provider(identity.subject, provider_id)
-                flash("模型提供商已删除。", "success")
-                return redirect(url_for("user_models"))
-
-            provider_data = _provider_form_data()
-            if isinstance(provider_data, str):
-                flash(provider_data, "error")
-                return redirect(url_for("user_models"))
-
-            if provider_id and not _user_provider_exists(identity.subject, provider_id):
-                flash("模型提供商不存在。", "error")
-                return redirect(url_for("user_models"))
-
-            _save_user_model_provider(identity.subject, provider_id, provider_data)
-            flash("模型提供商已保存。", "success")
-            return redirect(url_for("user_models"))
-
-        providers = _load_user_model_providers(identity.subject)
-        models_by_provider = {
-            provider["id"]: sorted(
-                _provider_model_options(provider),
-                key=lambda model: (model["model_name"], model["force_disable_thinking"]),
-            )
-            for provider in providers
-        }
-        return render_template(
-            "user_models.html",
-            providers=providers,
-            models_by_provider=models_by_provider,
-            active_nav="models",
-        )
+        return _model_management_response(_model_page_identity(), "user_models")
 
     @app.get("/models/fetch")
     def user_fetch_models():
@@ -423,22 +389,29 @@ def register_routes(app):
     @admin_required
     def admin_tasks():
         if request.method == "POST":
-            return create_task_for_identity(current_identity(), admin_created=True)
+            return create_task_for_identity(_console_user_identity(), admin_created=True)
         return _render_admin_tasks_page()
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
     @admin_required
     def admin_new_task():
         if request.method == "POST":
-            return create_task_for_identity(current_identity(), admin_created=True)
+            return create_task_for_identity(_console_user_identity(), admin_created=True)
         return redirect(url_for("admin_tasks"))
 
     @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
     @admin_required
     def admin_consistency():
         if request.method == "POST":
-            return create_consistency_task_for_identity(current_identity(), admin_created=True)
+            return create_consistency_task_for_identity(_console_user_identity(), admin_created=True)
         return _render_admin_consistency_page()
+
+    @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
+    @admin_required
+    def admin_models():
+        if not _platform_enabled():
+            return redirect(url_for("user_models"))
+        return _model_management_response(_console_user_identity(), "admin_models")
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>")
     @admin_required
@@ -706,6 +679,12 @@ def _is_user_endpoint(endpoint: str | None) -> bool:
     return bool(endpoint and endpoint.startswith("user_"))
 
 
+def _needs_saml_user_session(endpoint: str | None) -> bool:
+    if _is_user_endpoint(endpoint):
+        return True
+    return bool(endpoint in CONSOLE_USER_ENDPOINTS and session.get("admin_logged_in"))
+
+
 def _has_saml_user_session() -> bool:
     saml_user = session.get(SAML_USER_SESSION_KEY)
     return isinstance(saml_user, dict) and bool(str(saml_user.get("user_id") or "").strip())
@@ -761,6 +740,12 @@ def _current_user_identity() -> UserIdentity:
         abort(401, description="未收到 SSO 用户信息，请通过公司统一入口访问。")
 
 
+def _console_user_identity() -> UserIdentity:
+    if _platform_enabled():
+        return _current_user_identity()
+    return current_identity()
+
+
 def _owner_display(task) -> str:
     if _row_value(task, "current_owner_name"):
         return _row_value(task, "current_owner_name")
@@ -805,6 +790,7 @@ def _render_admin_consistency_page():
 
 
 def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_type: str, check_items):
+    identity = _console_user_identity()
     status = request.args.get("status", "")
     owner = request.args.get("owner", request.args.get("ip", "")).strip()
     page = _page_arg()
@@ -861,7 +847,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         global_concurrency=get_setting("global_concurrency", 3),
         user_concurrency=get_setting("user_concurrency", 1),
         check_items=check_items,
-        models=get_enabled_models(current_identity().subject),
+        models=get_enabled_models(identity.subject),
         active_nav=task_type,
     )
 
@@ -972,6 +958,44 @@ def _model_page_identity() -> UserIdentity:
     if _platform_enabled():
         return _current_user_identity()
     return current_identity()
+
+
+def _model_management_response(identity: UserIdentity, redirect_endpoint: str):
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+        provider_id = request.form.get("provider_id")
+        if action == "delete" and provider_id:
+            _delete_user_model_provider(identity.subject, provider_id)
+            flash("模型提供商已删除。", "success")
+            return redirect(url_for(redirect_endpoint))
+
+        provider_data = _provider_form_data()
+        if isinstance(provider_data, str):
+            flash(provider_data, "error")
+            return redirect(url_for(redirect_endpoint))
+
+        if provider_id and not _user_provider_exists(identity.subject, provider_id):
+            flash("模型提供商不存在。", "error")
+            return redirect(url_for(redirect_endpoint))
+
+        _save_user_model_provider(identity.subject, provider_id, provider_data)
+        flash("模型提供商已保存。", "success")
+        return redirect(url_for(redirect_endpoint))
+
+    providers = _load_user_model_providers(identity.subject)
+    models_by_provider = {
+        provider["id"]: sorted(
+            _provider_model_options(provider),
+            key=lambda model: (model["model_name"], model["force_disable_thinking"]),
+        )
+        for provider in providers
+    }
+    return render_template(
+        "user_models.html",
+        providers=providers,
+        models_by_provider=models_by_provider,
+        active_nav="models",
+    )
 
 
 def _provider_form_data() -> dict | str:

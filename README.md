@@ -190,6 +190,8 @@ auth:
 - `trusted_header`：公司网关或反向代理已经完成 SSO 登录，并把用户 ID/用户名注入可信 HTTP header。
 - `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接。
 
+无论用户从 `/` 用户入口还是从 `admin_url` 对应的 console 入口创建任务、选择模型或进入“模型管理”，系统都会按同一套 `auth.mode` 解析当前用户，使用同一个 `owner_subject` 读写该用户自己的模型配置。
+
 SAML 1.0/1.1 已经过老，当前不作为支持的接入模式；如果公司只提到旧版 SAML，优先请对方提供 SAML 2.0，或由公司网关先完成登录并转换为可信 header。
 
 常用字段含义：
@@ -222,7 +224,7 @@ auth:
 2. 将本服务部署在该网关之后，禁止用户绕过网关直连 Flask 服务；网关转发前应清理外部请求自带的同名 header，再写入可信 header。
 3. 把 `config.yaml` 的 `platform` 设为 `true`，`auth.mode` 设为 `trusted_header`，并按公司网关实际 header 名称填写 `trusted_header`。
 4. 访问用户入口验证任务归属：提交任务后，管理端任务列表应显示 `sso:<账号>` 和显示名称。
-5. 管理员入口仍使用本系统 `admin.username`、`admin.password` 和 `admin_url` 登录，不依赖公司 SSO。若网关默认保护全部路径，需要让网关对 `admin_url` 放行或单独做管理员访问控制；建议同时限制为内网、VPN 或管理员来源 IP。
+5. 管理员入口仍使用本系统 `admin.username`、`admin.password` 和 `admin_url` 登录；但在 console 内创建任务和管理模型时，仍会使用与 `/` 相同的 SSO 用户身份。若网关默认保护全部路径，需要让网关对 `admin_url` 放行或单独做管理员访问控制；建议同时限制为内网、VPN 或管理员来源 IP。
 
 如果公司 SSO 提供的是 SAML 2.0，并且没有现成网关负责把 SAML 转成可信 header，可以让本系统作为 SAML SP 直接对接：
 
@@ -240,12 +242,12 @@ auth:
     username_attribute: displayName
 ```
 
-SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、ACS URL、SP metadata URL（`https://文档门禁域名/auth/saml/metadata`），并请对方把稳定唯一用户 ID 映射到 `user_id_attribute`，把显示名映射到 `username_attribute`。如果 `user_id_attribute` 留空，系统会使用 SAML `NameID` 作为用户 ID；不建议使用姓名作为用户 ID，因为同名用户无法区分。SAML 登录成功后仍会存为 `owner_subject = sso:<用户ID>`，管理员入口继续使用本系统本地管理员账号密码，不需要在公司 SSO 里设置管理员。
+SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、ACS URL、SP metadata URL（`https://文档门禁域名/auth/saml/metadata`），并请对方把稳定唯一用户 ID 映射到 `user_id_attribute`，把显示名映射到 `username_attribute`。如果 `user_id_attribute` 留空，系统会使用 SAML `NameID` 作为用户 ID；不建议使用姓名作为用户 ID，因为同名用户无法区分。SAML 登录成功后仍会存为 `owner_subject = sso:<用户ID>`。管理员入口继续使用本系统本地管理员账号密码，不需要在公司 SSO 里设置管理员；console 内涉及当前用户的任务提交和模型配置时，仍使用同一个 SAML 用户身份。
 
 咨询公司 SSO 管理员时可以直接发送下面这段：
 
 ```text
-我们要把“文档智能门禁”接入公司 SSO，用于识别普通用户并按用户 ID 归属任务；管理员入口仍使用系统本地管理员账号，不需要通过 SSO 授权管理员。
+我们要把“文档智能门禁”接入公司 SSO，用于识别普通用户并按用户 ID 归属任务；管理员入口仍使用系统本地管理员账号，不需要通过 SSO 授权管理员，但 console 内创建任务和管理模型时仍使用当前 SSO 用户身份。
 
 请帮忙确认公司 SSO 支持哪种接入方式：
 1. 是否有统一网关/反向代理可先完成 SSO 登录，再向后端注入可信 HTTP header？如果可以，我们倾向使用 trusted_header。
@@ -268,7 +270,7 @@ SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、A
 
 ## 模型配置
 
-进入用户侧“模型管理”页面创建自己的模型提供商。模型配置按当前用户主体存入 SQLite，不再写入 `config.yaml`；平台提交任务时只会使用当前用户自己启用的模型。
+进入用户侧“模型管理”页面，或在 console 中进入“模型管理”，都可以创建自己的模型提供商。两处使用同一个当前用户主体，模型配置按该用户主体存入 SQLite，不再写入 `config.yaml`；平台提交任务时只会使用当前用户自己启用的模型。
 
 - API 地址填写完整 OpenAI Chat Completions 请求地址，例如 `https://api.example.com/v1/chat/completions`。
 - API Key 可为空，非空时会以 `Authorization: Bearer ...` 发送。
