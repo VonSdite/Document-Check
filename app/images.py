@@ -89,9 +89,18 @@ def image_items_from_meta(raw: str | None) -> list[dict]:
     return normalized
 
 
-def format_image_document_text(filename: str, images: list[dict]) -> str:
+def format_image_document_text(filename: str, images: list[dict], document_text: str = "", text_error: str = "") -> str:
     name = Path(str(filename or "")).name.strip() or "document"
-    lines = [f"file: {name}", "", f"extracted_images: {len(images)}"]
+    cleaned_text = str(document_text or "").strip()
+    cleaned_error = str(text_error or "").strip()
+    lines = [f"file: {name}"]
+    if cleaned_text:
+        lines.extend(["", "document_text:", cleaned_text])
+    elif cleaned_error:
+        lines.extend(["", f"document_text: 未提取到可检查文本（{cleaned_error}）"])
+    else:
+        lines.extend(["", "document_text: 未提取到可检查文本"])
+    lines.extend(["", f"extracted_images: {len(images)}"])
     for image in images:
         size_kb = (int(image.get("size_bytes") or 0) / 1024)
         lines.append(

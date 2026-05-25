@@ -373,17 +373,18 @@ class TaskExecutionTest(unittest.TestCase):
             """
             INSERT INTO tasks(
                 task_type, ip, original_filename, stored_filename, file_type, file_size,
-                document_meta_json, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
                 status, progress, created_at, updated_at
             )
             VALUES (
                 ?, '127.0.0.1', '图纸.pdf', '图纸.pdf', 'pdf', 1,
-                ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000,
+                ?, ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000,
                 'running', 0, ?, ?
             )
             """,
             (
                 IMAGE_TASK_TYPE,
+                "file: 图纸.pdf\n\ndocument_text:\n图 1 是电源接线图。",
                 json.dumps(image_meta, ensure_ascii=False),
                 json.dumps([9]),
                 json.dumps(
@@ -405,12 +406,12 @@ class TaskExecutionTest(unittest.TestCase):
         task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
         calls = []
 
-        def fake_run_image_check(**kwargs):
+        def fake_run_multimodal_document_check(**kwargs):
             calls.append(kwargs)
-            kwargs["on_content"]("流式图片结果")
-            return "图片最终结果"
+            kwargs["on_content"]("流式图文结果")
+            return "图文最终结果"
 
-        with patch("app.tasks.run_image_check", side_effect=fake_run_image_check):
+        with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
             TaskScheduler(self.app)._run_task(task_id)
 
         updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -418,11 +419,14 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["check_name"], "图片小语种文字检查")
-        self.assertEqual(calls[0]["image_name"], "0001_page001-image001.png")
-        self.assertEqual(calls[0]["image_position"], "page001-image001")
-        self.assertTrue(calls[0]["image_data_url"].startswith("data:image/png;base64,"))
+        self.assertIn("图 1 是电源接线图", calls[0]["document_text"])
+        self.assertEqual(calls[0]["batch_index"], 1)
+        self.assertEqual(calls[0]["batch_count"], 1)
+        self.assertEqual(calls[0]["image_items"][0]["name"], "0001_page001-image001.png")
+        self.assertEqual(calls[0]["image_items"][0]["position"], "page001-image001")
+        self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/png;base64,"))
         self.assertIn("0001_page001-image001.png", results[0]["result"])
-        self.assertIn("图片最终结果", results[0]["result"])
+        self.assertIn("图文最终结果", results[0]["result"])
 
 
 if __name__ == "__main__":

@@ -25,6 +25,13 @@ _IMAGE_EXECUTION_BOUNDARY = """执行边界：
 3. 优先输出明确问题；不确定请标注“需人工确认”。
 4. 没有发现问题时只给出简短结论。
 5. 单张图片回复最多列出 20 条问题。"""
+_MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY = """执行边界：
+1. 可以综合文档文本、图片清单、图片位置和本次提供的图片内容进行检查，尤其关注图文是否对应。
+2. 只依据提供的文档上下文和图片内容，不补全文档外信息。
+3. 不输出思考过程、推理链、草稿或分析计划。
+4. 优先输出明确问题；不确定请标注“需人工确认”。
+5. 输出问题时尽量引用图片名称、图片位置或文档中的文字线索。
+6. 单次回复最多列出 20 条问题。"""
 
 
 class LLMError(Exception):
@@ -212,6 +219,163 @@ def run_image_check(
         request_id=request_id,
         task_id=task_id,
         stream_trace_enabled=stream_trace_enabled,
+    )
+
+
+def run_multimodal_document_check(
+    *,
+    api_base: str,
+    api_key: Optional[str],
+    proxy_mode: str = "direct",
+    proxy: Optional[str] = None,
+    ssl_verify: bool = False,
+    request_timeout: int = 3600,
+    model_name: str,
+    force_disable_thinking: bool = False,
+    check_name: str,
+    prompt: str,
+    document_text: str,
+    image_items: list[dict],
+    batch_index: int = 1,
+    batch_count: int = 1,
+    on_delta: Optional[Callable[[str], None]] = None,
+    on_content: Optional[Callable[[str], None]] = None,
+    task_id: Optional[int] = None,
+    stream_trace_enabled: bool = False,
+) -> str:
+    request_id = uuid.uuid4().hex[:12]
+    endpoint = _chat_completions_endpoint(api_base)
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    if not image_items:
+        raise LLMError("未提供可发送给多模态模型的图片。")
+    normalized_images = []
+    for index, image in enumerate(image_items, start=1):
+        image_data_url = str(image.get("data_url") or "").strip()
+        if not image_data_url.startswith("data:image/"):
+            raise LLMError("图片数据格式无效，无法发送给多模态模型。")
+        normalized_images.append(
+            {
+                "index": int(image.get("index") or index),
+                "name": str(image.get("name") or image.get("filename") or f"image-{index:04d}"),
+                "position": str(image.get("position") or "未标注"),
+                "mime_type": str(image.get("mime_type") or ""),
+                "data_url": image_data_url,
+            }
+        )
+
+    content = [
+        {
+            "type": "text",
+            "text": _multimodal_document_prompt_text(
+                check_name=check_name,
+                prompt=prompt,
+                document_text=document_text,
+                image_items=normalized_images,
+                batch_index=batch_index,
+                batch_count=batch_count,
+            ),
+        }
+    ]
+    for image in normalized_images:
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"图片 {image['index']}：{image['name']}\n"
+                    f"位置：{image['position']}\n"
+                    f"格式：{image['mime_type'] or '未知'}"
+                ),
+            }
+        )
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image["data_url"],
+                },
+            }
+        )
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是文档智能门禁系统中的多模态审查助手。请严格基于用户提供的文档文本和图片内容进行图文联合检查，输出中文结果。",
+            },
+            {
+                "role": "user",
+                "content": content,
+            },
+        ],
+        "temperature": 0.2,
+    }
+    if force_disable_thinking:
+        _disable_thinking_in_payload(payload)
+
+    data_url_chars = sum(len(image["data_url"]) for image in normalized_images)
+    logger.info(
+        "LLM 图文联合请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s batch=%s/%s images=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s document_chars=%s data_url_chars=%s",
+        request_id,
+        task_id or "-",
+        endpoint,
+        model_name,
+        check_name,
+        batch_index,
+        batch_count,
+        len(normalized_images),
+        proxy_mode,
+        ssl_verify,
+        request_timeout,
+        force_disable_thinking,
+        len(prompt),
+        len(document_text),
+        data_url_chars,
+    )
+
+    return _run_payload_with_retries(
+        endpoint=endpoint,
+        headers=headers,
+        payload=payload,
+        proxy_mode=proxy_mode,
+        proxy=proxy,
+        ssl_verify=ssl_verify,
+        request_timeout=request_timeout,
+        on_delta=on_delta,
+        on_content=on_content,
+        request_id=request_id,
+        task_id=task_id,
+        stream_trace_enabled=stream_trace_enabled,
+    )
+
+
+def _multimodal_document_prompt_text(
+    *,
+    check_name: str,
+    prompt: str,
+    document_text: str,
+    image_items: list[dict],
+    batch_index: int,
+    batch_count: int,
+) -> str:
+    image_lines = []
+    for image in image_items:
+        image_lines.append(
+            f"- 图片 {image['index']}: {image['name']}，位置：{image['position']}，格式：{image['mime_type'] or '未知'}"
+        )
+    batch_label = f"{batch_index}/{batch_count}" if batch_count > 1 else "1/1"
+    return (
+        f"检查项：{check_name}\n\n"
+        f"{_MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY}\n\n"
+        f"当前图片批次：{batch_label}\n\n"
+        f"本次可见图片：\n{chr(10).join(image_lines)}\n\n"
+        f"检查提示词：\n{prompt}\n\n"
+        "待检查文档上下文：\n"
+        f"{document_text}"
     )
 
 

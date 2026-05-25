@@ -288,6 +288,52 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("图片小语种文字检查", content[0]["text"])
         self.assertEqual(content[1], {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
 
+    def test_run_multimodal_document_check_sends_text_and_multiple_images(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"图文检查完成"}}]}', "data: [DONE]"]),
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_multimodal_document_check(
+                api_base="https://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="qwen-vl",
+                check_name="图文对应检查",
+                prompt="检查图文对应",
+                document_text="file: 图纸.pdf\n\n正文提到图 1 是电源接线图",
+                image_items=[
+                    {
+                        "index": 1,
+                        "name": "0001_page001-image001.png",
+                        "position": "page001-image001",
+                        "mime_type": "image/png",
+                        "data_url": "data:image/png;base64,AAAA",
+                    },
+                    {
+                        "index": 2,
+                        "name": "0002_page002-image001.jpg",
+                        "position": "page002-image001",
+                        "mime_type": "image/jpeg",
+                        "data_url": "data:image/jpeg;base64,BBBB",
+                    },
+                ],
+                batch_index=1,
+                batch_count=2,
+            )
+
+        self.assertEqual(result, "图文检查完成")
+        payload = fake_session.calls[0][1]["json"]
+        content = payload["messages"][1]["content"]
+        self.assertEqual([item["type"] for item in content], ["text", "text", "image_url", "text", "image_url"])
+        self.assertIn("图文对应检查", content[0]["text"])
+        self.assertIn("当前图片批次：1/2", content[0]["text"])
+        self.assertIn("正文提到图 1 是电源接线图", content[0]["text"])
+        self.assertIn("0001_page001-image001.png", content[1]["text"])
+        self.assertEqual(content[2]["image_url"]["url"], "data:image/png;base64,AAAA")
+        self.assertEqual(content[4]["image_url"]["url"], "data:image/jpeg;base64,BBBB")
+
     def test_retries_llm_errors_twice_before_success(self):
         fake_session = FakeSession(
             [

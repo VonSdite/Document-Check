@@ -24,7 +24,7 @@
             </svg>
           </span>
         </label>
-        <span class="help-tip" tabindex="0" data-tip="支持从 docx、pdf、html、xlsx、xlsm 中提取图片；单文件最大 50MB。">?</span>
+        <span class="help-tip" tabindex="0" data-tip="支持从 docx、pdf、html、xlsx、xlsm 中提取图片，并提取文档文本用于图文联合检查；单文件最大 50MB。">?</span>
       </span>
     </div>
     <label>
@@ -47,7 +47,7 @@
   <div class="check-row">
     <div class="check-row-title">
       <span>图片检查项</span>
-      <span class="help-tip" tabindex="0" data-tip="系统会按图片位置逐张调用多模态模型，并按检查项汇总结果。">?</span>
+      <span class="help-tip" tabindex="0" data-tip="系统会按图片位置命名并按批次把文档文本和图片一起发送给多模态模型，支持检查图片问题和图文对应关系。">?</span>
     </div>
     <div class="check-chip-grid">
       {% for item in check_items %}

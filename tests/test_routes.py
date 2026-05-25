@@ -843,7 +843,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'image-small-language-text'"
             ).fetchone()
-        html = '<html><body><img alt="线路图" src="data:image/png;base64,AAAA"></body></html>'
+        html = '<html><body><p>图 1 是电源接线图。</p><img alt="线路图" src="data:image/png;base64,AAAA"></body></html>'
 
         response = self.client.post(
             "/images",
@@ -865,6 +865,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(len(meta["images"]), 1)
         self.assertIn("html-img001", meta["images"][0]["filename"])
         self.assertTrue((image_root / meta["images"][0]["relative_path"]).is_file())
+        self.assertIn("图 1 是电源接线图。", task["document_text"])
         self.assertIn("extracted_images: 1", task["document_text"])
         self.assertEqual(
             snapshots,

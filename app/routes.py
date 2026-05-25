@@ -1848,11 +1848,28 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
         flash("未能从文档中提取到可检查图片。", "error")
         return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
 
-    prepared_document_text = format_image_document_text(original_filename, images)
+    extracted_text = ""
+    text_error = ""
+    try:
+        extracted_text = extract_text(destination, file_type).strip()
+    except DocumentReadError as exc:
+        text_error = str(exc)
+        current_app.logger.warning(
+            "图片检查任务未能提取文档文本 file=%s error=%s",
+            original_filename,
+            exc,
+        )
+
+    prepared_document_text = format_image_document_text(
+        original_filename,
+        images,
+        document_text=extracted_text,
+        text_error=text_error,
+    )
     if len(prepared_document_text) > model["max_input_chars"]:
         _remove_uploaded_file(destination)
         _remove_directory(image_dir)
-        flash(f"图片清单 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
+        flash(f"图文检查上下文 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
         return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
 
     document_meta = {

@@ -7,7 +7,7 @@ from pathlib import Path
 from .db import get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
 from .images import default_image_folder, image_items_from_meta, image_path_from_item, image_to_data_url
-from .llm import LLMError, run_check, run_image_check
+from .llm import LLMError, run_check, run_multimodal_document_check
 from .network import outbound_network_config
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, document_groups_from_meta
 
@@ -17,6 +17,7 @@ class TaskCanceled(Exception):
 
 
 DEFAULT_CHECK_ITEM_CONCURRENCY = 1
+DEFAULT_IMAGE_CHECK_BATCH_SIZE = 8
 
 
 class TaskScheduler:
@@ -145,6 +146,13 @@ class TaskScheduler:
                     image_items = image_items_from_meta(_task_value(task, "document_meta_json"))
                     if not image_items:
                         raise RuntimeError("未能从文档中提取到可检查图片")
+                    document_text = _task_value(task, "document_text") or ""
+                    if not document_text:
+                        document_text = f"file: {task['original_filename']}\n\nextracted_images: {len(image_items)}"
+                    if len(document_text) > task["max_input_chars"]:
+                        raise RuntimeError(
+                            f"图文检查上下文 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
+                        )
                     check_items = _task_check_items(db, task, IMAGE_TASK_TYPE)
                     if not check_items:
                         raise RuntimeError("没有可执行的图片检查项")
@@ -153,6 +161,7 @@ class TaskScheduler:
                         task,
                         check_items,
                         image_items,
+                        document_text,
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                     )
@@ -490,13 +499,16 @@ def _run_image_check_items_concurrently(
     task,
     check_items: list[dict],
     image_items: list[dict],
+    document_text: str,
     *,
     max_workers: int,
     stream_trace_enabled: bool,
 ) -> list[dict]:
     task_id = task["id"]
     total = len(check_items)
-    total_units = max(1, total * len(image_items))
+    image_batches = _image_batches(image_items, _image_check_batch_size())
+    batch_count = len(image_batches)
+    total_units = max(1, total * batch_count)
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
@@ -546,17 +558,18 @@ def _run_image_check_items_concurrently(
                 raise TaskCanceled
 
             app.logger.info(
-                "任务图片检查项开始 task_id=%s item=%s index=%s/%s images=%s",
+                "任务图文联合检查项开始 task_id=%s item=%s index=%s/%s images=%s batches=%s",
                 task_id,
                 item["name"],
                 index,
                 total,
                 len(image_items),
+                batch_count,
             )
-            image_results = []
+            batch_results = []
             last_stream_write = 0.0
 
-            def save_partial(current_image: dict, content: str, summary: str, *, force: bool = False):
+            def save_partial(current_batch: dict | None, content: str, summary: str, *, force: bool = False):
                 nonlocal last_stream_write
                 content = content.strip()
                 now = time.monotonic()
@@ -565,9 +578,9 @@ def _run_image_check_items_concurrently(
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
 
-                result_text = _format_image_check_result(
-                    image_results,
-                    current_image=current_image if content else None,
+                result_text = _format_multimodal_image_check_result(
+                    batch_results,
+                    current_batch=current_batch if content else None,
                     current_content=content,
                 )
                 with result_lock:
@@ -577,7 +590,7 @@ def _run_image_check_items_concurrently(
                             "name": item["name"],
                             "result": result_text,
                         }
-                    elif not image_results:
+                    elif not batch_results:
                         partial_by_code.pop(item["code"], None)
 
                 last_stream_write = now
@@ -585,17 +598,18 @@ def _run_image_check_items_concurrently(
 
             network = outbound_network_config()
             image_folder = _task_image_folder(app)
-            for image_index, image in enumerate(image_items, start=1):
+            for batch_index, batch in enumerate(image_batches, start=1):
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
-                image_path = image_path_from_item(image_folder, image)
-                if not image_path.is_file():
-                    raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”已删除，无法检查")
-                mime_type = str(image.get("mime_type") or "")
-                if not mime_type.startswith("image/"):
-                    raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”不是可识别的图片格式")
+                batch_start_index = sum(len(previous) for previous in image_batches[: batch_index - 1]) + 1
+                multimodal_images = _multimodal_image_inputs(image_folder, batch, batch_start_index)
+                current_batch = {
+                    "batch_index": batch_index,
+                    "batch_count": batch_count,
+                    "images": batch,
+                }
 
-                content = run_image_check(
+                content = run_multimodal_document_check(
                     api_base=task["api_base"],
                     api_key=task["api_key"],
                     proxy_mode=network["proxy_mode"],
@@ -606,35 +620,43 @@ def _run_image_check_items_concurrently(
                     force_disable_thinking=_task_flag(task, "force_disable_thinking"),
                     check_name=item["name"],
                     prompt=item["prompt"],
-                    image_name=str(image.get("filename") or f"image-{image_index:04d}"),
-                    image_position=str(image.get("position") or ""),
-                    image_data_url=image_to_data_url(image_path, mime_type),
-                    on_content=lambda content, current=image: save_partial(
+                    document_text=document_text,
+                    image_items=multimodal_images,
+                    batch_index=batch_index,
+                    batch_count=batch_count,
+                    on_content=lambda content, current=current_batch: save_partial(
                         current,
                         content,
-                        f"正在检查图片：{item['name']} / {current.get('filename') or ''}",
+                        f"正在进行图文联合检查：{item['name']} / 批次 {current['batch_index']}/{current['batch_count']}",
                     ),
                     task_id=task_id,
                     stream_trace_enabled=stream_trace_enabled,
                 )
-                image_results.append({"image": image, "content": content})
+                batch_results.append(
+                    {
+                        "batch_index": batch_index,
+                        "batch_count": batch_count,
+                        "images": batch,
+                        "content": content,
+                    }
+                )
                 progress = mark_unit_completed()
                 save_partial(
-                    image,
+                    None,
                     "",
-                    f"已完成 {item['name']}：{image_index}/{len(image_items)} 张图片",
+                    f"已完成 {item['name']}：{batch_index}/{batch_count} 个图文批次",
                     force=True,
                 )
                 save_snapshot(
                     db,
-                    f"已完成 {index - 1}/{total} 个图片检查项，正在检查第 {index} 项。",
+                    f"已完成 {index - 1}/{total} 个图文检查项，正在检查第 {index} 项。",
                     progress,
                 )
 
             result = {
                 "code": item["code"],
                 "name": item["name"],
-                "result": _format_image_check_result(image_results),
+                "result": _format_multimodal_image_check_result(batch_results),
             }
             with result_lock:
                 completed_by_code[item["code"]] = result
@@ -642,14 +664,15 @@ def _run_image_check_items_concurrently(
                 completed_count = len(completed_by_code)
             save_snapshot(
                 db,
-                f"已完成 {completed_count}/{total} 个图片检查项，继续检查中。",
+                f"已完成 {completed_count}/{total} 个图文检查项，继续检查中。",
                 current_progress(),
             )
             app.logger.info(
-                "任务图片检查项完成 task_id=%s item=%s images=%s output_chars=%s",
+                "任务图文联合检查项完成 task_id=%s item=%s images=%s batches=%s output_chars=%s",
                 task_id,
                 item["name"],
-                len(image_results),
+                len(image_items),
+                len(batch_results),
                 len(result["result"]),
             )
             return result
@@ -663,7 +686,7 @@ def _run_image_check_items_concurrently(
         with result_lock:
             ordered = _ordered_results(check_items, completed_by_code, {})
         if len(ordered) != total:
-            raise RuntimeError("部分图片检查项未完成")
+            raise RuntimeError("部分图文检查项未完成")
         return ordered
     except Exception:
         cancel_event.set()
@@ -676,25 +699,65 @@ def _run_image_check_items_concurrently(
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def _format_image_check_result(
-    image_results: list[dict],
+def _image_check_batch_size() -> int:
+    try:
+        return max(1, min(20, int(get_setting("image_check_batch_size", DEFAULT_IMAGE_CHECK_BATCH_SIZE))))
+    except (TypeError, ValueError):
+        return DEFAULT_IMAGE_CHECK_BATCH_SIZE
+
+
+def _image_batches(image_items: list[dict], batch_size: int) -> list[list[dict]]:
+    return [image_items[index : index + batch_size] for index in range(0, len(image_items), batch_size)]
+
+
+def _multimodal_image_inputs(image_folder: Path, image_items: list[dict], start_index: int) -> list[dict]:
+    inputs = []
+    for offset, image in enumerate(image_items):
+        image_index = start_index + offset
+        image_path = image_path_from_item(image_folder, image)
+        if not image_path.is_file():
+            raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”已删除，无法检查")
+        mime_type = str(image.get("mime_type") or "")
+        if not mime_type.startswith("image/"):
+            raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”不是可识别的图片格式")
+        inputs.append(
+            {
+                "index": image_index,
+                "name": str(image.get("filename") or f"image-{image_index:04d}"),
+                "position": str(image.get("position") or ""),
+                "mime_type": mime_type,
+                "data_url": image_to_data_url(image_path, mime_type),
+            }
+        )
+    return inputs
+
+
+def _format_multimodal_image_check_result(
+    batch_results: list[dict],
     *,
-    current_image: dict | None = None,
+    current_batch: dict | None = None,
     current_content: str = "",
 ) -> str:
     parts = []
-    for item in image_results:
-        image = item["image"]
-        parts.append(_format_single_image_result(image, item["content"]))
-    if current_image is not None and current_content:
-        parts.append(_format_single_image_result(current_image, current_content))
+    for item in batch_results:
+        parts.append(_format_image_batch_result(item, item["content"]))
+    if current_batch is not None and current_content:
+        parts.append(_format_image_batch_result(current_batch, current_content))
     return "\n\n".join(parts).strip()
 
 
-def _format_single_image_result(image: dict, content: str) -> str:
-    filename = str(image.get("filename") or image.get("id") or "图片")
-    position = str(image.get("position") or "未标注")
-    return f"### {filename}\n\n位置：{position}\n\n{str(content or '').strip()}"
+def _format_image_batch_result(batch: dict, content: str) -> str:
+    batch_index = int(batch.get("batch_index") or 1)
+    batch_count = int(batch.get("batch_count") or 1)
+    images = batch.get("images") or []
+    title = "### 图文联合检查结果" if batch_count <= 1 else f"### 图文联合检查结果（批次 {batch_index}/{batch_count}）"
+    image_lines = []
+    for image in images:
+        filename = str(image.get("filename") or image.get("id") or "图片")
+        position = str(image.get("position") or "未标注")
+        image_lines.append(f"- {filename}（位置：{position}）")
+    image_list = "\n".join(image_lines) if image_lines else "- 未记录图片"
+    return f"{title}\n\n覆盖图片：\n{image_list}\n\n{str(content or '').strip()}"
 
 
 def _task_image_folder(app) -> Path:
