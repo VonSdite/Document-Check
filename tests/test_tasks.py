@@ -8,7 +8,7 @@ from flask import Flask
 
 from app.db import get_db, init_db, now_text
 from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE
-from app.tasks import TaskScheduler, _document_check_items, _run_check_items_concurrently
+from app.tasks import TaskScheduler, _document_check_items, _document_text_for_image_batch, _run_check_items_concurrently
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -440,6 +440,39 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("0120_page094-image001.bin", results[0]["result"])
         self.assertIn("已跳过的图片", results[0]["result"])
         self.assertIn("图文最终结果", results[0]["result"])
+
+    def test_image_batch_uses_nearby_page_text_context(self):
+        document_text = "\n\n".join(
+            [
+                "file: 图纸.pdf",
+                "document_text:",
+                "[第68页]\n前一页说明",
+                "[第69页]\n图 7-5 叠光控制器 ESN码位置",
+                "[第70页]\n图 7-6 光伏优化器 ESN码位置",
+                "[第71页]\n后一页说明",
+                "[第10页]\n无关安装步骤",
+                "extracted_images: 1\n- 0105_page069-image001.png: page069-image001",
+            ]
+        )
+
+        scoped = _document_text_for_image_batch(
+            document_text,
+            [
+                {
+                    "filename": "0105_page069-image001.png",
+                    "position": "page069-image001",
+                    "mime_type": "image/png",
+                }
+            ],
+        )
+
+        self.assertIn("document_text_scope", scoped)
+        self.assertIn("[第68页]", scoped)
+        self.assertIn("[第69页]", scoped)
+        self.assertIn("[第70页]", scoped)
+        self.assertIn("0105_page069-image001.png", scoped)
+        self.assertNotIn("[第10页]", scoped)
+        self.assertNotIn("extracted_images: 1", scoped)
 
 
 if __name__ == "__main__":

@@ -315,7 +315,9 @@ DEFAULT_IMAGE_CHECK_ITEMS = (
 1. 先给出总体判断，说明是否发现图文对应风险。
 2. 按条列出问题：图片名称或位置、文档文字线索、图片可见内容、冲突或缺失说明、建议修改。
 3. 对证据不足、图片不清晰或需要业务判断的问题标注“需人工确认”。
-4. 如果未发现明显问题，明确说明“未发现明显图文对应问题”。不要编造文档或图片中不存在的内容。""",
+4. 只有同时看到明确文档线索和图片可见证据时，才判断为“不对应”。
+5. 不要仅凭文件名、页码、图片顺序或未提供的上下文推断图片插入错位；证据不足时写“需人工确认”。
+6. 如果未发现明显问题，明确说明“未发现明显图文对应问题”。不要编造文档或图片中不存在的内容。""",
         "sort_order": 10,
     },
     {
@@ -401,7 +403,7 @@ def seed_defaults():
         "global_concurrency": 3,
         "user_concurrency": 1,
         "check_item_concurrency": 1,
-        "image_check_batch_size": 8,
+        "image_check_batch_size": 4,
         "llm_stream_trace_enabled": False,
     }
     for key, value in defaults.items():

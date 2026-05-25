@@ -47,7 +47,7 @@
   <div class="check-row">
     <div class="check-row-title">
       <span>图片检查项</span>
-      <span class="help-tip" tabindex="0" data-tip="系统会按图片位置命名并按批次把文档文本和图片一起发送给多模态模型，支持检查图片问题和图文对应关系。">?</span>
+      <span class="help-tip" tabindex="0" data-tip="系统会按图片位置命名，每批最多 4 张图，并只带当前图片附近页文本给多模态模型，减少跨页误配。">?</span>
     </div>
     <div class="check-chip-grid">
       {% for item in check_items %}

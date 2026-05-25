@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,7 +18,10 @@ class TaskCanceled(Exception):
 
 
 DEFAULT_CHECK_ITEM_CONCURRENCY = 1
-DEFAULT_IMAGE_CHECK_BATCH_SIZE = 8
+DEFAULT_IMAGE_CHECK_BATCH_SIZE = 4
+MAX_IMAGE_CHECK_BATCH_SIZE = 4
+IMAGE_CONTEXT_NEIGHBOR_PAGES = 1
+IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
 
 
 class TaskScheduler:
@@ -628,6 +632,7 @@ def _run_image_check_items_concurrently(
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
                 multimodal_images = _multimodal_image_inputs(image_folder, batch)
+                batch_document_text = _document_text_for_image_batch(document_text, batch)
                 current_batch = {
                     "batch_index": batch_index,
                     "batch_count": batch_count,
@@ -645,7 +650,7 @@ def _run_image_check_items_concurrently(
                     force_disable_thinking=_task_flag(task, "force_disable_thinking"),
                     check_name=item["name"],
                     prompt=item["prompt"],
-                    document_text=document_text,
+                    document_text=batch_document_text,
                     image_items=multimodal_images,
                     batch_index=batch_index,
                     batch_count=batch_count,
@@ -727,13 +732,102 @@ def _run_image_check_items_concurrently(
 
 def _image_check_batch_size() -> int:
     try:
-        return max(1, min(20, int(get_setting("image_check_batch_size", DEFAULT_IMAGE_CHECK_BATCH_SIZE))))
+        return max(1, min(MAX_IMAGE_CHECK_BATCH_SIZE, int(get_setting("image_check_batch_size", DEFAULT_IMAGE_CHECK_BATCH_SIZE))))
     except (TypeError, ValueError):
         return DEFAULT_IMAGE_CHECK_BATCH_SIZE
 
 
 def _image_batches(image_items: list[dict], batch_size: int) -> list[list[dict]]:
     return [image_items[index : index + batch_size] for index in range(0, len(image_items), batch_size)]
+
+
+def _document_text_for_image_batch(document_text: str, image_items: list[dict]) -> str:
+    text = str(document_text or "").strip()
+    if not text:
+        return ""
+
+    pages = sorted(
+        {
+            page
+            for image in image_items
+            for page in _page_numbers_from_image(image)
+        }
+    )
+    if not pages:
+        return _trim_document_context(text, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
+
+    page_sections = _page_sections_from_document_text(text)
+    if not page_sections:
+        return _trim_document_context(text, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
+
+    wanted_pages = set()
+    for page in pages:
+        for value in range(page - IMAGE_CONTEXT_NEIGHBOR_PAGES, page + IMAGE_CONTEXT_NEIGHBOR_PAGES + 1):
+            if value > 0:
+                wanted_pages.add(value)
+    selected = [(page, section) for page, section in page_sections if page in wanted_pages]
+    if not selected:
+        return _trim_document_context(text, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
+
+    image_lines = []
+    for image in image_items:
+        filename = str(image.get("filename") or image.get("id") or "图片")
+        position = str(image.get("position") or "未标注")
+        image_lines.append(f"- {filename}（位置：{position}）")
+
+    page_text = "\n\n".join(section.strip() for _, section in selected if section.strip())
+    header = _document_header(text)
+    scoped = (
+        f"{header}\n\n"
+        f"document_text_scope: 仅提供当前图片所在页及前后 {IMAGE_CONTEXT_NEIGHBOR_PAGES} 页的文本，避免跨页误配。\n"
+        f"current_batch_images:\n{chr(10).join(image_lines)}\n\n"
+        f"相关文档文本：\n{page_text}"
+    ).strip()
+    return _trim_document_context(scoped, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
+
+
+def _page_numbers_from_image(image: dict) -> list[int]:
+    value = f"{image.get('position') or ''} {image.get('filename') or ''}"
+    pages = []
+    for match in re.finditer(r"page0*(\d+)", value, flags=re.IGNORECASE):
+        try:
+            pages.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return pages
+
+
+def _page_sections_from_document_text(document_text: str) -> list[tuple[int, str]]:
+    text = str(document_text or "")
+    body = text.split("\n\nextracted_images:", 1)[0]
+    matches = list(re.finditer(r"(?m)^\[第(\d+)页\]\s*$", body))
+    sections = []
+    for index, match in enumerate(matches):
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        try:
+            page = int(match.group(1))
+        except ValueError:
+            continue
+        sections.append((page, body[match.start() : next_start].strip()))
+    return sections
+
+
+def _document_header(document_text: str) -> str:
+    lines = []
+    for line in str(document_text or "").splitlines():
+        if line.startswith("file:"):
+            lines.append(line.strip())
+            continue
+        if lines:
+            break
+    return "\n".join(lines) if lines else "file: document"
+
+
+def _trim_document_context(text: str, max_chars: int) -> str:
+    text = str(text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n\n[文档上下文已按当前批次截断]"
 
 
 def _split_checkable_image_items(image_items: list[dict]) -> tuple[list[dict], list[dict]]:
