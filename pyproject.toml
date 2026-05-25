@@ -10,7 +10,7 @@ dependencies = [
   "gevent==26.4.0",
   "mistune==3.0.2",
   "openpyxl==3.1.5",
-  "pypdf==4.3.1",
+  "pypdf[image]==4.3.1",
   "python-docx==1.1.2",
   "python3-saml==1.16.0",
   "pyyaml==6.0.2",
