@@ -6,9 +6,10 @@ from pathlib import Path
 
 from .db import get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
-from .llm import LLMError, run_check
+from .images import default_image_folder, image_items_from_meta, image_path_from_item, image_to_data_url
+from .llm import LLMError, run_check, run_image_check
 from .network import outbound_network_config
-from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, document_groups_from_meta
+from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, document_groups_from_meta
 
 
 class TaskCanceled(Exception):
@@ -136,45 +137,57 @@ class TaskScheduler:
                     return
 
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
-                if task_type == CONSISTENCY_TASK_TYPE:
-                    document_text = _task_value(task, "document_text") or _extract_consistency_document_text(self.app, task)
-                    check_items = _task_check_items(db, task, CONSISTENCY_TASK_TYPE)
-                    max_workers = max(
-                        1,
-                        int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
+                max_workers = max(
+                    1,
+                    int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
+                )
+                if task_type == IMAGE_TASK_TYPE:
+                    image_items = image_items_from_meta(_task_value(task, "document_meta_json"))
+                    if not image_items:
+                        raise RuntimeError("未能从文档中提取到可检查图片")
+                    check_items = _task_check_items(db, task, IMAGE_TASK_TYPE)
+                    if not check_items:
+                        raise RuntimeError("没有可执行的图片检查项")
+                    results = _run_image_check_items_concurrently(
+                        self.app,
+                        task,
+                        check_items,
+                        image_items,
+                        max_workers=max_workers,
+                        stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                     )
                 else:
-                    document_text = _task_value(task, "document_text")
+                    if task_type == CONSISTENCY_TASK_TYPE:
+                        document_text = _task_value(task, "document_text") or _extract_consistency_document_text(self.app, task)
+                        check_items = _task_check_items(db, task, CONSISTENCY_TASK_TYPE)
+                    else:
+                        document_text = _task_value(task, "document_text")
+                        if not document_text:
+                            upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / task["stored_filename"]
+                            document_text = format_document_text(
+                                task["original_filename"],
+                                extract_text(upload_path, task["file_type"]),
+                            )
+                        check_items = _document_check_items(db, task)
+
                     if not document_text:
-                        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / task["stored_filename"]
-                        document_text = format_document_text(
-                            task["original_filename"],
-                            extract_text(upload_path, task["file_type"]),
+                        raise RuntimeError("未能从文档中提取到可检查文本")
+                    if len(document_text) > task["max_input_chars"]:
+                        raise RuntimeError(
+                            f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
                         )
-                    check_items = _document_check_items(db, task)
-                    max_workers = max(
-                        1,
-                        int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
+
+                    if not check_items:
+                        raise RuntimeError("没有可执行的检查项")
+
+                    results = _run_check_items_concurrently(
+                        self.app,
+                        task,
+                        check_items,
+                        document_text,
+                        max_workers=max_workers,
+                        stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                     )
-
-                if not document_text:
-                    raise RuntimeError("未能从文档中提取到可检查文本")
-                if len(document_text) > task["max_input_chars"]:
-                    raise RuntimeError(
-                        f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
-                    )
-
-                if not check_items:
-                    raise RuntimeError("没有可执行的检查项")
-
-                results = _run_check_items_concurrently(
-                    self.app,
-                    task,
-                    check_items,
-                    document_text,
-                    max_workers=max_workers,
-                    stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
-                )
                 if _cancel_requested(db, task_id):
                     raise TaskCanceled
 
@@ -470,6 +483,225 @@ def _run_check_items_concurrently(
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
         executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _run_image_check_items_concurrently(
+    app,
+    task,
+    check_items: list[dict],
+    image_items: list[dict],
+    *,
+    max_workers: int,
+    stream_trace_enabled: bool,
+) -> list[dict]:
+    task_id = task["id"]
+    total = len(check_items)
+    total_units = max(1, total * len(image_items))
+    completed_units = 0
+    completed_by_code: dict[str, dict] = {}
+    partial_by_code: dict[str, dict] = {}
+    result_lock = threading.Lock()
+    save_lock = threading.Lock()
+    cancel_event = threading.Event()
+    heartbeat_stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_progress_heartbeat,
+        args=(
+            app,
+            task_id,
+            heartbeat_stop,
+            5,
+            89,
+            task["request_timeout"],
+        ),
+        daemon=True,
+        name=f"task-image-heartbeat-{task_id}",
+    )
+    with save_lock:
+        db = get_db()
+        _update_progress(db, task_id, 5)
+    heartbeat.start()
+
+    def save_snapshot(db, summary: str, progress: int):
+        with result_lock:
+            snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
+        with save_lock:
+            _save_intermediate_results(db, task_id, snapshot, summary, progress)
+
+    def current_progress() -> int:
+        with result_lock:
+            units = completed_units
+        return 5 + int(units / total_units * 85)
+
+    def mark_unit_completed() -> int:
+        nonlocal completed_units
+        with result_lock:
+            completed_units += 1
+            return 5 + int(completed_units / total_units * 85)
+
+    def run_item(index: int, item: dict) -> dict:
+        with app.app_context():
+            db = get_db()
+            if cancel_event.is_set() or _cancel_requested(db, task_id):
+                raise TaskCanceled
+
+            app.logger.info(
+                "任务图片检查项开始 task_id=%s item=%s index=%s/%s images=%s",
+                task_id,
+                item["name"],
+                index,
+                total,
+                len(image_items),
+            )
+            image_results = []
+            last_stream_write = 0.0
+
+            def save_partial(current_image: dict, content: str, summary: str, *, force: bool = False):
+                nonlocal last_stream_write
+                content = content.strip()
+                now = time.monotonic()
+                if not force and content and now - last_stream_write < 1.2:
+                    return
+                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                    raise TaskCanceled
+
+                result_text = _format_image_check_result(
+                    image_results,
+                    current_image=current_image if content else None,
+                    current_content=content,
+                )
+                with result_lock:
+                    if result_text:
+                        partial_by_code[item["code"]] = {
+                            "code": item["code"],
+                            "name": item["name"],
+                            "result": result_text,
+                        }
+                    elif not image_results:
+                        partial_by_code.pop(item["code"], None)
+
+                last_stream_write = now
+                save_snapshot(db, summary, current_progress())
+
+            network = outbound_network_config()
+            image_folder = _task_image_folder(app)
+            for image_index, image in enumerate(image_items, start=1):
+                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                    raise TaskCanceled
+                image_path = image_path_from_item(image_folder, image)
+                if not image_path.is_file():
+                    raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”已删除，无法检查")
+                mime_type = str(image.get("mime_type") or "")
+                if not mime_type.startswith("image/"):
+                    raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”不是可识别的图片格式")
+
+                content = run_image_check(
+                    api_base=task["api_base"],
+                    api_key=task["api_key"],
+                    proxy_mode=network["proxy_mode"],
+                    proxy=network["proxy"],
+                    ssl_verify=network["ssl_verify"],
+                    request_timeout=task["request_timeout"],
+                    model_name=task["model_name"],
+                    force_disable_thinking=_task_flag(task, "force_disable_thinking"),
+                    check_name=item["name"],
+                    prompt=item["prompt"],
+                    image_name=str(image.get("filename") or f"image-{image_index:04d}"),
+                    image_position=str(image.get("position") or ""),
+                    image_data_url=image_to_data_url(image_path, mime_type),
+                    on_content=lambda content, current=image: save_partial(
+                        current,
+                        content,
+                        f"正在检查图片：{item['name']} / {current.get('filename') or ''}",
+                    ),
+                    task_id=task_id,
+                    stream_trace_enabled=stream_trace_enabled,
+                )
+                image_results.append({"image": image, "content": content})
+                progress = mark_unit_completed()
+                save_partial(
+                    image,
+                    "",
+                    f"已完成 {item['name']}：{image_index}/{len(image_items)} 张图片",
+                    force=True,
+                )
+                save_snapshot(
+                    db,
+                    f"已完成 {index - 1}/{total} 个图片检查项，正在检查第 {index} 项。",
+                    progress,
+                )
+
+            result = {
+                "code": item["code"],
+                "name": item["name"],
+                "result": _format_image_check_result(image_results),
+            }
+            with result_lock:
+                completed_by_code[item["code"]] = result
+                partial_by_code.pop(item["code"], None)
+                completed_count = len(completed_by_code)
+            save_snapshot(
+                db,
+                f"已完成 {completed_count}/{total} 个图片检查项，继续检查中。",
+                current_progress(),
+            )
+            app.logger.info(
+                "任务图片检查项完成 task_id=%s item=%s images=%s output_chars=%s",
+                task_id,
+                item["name"],
+                len(image_results),
+                len(result["result"]),
+            )
+            return result
+
+    executor = ThreadPoolExecutor(max_workers=max(1, min(max_workers, total)), thread_name_prefix=f"task-image-check-{task_id}")
+    futures = []
+    try:
+        futures = [executor.submit(run_item, index, item) for index, item in enumerate(check_items, start=1)]
+        for future in as_completed(futures):
+            future.result()
+        with result_lock:
+            ordered = _ordered_results(check_items, completed_by_code, {})
+        if len(ordered) != total:
+            raise RuntimeError("部分图片检查项未完成")
+        return ordered
+    except Exception:
+        cancel_event.set()
+        for future in futures:
+            future.cancel()
+        raise
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=2)
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _format_image_check_result(
+    image_results: list[dict],
+    *,
+    current_image: dict | None = None,
+    current_content: str = "",
+) -> str:
+    parts = []
+    for item in image_results:
+        image = item["image"]
+        parts.append(_format_single_image_result(image, item["content"]))
+    if current_image is not None and current_content:
+        parts.append(_format_single_image_result(current_image, current_content))
+    return "\n\n".join(parts).strip()
+
+
+def _format_single_image_result(image: dict, content: str) -> str:
+    filename = str(image.get("filename") or image.get("id") or "图片")
+    position = str(image.get("position") or "未标注")
+    return f"### {filename}\n\n位置：{position}\n\n{str(content or '').strip()}"
+
+
+def _task_image_folder(app) -> Path:
+    configured = app.config.get("IMAGE_FOLDER")
+    if configured:
+        return Path(configured)
+    return default_image_folder(app.config["UPLOAD_FOLDER"])
 
 
 def _ordered_results(check_items: list[dict], completed: dict[str, dict], partial: dict[str, dict]) -> list[dict]:

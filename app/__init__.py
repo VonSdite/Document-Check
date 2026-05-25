@@ -31,11 +31,13 @@ def create_app():
         ROOT_DIR=root_dir,
         DATABASE=str(root_dir / "instance" / "document_check.sqlite3"),
         UPLOAD_FOLDER=str(root_dir / "instance" / "uploads"),
+        IMAGE_FOLDER=str(root_dir / "instance" / "extracted_images"),
         LOG_FILE=str(root_dir / "instance" / "logs" / "app.log"),
         MAX_CONTENT_LENGTH=50 * 1024 * 1024,
     )
 
     Path(app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
+    Path(app.config["IMAGE_FOLDER"]).mkdir(parents=True, exist_ok=True)
     Path(app.instance_path).mkdir(parents=True, exist_ok=True)
     _configure_logging(app)
 

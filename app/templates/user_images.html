@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}图片检查 - 文档智能门禁{% endblock %}
+
+{% block content %}
+{% set submit_disabled = not models or not check_items %}
+<form method="post" enctype="multipart/form-data" class="panel create-panel">
+  <div class="panel-head compact-head">
+    <h1>创建图片检查</h1>
+  </div>
+
+  <div class="quick-form-grid">
+    <div class="form-field">
+      <span class="field-label">文档</span>
+      <span class="field-with-help">
+        <label class="file-upload-control">
+          <input class="file-input" name="document" type="file" accept=".docx,.pdf,.txt,.md,.html,.xlsx,.xlsm,.xls" required>
+          <span class="file-name">未选择文件</span>
+          <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
+          <span class="file-button" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <path d="M14 2v6h6"/>
+            </svg>
+          </span>
+        </label>
+        <span class="help-tip" tabindex="0" data-tip="支持从 docx、pdf、html、xlsx、xlsm 中提取图片；单文件最大 50MB。">?</span>
+      </span>
+    </div>
+    <label>
+      多模态模型
+      <select name="model_id" required {{ "disabled" if submit_disabled else "" }}>
+        {% if not models %}
+        <option value="">暂无可用模型</option>
+        {% else %}
+          {% for model in models %}
+          <option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}{{ "（关闭思考）" if model.force_disable_thinking else "" }}</option>
+          {% endfor %}
+        {% endif %}
+      </select>
+    </label>
+    <div class="submit-slot">
+      <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
+    </div>
+  </div>
+
+  <div class="check-row">
+    <div class="check-row-title">
+      <span>图片检查项</span>
+      <span class="help-tip" tabindex="0" data-tip="系统会按图片位置逐张调用多模态模型，并按检查项汇总结果。">?</span>
+    </div>
+    <div class="check-chip-grid">
+      {% for item in check_items %}
+      <label class="check-chip">
+        <input type="checkbox" name="checks" value="{{ item.id }}" checked>
+        <span>{{ item.name }}</span>
+        <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+</form>
+
+<section class="metric-grid" data-refresh-region="stats" data-refresh-active="{{ '1' if stats.queued or stats.running else '0' }}">
+  <div class="metric"><span>全部</span><strong>{{ stats.total }}</strong></div>
+  <div class="metric"><span>排队</span><strong>{{ stats.queued }}</strong></div>
+  <div class="metric"><span>检查中</span><strong>{{ stats.running }}</strong></div>
+  <div class="metric"><span>已完成</span><strong>{{ stats.completed }}</strong></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head compact-head task-panel-head">
+    <h2>我的图片检查任务</h2>
+    <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
+      <span class="refresh-dot" aria-hidden="true"></span>
+      <span data-refresh-label>刷新中</span>
+    </button>
+  </div>
+  <div data-refresh-region="task-list">
+  {% if tasks %}
+  <div class="table-wrap">
+    <table class="task-table">
+      <thead>
+        <tr>
+          <th>文档</th>
+          <th>模型</th>
+          <th>状态</th>
+          <th>创建时间</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+        <tr>
+          <td class="task-file-cell">
+            <div class="task-file-line">
+              <a class="strong-link task-report-link" href="{{ url_for('user_task_detail', task_id=task.id) }}" title="查看报告">{{ task.original_filename }}</a>
+              <a class="task-download-link" href="{{ url_for('user_download_task_document', task_id=task.id) }}" title="下载文档" aria-label="下载文档：{{ task.original_filename }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 3v12"></path>
+                  <path d="m7 10 5 5 5-5"></path>
+                  <path d="M5 21h14"></path>
+                </svg>
+              </a>
+            </div>
+            <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</div>
+          </td>
+          <td class="task-model-cell">{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
+          <td>
+            <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
+            {% if task.status == "running" %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
+          </td>
+          <td>{{ task.created_at }}</td>
+          <td class="right">
+            <div class="task-actions">
+              <a class="small-button" href="{{ url_for('user_task_detail', task_id=task.id) }}">查看</a>
+              {% if task.status in ["queued", "running"] %}
+              <form method="post" action="{{ url_for('user_cancel_task', task_id=task.id) }}">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                <button class="small-button warn" type="submit">取消</button>
+              </form>
+              {% endif %}
+              {% if task.status not in ["queued", "running"] %}
+              <form method="post" action="{{ url_for('user_delete_task', task_id=task.id) }}" data-confirm="确认删除该历史任务？删除后不可恢复。">
+                <button class="small-button danger" type="submit">删除</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pagination.pages > 1 %}
+  <nav class="pagination" aria-label="任务分页">
+    <span>共 {{ pagination.total }} 条，每页 {{ pagination.per_page }} 条</span>
+    <div>
+      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('user_images', page=pagination.prev_page) }}">上一页</a>
+      <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
+      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('user_images', page=pagination.next_page) }}">下一页</a>
+    </div>
+  </nav>
+  {% endif %}
+  {% else %}
+  <div class="empty-state compact">
+    <h3>暂无任务</h3>
+  </div>
+  {% endif %}
+  </div>
+</section>
+{% endblock %}

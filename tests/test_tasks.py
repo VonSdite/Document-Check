@@ -7,7 +7,7 @@ from unittest.mock import patch
 from flask import Flask
 
 from app.db import get_db, init_db, now_text
-from app.task_types import CONSISTENCY_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE
 from app.tasks import TaskScheduler, _document_check_items, _run_check_items_concurrently
 
 
@@ -17,8 +17,10 @@ class TaskExecutionTest(unittest.TestCase):
         self.app = Flask(__name__)
         self.app.config["DATABASE"] = str(Path(self.temp_dir.name) / "test.sqlite3")
         self.app.config["UPLOAD_FOLDER"] = str(Path(self.temp_dir.name) / "uploads")
+        self.app.config["IMAGE_FOLDER"] = str(Path(self.temp_dir.name) / "images")
         self.app.config["NETWORK"] = {"proxy_mode": "direct", "proxy": "", "ssl_verify": False}
         Path(self.app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
+        Path(self.app.config["IMAGE_FOLDER"]).mkdir(parents=True, exist_ok=True)
         self.context = self.app.app_context()
         self.context.push()
         init_db()
@@ -347,6 +349,80 @@ class TaskExecutionTest(unittest.TestCase):
 
         self.assertEqual(calls[0]["check_name"], "多文档对照检查")
         self.assertEqual(calls[0]["prompt"], "默认多文档对照提示词")
+
+    def test_image_task_runs_multimodal_check_for_extracted_images(self):
+        image_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        (image_dir / "0001_page001-image001.png").write_bytes(b"png-bytes")
+        db = get_db()
+        created_at = now_text()
+        image_meta = {
+            "images": [
+                {
+                    "id": "image-0001",
+                    "filename": "0001_page001-image001.png",
+                    "relative_path": "task-images/0001_page001-image001.png",
+                    "mime_type": "image/png",
+                    "position": "page001-image001",
+                    "source": "图纸.pdf",
+                    "size_bytes": 9,
+                }
+            ]
+        }
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, original_filename, stored_filename, file_type, file_size,
+                document_meta_json, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                ?, '127.0.0.1', '图纸.pdf', '图纸.pdf', 'pdf', 1,
+                ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                IMAGE_TASK_TYPE,
+                json.dumps(image_meta, ensure_ascii=False),
+                json.dumps([9]),
+                json.dumps(
+                    [
+                        {
+                            "id": 9,
+                            "code": "image-small-language-text",
+                            "name": "图片小语种文字检查",
+                            "prompt": "检查小语种",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+        calls = []
+
+        def fake_run_image_check(**kwargs):
+            calls.append(kwargs)
+            kwargs["on_content"]("流式图片结果")
+            return "图片最终结果"
+
+        with patch("app.tasks.run_image_check", side_effect=fake_run_image_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["check_name"], "图片小语种文字检查")
+        self.assertEqual(calls[0]["image_name"], "0001_page001-image001.png")
+        self.assertEqual(calls[0]["image_position"], "page001-image001")
+        self.assertTrue(calls[0]["image_data_url"].startswith("data:image/png;base64,"))
+        self.assertIn("0001_page001-image001.png", results[0]["result"])
+        self.assertIn("图片最终结果", results[0]["result"])
 
 
 if __name__ == "__main__":

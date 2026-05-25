@@ -4,7 +4,7 @@ from datetime import datetime
 
 from flask import current_app, g
 
-from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
+from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
 
 
 def now_text() -> str:
@@ -299,12 +299,54 @@ DEFAULT_CONSISTENCY_CHECK_ITEMS = (
     },
 )
 
+DEFAULT_IMAGE_CHECK_ITEMS = (
+    {
+        "code": "image-small-language-text",
+        "name": "图片小语种文字检查",
+        "description": "检查图片中的文字、标注或截图内容是否包含小语种文本。",
+        "prompt": """你是一名图片文字审查专家。请检查当前图片中可见的文字、标注、截图界面、图例和说明，判断是否包含非中文、非英文的小语种文本。
+输出要求：
+1. 先说明是否发现小语种文字。
+2. 如发现，逐条列出：位置线索、识别到的文字、疑似语种、是否影响文档理解、建议处理方式。
+3. 对看不清或无法确定的内容标注“需人工确认”。
+4. 不要编造图片中不存在的文字。""",
+        "sort_order": 10,
+    },
+    {
+        "code": "image-wiring",
+        "name": "图片接线问题检查",
+        "description": "检查图片中的接线、端子、线缆走向、标识和连接关系是否存在明显问题。",
+        "prompt": """你是一名电气接线图和设备接线审查专家。请检查当前图片中的接线关系、端子编号、线缆走向、极性、颜色/线号标识、连接点和交叉连接是否存在明显风险。
+输出要求：
+1. 先给出总体判断，说明是否发现明显接线风险。
+2. 按条列出问题：位置线索、问题描述、可能影响、建议修改或需核对的依据。
+3. 对图片分辨率不足、遮挡或无法确认的地方标注“需人工确认”。
+4. 只依据当前图片可见内容，不要补全不可见接线。""",
+        "sort_order": 20,
+    },
+    {
+        "code": "image-drawing-standard",
+        "name": "图片画图规范检查",
+        "description": "检查图片中的图纸、流程图、示意图是否符合常见画图规范和表达规范。",
+        "prompt": """你是一名技术制图和图示规范审查专家。请检查当前图片中的图纸、流程图、结构图、示意图或截图是否存在画图规范问题，包括但不限于标题/图号、比例与方向、线型线宽、符号图例、标注单位、编号、对齐、层级、可读性和说明完整性。
+输出要求：
+1. 先概括图片是否存在明显画图规范风险。
+2. 按条列出：位置线索、问题描述、影响、修改建议。
+3. 对行业标准或业务口径不明确的问题标注“需人工确认”。
+4. 如果未发现明显问题，明确说明“未发现明显画图规范问题”。""",
+        "sort_order": 30,
+    },
+)
+
 DEFAULT_CHECK_ITEMS = tuple(
     {**item, "task_type": DOCUMENT_TASK_TYPE}
     for item in DEFAULT_DOCUMENT_CHECK_ITEMS
 ) + tuple(
     {**item, "task_type": CONSISTENCY_TASK_TYPE}
     for item in DEFAULT_CONSISTENCY_CHECK_ITEMS
+) + tuple(
+    {**item, "task_type": IMAGE_TASK_TYPE}
+    for item in DEFAULT_IMAGE_CHECK_ITEMS
 )
 DEFAULT_CHECK_ITEMS_BY_CODE = {item["code"]: item for item in DEFAULT_CHECK_ITEMS}
 

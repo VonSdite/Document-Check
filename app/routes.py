@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import uuid
 import zipfile
 from datetime import date, datetime, timedelta
@@ -39,6 +40,13 @@ from .db import (
     set_setting,
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
+from .images import (
+    default_image_folder,
+    extract_images,
+    format_image_document_text,
+    image_items_from_meta,
+    image_path_from_item,
+)
 from .llm import LLMError, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
 from .network import outbound_network_config
@@ -48,6 +56,7 @@ from .task_types import (
     CONSISTENCY_MAX_MATERIAL_FILES,
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
+    IMAGE_TASK_TYPE,
     document_groups_from_meta,
     task_type_label,
 )
@@ -69,7 +78,7 @@ MODEL_TEST_TIMEOUT_MAX = 60
 PROVIDER_INPUT_LIMIT_DEFAULT = 80000
 PROVIDER_INPUT_LIMIT_MIN = 5000
 PROVIDER_INPUT_LIMIT_MAX = 1000000
-CONSOLE_USER_ENDPOINTS = {"admin_tasks", "admin_new_task", "admin_consistency", "admin_models"}
+CONSOLE_USER_ENDPOINTS = {"admin_tasks", "admin_new_task", "admin_consistency", "admin_images", "admin_models"}
 INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
 
 
@@ -256,6 +265,49 @@ def register_routes(app):
             active_nav=CONSISTENCY_TASK_TYPE,
         )
 
+    @app.route("/images", methods=["GET", "POST"])
+    def user_images():
+        if not _platform_enabled():
+            if request.method == "POST":
+                return create_image_task_for_identity(current_identity(), admin_created=True)
+            return _render_admin_images_page()
+
+        identity = _current_user_identity()
+        if request.method == "POST":
+            return create_image_task_for_identity(identity, admin_created=False)
+
+        page = _page_arg()
+        total = get_db().execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
+            (identity.subject, IMAGE_TASK_TYPE),
+        ).fetchone()["total"]
+        page = _bounded_page(page, total, TASKS_PER_PAGE)
+        rows = get_db().execute(
+            """
+            SELECT t.*,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+                   COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
+            FROM tasks t
+            WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (identity.subject, IMAGE_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
+        ).fetchall()
+        stats = _task_stats_for_where("COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?", (identity.subject, IMAGE_TASK_TYPE))
+        return render_template(
+            "user_images.html",
+            ip=identity.ip,
+            identity=identity,
+            tasks=rows,
+            stats=stats,
+            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            check_items=get_enabled_check_items(IMAGE_TASK_TYPE),
+            models=get_enabled_models(identity.subject),
+            active_nav=IMAGE_TASK_TYPE,
+        )
+
     @app.get("/tasks/<int:task_id>")
     def user_task_detail(task_id):
         task = _get_user_task_or_local_admin(task_id)
@@ -265,6 +317,7 @@ def register_routes(app):
             task=task,
             results=_task_results(task),
             document_groups=_task_document_groups(task),
+            image_items=_task_image_items(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_endpoint=_task_list_endpoint(not _platform_enabled(), task["task_type"]),
         )
@@ -409,6 +462,13 @@ def register_routes(app):
             return create_consistency_task_for_identity(_console_user_identity(), admin_created=True)
         return _render_admin_consistency_page()
 
+    @app.route(f"{admin_prefix}/images", methods=["GET", "POST"])
+    @admin_required
+    def admin_images():
+        if request.method == "POST":
+            return create_image_task_for_identity(_console_user_identity(), admin_created=True)
+        return _render_admin_images_page()
+
     @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
     @admin_required
     def admin_models():
@@ -426,6 +486,7 @@ def register_routes(app):
             task=task,
             results=_task_results(task),
             document_groups=_task_document_groups(task),
+            image_items=_task_image_items(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_endpoint=_task_list_endpoint(True, task["task_type"]),
         )
@@ -631,6 +692,7 @@ def register_routes(app):
 
         document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
         consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
+        image_check_items = _check_items_for_task_type(db, IMAGE_TASK_TYPE)
         settings_tab = _settings_tab()
         return render_template(
             "admin_settings.html",
@@ -656,6 +718,17 @@ def register_routes(app):
                     "prompt_placeholder": "描述素材与资料的比对规则、关注范围和输出要求",
                     "items": consistency_check_items,
                     "default_check_codes": default_check_item_codes(CONSISTENCY_TASK_TYPE),
+                },
+                {
+                    "task_type": IMAGE_TASK_TYPE,
+                    "title": "图片检查-提示词设置",
+                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。",
+                    "new_title": "新增图片检查项",
+                    "name_placeholder": "例如：端子标识完整性检查",
+                    "description_placeholder": "用于说明该图片检查项的范围",
+                    "prompt_placeholder": "描述图片审查角色、关注范围、判断规则和输出要求",
+                    "items": image_check_items,
+                    "default_check_codes": default_check_item_codes(IMAGE_TASK_TYPE),
                 },
             ],
             global_concurrency=get_setting("global_concurrency", 3),
@@ -881,6 +954,15 @@ def _render_admin_consistency_page():
     )
 
 
+def _render_admin_images_page():
+    return _render_admin_task_list(
+        task_type=IMAGE_TASK_TYPE,
+        template_name="admin_images.html",
+        totals_task_type=IMAGE_TASK_TYPE,
+        check_items=get_enabled_check_items(IMAGE_TASK_TYPE),
+    )
+
+
 def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_type: str, check_items):
     identity = _console_user_identity()
     status = request.args.get("status", "")
@@ -961,11 +1043,19 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
 
 
 def _check_item_task_type(value: str | None) -> str:
-    return CONSISTENCY_TASK_TYPE if value == CONSISTENCY_TASK_TYPE else DOCUMENT_TASK_TYPE
+    if value == CONSISTENCY_TASK_TYPE:
+        return CONSISTENCY_TASK_TYPE
+    if value == IMAGE_TASK_TYPE:
+        return IMAGE_TASK_TYPE
+    return DOCUMENT_TASK_TYPE
 
 
 def _check_item_code_prefix(task_type: str) -> str:
-    return "custom-consistency" if task_type == CONSISTENCY_TASK_TYPE else "custom"
+    if task_type == CONSISTENCY_TASK_TYPE:
+        return "custom-consistency"
+    if task_type == IMAGE_TASK_TYPE:
+        return "custom-image"
+    return "custom"
 
 
 def _check_items_for_task_type(db, task_type: str):
@@ -1499,6 +1589,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks,
             COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
             COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
             COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
@@ -1507,7 +1598,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         FROM tasks
         WHERE created_at >= ? AND created_at < ? AND {mode_clause}
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, start_at, end_at, *mode_params),
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, start_at, end_at, *mode_params),
     ).fetchone()
     mode_clause, mode_params = _mode_subject_filter("")
     daily_rows = db.execute(
@@ -1517,13 +1608,14 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users,
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
-            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks
         FROM tasks
         WHERE created_at >= ? AND created_at < ? AND {mode_clause}
         GROUP BY day
         ORDER BY day DESC
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, start_at, end_at, *mode_params),
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, start_at, end_at, *mode_params),
     ).fetchall()
     join_ip_usernames = _auth_mode() == "ip"
     ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
@@ -1542,6 +1634,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks,
             MAX(t.created_at) AS last_task_at
         FROM tasks t
         {ip_username_join}
@@ -1550,7 +1643,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         ORDER BY tasks DESC, last_task_at DESC, COALESCE(t.owner_subject, 'ip:' || t.ip) ASC
         LIMIT 10
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, start_at, end_at, *mode_params),
+        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, start_at, end_at, *mode_params),
     ).fetchall()
     return {
         "totals": totals,
@@ -1687,6 +1780,115 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     return redirect(url_for("user_tasks"))
 
 
+def create_image_task_for_identity(identity: UserIdentity, *, admin_created: bool):
+    db = get_db()
+    upload = request.files.get("document")
+    if upload is None or not upload.filename:
+        flash("请选择要提取图片的文档。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+    if not allowed_file(upload.filename):
+        flash("仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+
+    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
+    if not check_ids:
+        flash("请至少选择一个图片检查项。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+    check_snapshots = _enabled_check_item_snapshots(db, check_ids, IMAGE_TASK_TYPE)
+    if len(check_snapshots) != len(set(check_ids)):
+        flash("请选择当前可用的图片检查项。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+
+    model_id = request.form.get("model_id", "")
+    model = _find_enabled_model(model_id, identity.subject)
+    if model is None:
+        flash("请选择可用模型。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+
+    file_type = extension_of(upload.filename)
+    original_filename = _clean_upload_filename(upload.filename, file_type)
+    created_at = now_text()
+    stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
+    image_dir = _image_output_dir_for_stored(stored_filename)
+    upload.save(destination)
+    file_size = os.path.getsize(destination)
+    try:
+        images = extract_images(destination, file_type, image_dir, source_filename=original_filename)
+    except DocumentReadError as exc:
+        _remove_uploaded_file(destination)
+        _remove_directory(image_dir)
+        flash(f"图片提取失败：{exc}", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+    if not images:
+        _remove_uploaded_file(destination)
+        _remove_directory(image_dir)
+        flash("未能从文档中提取到可检查图片。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+
+    prepared_document_text = format_image_document_text(original_filename, images)
+    if len(prepared_document_text) > model["max_input_chars"]:
+        _remove_uploaded_file(destination)
+        _remove_directory(image_dir)
+        flash(f"图片清单 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+
+    document_meta = {
+        "source_document": {
+            "original_filename": original_filename,
+            "stored_filename": stored_filename,
+            "file_type": file_type,
+            "file_size": file_size,
+        },
+        "images": [
+            {
+                **image,
+                "relative_path": f"{image_dir.name}/{image['filename']}",
+            }
+            for image in images
+        ],
+    }
+    owner_name = identity.display_name or None
+    db.execute(
+        """
+        INSERT INTO tasks(
+            task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+            original_filename, stored_filename, file_type, file_size,
+            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+            request_timeout, max_input_chars, force_disable_thinking,
+            status, progress, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        """,
+        (
+            IMAGE_TASK_TYPE,
+            identity.ip,
+            owner_name,
+            identity.subject,
+            owner_name,
+            identity.source,
+            original_filename,
+            stored_filename,
+            file_type,
+            file_size,
+            prepared_document_text,
+            json.dumps(document_meta, ensure_ascii=False),
+            json.dumps(check_ids, ensure_ascii=False),
+            json.dumps(check_snapshots, ensure_ascii=False),
+            model["provider_name"],
+            model["model_name"],
+            model["api_base"],
+            model["api_key"],
+            model["request_timeout"],
+            model["max_input_chars"],
+            1 if model["force_disable_thinking"] else 0,
+            created_at,
+            created_at,
+        ),
+    )
+    db.commit()
+    return redirect(url_for(_task_list_endpoint(admin_created, IMAGE_TASK_TYPE)))
+
+
 def create_consistency_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     db = get_db()
     master_uploads = _selected_uploads("master_documents")
@@ -1800,6 +2002,8 @@ def _back_to_task_form(admin_created: bool, task_type: str = DOCUMENT_TASK_TYPE)
 def _task_list_endpoint(admin_created: bool, task_type: str | None = DOCUMENT_TASK_TYPE) -> str:
     if task_type == CONSISTENCY_TASK_TYPE:
         return "admin_consistency" if admin_created else "user_consistency"
+    if task_type == IMAGE_TASK_TYPE:
+        return "admin_images" if admin_created else "user_images"
     return "admin_tasks" if admin_created else "user_tasks"
 
 
@@ -1958,7 +2162,11 @@ def _delete_task(task):
         flash("运行中的任务不能直接删除，请先取消后再删除。", "error")
         return False
     db = get_db()
-    _remove_uploaded_files(_task_upload_paths(task))
+    paths = _task_upload_paths(task)
+    image_dirs = {path.parent for path in paths if _image_folder() in path.parents}
+    _remove_uploaded_files(paths)
+    for image_dir in image_dirs:
+        _remove_empty_directory(image_dir)
     db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
     db.commit()
     return True
@@ -1996,26 +2204,58 @@ def _remove_uploaded_files(paths: list[Path]):
         _remove_uploaded_file(path)
 
 
+def _remove_directory(path: Path):
+    if path.exists() and path.is_dir():
+        shutil.rmtree(path)
+
+
+def _remove_empty_directory(path: Path):
+    try:
+        path.rmdir()
+    except OSError:
+        return
+
+
 def _task_upload_path(task) -> Path:
     return Path(current_app.config["UPLOAD_FOLDER"]) / Path(task["stored_filename"]).name
 
 
 def _task_upload_paths(task) -> list[Path]:
     groups = _task_document_groups(task)
-    if not groups:
-        return [_task_upload_path(task)]
     upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
     paths = []
-    for group in groups:
-        for file_info in group["files"]:
-            stored_filename = Path(str(file_info.get("stored_filename") or "")).name
-            if stored_filename:
-                paths.append(upload_folder / stored_filename)
+    if groups:
+        for group in groups:
+            for file_info in group["files"]:
+                stored_filename = Path(str(file_info.get("stored_filename") or "")).name
+                if stored_filename:
+                    paths.append(upload_folder / stored_filename)
+    else:
+        paths.append(_task_upload_path(task))
+    for image in _task_image_items(task):
+        paths.append(image_path_from_item(_image_folder(), image))
     return paths
 
 
 def _task_document_groups(task) -> list[dict]:
     return document_groups_from_meta(task["document_meta_json"])
+
+
+def _task_image_items(task) -> list[dict]:
+    return image_items_from_meta(task["document_meta_json"])
+
+
+def _image_folder() -> Path:
+    configured = current_app.config.get("IMAGE_FOLDER")
+    if configured:
+        return Path(configured)
+    return default_image_folder(current_app.config["UPLOAD_FOLDER"])
+
+
+def _image_output_dir_for_stored(stored_filename: str) -> Path:
+    folder = _image_folder()
+    stem = Path(stored_filename).stem
+    return folder / _safe_filename_part(stem, "task-images")
 
 
 def _download_task_documents_zip(task, fallback_endpoint: str):
@@ -2129,6 +2369,7 @@ def _export_task_report(task):
         task=task,
         results=_task_results(task),
         document_groups=_task_document_groups(task),
+        image_items=_task_image_items(task),
         app_css=app_css,
     )
     filename = f"document-check-report-{task['id']}.html"

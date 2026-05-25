@@ -19,6 +19,12 @@ _EXECUTION_BOUNDARY = """执行边界：
 3. 优先输出明确问题；不确定请标注“需人工确认”。
 4. 没有发现问题时只给出简短结论。
 5. 单次回复最多列出 20 条问题。"""
+_IMAGE_EXECUTION_BOUNDARY = """执行边界：
+1. 只依据当前图片和提供的图片位置信息进行检查，不补全图片外信息。
+2. 不输出思考过程、推理链、草稿或分析计划。
+3. 优先输出明确问题；不确定请标注“需人工确认”。
+4. 没有发现问题时只给出简短结论。
+5. 单张图片回复最多列出 20 条问题。"""
 
 
 class LLMError(Exception):
@@ -95,6 +101,135 @@ def run_check(
         len(document_text),
     )
 
+    return _run_payload_with_retries(
+        endpoint=endpoint,
+        headers=headers,
+        payload=payload,
+        proxy_mode=proxy_mode,
+        proxy=proxy,
+        ssl_verify=ssl_verify,
+        request_timeout=request_timeout,
+        on_delta=on_delta,
+        on_content=on_content,
+        request_id=request_id,
+        task_id=task_id,
+        stream_trace_enabled=stream_trace_enabled,
+    )
+
+
+def run_image_check(
+    *,
+    api_base: str,
+    api_key: Optional[str],
+    proxy_mode: str = "direct",
+    proxy: Optional[str] = None,
+    ssl_verify: bool = False,
+    request_timeout: int = 3600,
+    model_name: str,
+    force_disable_thinking: bool = False,
+    check_name: str,
+    prompt: str,
+    image_name: str,
+    image_position: str,
+    image_data_url: str,
+    on_delta: Optional[Callable[[str], None]] = None,
+    on_content: Optional[Callable[[str], None]] = None,
+    task_id: Optional[int] = None,
+    stream_trace_enabled: bool = False,
+) -> str:
+    request_id = uuid.uuid4().hex[:12]
+    endpoint = _chat_completions_endpoint(api_base)
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    image_data_url = str(image_data_url or "").strip()
+    if not image_data_url.startswith("data:image/"):
+        raise LLMError("图片数据格式无效，无法发送给多模态模型。")
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是文档智能门禁系统中的图片审查助手。请严格基于用户提供的图片进行检查，输出中文结果。",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"检查项：{check_name}\n\n"
+                            f"{_IMAGE_EXECUTION_BOUNDARY}\n\n"
+                            f"图片名称：{image_name}\n"
+                            f"图片位置：{image_position or '未标注'}\n\n"
+                            f"检查提示词：\n{prompt}"
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data_url,
+                        },
+                    },
+                ],
+            },
+        ],
+        "temperature": 0.2,
+    }
+    if force_disable_thinking:
+        _disable_thinking_in_payload(payload)
+
+    logger.info(
+        "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s data_url_chars=%s",
+        request_id,
+        task_id or "-",
+        endpoint,
+        model_name,
+        check_name,
+        image_name,
+        image_position or "-",
+        proxy_mode,
+        ssl_verify,
+        request_timeout,
+        force_disable_thinking,
+        len(prompt),
+        len(image_data_url),
+    )
+
+    return _run_payload_with_retries(
+        endpoint=endpoint,
+        headers=headers,
+        payload=payload,
+        proxy_mode=proxy_mode,
+        proxy=proxy,
+        ssl_verify=ssl_verify,
+        request_timeout=request_timeout,
+        on_delta=on_delta,
+        on_content=on_content,
+        request_id=request_id,
+        task_id=task_id,
+        stream_trace_enabled=stream_trace_enabled,
+    )
+
+
+def _run_payload_with_retries(
+    *,
+    endpoint: str,
+    headers: dict,
+    payload: dict,
+    proxy_mode: str,
+    proxy: Optional[str],
+    ssl_verify: bool,
+    request_timeout: int,
+    on_delta: Optional[Callable[[str], None]],
+    on_content: Optional[Callable[[str], None]],
+    request_id: str,
+    task_id: Optional[int],
+    stream_trace_enabled: bool,
+) -> str:
     last_error = None
     for attempt in range(1, _MAX_RETRIES + 2):
         attempt_parts = []

@@ -261,6 +261,33 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIs(payload["enable_thinking"], False)
         self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
 
+    def test_run_image_check_sends_multimodal_chat_content(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"图片检查完成"}}]}', "data: [DONE]"]),
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_image_check(
+                api_base="https://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="qwen-vl",
+                check_name="图片小语种文字检查",
+                prompt="检查小语种",
+                image_name="0001_page001-image001.png",
+                image_position="page001-image001",
+                image_data_url="data:image/png;base64,AAAA",
+            )
+
+        self.assertEqual(result, "图片检查完成")
+        payload = fake_session.calls[0][1]["json"]
+        content = payload["messages"][1]["content"]
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[0]["type"], "text")
+        self.assertIn("图片小语种文字检查", content[0]["text"])
+        self.assertEqual(content[1], {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
+
     def test_retries_llm_errors_twice_before_success(self):
         fake_session = FakeSession(
             [

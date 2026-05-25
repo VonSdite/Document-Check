@@ -29,12 +29,13 @@
   <div class="metric"><span>提交任务</span><strong>{{ totals.tasks }}</strong></div>
   <div class="metric"><span>单文档检查任务</span><strong>{{ totals.document_tasks }}</strong></div>
   <div class="metric"><span>多文档对照任务</span><strong>{{ totals.consistency_tasks }}</strong></div>
-  <div class="metric"><span>已完成</span><strong>{{ totals.completed }}</strong></div>
+  <div class="metric"><span>图片检查任务</span><strong>{{ totals.image_tasks }}</strong></div>
 </section>
 
 <section class="overview-status-grid">
   <div class="metric slim"><span>排队</span><strong>{{ totals.queued }}</strong></div>
   <div class="metric slim"><span>检查中</span><strong>{{ totals.running }}</strong></div>
+  <div class="metric slim"><span>已完成</span><strong>{{ totals.completed }}</strong></div>
   <div class="metric slim"><span>失败</span><strong>{{ totals.failed }}</strong></div>
   <div class="metric slim"><span>已取消</span><strong>{{ totals.canceled }}</strong></div>
 </section>
@@ -54,6 +55,7 @@
             <th>提交任务</th>
             <th>单文档检查</th>
             <th>多文档对照</th>
+            <th>图片检查</th>
           </tr>
         </thead>
         <tbody>
@@ -64,6 +66,7 @@
             <td>{{ row.tasks }}</td>
             <td>{{ row.document_tasks }}</td>
             <td>{{ row.consistency_tasks }}</td>
+            <td>{{ row.image_tasks }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -90,6 +93,7 @@
             <th>提交任务</th>
             <th>单文档</th>
             <th>多文档</th>
+            <th>图片</th>
             <th>最近提交</th>
           </tr>
         </thead>
@@ -109,6 +113,7 @@
             <td>{{ row.tasks }}</td>
             <td>{{ row.document_tasks }}</td>
             <td>{{ row.consistency_tasks }}</td>
+            <td>{{ row.image_tasks }}</td>
             <td>{{ row.last_task_at }}</td>
           </tr>
           {% endfor %}

@@ -14,7 +14,7 @@ from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
-from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
 
 
 def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
@@ -352,16 +352,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(html, "html.parser")
         self.assertIn("单文档检查-提示词设置", html)
         self.assertIn("多文档对照检查-提示词设置", html)
+        self.assertIn("图片检查-提示词设置", html)
         self.assertIn("consistency_check", html)
+        self.assertIn("image_check", html)
         document_tip = soup.find("button", {"aria-label": "单文档检查-提示词设置说明"})
         consistency_tip = soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"})
+        image_tip = soup.find("button", {"aria-label": "图片检查-提示词设置说明"})
         self.assertIsNotNone(document_tip)
         self.assertIsNotNone(consistency_tip)
+        self.assertIsNotNone(image_tip)
         self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
         self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
+        self.assertEqual(image_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。")
         visible_descriptions = [item.get_text(strip=True) for item in soup.select(".settings-section-head p")]
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。", visible_descriptions)
+        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。", visible_descriptions)
 
     def test_admin_overview_counts_tasks_in_selected_range(self):
         self._insert_task(ip="10.0.0.1", username_snapshot="测试用户A", created_at="2026-05-01 10:00:00")
@@ -725,6 +731,35 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(item["prompt"], "只检查资料遗漏。")
         self.assertEqual(item["enabled"], 1)
 
+    def test_admin_settings_creates_image_check_item(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "create_check_item",
+                "task_type": IMAGE_TASK_TYPE,
+                "name": "接线颜色检查",
+                "description": "检查线缆颜色是否符合图纸要求",
+                "prompt": "只检查接线颜色。",
+                "enabled": "on",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            item = get_db().execute(
+                """
+                SELECT task_type, code, name, description, prompt, enabled
+                FROM check_items
+                WHERE name = ?
+                """,
+                ("接线颜色检查",),
+            ).fetchone()
+        self.assertEqual(item["task_type"], IMAGE_TASK_TYPE)
+        self.assertTrue(item["code"].startswith("custom-image-"))
+        self.assertEqual(item["description"], "检查线缆颜色是否符合图纸要求")
+        self.assertEqual(item["prompt"], "只检查接线颜色。")
+        self.assertEqual(item["enabled"], 1)
+
     def test_upload_destination_uses_unique_name_for_same_second_uploads(self):
         with self.app.app_context():
             first_name, _ = _upload_destination("报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt")
@@ -777,6 +812,47 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task = get_db().execute("SELECT * FROM tasks").fetchone()
         snapshots = json.loads(task["checks_snapshot_json"])
         self.assertEqual(task["document_text"], "file: doc.txt\n\n测试文档")
+        self.assertEqual(
+            snapshots,
+            [
+                {
+                    "id": item["id"],
+                    "code": item["code"],
+                    "name": item["name"],
+                    "prompt": item["prompt"],
+                }
+            ],
+        )
+
+    def test_create_image_task_saves_extracted_image_metadata(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id, code, name, prompt FROM check_items WHERE code = 'image-small-language-text'"
+            ).fetchone()
+        html = '<html><body><img alt="线路图" src="data:image/png;base64,AAAA"></body></html>'
+
+        response = self.client.post(
+            "/images",
+            data={
+                "document": (io.BytesIO(html.encode("utf-8")), "diagram.html"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT * FROM tasks").fetchone()
+            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+        meta = json.loads(task["document_meta_json"])
+        snapshots = json.loads(task["checks_snapshot_json"])
+        self.assertEqual(task["task_type"], IMAGE_TASK_TYPE)
+        self.assertEqual(len(meta["images"]), 1)
+        self.assertIn("html-img001", meta["images"][0]["filename"])
+        self.assertTrue((image_root / meta["images"][0]["relative_path"]).is_file())
+        self.assertIn("extracted_images: 1", task["document_text"])
         self.assertEqual(
             snapshots,
             [
