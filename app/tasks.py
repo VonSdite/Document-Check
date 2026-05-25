@@ -506,9 +506,10 @@ def _run_image_check_items_concurrently(
 ) -> list[dict]:
     task_id = task["id"]
     total = len(check_items)
-    image_batches = _image_batches(image_items, _image_check_batch_size())
+    checkable_image_items, skipped_image_items = _split_checkable_image_items(image_items)
+    image_batches = _image_batches(checkable_image_items, _image_check_batch_size())
     batch_count = len(image_batches)
-    total_units = max(1, total * batch_count)
+    total_units = max(1, total * max(1, batch_count))
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
@@ -558,12 +559,13 @@ def _run_image_check_items_concurrently(
                 raise TaskCanceled
 
             app.logger.info(
-                "任务图文联合检查项开始 task_id=%s item=%s index=%s/%s images=%s batches=%s",
+                "任务图文联合检查项开始 task_id=%s item=%s index=%s/%s images=%s skipped_images=%s batches=%s",
                 task_id,
                 item["name"],
                 index,
                 total,
-                len(image_items),
+                len(checkable_image_items),
+                len(skipped_image_items),
                 batch_count,
             )
             batch_results = []
@@ -598,11 +600,34 @@ def _run_image_check_items_concurrently(
 
             network = outbound_network_config()
             image_folder = _task_image_folder(app)
+            if not image_batches:
+                result = {
+                    "code": item["code"],
+                    "name": item["name"],
+                    "result": _format_multimodal_image_check_result([], skipped_images=skipped_image_items),
+                }
+                progress = mark_unit_completed()
+                with result_lock:
+                    completed_by_code[item["code"]] = result
+                    partial_by_code.pop(item["code"], None)
+                    completed_count = len(completed_by_code)
+                save_snapshot(
+                    db,
+                    f"已完成 {completed_count}/{total} 个图文检查项，继续检查中。",
+                    progress,
+                )
+                app.logger.info(
+                    "任务图文联合检查项跳过 task_id=%s item=%s skipped_images=%s",
+                    task_id,
+                    item["name"],
+                    len(skipped_image_items),
+                )
+                return result
+
             for batch_index, batch in enumerate(image_batches, start=1):
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
-                batch_start_index = sum(len(previous) for previous in image_batches[: batch_index - 1]) + 1
-                multimodal_images = _multimodal_image_inputs(image_folder, batch, batch_start_index)
+                multimodal_images = _multimodal_image_inputs(image_folder, batch)
                 current_batch = {
                     "batch_index": batch_index,
                     "batch_count": batch_count,
@@ -656,7 +681,7 @@ def _run_image_check_items_concurrently(
             result = {
                 "code": item["code"],
                 "name": item["name"],
-                "result": _format_multimodal_image_check_result(batch_results),
+                "result": _format_multimodal_image_check_result(batch_results, skipped_images=skipped_image_items),
             }
             with result_lock:
                 completed_by_code[item["code"]] = result
@@ -668,10 +693,11 @@ def _run_image_check_items_concurrently(
                 current_progress(),
             )
             app.logger.info(
-                "任务图文联合检查项完成 task_id=%s item=%s images=%s batches=%s output_chars=%s",
+                "任务图文联合检查项完成 task_id=%s item=%s images=%s skipped_images=%s batches=%s output_chars=%s",
                 task_id,
                 item["name"],
-                len(image_items),
+                len(checkable_image_items),
+                len(skipped_image_items),
                 len(batch_results),
                 len(result["result"]),
             )
@@ -710,10 +736,25 @@ def _image_batches(image_items: list[dict], batch_size: int) -> list[list[dict]]
     return [image_items[index : index + batch_size] for index in range(0, len(image_items), batch_size)]
 
 
-def _multimodal_image_inputs(image_folder: Path, image_items: list[dict], start_index: int) -> list[dict]:
+def _split_checkable_image_items(image_items: list[dict]) -> tuple[list[dict], list[dict]]:
+    checkable = []
+    skipped = []
+    for index, image in enumerate(image_items, start=1):
+        item = dict(image)
+        item["_image_index"] = index
+        mime_type = str(item.get("mime_type") or "")
+        if mime_type.startswith("image/"):
+            checkable.append(item)
+            continue
+        item["skip_reason"] = "不是可识别的图片格式"
+        skipped.append(item)
+    return checkable, skipped
+
+
+def _multimodal_image_inputs(image_folder: Path, image_items: list[dict]) -> list[dict]:
     inputs = []
-    for offset, image in enumerate(image_items):
-        image_index = start_index + offset
+    for fallback_index, image in enumerate(image_items, start=1):
+        image_index = int(image.get("_image_index") or fallback_index)
         image_path = image_path_from_item(image_folder, image)
         if not image_path.is_file():
             raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”已删除，无法检查")
@@ -737,12 +778,15 @@ def _format_multimodal_image_check_result(
     *,
     current_batch: dict | None = None,
     current_content: str = "",
+    skipped_images: list[dict] | None = None,
 ) -> str:
     parts = []
     for item in batch_results:
         parts.append(_format_image_batch_result(item, item["content"]))
     if current_batch is not None and current_content:
         parts.append(_format_image_batch_result(current_batch, current_content))
+    if skipped_images:
+        parts.append(_format_skipped_image_result(skipped_images))
     return "\n\n".join(parts).strip()
 
 
@@ -758,6 +802,17 @@ def _format_image_batch_result(batch: dict, content: str) -> str:
         image_lines.append(f"- {filename}（位置：{position}）")
     image_list = "\n".join(image_lines) if image_lines else "- 未记录图片"
     return f"{title}\n\n覆盖图片：\n{image_list}\n\n{str(content or '').strip()}"
+
+
+def _format_skipped_image_result(skipped_images: list[dict]) -> str:
+    image_lines = []
+    for image in skipped_images:
+        filename = str(image.get("filename") or image.get("id") or "图片")
+        position = str(image.get("position") or "未标注")
+        mime_type = str(image.get("mime_type") or "未知格式")
+        reason = str(image.get("skip_reason") or "已跳过")
+        image_lines.append(f"- {filename}（位置：{position}，格式：{mime_type}，原因：{reason}）")
+    return "### 已跳过的图片\n\n以下提取图片不是可识别图片格式，已跳过，不影响其他图片继续检查：\n" + "\n".join(image_lines)
 
 
 def _task_image_folder(app) -> Path:

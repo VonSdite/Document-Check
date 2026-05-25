@@ -353,11 +353,21 @@ class TaskExecutionTest(unittest.TestCase):
     def test_image_task_runs_multimodal_check_for_extracted_images(self):
         image_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-images"
         image_dir.mkdir(parents=True, exist_ok=True)
+        (image_dir / "0120_page094-image001.bin").write_bytes(b"unknown-bytes")
         (image_dir / "0001_page001-image001.png").write_bytes(b"png-bytes")
         db = get_db()
         created_at = now_text()
         image_meta = {
             "images": [
+                {
+                    "id": "image-0120",
+                    "filename": "0120_page094-image001.bin",
+                    "relative_path": "task-images/0120_page094-image001.bin",
+                    "mime_type": "application/octet-stream",
+                    "position": "page094-image001",
+                    "source": "图纸.pdf",
+                    "size_bytes": 13,
+                },
                 {
                     "id": "image-0001",
                     "filename": "0001_page001-image001.png",
@@ -422,10 +432,13 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("图 1 是电源接线图", calls[0]["document_text"])
         self.assertEqual(calls[0]["batch_index"], 1)
         self.assertEqual(calls[0]["batch_count"], 1)
+        self.assertEqual(calls[0]["image_items"][0]["index"], 2)
         self.assertEqual(calls[0]["image_items"][0]["name"], "0001_page001-image001.png")
         self.assertEqual(calls[0]["image_items"][0]["position"], "page001-image001")
         self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/png;base64,"))
         self.assertIn("0001_page001-image001.png", results[0]["result"])
+        self.assertIn("0120_page094-image001.bin", results[0]["result"])
+        self.assertIn("已跳过的图片", results[0]["result"])
         self.assertIn("图文最终结果", results[0]["result"])
 
 
