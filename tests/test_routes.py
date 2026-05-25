@@ -413,6 +413,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("IP 10.0.0.8", html)
         self.assertNotIn("ip:10.0.0.8", html)
 
+    def test_admin_task_owner_cell_avoids_duplicate_ip_metadata(self):
+        self._insert_task(ip="127.0.0.1")
+
+        response = self.client.get("/admin/tasks")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        soup = BeautifulSoup(html, "html.parser")
+        owner_cell = soup.select_one(".task-owner-cell")
+        self.assertIsNotNone(owner_cell)
+        self.assertEqual(owner_cell.get_text(" ", strip=True), "127.0.0.1")
+        self.assertNotIn("ip:127.0.0.1 · IP 127.0.0.1", html)
+
     def test_admin_overview_filters_tasks_by_auth_mode(self):
         self._insert_task(
             ip="10.0.0.1",

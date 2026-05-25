@@ -82,7 +82,14 @@
           </dd>
         </div>
         {% endif %}
-        <div><dt>归属用户</dt><dd>{{ owner_display(task) }} · {{ task.effective_owner_subject or task.ip }} · IP {{ task.ip }}</dd></div>
+        <div>
+          <dt>归属用户</dt>
+          <dd>
+            {{ owner_display(task) }}
+            {% set owner_meta_text = owner_meta(task) %}
+            {% if owner_meta_text %} · {{ owner_meta_text }}{% endif %}
+          </dd>
+        </div>
         <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
         <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>
         <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>

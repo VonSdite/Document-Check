@@ -87,6 +87,7 @@ def register_routes(app):
     app.add_template_global(lambda: app.config["ADMIN_URL"], "admin_url")
     app.add_template_global(subject_label, "subject_label")
     app.add_template_global(_owner_display, "owner_display")
+    app.add_template_global(_owner_meta, "owner_meta")
 
     @app.context_processor
     def inject_globals():
@@ -924,6 +925,28 @@ def _owner_display(task) -> str:
     if _row_value(task, "username_snapshot"):
         return _row_value(task, "username_snapshot")
     return subject_label(subject)
+
+
+def _owner_meta(task) -> str:
+    subject = (
+        _row_value(task, "effective_owner_subject")
+        or _row_value(task, "owner_subject")
+        or owner_subject_from_ip(_row_value(task, "ip"))
+    )
+    ip = str(_row_value(task, "ip") or "").strip()
+    if subject.startswith("ip:"):
+        subject_ip = subject[3:].strip()
+        display = _owner_display(task)
+        if display and display not in {subject_ip, ip}:
+            return f"IP {ip or subject_ip}"
+        return ""
+    if subject and ip:
+        return f"{subject} · IP {ip}"
+    if subject:
+        return subject
+    if ip:
+        return f"IP {ip}"
+    return ""
 
 
 def _row_value(row, key: str, default=None):
