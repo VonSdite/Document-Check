@@ -17,7 +17,7 @@ from app.db import (
     set_ip_username,
     set_setting,
 )
-from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
 from app.routes import _next_check_item_sort_order, _reorder_check_items
 
 
@@ -157,6 +157,39 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("typo", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
+
+    def test_seed_defaults_migrates_image_language_check_item(self):
+        db = get_db()
+        db.execute(
+            """
+            UPDATE check_items
+            SET name = ?,
+                description = ?,
+                prompt = ?,
+                sort_order = ?
+            WHERE code = ?
+            """,
+            (
+                "图片小语种文字检查",
+                "检查图片中的文字是否包含小语种文本。",
+                "旧提示词：检查非中文、非英文的小语种文字。",
+                99,
+                "image-small-language-text",
+            ),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT task_type, name, description, prompt, sort_order FROM check_items WHERE code = ?",
+            ("image-small-language-text",),
+        ).fetchone()
+        self.assertEqual(row["task_type"], IMAGE_TASK_TYPE)
+        self.assertEqual(row["name"], "图片语种匹配检查")
+        self.assertIn("文档主要语种", row["description"])
+        self.assertIn("文档主要语种", row["prompt"])
+        self.assertEqual(row["sort_order"], 20)
 
     def test_next_custom_check_item_sort_order_goes_before_first_item(self):
         self.assertEqual(_next_check_item_sort_order(get_db()), 0)

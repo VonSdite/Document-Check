@@ -402,8 +402,8 @@ class TaskExecutionTest(unittest.TestCase):
                         {
                             "id": 9,
                             "code": "image-small-language-text",
-                            "name": "图片小语种文字检查",
-                            "prompt": "检查小语种",
+                            "name": "图片语种匹配检查",
+                            "prompt": "检查图片文字语种是否和文档一致",
                         }
                     ],
                     ensure_ascii=False,
@@ -428,7 +428,7 @@ class TaskExecutionTest(unittest.TestCase):
         results = json.loads(updated["result_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["check_name"], "图片小语种文字检查")
+        self.assertEqual(calls[0]["check_name"], "图片语种匹配检查")
         self.assertIn("图 1 是电源接线图", calls[0]["document_text"])
         self.assertEqual(calls[0]["batch_index"], 1)
         self.assertEqual(calls[0]["batch_count"], 1)

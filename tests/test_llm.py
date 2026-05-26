@@ -273,8 +273,8 @@ class LLMResponseParsingTest(unittest.TestCase):
                 api_base="https://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="qwen-vl",
-                check_name="图片小语种文字检查",
-                prompt="检查小语种",
+                check_name="图片语种匹配检查",
+                prompt="检查图片文字语种是否和文档一致",
                 image_name="0001_page001-image001.png",
                 image_position="page001-image001",
                 image_data_url="data:image/png;base64,AAAA",
@@ -285,7 +285,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         content = payload["messages"][1]["content"]
         self.assertIsInstance(content, list)
         self.assertEqual(content[0]["type"], "text")
-        self.assertIn("图片小语种文字检查", content[0]["text"])
+        self.assertIn("图片语种匹配检查", content[0]["text"])
         self.assertEqual(content[1], {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
 
     def test_run_multimodal_document_check_sends_text_and_multiple_images(self):

@@ -322,14 +322,20 @@ DEFAULT_IMAGE_CHECK_ITEMS = (
     },
     {
         "code": "image-small-language-text",
-        "name": "图片小语种文字检查",
-        "description": "检查图片中的文字、标注或截图内容是否包含小语种文本。",
-        "prompt": """你是一名图片文字审查专家。请检查本次提供的图片中可见的文字、标注、截图界面、图例和说明，判断是否包含非中文、非英文的小语种文本；如文档文本中对图片文字有说明，也请一起核对。
+        "name": "图片语种匹配检查",
+        "description": "检查图片中的文字语种是否与文档主要语种一致，例如英文文档图片中出现中文说明。",
+        "prompt": """你是一名图片文字语种一致性审查专家。请先根据提供的文档上下文判断文档主要语种（如中文、英文、中英混排或其他语种），再检查本次图片中可见文字、标注、截图界面、图例和说明的语种是否与文档主要语种一致。
+重点关注：
+1. 英文文档中图片出现中文说明、中文界面、中文标注等明显不匹配内容。
+2. 中文文档中图片出现大段英文或其他语种说明，且文档上下文没有对应语种使用习惯。
+3. 多语种文档中，图片文字语种是否超出文档正文、标题或图注使用的语种范围。
+4. 不要把产品名、型号、单位、接口名、标准缩写、命令、URL、代码片段等技术性英文/符号直接判为异常，除非出现大段说明文字语种明显不匹配。
+
 输出要求：
-1. 先说明是否发现小语种文字。
-2. 如发现，逐条列出：图片名称或位置、识别到的文字、疑似语种、是否影响文档理解、建议处理方式。
-3. 对看不清或无法确定的内容标注“需人工确认”。
-4. 不要编造图片中不存在的文字。""",
+1. 先说明文档主要语种，以及是否发现图片文字语种不匹配。
+2. 如发现，逐条列出：图片名称或位置、图片中识别到的文字、图片文字语种、文档主要语种、不匹配原因、建议处理方式。
+3. 对看不清、文字过少或无法判断文档主要语种的内容标注“需人工确认”。
+4. 如果未发现明显不匹配，明确说明“未发现图片文字语种与文档语种明显不一致”。不要编造图片或文档中不存在的文字。""",
         "sort_order": 20,
     },
     {
@@ -369,6 +375,8 @@ DEFAULT_CHECK_ITEMS = tuple(
     for item in DEFAULT_IMAGE_CHECK_ITEMS
 )
 DEFAULT_CHECK_ITEMS_BY_CODE = {item["code"]: item for item in DEFAULT_CHECK_ITEMS}
+_IMAGE_LANGUAGE_MATCH_CODE = "image-small-language-text"
+_LEGACY_IMAGE_LANGUAGE_MARKERS = ("小语种", "非中文、非英文")
 
 
 def default_check_item_codes(task_type: str | None = None) -> set[str]:
@@ -434,4 +442,46 @@ def seed_defaults():
                 ),
             )
 
+    _sync_renamed_default_check_items(db, now)
     db.commit()
+
+
+def _sync_renamed_default_check_items(db, updated_at: str):
+    default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get(_IMAGE_LANGUAGE_MATCH_CODE)
+    if default_item is None:
+        return
+    row = db.execute(
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = ?",
+        (_IMAGE_LANGUAGE_MATCH_CODE,),
+    ).fetchone()
+    if row is None:
+        return
+    prompt = str(row["prompt"] or "")
+    should_update_prompt = any(marker in prompt for marker in _LEGACY_IMAGE_LANGUAGE_MARKERS)
+    next_prompt = default_item["prompt"] if should_update_prompt else prompt
+    if (
+        row["name"] == default_item["name"]
+        and (row["description"] or "") == default_item["description"]
+        and next_prompt == prompt
+        and int(row["sort_order"] or 0) == int(default_item["sort_order"])
+    ):
+        return
+    db.execute(
+        """
+        UPDATE check_items
+        SET name = ?,
+            description = ?,
+            prompt = ?,
+            sort_order = ?,
+            updated_at = ?
+        WHERE code = ?
+        """,
+        (
+            default_item["name"],
+            default_item["description"],
+            next_prompt,
+            default_item["sort_order"],
+            updated_at,
+            _IMAGE_LANGUAGE_MATCH_CODE,
+        ),
+    )
