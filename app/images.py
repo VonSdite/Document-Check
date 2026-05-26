@@ -176,6 +176,7 @@ def _docx_image_refs(root: ET.Element, rels: dict[str, str], part_label: str) ->
     if body is None:
         return []
     refs = []
+    heading_path: list[tuple[int, str]] = []
     paragraph_index = 0
     table_index = 0
     block_index = 0
@@ -186,15 +187,96 @@ def _docx_image_refs(root: ET.Element, rels: dict[str, str], part_label: str) ->
         local = _local_name(child.tag)
         if local == "p":
             paragraph_index += 1
-            position = f"{part_label}-block{block_index:03d}-p{paragraph_index:03d}"
+            paragraph_text = _docx_paragraph_text(child)
+            heading_level = _docx_heading_level(child, paragraph_text)
+            if heading_level:
+                heading_path = _update_docx_heading_path(heading_path, heading_level, paragraph_text)
+            section_prefix = _docx_section_prefix(part_label, heading_path)
+            position = f"{section_prefix}-block{block_index:03d}-p{paragraph_index:03d}"
             refs.extend((rel_id, position) for rel_id in _image_relation_ids(child) if rel_id in rels)
         elif local == "tbl":
             table_index += 1
-            refs.extend(_docx_table_refs(child, rels, f"{part_label}-block{block_index:03d}-tbl{table_index:03d}"))
+            section_prefix = _docx_section_prefix(part_label, heading_path)
+            refs.extend(_docx_table_refs(child, rels, f"{section_prefix}-block{block_index:03d}-tbl{table_index:03d}"))
         else:
-            position = f"{part_label}-block{block_index:03d}"
+            section_prefix = _docx_section_prefix(part_label, heading_path)
+            position = f"{section_prefix}-block{block_index:03d}"
             refs.extend((rel_id, position) for rel_id in _image_relation_ids(child) if rel_id in rels)
     return refs
+
+
+def _docx_paragraph_text(paragraph: ET.Element) -> str:
+    parts = []
+    for node in paragraph.iter():
+        local = _local_name(node.tag)
+        if local == "t" and node.text:
+            parts.append(node.text)
+        elif local == "tab":
+            parts.append(" ")
+    return "".join(parts).strip()
+
+
+def _docx_heading_level(paragraph: ET.Element, text: str) -> int:
+    p_pr = paragraph.find(f"{{{_WORD_NS}}}pPr")
+    if p_pr is not None:
+        outline = p_pr.find(f"{{{_WORD_NS}}}outlineLvl")
+        if outline is not None:
+            try:
+                return int(outline.attrib.get(f"{{{_WORD_NS}}}val", "0")) + 1
+            except ValueError:
+                pass
+        style = p_pr.find(f"{{{_WORD_NS}}}pStyle")
+        if style is not None:
+            style_id = str(style.attrib.get(f"{{{_WORD_NS}}}val") or "")
+            style_level = _docx_heading_level_from_style(style_id)
+            if style_level:
+                return style_level
+    return _docx_heading_level_from_text(text)
+
+
+def _docx_heading_level_from_style(style_id: str) -> int:
+    normalized = re.sub(r"[\s_-]+", "", str(style_id or "")).lower()
+    if not normalized:
+        return 0
+    for pattern in (r"heading(\d+)", r"head(\d+)", r"title(\d+)", r"标题(\d+)"):
+        match = re.search(pattern, normalized)
+        if match:
+            return max(1, min(9, int(match.group(1))))
+    if normalized in {"title", "subtitle", "chapter", "section"}:
+        return 1
+    return 0
+
+
+def _docx_heading_level_from_text(text: str) -> int:
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not value or len(value) > 80:
+        return 0
+    if re.match(r"^第[一二三四五六七八九十百千万\d]+[章节篇部分]\s*.+", value):
+        return 1
+    numbered = re.match(r"^(\d+(?:\.\d+){0,5})[、.．\s-]+[^\d\s].+", value)
+    if numbered:
+        return max(1, min(6, numbered.group(1).count(".") + 1))
+    return 0
+
+
+def _update_docx_heading_path(heading_path: list[tuple[int, str]], level: int, text: str) -> list[tuple[int, str]]:
+    normalized_level = max(1, min(9, int(level or 1)))
+    label = _docx_heading_label(normalized_level, text)
+    path = [item for item in heading_path if item[0] < normalized_level]
+    path.append((normalized_level, label))
+    return path
+
+
+def _docx_heading_label(level: int, text: str) -> str:
+    compact = re.sub(r"\s+", "-", str(text or "").strip())
+    return _safe_name(compact, f"heading{level}")[:60].strip("-") or f"heading{level}"
+
+
+def _docx_section_prefix(part_label: str, heading_path: list[tuple[int, str]]) -> str:
+    if not heading_path:
+        return part_label
+    labels = [label for _, label in heading_path[-3:]]
+    return f"{part_label}-{'-'.join(labels)}"
 
 
 def _docx_table_refs(table: ET.Element, rels: dict[str, str], base_position: str) -> list[tuple[str, str]]:

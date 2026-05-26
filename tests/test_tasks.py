@@ -419,7 +419,7 @@ class TaskExecutionTest(unittest.TestCase):
         def fake_run_multimodal_document_check(**kwargs):
             calls.append(kwargs)
             kwargs["on_content"]("流式图文结果")
-            return "图文最终结果"
+            return "图文最终结果\n发现问题：图片中中文说明与英文文档语种不一致。\n需人工确认：截图底部文字较小。"
 
         with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
             TaskScheduler(self.app)._run_task(task_id)
@@ -440,6 +440,10 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("0120_page094-image001.bin", results[0]["result"])
         self.assertIn("已跳过的图片", results[0]["result"])
         self.assertIn("图文最终结果", results[0]["result"])
+        self.assertIn("检查汇总", results[0]["result"])
+        self.assertIn("明确问题", results[0]["result"])
+        self.assertIn("图片中中文说明与英文文档语种不一致", results[0]["result"])
+        self.assertIn("需人工确认", results[0]["result"])
 
     def test_image_batch_uses_nearby_page_text_context(self):
         document_text = "\n\n".join(

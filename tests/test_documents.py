@@ -63,8 +63,8 @@ class DocumentFormattingTest(unittest.TestCase):
 
         self.assertEqual(len(images), 1)
         image = images[0]
-        self.assertEqual(image["position"], "document-block001-p001")
-        self.assertTrue(image["filename"].startswith("0001_document-block001-p001"))
+        self.assertEqual(image["position"], "document-1-安装步骤-block002-p002")
+        self.assertTrue(image["filename"].startswith("0001_document-1-安装步骤-block002-p002"))
         self.assertEqual(image["mime_type"], "image/png")
         self.assertIn("图纸.docx", format_image_document_text("图纸.docx", images))
 
@@ -125,6 +125,10 @@ def _write_docx_with_inline_image(path: Path):
             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
   <w:body>
+    <w:p>
+      <w:pPr><w:pStyle w:val="Heading1"/></w:pPr>
+      <w:r><w:t>1 安装步骤</w:t></w:r>
+    </w:p>
     <w:p>
       <w:r>
         <w:drawing>

@@ -881,6 +881,10 @@ def _format_multimodal_image_check_result(
         parts.append(_format_image_batch_result(current_batch, current_content))
     if skipped_images:
         parts.append(_format_skipped_image_result(skipped_images))
+    if current_batch is None:
+        summary = _format_image_check_issue_summary(batch_results, skipped_images or [])
+        if summary:
+            parts.append(summary)
     return "\n\n".join(parts).strip()
 
 
@@ -907,6 +911,91 @@ def _format_skipped_image_result(skipped_images: list[dict]) -> str:
         reason = str(image.get("skip_reason") or "已跳过")
         image_lines.append(f"- {filename}（位置：{position}，格式：{mime_type}，原因：{reason}）")
     return "### 已跳过的图片\n\n以下提取图片不是可识别图片格式，已跳过，不影响其他图片继续检查：\n" + "\n".join(image_lines)
+
+
+def _format_image_check_issue_summary(batch_results: list[dict], skipped_images: list[dict]) -> str:
+    issues = []
+    manual = []
+    for batch in batch_results:
+        batch_label = _image_batch_label(batch)
+        for line in _summary_candidate_lines(str(batch.get("content") or "")):
+            normalized = _normalize_summary_line(line)
+            if not normalized or _summary_line_is_negative(normalized):
+                continue
+            entry = f"{batch_label} {normalized}"
+            if _summary_line_needs_manual(normalized):
+                manual.append(entry)
+            elif _summary_line_is_issue(normalized):
+                issues.append(entry)
+    for image in skipped_images:
+        filename = str(image.get("filename") or image.get("id") or "图片")
+        position = str(image.get("position") or "未标注")
+        manual.append(f"{filename}（位置：{position}）提取后不是可识别图片格式，已跳过，需人工确认是否影响检查。")
+
+    issues = _dedupe_limited(issues, 30)
+    manual = _dedupe_limited(manual, 30)
+    if not issues and not manual:
+        return "### 检查汇总\n\n明确问题：未汇总到明确问题。\n\n需人工确认：未汇总到需人工确认项。"
+
+    issue_text = "\n".join(f"- {item}" for item in issues) if issues else "- 未汇总到明确问题。"
+    manual_text = "\n".join(f"- {item}" for item in manual) if manual else "- 未汇总到需人工确认项。"
+    return f"### 检查汇总\n\n#### 明确问题\n{issue_text}\n\n#### 需人工确认\n{manual_text}"
+
+
+def _image_batch_label(batch: dict) -> str:
+    batch_index = int(batch.get("batch_index") or 1)
+    batch_count = int(batch.get("batch_count") or 1)
+    if batch_count > 1:
+        return f"批次 {batch_index}/{batch_count}："
+    return "批次 1："
+
+
+def _summary_candidate_lines(content: str) -> list[str]:
+    lines = []
+    for raw_line in str(content or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if re.match(r"^[-*]?\s*(覆盖图片|图片名称|图片位置|输出要求|详细问题列表)[:：]?$", line):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _normalize_summary_line(line: str) -> str:
+    value = re.sub(r"^\s*[-*]\s*", "", str(line or "").strip())
+    value = re.sub(r"^\s*\d+[.)、]\s*", "", value)
+    value = re.sub(r"\s+", " ", value)
+    return value[:240].strip()
+
+
+def _summary_line_is_negative(line: str) -> bool:
+    return any(marker in line for marker in ("未发现", "没有发现", "无明显", "未见明显", "不存在明显", "未汇总到"))
+
+
+def _summary_line_needs_manual(line: str) -> bool:
+    return any(marker in line for marker in ("需人工确认", "需要人工确认", "无法确认", "无法判断", "不确定", "证据不足", "看不清", "分辨率不足"))
+
+
+def _summary_line_is_issue(line: str) -> bool:
+    return any(
+        marker in line
+        for marker in ("发现", "问题", "风险", "不一致", "不匹配", "冲突", "错误", "异常", "不符合", "缺失", "错位", "不对应")
+    )
+
+
+def _dedupe_limited(items: list[str], limit: int) -> list[str]:
+    result = []
+    seen = set()
+    for item in items:
+        key = item.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def _task_image_folder(app) -> Path:
