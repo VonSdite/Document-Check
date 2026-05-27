@@ -165,6 +165,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(image_title_item["name"], "图表标题规范检查")
         self.assertIn("图x-x", image_title_item["description"])
         self.assertIn("表3-1", image_title_item["prompt"])
+        self.assertIn("章节标题不能替代表标题", image_title_item["prompt"])
+        self.assertIn("同一张图片中可能同时出现", image_title_item["prompt"])
         image_quality_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
             (IMAGE_TASK_TYPE, "image-integrity-clarity"),
