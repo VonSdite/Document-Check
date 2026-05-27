@@ -157,6 +157,14 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("typo", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
+        image_title_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (IMAGE_TASK_TYPE, "image-figure-table-title-standard"),
+        ).fetchone()
+        self.assertIsNotNone(image_title_item)
+        self.assertEqual(image_title_item["name"], "图表标题规范检查")
+        self.assertIn("图x-x", image_title_item["description"])
+        self.assertIn("表3-1", image_title_item["prompt"])
 
     def test_seed_defaults_migrates_image_language_check_item(self):
         db = get_db()
