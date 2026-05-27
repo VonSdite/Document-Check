@@ -129,6 +129,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
     def test_default_check_item_concurrency_is_seeded(self):
         self.assertEqual(get_setting("check_item_concurrency"), 1)
 
+    def test_default_image_page_check_max_pages_is_seeded(self):
+        self.assertEqual(get_setting("image_page_check_max_pages"), 120)
+
     def test_llm_stream_trace_is_disabled_by_default(self):
         self.assertFalse(get_setting("llm_stream_trace_enabled"))
 

@@ -6,7 +6,13 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from app.documents import allowed_file, extract_text, format_document_text
-from app.images import extract_images, format_image_document_text, image_items_from_meta
+from app.images import (
+    candidate_pdf_pages_for_image_check,
+    extract_images,
+    format_image_document_text,
+    image_items_from_meta,
+    select_pdf_page_numbers,
+)
 
 
 _TINY_PNG = (
@@ -90,6 +96,48 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0]["filename"], "0001_page001-image001.png")
         self.assertEqual(images[0]["relative_path"], "task/0001_page001-image001.png")
+
+    def test_formats_page_screenshots_in_image_document_text(self):
+        text = format_image_document_text(
+            "报告.pdf",
+            [],
+            document_text="[第1页]\n表格内容",
+            page_images=[
+                {
+                    "filename": "0001_page001-screenshot.png",
+                    "position": "page001-screenshot",
+                    "mime_type": "image/png",
+                    "size_bytes": 2048,
+                }
+            ],
+            page_selection={
+                "total_pages": 1,
+                "omitted_pages": 0,
+                "strategy": "full",
+            },
+        )
+
+        self.assertIn("page_screenshots: 1", text)
+        self.assertIn("page_screenshot_selection", text)
+        self.assertIn("0001_page001-screenshot.png", text)
+
+    def test_select_pdf_pages_uses_candidates_and_segments_for_long_documents(self):
+        selection = select_pdf_page_numbers(200, max_pages=10, candidate_pages=[50, 120])
+
+        self.assertEqual(selection["total_pages"], 200)
+        self.assertEqual(len(selection["selected_pages"]), 10)
+        self.assertIn(1, selection["selected_pages"])
+        self.assertIn(50, selection["selected_pages"])
+        self.assertIn(120, selection["selected_pages"])
+        self.assertEqual(selection["omitted_pages"], 190)
+
+    def test_candidate_pdf_pages_include_embedded_image_and_text_signals(self):
+        pages = candidate_pdf_pages_for_image_check(
+            "[第1页]\n普通正文\n\n[第2页]\n表格内容\n项目 参数 单位",
+            [{"position": "page005-image001", "page_number": 5}],
+        )
+
+        self.assertEqual(pages, [2, 5])
 
 
 def _write_docx_with_inline_image(path: Path):

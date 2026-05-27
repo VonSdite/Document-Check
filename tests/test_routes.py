@@ -17,6 +17,13 @@ from app.routes import _find_enabled_model, _upload_destination, get_enabled_mod
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
 
 
+_TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
 def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
     output = io.BytesIO()
     workbook = Workbook()
@@ -26,6 +33,19 @@ def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
         sheet.append(row)
     workbook.save(output)
     workbook.close()
+    output.seek(0)
+    return output
+
+
+def _pdf_with_image_bytes() -> io.BytesIO:
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=240, height=180)
+    page.insert_text((24, 32), "图 1 是电源接线图。")
+    page.insert_image(fitz.Rect(24, 52, 84, 112), stream=_TINY_PNG)
+    output = io.BytesIO(document.tobytes())
+    document.close()
     output.seek(0)
     return output
 
@@ -263,6 +283,25 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(form.get("data-network-proxy-mode"), "direct")
         self.assertIsNotNone(proxy_field)
         self.assertIsNone(proxy_input.get("required"))
+
+    def test_admin_settings_saves_task_limits(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "concurrency",
+                "global_concurrency": "4",
+                "user_concurrency": "2",
+                "check_item_concurrency": "3",
+                "image_page_check_max_pages": "36",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(get_setting("global_concurrency"), 4)
+            self.assertEqual(get_setting("user_concurrency"), 2)
+            self.assertEqual(get_setting("check_item_concurrency"), 3)
+            self.assertEqual(get_setting("image_page_check_max_pages"), 36)
 
     def test_admin_settings_saves_network_to_yaml_config(self):
         response = self.client.post(
@@ -843,12 +882,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'image-small-language-text'"
             ).fetchone()
-        html = '<html><body><p>图 1 是电源接线图。</p><img alt="线路图" src="data:image/png;base64,AAAA"></body></html>'
 
         response = self.client.post(
             "/images",
             data={
-                "document": (io.BytesIO(html.encode("utf-8")), "diagram.html"),
+                "document": (_pdf_with_image_bytes(), "diagram.pdf"),
                 "checks": [str(item["id"])],
                 "model_id": model_id,
             },
@@ -862,11 +900,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         meta = json.loads(task["document_meta_json"])
         snapshots = json.loads(task["checks_snapshot_json"])
         self.assertEqual(task["task_type"], IMAGE_TASK_TYPE)
-        self.assertEqual(len(meta["images"]), 1)
-        self.assertIn("html-img001", meta["images"][0]["filename"])
-        self.assertTrue((image_root / meta["images"][0]["relative_path"]).is_file())
-        self.assertIn("图 1 是电源接线图。", task["document_text"])
-        self.assertIn("extracted_images: 1", task["document_text"])
+        self.assertEqual(meta["source_document"]["file_type"], "pdf")
+        self.assertEqual(len(meta["page_images"]), 1)
+        self.assertIn("page001-screenshot", meta["page_images"][0]["filename"])
+        self.assertTrue((image_root / meta["page_images"][0]["relative_path"]).is_file())
+        self.assertIn("document_text:", task["document_text"])
+        self.assertIn("extracted_images:", task["document_text"])
+        self.assertIn("page_screenshots: 1", task["document_text"])
         self.assertEqual(
             snapshots,
             [
@@ -878,6 +918,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_image_task_rejects_non_pdf_document(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
+            ).fetchone()
+
+        response = self.client.post(
+            "/images",
+            data={
+                "document": (io.BytesIO(b"<html></html>"), "diagram.html"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
 
     def test_create_task_uses_trusted_header_identity(self):
         model_id = self._configure_provider("trusted_header:100086")

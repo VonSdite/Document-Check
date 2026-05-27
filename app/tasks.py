@@ -7,7 +7,14 @@ from pathlib import Path
 
 from .db import get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
-from .images import default_image_folder, image_items_from_meta, image_path_from_item, image_to_data_url
+from .images import (
+    default_image_folder,
+    image_items_from_meta,
+    image_path_from_item,
+    image_to_data_url,
+    page_numbers_from_image_item,
+    page_sections_from_document_text,
+)
 from .llm import LLMError, run_check, run_multimodal_document_check
 from .network import outbound_network_config
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, document_groups_from_meta
@@ -22,6 +29,20 @@ DEFAULT_IMAGE_CHECK_BATCH_SIZE = 4
 MAX_IMAGE_CHECK_BATCH_SIZE = 4
 IMAGE_CONTEXT_NEIGHBOR_PAGES = 1
 IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
+IMAGE_PAGE_CHECK_CODES = {
+    "image-text-correspondence",
+    "image-figure-table-title-standard",
+    "image-integrity-clarity",
+}
+IMAGE_RESOURCE_CHECK_CODES = {
+    "image-small-language-text",
+    "image-wiring",
+    "image-drawing-standard",
+}
+IMAGE_CHECK_TARGET_LABELS = {
+    "page": "页面级检查",
+    "resource": "图片资源检查",
+}
 
 
 class TaskScheduler:
@@ -147,15 +168,17 @@ class TaskScheduler:
                     int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
                 )
                 if task_type == IMAGE_TASK_TYPE:
-                    image_items = image_items_from_meta(_task_value(task, "document_meta_json"))
-                    if not image_items:
-                        raise RuntimeError("未能从文档中提取到可检查图片")
+                    document_meta_raw = _task_value(task, "document_meta_json")
+                    image_items = image_items_from_meta(document_meta_raw)
+                    page_image_items = image_items_from_meta(document_meta_raw, "page_images")
+                    if not image_items and not page_image_items:
+                        raise RuntimeError("未能从 PDF 中生成可检查页面截图或提取到可检查图片")
                     document_text = _task_value(task, "document_text") or ""
                     if not document_text:
-                        document_text = f"file: {task['original_filename']}\n\nextracted_images: {len(image_items)}"
-                    if len(document_text) > task["max_input_chars"]:
-                        raise RuntimeError(
-                            f"图文检查上下文 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
+                        document_text = (
+                            f"file: {task['original_filename']}\n\n"
+                            f"extracted_images: {len(image_items)}\n"
+                            f"page_screenshots: {len(page_image_items)}"
                         )
                     check_items = _task_check_items(db, task, IMAGE_TASK_TYPE)
                     if not check_items:
@@ -165,7 +188,9 @@ class TaskScheduler:
                         task,
                         check_items,
                         image_items,
+                        page_image_items,
                         document_text,
+                        document_meta=_document_meta(document_meta_raw),
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                     )
@@ -339,6 +364,16 @@ def _task_value(task, key: str):
     return None
 
 
+def _document_meta(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _run_check_items_concurrently(
     app,
     task,
@@ -503,17 +538,19 @@ def _run_image_check_items_concurrently(
     task,
     check_items: list[dict],
     image_items: list[dict],
+    page_image_items: list[dict],
     document_text: str,
     *,
+    document_meta: dict | None,
     max_workers: int,
     stream_trace_enabled: bool,
 ) -> list[dict]:
     task_id = task["id"]
     total = len(check_items)
-    checkable_image_items, skipped_image_items = _split_checkable_image_items(image_items)
-    image_batches = _image_batches(checkable_image_items, _image_check_batch_size())
-    batch_count = len(image_batches)
-    total_units = max(1, total * max(1, batch_count))
+    groups = _image_check_groups(check_items, image_items, page_image_items, document_meta or {})
+    if not groups:
+        raise RuntimeError("没有可检查的 PDF 页面截图或图片资源")
+    total_units = max(1, sum(max(1, len(group["batches"])) for group in groups))
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
@@ -556,23 +593,31 @@ def _run_image_check_items_concurrently(
             completed_units += 1
             return 5 + int(completed_units / total_units * 85)
 
-    def run_item(index: int, item: dict) -> dict:
+    def run_group(group_index: int, group: dict):
         with app.app_context():
             db = get_db()
             if cancel_event.is_set() or _cancel_requested(db, task_id):
                 raise TaskCanceled
 
+            items = group["items"]
+            batches = group["batches"]
+            batch_count = len(batches)
+            skipped_images = group["skipped_images"]
+            manual_notes = group["manual_notes"]
+            target_label = group["label"]
             app.logger.info(
-                "任务图文联合检查项开始 task_id=%s item=%s index=%s/%s images=%s skipped_images=%s batches=%s",
+                "任务图文联合检查组开始 task_id=%s target=%s group=%s/%s checks=%s images=%s skipped_images=%s batches=%s",
                 task_id,
-                item["name"],
-                index,
-                total,
-                len(checkable_image_items),
-                len(skipped_image_items),
+                target_label,
+                group_index,
+                len(groups),
+                len(items),
+                len(group["checkable_images"]),
+                len(skipped_images),
                 batch_count,
             )
-            batch_results = []
+            prompt = _combined_image_check_prompt(items, group["target_kind"], target_label)
+            batch_results_by_code = {item["code"]: [] for item in items}
             last_stream_write = 0.0
 
             def save_partial(current_batch: dict | None, content: str, summary: str, *, force: bool = False):
@@ -584,51 +629,60 @@ def _run_image_check_items_concurrently(
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
 
-                result_text = _format_multimodal_image_check_result(
-                    batch_results,
-                    current_batch=current_batch if content else None,
-                    current_content=content,
-                )
                 with result_lock:
-                    if result_text:
-                        partial_by_code[item["code"]] = {
-                            "code": item["code"],
-                            "name": item["name"],
-                            "result": result_text,
-                        }
-                    elif not batch_results:
-                        partial_by_code.pop(item["code"], None)
+                    sections = _split_combined_check_output(content, items) if content else {}
+                    for item in items:
+                        item_content = sections.get(item["code"], "")
+                        result_text = _format_multimodal_image_check_result(
+                            batch_results_by_code[item["code"]],
+                            current_batch=current_batch if item_content else None,
+                            current_content=item_content,
+                            skipped_images=skipped_images,
+                            manual_notes=manual_notes,
+                        )
+                        if result_text:
+                            partial_by_code[item["code"]] = {
+                                "code": item["code"],
+                                "name": item["name"],
+                                "result": result_text,
+                            }
+                        elif not batch_results_by_code[item["code"]]:
+                            partial_by_code.pop(item["code"], None)
 
                 last_stream_write = now
                 save_snapshot(db, summary, current_progress())
 
             network = outbound_network_config()
             image_folder = _task_image_folder(app)
-            if not image_batches:
-                result = {
-                    "code": item["code"],
-                    "name": item["name"],
-                    "result": _format_multimodal_image_check_result([], skipped_images=skipped_image_items),
-                }
+            if not batches:
                 progress = mark_unit_completed()
                 with result_lock:
-                    completed_by_code[item["code"]] = result
-                    partial_by_code.pop(item["code"], None)
+                    for item in items:
+                        completed_by_code[item["code"]] = {
+                            "code": item["code"],
+                            "name": item["name"],
+                            "result": _format_multimodal_image_check_result(
+                                [],
+                                skipped_images=skipped_images,
+                                manual_notes=manual_notes,
+                            ),
+                        }
+                        partial_by_code.pop(item["code"], None)
                     completed_count = len(completed_by_code)
                 save_snapshot(
                     db,
-                    f"已完成 {completed_count}/{total} 个图文检查项，继续检查中。",
+                    f"已完成 {completed_count}/{total} 个图片检查项，继续检查中。",
                     progress,
                 )
                 app.logger.info(
-                    "任务图文联合检查项跳过 task_id=%s item=%s skipped_images=%s",
+                    "任务图文联合检查组跳过 task_id=%s target=%s skipped_images=%s",
                     task_id,
-                    item["name"],
-                    len(skipped_image_items),
+                    target_label,
+                    len(skipped_images),
                 )
-                return result
+                return
 
-            for batch_index, batch in enumerate(image_batches, start=1):
+            for batch_index, batch in enumerate(batches, start=1):
                 if cancel_event.is_set() or _cancel_requested(db, task_id):
                     raise TaskCanceled
                 multimodal_images = _multimodal_image_inputs(image_folder, batch)
@@ -637,6 +691,8 @@ def _run_image_check_items_concurrently(
                     "batch_index": batch_index,
                     "batch_count": batch_count,
                     "images": batch,
+                    "target_label": target_label,
+                    "target_kind": group["target_kind"],
                 }
 
                 content = run_multimodal_document_check(
@@ -648,8 +704,8 @@ def _run_image_check_items_concurrently(
                     request_timeout=task["request_timeout"],
                     model_name=task["model_name"],
                     force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-                    check_name=item["name"],
-                    prompt=item["prompt"],
+                    check_name=f"{target_label}合并检查（{len(items)}项）",
+                    prompt=prompt,
                     document_text=batch_document_text,
                     image_items=multimodal_images,
                     batch_index=batch_index,
@@ -657,61 +713,69 @@ def _run_image_check_items_concurrently(
                     on_content=lambda content, current=current_batch: save_partial(
                         current,
                         content,
-                        f"正在进行图文联合检查：{item['name']} / 批次 {current['batch_index']}/{current['batch_count']}",
+                        f"正在进行{target_label}：批次 {current['batch_index']}/{current['batch_count']}",
                     ),
                     task_id=task_id,
                     stream_trace_enabled=stream_trace_enabled,
                 )
-                batch_results.append(
-                    {
-                        "batch_index": batch_index,
-                        "batch_count": batch_count,
-                        "images": batch,
-                        "content": content,
-                    }
-                )
+                sections = _split_combined_check_output(content, items)
+                for item in items:
+                    batch_results_by_code[item["code"]].append(
+                        {
+                            "batch_index": batch_index,
+                            "batch_count": batch_count,
+                            "images": batch,
+                            "target_label": target_label,
+                            "target_kind": group["target_kind"],
+                            "content": sections.get(item["code"], ""),
+                        }
+                    )
                 progress = mark_unit_completed()
                 save_partial(
                     None,
                     "",
-                    f"已完成 {item['name']}：{batch_index}/{batch_count} 个图文批次",
+                    f"已完成 {target_label}：{batch_index}/{batch_count} 个图文批次",
                     force=True,
                 )
                 save_snapshot(
                     db,
-                    f"已完成 {index - 1}/{total} 个图文检查项，正在检查第 {index} 项。",
+                    f"正在进行图片检查，已完成 {completed_units}/{total_units} 个图文批次。",
                     progress,
                 )
 
-            result = {
-                "code": item["code"],
-                "name": item["name"],
-                "result": _format_multimodal_image_check_result(batch_results, skipped_images=skipped_image_items),
-            }
             with result_lock:
-                completed_by_code[item["code"]] = result
-                partial_by_code.pop(item["code"], None)
+                for item in items:
+                    completed_by_code[item["code"]] = {
+                        "code": item["code"],
+                        "name": item["name"],
+                        "result": _format_multimodal_image_check_result(
+                            batch_results_by_code[item["code"]],
+                            skipped_images=skipped_images,
+                            manual_notes=manual_notes,
+                        ),
+                    }
+                    partial_by_code.pop(item["code"], None)
                 completed_count = len(completed_by_code)
             save_snapshot(
                 db,
-                f"已完成 {completed_count}/{total} 个图文检查项，继续检查中。",
+                f"已完成 {completed_count}/{total} 个图片检查项，继续检查中。",
                 current_progress(),
             )
             app.logger.info(
-                "任务图文联合检查项完成 task_id=%s item=%s images=%s skipped_images=%s batches=%s output_chars=%s",
+                "任务图文联合检查组完成 task_id=%s target=%s checks=%s images=%s skipped_images=%s batches=%s",
                 task_id,
-                item["name"],
-                len(checkable_image_items),
-                len(skipped_image_items),
-                len(batch_results),
-                len(result["result"]),
+                target_label,
+                len(items),
+                len(group["checkable_images"]),
+                len(skipped_images),
+                batch_count,
             )
-            return result
+            return
 
-    executor = ThreadPoolExecutor(max_workers=max(1, min(max_workers, total)), thread_name_prefix=f"task-image-check-{task_id}")
+    executor = ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(groups))), thread_name_prefix=f"task-image-check-{task_id}")
     futures = []
     try:
-        futures = [executor.submit(run_item, index, item) for index, item in enumerate(check_items, start=1)]
+        futures = [executor.submit(run_group, index, group) for index, group in enumerate(groups, start=1)]
         for future in as_completed(futures):
             future.result()
         with result_lock:
@@ -728,6 +792,162 @@ def _run_image_check_items_concurrently(
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
         executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _image_check_groups(
+    check_items: list[dict],
+    image_items: list[dict],
+    page_image_items: list[dict],
+    document_meta: dict,
+) -> list[dict]:
+    items_by_target = {"page": [], "resource": []}
+    for item in check_items:
+        items_by_target[_image_check_target(item)].append(item)
+
+    groups = []
+    for target_kind in ("page", "resource"):
+        items = items_by_target[target_kind]
+        if not items:
+            continue
+        source_images = page_image_items if target_kind == "page" else image_items
+        fallback_used = False
+        if not source_images and target_kind == "resource" and page_image_items:
+            source_images = page_image_items
+            fallback_used = True
+        if not source_images and target_kind == "page" and image_items:
+            source_images = image_items
+            fallback_used = True
+        checkable_images, skipped_images = _split_checkable_image_items(source_images)
+        manual_notes = _image_check_manual_notes(target_kind, document_meta, fallback_used)
+        groups.append(
+            {
+                "target_kind": target_kind,
+                "label": IMAGE_CHECK_TARGET_LABELS[target_kind],
+                "items": items,
+                "checkable_images": checkable_images,
+                "skipped_images": skipped_images,
+                "manual_notes": manual_notes,
+                "batches": _image_batches(checkable_images, _image_check_batch_size()),
+            }
+        )
+    return groups
+
+
+def _image_check_target(item: dict) -> str:
+    code = str(item.get("code") or "")
+    if code in IMAGE_RESOURCE_CHECK_CODES:
+        return "resource"
+    if code in IMAGE_PAGE_CHECK_CODES:
+        return "page"
+    return "page"
+
+
+def _image_check_manual_notes(target_kind: str, document_meta: dict, fallback_used: bool) -> list[str]:
+    notes = []
+    if target_kind == "page":
+        selection = document_meta.get("page_selection") if isinstance(document_meta, dict) else None
+        if isinstance(selection, dict) and int(selection.get("omitted_pages") or 0) > 0:
+            notes.append(
+                "PDF 共 {total} 页，本次页面级检查按长文档策略选取 {selected} 页，未覆盖 {omitted} 页；"
+                "未覆盖页需要人工抽查或调高 image_page_check_max_pages 后重跑。".format(
+                    total=selection.get("total_pages", "-"),
+                    selected=len(selection.get("selected_pages") or []),
+                    omitted=selection.get("omitted_pages", "-"),
+                )
+            )
+    if target_kind == "resource":
+        image_error = str(document_meta.get("image_extraction_error") or "").strip() if isinstance(document_meta, dict) else ""
+        if image_error:
+            notes.append(f"PDF 内嵌图片提取异常，图片资源类检查可能未覆盖全部原始图片：{image_error}")
+    if fallback_used:
+        notes.append("当前检查对象缺少首选图片源，已回退使用另一类 PDF 图像；细节判断需要人工确认。")
+    return notes
+
+
+def _combined_image_check_prompt(check_items: list[dict], target_kind: str, target_label: str) -> str:
+    target_instruction = (
+        "本组检查对象是 PDF 整页截图。请重点观察页面中的正文、图、表、标题、页眉页脚、遮挡、裁切、版式和上下文对应关系。"
+        if target_kind == "page"
+        else "本组检查对象是从 PDF 中提取的内嵌图片资源。请重点观察图片自身的文字、接线、图形元素、标注和可读性。"
+    )
+    item_blocks = []
+    for item in check_items:
+        item_blocks.append(
+            f"### 检查项：{item['code']}｜{item['name']}\n"
+            f"{str(item.get('prompt') or '').strip()}"
+        )
+    required_sections = "\n".join(
+        (
+            f"### 检查项：{item['code']}｜{item['name']}\n"
+            "#### 总体判断\n"
+            "说明是否发现明确问题。\n"
+            "#### 明确问题\n"
+            "- 没有明确问题时写“未发现明确问题”。\n"
+            "#### 需人工确认\n"
+            "- 没有需人工确认项时写“未发现需人工确认项”。\n"
+            "#### 未发现问题\n"
+            "- 简述正常项或写“未发现明显异常”。"
+        )
+        for item in check_items
+    )
+    return (
+        f"本次执行{target_label}，一次请求中合并 {len(check_items)} 个检查项。请对每个检查项独立判断，"
+        "不要把其他检查项的结论混入当前检查项。\n\n"
+        f"{target_instruction}\n\n"
+        "证据约束：只能依据本次提供的 PDF 页面/图片和文档上下文；看不清、证据不足、跨页缺上下文时放入“需人工确认”，不要编造不可见内容。\n\n"
+        "输出必须严格使用以下结构，并保留每个检查项的 code：\n"
+        f"{required_sections}\n\n"
+        "检查项提示词如下：\n\n"
+        f"{chr(10).join(item_blocks)}"
+    )
+
+
+def _split_combined_check_output(content: str, check_items: list[dict]) -> dict[str, str]:
+    text = str(content or "").strip()
+    if not text:
+        return {item["code"]: _missing_check_section(item, "模型未返回该检查项内容。") for item in check_items}
+    if len(check_items) == 1 and "### 检查项：" not in text:
+        return {check_items[0]["code"]: text}
+
+    headers = list(re.finditer(r"(?m)^###\s*检查项[:：]\s*(.+?)\s*$", text))
+    sections: dict[str, str] = {}
+    for index, header in enumerate(headers):
+        header_line = header.group(1).strip()
+        start = header.start()
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        matched_code = _match_check_code_from_header(header_line, check_items)
+        if matched_code:
+            sections[matched_code] = text[start:end].strip()
+
+    for item in check_items:
+        sections.setdefault(item["code"], _missing_check_section(item, "模型未按要求返回该检查项的独立小节。"))
+    return sections
+
+
+def _match_check_code_from_header(header_line: str, check_items: list[dict]) -> str:
+    normalized = str(header_line or "").strip()
+    for item in check_items:
+        code = str(item.get("code") or "")
+        name = str(item.get("name") or "")
+        if code and code in normalized:
+            return code
+        if name and name in normalized:
+            return code
+    return ""
+
+
+def _missing_check_section(item: dict, reason: str) -> str:
+    return (
+        f"### 检查项：{item.get('code')}｜{item.get('name')}\n\n"
+        "#### 总体判断\n"
+        "需人工确认。\n\n"
+        "#### 明确问题\n"
+        "- 未汇总到明确问题。\n\n"
+        "#### 需人工确认\n"
+        f"- {reason}\n\n"
+        "#### 未发现问题\n"
+        "- 未形成独立结论。"
+    )
 
 
 def _image_check_batch_size() -> int:
@@ -750,13 +970,13 @@ def _document_text_for_image_batch(document_text: str, image_items: list[dict]) 
         {
             page
             for image in image_items
-            for page in _page_numbers_from_image(image)
+            for page in page_numbers_from_image_item(image)
         }
     )
     if not pages:
         return _trim_document_context(text, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
 
-    page_sections = _page_sections_from_document_text(text)
+    page_sections = page_sections_from_document_text(text)
     if not page_sections:
         return _trim_document_context(text, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
 
@@ -784,32 +1004,6 @@ def _document_text_for_image_batch(document_text: str, image_items: list[dict]) 
         f"相关文档文本：\n{page_text}"
     ).strip()
     return _trim_document_context(scoped, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
-
-
-def _page_numbers_from_image(image: dict) -> list[int]:
-    value = f"{image.get('position') or ''} {image.get('filename') or ''}"
-    pages = []
-    for match in re.finditer(r"page0*(\d+)", value, flags=re.IGNORECASE):
-        try:
-            pages.append(int(match.group(1)))
-        except ValueError:
-            continue
-    return pages
-
-
-def _page_sections_from_document_text(document_text: str) -> list[tuple[int, str]]:
-    text = str(document_text or "")
-    body = text.split("\n\nextracted_images:", 1)[0]
-    matches = list(re.finditer(r"(?m)^\[第(\d+)页\]\s*$", body))
-    sections = []
-    for index, match in enumerate(matches):
-        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        try:
-            page = int(match.group(1))
-        except ValueError:
-            continue
-        sections.append((page, body[match.start() : next_start].strip()))
-    return sections
 
 
 def _document_header(document_text: str) -> str:
@@ -873,6 +1067,7 @@ def _format_multimodal_image_check_result(
     current_batch: dict | None = None,
     current_content: str = "",
     skipped_images: list[dict] | None = None,
+    manual_notes: list[str] | None = None,
 ) -> str:
     parts = []
     for item in batch_results:
@@ -881,8 +1076,10 @@ def _format_multimodal_image_check_result(
         parts.append(_format_image_batch_result(current_batch, current_content))
     if skipped_images:
         parts.append(_format_skipped_image_result(skipped_images))
+    if manual_notes:
+        parts.append(_format_manual_notes(manual_notes))
     if current_batch is None:
-        summary = _format_image_check_issue_summary(batch_results, skipped_images or [])
+        summary = _format_image_check_issue_summary(batch_results, skipped_images or [], manual_notes or [])
         if summary:
             parts.append(summary)
     return "\n\n".join(parts).strip()
@@ -892,7 +1089,8 @@ def _format_image_batch_result(batch: dict, content: str) -> str:
     batch_index = int(batch.get("batch_index") or 1)
     batch_count = int(batch.get("batch_count") or 1)
     images = batch.get("images") or []
-    title = "### 图文联合检查结果" if batch_count <= 1 else f"### 图文联合检查结果（批次 {batch_index}/{batch_count}）"
+    target_label = str(batch.get("target_label") or "图文联合检查")
+    title = f"### {target_label}结果" if batch_count <= 1 else f"### {target_label}结果（批次 {batch_index}/{batch_count}）"
     image_lines = []
     for image in images:
         filename = str(image.get("filename") or image.get("id") or "图片")
@@ -913,11 +1111,25 @@ def _format_skipped_image_result(skipped_images: list[dict]) -> str:
     return "### 已跳过的图片\n\n以下提取图片不是可识别图片格式，已跳过，不影响其他图片继续检查：\n" + "\n".join(image_lines)
 
 
-def _format_image_check_issue_summary(batch_results: list[dict], skipped_images: list[dict]) -> str:
+def _format_manual_notes(manual_notes: list[str]) -> str:
+    lines = [f"- {note}" for note in _dedupe_limited([str(note).strip() for note in manual_notes], 30) if note]
+    if not lines:
+        return ""
+    return "### 系统需人工确认\n\n" + "\n".join(lines)
+
+
+def _format_image_check_issue_summary(batch_results: list[dict], skipped_images: list[dict], manual_notes: list[str] | None = None) -> str:
     issues = []
     manual = []
     for batch in batch_results:
         batch_label = _image_batch_label(batch)
+        structured_issues, structured_manual = _structured_summary_items(str(batch.get("content") or ""))
+        for line in structured_issues:
+            issues.append(f"{batch_label} {line}")
+        for line in structured_manual:
+            manual.append(f"{batch_label} {line}")
+        if structured_issues or structured_manual:
+            continue
         for line in _summary_candidate_lines(str(batch.get("content") or "")):
             normalized = _normalize_summary_line(line)
             if not normalized or _summary_line_is_negative(normalized):
@@ -931,6 +1143,8 @@ def _format_image_check_issue_summary(batch_results: list[dict], skipped_images:
         filename = str(image.get("filename") or image.get("id") or "图片")
         position = str(image.get("position") or "未标注")
         manual.append(f"{filename}（位置：{position}）提取后不是可识别图片格式，已跳过，需人工确认是否影响检查。")
+    for note in manual_notes or []:
+        manual.append(str(note).strip())
 
     issues = _dedupe_limited(issues, 30)
     manual = _dedupe_limited(manual, 30)
@@ -960,6 +1174,27 @@ def _summary_candidate_lines(content: str) -> list[str]:
             continue
         lines.append(line)
     return lines
+
+
+def _structured_summary_items(content: str) -> tuple[list[str], list[str]]:
+    issues = _structured_section_items(content, "明确问题")
+    manual = _structured_section_items(content, "需人工确认")
+    issues = [item for item in issues if not _summary_line_is_negative(item)]
+    manual = [item for item in manual if not _summary_line_is_negative(item)]
+    return issues, manual
+
+
+def _structured_section_items(content: str, section_title: str) -> list[str]:
+    text = str(content or "")
+    pattern = rf"(?ms)^####\s*{re.escape(section_title)}\s*$([\s\S]*?)(?=^####\s+|^###\s+|\Z)"
+    items = []
+    for match in re.finditer(pattern, text):
+        section = match.group(1)
+        for raw_line in section.splitlines():
+            line = _normalize_summary_line(raw_line)
+            if line:
+                items.append(line)
+    return items
 
 
 def _normalize_summary_line(line: str) -> str:

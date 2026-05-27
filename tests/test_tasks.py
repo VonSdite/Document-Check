@@ -428,7 +428,9 @@ class TaskExecutionTest(unittest.TestCase):
         results = json.loads(updated["result_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["check_name"], "图片语种匹配检查")
+        self.assertEqual(calls[0]["check_name"], "图片资源检查合并检查（1项）")
+        self.assertIn("image-small-language-text", calls[0]["prompt"])
+        self.assertIn("图片语种匹配检查", calls[0]["prompt"])
         self.assertIn("图 1 是电源接线图", calls[0]["document_text"])
         self.assertEqual(calls[0]["batch_index"], 1)
         self.assertEqual(calls[0]["batch_count"], 1)
@@ -444,6 +446,115 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("明确问题", results[0]["result"])
         self.assertIn("图片中中文说明与英文文档语种不一致", results[0]["result"])
         self.assertIn("需人工确认", results[0]["result"])
+
+    def test_image_task_merges_page_level_checks_for_page_screenshots(self):
+        image_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-pages"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        (image_dir / "0001_page001-screenshot.png").write_bytes(b"page-png-bytes")
+        db = get_db()
+        created_at = now_text()
+        image_meta = {
+            "page_selection": {
+                "total_pages": 150,
+                "selected_pages": [1],
+                "omitted_pages": 149,
+                "max_pages": 1,
+                "strategy": "candidate-and-segment-sampling",
+            },
+            "images": [],
+            "page_images": [
+                {
+                    "id": "page-0001",
+                    "filename": "0001_page001-screenshot.png",
+                    "relative_path": "task-pages/0001_page001-screenshot.png",
+                    "mime_type": "image/png",
+                    "position": "page001-screenshot",
+                    "source": "图纸.pdf",
+                    "size_bytes": 14,
+                    "kind": "page",
+                    "page_number": 1,
+                }
+            ],
+        }
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                ?, '127.0.0.1', '图纸.pdf', '图纸.pdf', 'pdf', 1,
+                ?, ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                IMAGE_TASK_TYPE,
+                "file: 图纸.pdf\n\ndocument_text:\n[第1页]\n3.1 参数\n项目 参数 单位",
+                json.dumps(image_meta, ensure_ascii=False),
+                json.dumps([35, 38]),
+                json.dumps(
+                    [
+                        {
+                            "id": 35,
+                            "code": "image-figure-table-title-standard",
+                            "name": "图表标题规范检查",
+                            "prompt": "检查图标题和表标题是否缺失",
+                        },
+                        {
+                            "id": 38,
+                            "code": "image-integrity-clarity",
+                            "name": "图片完整性和清晰度检查",
+                            "prompt": "检查图片完整性和清晰度",
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+        calls = []
+
+        def fake_run_multimodal_document_check(**kwargs):
+            calls.append(kwargs)
+            return """### 检查项：image-figure-table-title-standard｜图表标题规范检查
+#### 总体判断
+发现表标题缺失。
+#### 明确问题
+- page001 表格缺少表标题。
+#### 需人工确认
+- 未发现需人工确认项。
+#### 未发现问题
+- 未发现其他图表标题问题。
+### 检查项：image-integrity-clarity｜图片完整性和清晰度检查
+#### 总体判断
+未发现明确清晰度问题。
+#### 明确问题
+- 未发现明确问题。
+#### 需人工确认
+- 页面截图较小，需人工确认清晰度。
+#### 未发现问题
+- 未发现明显异常。"""
+
+        with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["check_name"], "页面级检查合并检查（2项）")
+        self.assertIn("image-figure-table-title-standard", calls[0]["prompt"])
+        self.assertIn("image-integrity-clarity", calls[0]["prompt"])
+        self.assertEqual(calls[0]["image_items"][0]["position"], "page001-screenshot")
+        self.assertEqual([item["code"] for item in results], ["image-figure-table-title-standard", "image-integrity-clarity"])
+        self.assertIn("page001 表格缺少表标题", results[0]["result"])
+        self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"])
+        self.assertIn("未覆盖 149 页", results[0]["result"])
 
     def test_image_batch_uses_nearby_page_text_context(self):
         document_text = "\n\n".join(

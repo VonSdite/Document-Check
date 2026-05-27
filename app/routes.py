@@ -41,11 +41,14 @@ from .db import (
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
 from .images import (
+    DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES,
+    candidate_pdf_pages_for_image_check,
     default_image_folder,
     extract_images,
     format_image_document_text,
     image_items_from_meta,
     image_path_from_item,
+    render_pdf_page_images,
 )
 from .llm import LLMError, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
@@ -539,13 +542,18 @@ def register_routes(app):
                         1,
                         int(request.form.get("check_item_concurrency", str(CHECK_ITEM_CONCURRENCY_DEFAULT))),
                     )
+                    image_page_check_max_pages = max(
+                        1,
+                        int(request.form.get("image_page_check_max_pages", str(DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES))),
+                    )
                 except ValueError:
-                    flash("并发度必须是正整数。", "error")
+                    flash("任务设置必须是正整数。", "error")
                     return redirect(url_for("admin_settings"))
                 set_setting("global_concurrency", global_concurrency)
                 set_setting("user_concurrency", user_concurrency)
                 set_setting("check_item_concurrency", check_item_concurrency)
-                flash("并发设置已保存。", "success")
+                set_setting("image_page_check_max_pages", image_page_check_max_pages)
+                flash("任务设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
             if action == "diagnostics":
@@ -735,6 +743,7 @@ def register_routes(app):
             global_concurrency=get_setting("global_concurrency", 3),
             user_concurrency=get_setting("user_concurrency", 1),
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
+            image_page_check_max_pages=get_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES),
             network=current_app.config["NETWORK"],
             llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
             settings_tab=settings_tab,
@@ -1809,8 +1818,9 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
     if upload is None or not upload.filename:
         flash("请选择要提取图片的文档。", "error")
         return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-    if not allowed_file(upload.filename):
-        flash("仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
+    file_type = extension_of(upload.filename)
+    if file_type != "pdf":
+        flash("图片检查仅支持 PDF 文件。", "error")
         return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
 
     check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
@@ -1828,25 +1838,12 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
         flash("请选择可用模型。", "error")
         return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
 
-    file_type = extension_of(upload.filename)
     original_filename = _clean_upload_filename(upload.filename, file_type)
     created_at = now_text()
     stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
     image_dir = _image_output_dir_for_stored(stored_filename)
     upload.save(destination)
     file_size = os.path.getsize(destination)
-    try:
-        images = extract_images(destination, file_type, image_dir, source_filename=original_filename)
-    except DocumentReadError as exc:
-        _remove_uploaded_file(destination)
-        _remove_directory(image_dir)
-        flash(f"图片提取失败：{exc}", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-    if not images:
-        _remove_uploaded_file(destination)
-        _remove_directory(image_dir)
-        flash("未能从文档中提取到可检查图片。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
 
     extracted_text = ""
     text_error = ""
@@ -1860,17 +1857,46 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
             exc,
         )
 
+    image_error = ""
+    try:
+        images = extract_images(destination, file_type, image_dir, source_filename=original_filename)
+    except DocumentReadError as exc:
+        images = []
+        image_error = str(exc)
+        current_app.logger.warning(
+            "图片检查任务未能提取 PDF 内嵌图片 file=%s error=%s",
+            original_filename,
+            exc,
+        )
+
+    try:
+        candidate_pages = candidate_pdf_pages_for_image_check(extracted_text, images)
+        page_images, page_selection = render_pdf_page_images(
+            destination,
+            image_dir,
+            source_filename=original_filename,
+            max_pages=_image_page_check_max_pages(),
+            candidate_pages=candidate_pages,
+        )
+    except DocumentReadError as exc:
+        _remove_uploaded_file(destination)
+        _remove_directory(image_dir)
+        flash(f"PDF 页面截图生成失败：{exc}", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+    if not images and not page_images:
+        _remove_uploaded_file(destination)
+        _remove_directory(image_dir)
+        flash("未能从 PDF 中生成可检查页面截图或提取到可检查图片。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
+
     prepared_document_text = format_image_document_text(
         original_filename,
         images,
         document_text=extracted_text,
         text_error=text_error,
+        page_images=page_images,
+        page_selection=page_selection,
     )
-    if len(prepared_document_text) > model["max_input_chars"]:
-        _remove_uploaded_file(destination)
-        _remove_directory(image_dir)
-        flash(f"图文检查上下文 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
 
     document_meta = {
         "source_document": {
@@ -1879,12 +1905,21 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
             "file_type": file_type,
             "file_size": file_size,
         },
+        "image_extraction_error": image_error,
+        "page_selection": page_selection,
         "images": [
             {
                 **image,
                 "relative_path": f"{image_dir.name}/{image['filename']}",
             }
             for image in images
+        ],
+        "page_images": [
+            {
+                **image,
+                "relative_path": f"{image_dir.name}/{image['filename']}",
+            }
+            for image in page_images
         ],
     }
     owner_name = identity.display_name or None
@@ -2282,7 +2317,8 @@ def _task_document_groups(task) -> list[dict]:
 
 
 def _task_image_items(task) -> list[dict]:
-    return image_items_from_meta(task["document_meta_json"])
+    raw = task["document_meta_json"]
+    return image_items_from_meta(raw) + image_items_from_meta(raw, "page_images")
 
 
 def _image_folder() -> Path:
@@ -2296,6 +2332,13 @@ def _image_output_dir_for_stored(stored_filename: str) -> Path:
     folder = _image_folder()
     stem = Path(stored_filename).stem
     return folder / _safe_filename_part(stem, "task-images")
+
+
+def _image_page_check_max_pages() -> int:
+    try:
+        return max(1, int(get_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES)))
+    except (TypeError, ValueError):
+        return DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES
 
 
 def _download_task_documents_zip(task, fallback_endpoint: str):

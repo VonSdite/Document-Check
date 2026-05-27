@@ -467,6 +467,7 @@ def seed_defaults():
         "user_concurrency": 1,
         "check_item_concurrency": 1,
         "image_check_batch_size": 4,
+        "image_page_check_max_pages": 120,
         "llm_stream_trace_enabled": False,
     }
     for key, value in defaults.items():

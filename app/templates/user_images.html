@@ -14,7 +14,7 @@
       <span class="field-label">文档</span>
       <span class="field-with-help">
         <label class="file-upload-control">
-          <input class="file-input" name="document" type="file" accept=".docx,.pdf,.txt,.md,.html,.xlsx,.xlsm,.xls" required>
+          <input class="file-input" name="document" type="file" accept=".pdf" required>
           <span class="file-name">未选择文件</span>
           <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
           <span class="file-button" aria-hidden="true">
@@ -24,7 +24,7 @@
             </svg>
           </span>
         </label>
-        <span class="help-tip" tabindex="0" data-tip="支持从 docx、pdf、html、xlsx、xlsm 中提取图片，并提取文档文本用于图文联合检查；单文件最大 50MB。">?</span>
+        <span class="help-tip" tabindex="0" data-tip="图片检查仅支持 PDF，会生成页面截图并提取文档文本用于图文联合检查；单文件最大 50MB。">?</span>
       </span>
     </div>
     <label>
@@ -47,7 +47,7 @@
   <div class="check-row">
     <div class="check-row-title">
       <span>图片检查项</span>
-      <span class="help-tip" tabindex="0" data-tip="系统会按图片位置命名，每批最多 4 张图，并只带当前图片附近页文本给多模态模型，减少跨页误配。">?</span>
+      <span class="help-tip" tabindex="0" data-tip="系统会按页面截图和图片资源分组检查，每批最多 4 张图，并只带当前页附近文本给多模态模型，减少跨页误配。">?</span>
     </div>
     <div class="check-chip-grid">
       {% for item in check_items %}

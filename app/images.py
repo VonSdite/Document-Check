@@ -14,6 +14,8 @@ from .documents import DocumentReadError
 
 
 SUPPORTED_IMAGE_TYPES = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
+DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES = 120
+PDF_PAGE_IMAGE_SCALE = 1.6
 _REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -53,7 +55,103 @@ def extract_images(
         raise ImageExtractionError(str(exc)) from exc
 
 
-def image_items_from_meta(raw: str | None) -> list[dict]:
+def render_pdf_page_images(
+    document_path: Path,
+    output_dir: Path,
+    *,
+    source_filename: str = "",
+    max_pages: int = DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES,
+    candidate_pages: list[int] | set[int] | None = None,
+) -> tuple[list[dict], dict]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    source_name = Path(str(source_filename or document_path.name)).name
+    try:
+        import fitz
+    except ImportError as exc:
+        raise ImageExtractionError("PDF 页面截图渲染依赖 PyMuPDF，当前环境未安装。") from exc
+
+    try:
+        with fitz.open(str(document_path)) as document:
+            selection = select_pdf_page_numbers(
+                int(document.page_count),
+                max_pages=max_pages,
+                candidate_pages=candidate_pages,
+            )
+            records = []
+            for sequence, page_number in enumerate(selection["selected_pages"], start=1):
+                page = document.load_page(page_number - 1)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(PDF_PAGE_IMAGE_SCALE, PDF_PAGE_IMAGE_SCALE), alpha=False)
+                data = pixmap.tobytes("png")
+                position = f"page{page_number:03d}-screenshot"
+                record = _write_image_record(output_dir, sequence, position, f"page{page_number:03d}.png", data, source_name)
+                record["id"] = f"page-{sequence:04d}"
+                record["kind"] = "page"
+                record["page_number"] = page_number
+                records.append(record)
+            return records, selection
+    except ImageExtractionError:
+        raise
+    except Exception as exc:
+        raise ImageExtractionError(f"PDF 页面截图渲染失败：{exc}") from exc
+
+
+def select_pdf_page_numbers(
+    total_pages: int,
+    *,
+    max_pages: int = DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES,
+    candidate_pages: list[int] | set[int] | None = None,
+) -> dict:
+    total = max(0, int(total_pages or 0))
+    limit = max(1, int(max_pages or DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES))
+    candidates = {
+        int(page)
+        for page in (candidate_pages or [])
+        if isinstance(page, int) or str(page).isdigit()
+    }
+    candidates = {page for page in candidates if 1 <= page <= total}
+    if total <= limit:
+        selected = list(range(1, total + 1))
+        strategy = "full"
+    else:
+        selected_set = set()
+        selected_set.update(range(1, min(3, total) + 1))
+        selected_set.update(range(max(1, total - 1), total + 1))
+        selected_set.update(candidates)
+        segment_count = max(1, limit - len(selected_set))
+        for index in range(segment_count):
+            page = 1 + round(index * (total - 1) / max(1, segment_count - 1))
+            selected_set.add(page)
+            if len(selected_set) >= limit:
+                break
+        if len(selected_set) < limit:
+            for page in range(1, total + 1):
+                selected_set.add(page)
+                if len(selected_set) >= limit:
+                    break
+        selected = sorted(selected_set)[:limit]
+        strategy = "candidate-and-segment-sampling"
+    omitted = max(0, total - len(selected))
+    return {
+        "total_pages": total,
+        "selected_pages": selected,
+        "omitted_pages": omitted,
+        "max_pages": limit,
+        "strategy": strategy,
+    }
+
+
+def candidate_pdf_pages_for_image_check(document_text: str = "", images: list[dict] | None = None) -> list[int]:
+    pages = set()
+    for image in images or []:
+        for page in page_numbers_from_image_item(image):
+            pages.add(page)
+    for page, section in page_sections_from_document_text(document_text):
+        if _page_text_has_image_check_signal(section):
+            pages.add(page)
+    return sorted(pages)
+
+
+def image_items_from_meta(raw: str | None, key: str = "images") -> list[dict]:
     if not raw:
         return []
     import json
@@ -62,7 +160,7 @@ def image_items_from_meta(raw: str | None) -> list[dict]:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return []
-    images = data.get("images") if isinstance(data, dict) else None
+    images = data.get(key) if isinstance(data, dict) else None
     if not isinstance(images, list):
         return []
     normalized = []
@@ -84,15 +182,26 @@ def image_items_from_meta(raw: str | None) -> list[dict]:
                 "position": str(image.get("position") or ""),
                 "source": str(image.get("source") or ""),
                 "size_bytes": int(image.get("size_bytes") or 0),
+                "kind": str(image.get("kind") or key.rstrip("s") or "image"),
+                "page_number": _safe_int(image.get("page_number")),
             }
         )
     return normalized
 
 
-def format_image_document_text(filename: str, images: list[dict], document_text: str = "", text_error: str = "") -> str:
+def format_image_document_text(
+    filename: str,
+    images: list[dict],
+    document_text: str = "",
+    text_error: str = "",
+    *,
+    page_images: list[dict] | None = None,
+    page_selection: dict | None = None,
+) -> str:
     name = Path(str(filename or "")).name.strip() or "document"
     cleaned_text = str(document_text or "").strip()
     cleaned_error = str(text_error or "").strip()
+    page_images = page_images or []
     lines = [f"file: {name}"]
     if cleaned_text:
         lines.extend(["", "document_text:", cleaned_text])
@@ -107,6 +216,22 @@ def format_image_document_text(filename: str, images: list[dict], document_text:
             f"- {image.get('filename')}: {image.get('position') or '-'} "
             f"({image.get('mime_type') or '-'}, {size_kb:.1f} KB)"
         )
+    if page_images:
+        lines.extend(["", f"page_screenshots: {len(page_images)}"])
+        if page_selection:
+            lines.append(
+                "page_screenshot_selection: "
+                f"PDF 共 {page_selection.get('total_pages', len(page_images))} 页，"
+                f"已渲染 {len(page_images)} 页，"
+                f"未覆盖 {page_selection.get('omitted_pages', 0)} 页，"
+                f"策略：{page_selection.get('strategy', 'full')}"
+            )
+        for image in page_images:
+            size_kb = (int(image.get("size_bytes") or 0) / 1024)
+            lines.append(
+                f"- {image.get('filename')}: {image.get('position') or '-'} "
+                f"({image.get('mime_type') or '-'}, {size_kb:.1f} KB)"
+            )
     return "\n".join(lines).strip()
 
 
@@ -421,8 +546,63 @@ def _extract_pdf_images(path: Path, output_dir: Path, source_name: str) -> list[
             sequence += 1
             image_name = str(getattr(image_file, "name", "") or f"page{page_index:03d}-image{image_index:03d}")
             position = f"page{page_index:03d}-image{image_index:03d}"
-            records.append(_write_image_record(output_dir, sequence, position, image_name, data, source_name))
+            record = _write_image_record(output_dir, sequence, position, image_name, data, source_name)
+            record["kind"] = "embedded"
+            record["page_number"] = page_index
+            records.append(record)
     return records
+
+
+def page_numbers_from_image_item(image: dict) -> list[int]:
+    value = f"{image.get('position') or ''} {image.get('filename') or ''}"
+    pages = []
+    for match in re.finditer(r"page0*(\d+)", value, flags=re.IGNORECASE):
+        try:
+            pages.append(int(match.group(1)))
+        except ValueError:
+            continue
+    page_number = image.get("page_number")
+    if isinstance(page_number, int) and page_number > 0:
+        pages.append(page_number)
+    return sorted(set(pages))
+
+
+def page_sections_from_document_text(document_text: str) -> list[tuple[int, str]]:
+    text = str(document_text or "")
+    body = text.split("\n\nextracted_images:", 1)[0]
+    matches = list(re.finditer(r"(?m)^\[第(\d+)页]\s*$", body))
+    sections = []
+    for index, match in enumerate(matches):
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        try:
+            page = int(match.group(1))
+        except ValueError:
+            continue
+        sections.append((page, body[match.start() : next_start].strip()))
+    return sections
+
+
+def _page_text_has_image_check_signal(section: str) -> bool:
+    text = re.sub(r"\s+", " ", str(section or "")).strip()
+    if not text:
+        return False
+    markers = (
+        "图",
+        "表",
+        "Figure",
+        "Fig.",
+        "Table",
+        "接线",
+        "示意",
+        "流程",
+        "截图",
+        "参数",
+        "安装",
+    )
+    if any(marker in text for marker in markers):
+        return True
+    lines = [line.strip() for line in str(section or "").splitlines() if line.strip()]
+    return len(lines) >= 8 and sum(1 for line in lines if len(line) <= 40) >= 5
 
 
 def _extract_html_images(path: Path, output_dir: Path, source_name: str) -> list[dict]:
@@ -558,6 +738,13 @@ def _safe_name(value: str, fallback: str) -> str:
     value = re.sub(r"[\x00-\x1f\x7f/\\<>:\"|?*\s]+", "-", str(value or "")).strip(" .-_")
     value = re.sub(r"-+", "-", value)
     return value[:120] or fallback
+
+
+def _safe_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _direct_children(element: ET.Element, local_name: str) -> list[ET.Element]:
