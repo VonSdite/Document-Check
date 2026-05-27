@@ -165,6 +165,14 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(image_title_item["name"], "图表标题规范检查")
         self.assertIn("图x-x", image_title_item["description"])
         self.assertIn("表3-1", image_title_item["prompt"])
+        image_quality_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (IMAGE_TASK_TYPE, "image-integrity-clarity"),
+        ).fetchone()
+        self.assertIsNotNone(image_quality_item)
+        self.assertEqual(image_quality_item["name"], "图片完整性和清晰度检查")
+        self.assertIn("异常色块", image_quality_item["description"])
+        self.assertIn("过度拉伸", image_quality_item["prompt"])
 
     def test_seed_defaults_migrates_image_language_check_item(self):
         db = get_db()
