@@ -1185,16 +1185,41 @@ def _structured_summary_items(content: str) -> tuple[list[str], list[str]]:
 
 
 def _structured_section_items(content: str, section_title: str) -> list[str]:
-    text = str(content or "")
-    pattern = rf"(?ms)^####\s*{re.escape(section_title)}\s*$([\s\S]*?)(?=^####\s+|^###\s+|\Z)"
     items = []
-    for match in re.finditer(pattern, text):
-        section = match.group(1)
-        for raw_line in section.splitlines():
-            line = _normalize_summary_line(raw_line)
-            if line:
-                items.append(line)
+    current_section = ""
+    for raw_line in str(content or "").splitlines():
+        heading, inline_text = _summary_section_heading(raw_line)
+        if heading:
+            current_section = heading
+            if heading == section_title and inline_text:
+                line = _normalize_summary_line(inline_text)
+                if line:
+                    items.append(line)
+            continue
+        if current_section != section_title:
+            continue
+        line = _normalize_summary_line(raw_line)
+        if line:
+            items.append(line)
     return items
+
+
+def _summary_section_heading(line: str) -> tuple[str, str]:
+    value = str(line or "").strip()
+    if not value:
+        return "", ""
+    value = re.sub(r"^\s{0,3}#{1,6}\s*", "", value).strip()
+    value = re.sub(r"^\s*[-*]\s*", "", value).strip()
+    value = value.strip("*_` \t")
+    value = re.sub(r"^\d+[.)、]\s*", "", value).strip()
+
+    for title in ("总体判断", "明确问题", "需人工确认", "未发现问题"):
+        if value == title:
+            return title, ""
+        match = re.match(rf"^{re.escape(title)}\s*[:：]\s*(.+)$", value)
+        if match:
+            return title, match.group(1).strip()
+    return "", ""
 
 
 def _normalize_summary_line(line: str) -> str:

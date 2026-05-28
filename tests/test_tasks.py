@@ -8,7 +8,13 @@ from flask import Flask
 
 from app.db import get_db, init_db, now_text
 from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE
-from app.tasks import TaskScheduler, _document_check_items, _document_text_for_image_batch, _run_check_items_concurrently
+from app.tasks import (
+    TaskScheduler,
+    _document_check_items,
+    _document_text_for_image_batch,
+    _format_image_check_issue_summary,
+    _run_check_items_concurrently,
+)
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -524,18 +530,18 @@ class TaskExecutionTest(unittest.TestCase):
             return """### 检查项：image-figure-table-title-standard｜图表标题规范检查
 #### 总体判断
 发现表标题缺失。
-#### 明确问题
+明确问题
 - page001 表格缺少表标题。
-#### 需人工确认
+需人工确认
 - 未发现需人工确认项。
 #### 未发现问题
 - 未发现其他图表标题问题。
 ### 检查项：image-integrity-clarity｜图片完整性和清晰度检查
 #### 总体判断
 未发现明确清晰度问题。
-#### 明确问题
+**明确问题**
 - 未发现明确问题。
-#### 需人工确认
+**需人工确认**
 - 页面截图较小，需人工确认清晰度。
 #### 未发现问题
 - 未发现明显异常。"""
@@ -553,8 +559,36 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["image_items"][0]["position"], "page001-screenshot")
         self.assertEqual([item["code"] for item in results], ["image-figure-table-title-standard", "image-integrity-clarity"])
         self.assertIn("page001 表格缺少表标题", results[0]["result"])
+        self.assertIn("page001 表格缺少表标题", results[0]["result"].split("### 检查汇总", 1)[-1])
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"])
+        self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"].split("### 检查汇总", 1)[-1])
         self.assertIn("未覆盖 149 页", results[0]["result"])
+
+    def test_image_issue_summary_reads_bare_page_level_sections(self):
+        summary = _format_image_check_issue_summary(
+            [
+                {
+                    "batch_index": 23,
+                    "batch_count": 30,
+                    "content": """### 检查项：image-figure-table-title-standard｜图表标题规范检查
+总体判断
+发现明确问题：图片 89 页面顶部的表格缺失规范的表编号和标题。
+
+明确问题
+- 图片 89（page089-screenshot）：页面顶部的表格缺失表编号。
+  - 线索：表格上方仅有“设置时间”文字，未见“表X-X”格式标题。
+
+需人工确认
+- 未发现需人工确认项。""",
+                }
+            ],
+            [],
+        )
+
+        self.assertIn("批次 23/30", summary)
+        self.assertIn("图片 89（page089-screenshot）：页面顶部的表格缺失表编号", summary)
+        self.assertIn("线索：表格上方仅有", summary)
+        self.assertNotIn("未汇总到明确问题", summary)
 
     def test_image_batch_uses_nearby_page_text_context(self):
         document_text = "\n\n".join(
