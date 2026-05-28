@@ -13,6 +13,7 @@ from app.tasks import (
     _document_check_items,
     _document_text_for_image_batch,
     _format_image_check_issue_summary,
+    _image_check_target,
     _run_check_items_concurrently,
 )
 
@@ -563,6 +564,10 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"])
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"].split("### 检查汇总", 1)[-1])
         self.assertIn("未覆盖 149 页", results[0]["result"])
+
+    def test_qwen_vl_optimized_image_checks_use_expected_targets(self):
+        self.assertEqual(_image_check_target({"code": "image-ui-step-consistency"}), "page")
+        self.assertEqual(_image_check_target({"code": "image-device-installation"}), "resource")
 
     def test_image_issue_summary_reads_bare_page_level_sections(self):
         summary = _format_image_check_issue_summary(

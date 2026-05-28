@@ -160,16 +160,34 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("typo", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
+        self.assertIn("image-ui-step-consistency", default_check_item_codes(IMAGE_TASK_TYPE))
+        self.assertIn("image-device-installation", default_check_item_codes(IMAGE_TASK_TYPE))
+        ui_step_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (IMAGE_TASK_TYPE, "image-ui-step-consistency"),
+        ).fetchone()
+        self.assertIsNotNone(ui_step_item)
+        self.assertEqual(ui_step_item["name"], "界面截图与步骤一致性检查")
+        self.assertIn("按钮", ui_step_item["description"])
+        self.assertIn("旧版界面", ui_step_item["prompt"])
+        device_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (IMAGE_TASK_TYPE, "image-device-installation"),
+        ).fetchone()
+        self.assertIsNotNone(device_item)
+        self.assertEqual(device_item["name"], "设备外观与安装图检查")
+        self.assertIn("安装方向", device_item["description"])
+        self.assertIn("壁挂/导轨/机柜/桌面", device_item["prompt"])
         image_title_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
             (IMAGE_TASK_TYPE, "image-figure-table-title-standard"),
         ).fetchone()
         self.assertIsNotNone(image_title_item)
-        self.assertEqual(image_title_item["name"], "图表标题规范检查")
+        self.assertEqual(image_title_item["name"], "图表标题可见性复核")
         self.assertIn("图x-x", image_title_item["description"])
         self.assertIn("表3-1", image_title_item["prompt"])
-        self.assertIn("章节标题不能替代表标题", image_title_item["prompt"])
-        self.assertIn("同一张图片中可能同时出现", image_title_item["prompt"])
+        self.assertIn("章节标题不能替代图表标题", image_title_item["prompt"])
+        self.assertIn("逐项识别当前页面", image_title_item["prompt"])
         self.assertIn("页眉或文档名不能替代表标题", image_title_item["prompt"])
         self.assertIn("续表x-x", image_title_item["prompt"])
         image_quality_item = db.execute(
@@ -178,8 +196,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(image_quality_item)
         self.assertEqual(image_quality_item["name"], "图片完整性和清晰度检查")
-        self.assertIn("异常色块", image_quality_item["description"])
-        self.assertIn("过度拉伸", image_quality_item["prompt"])
+        self.assertIn("关键文字", image_quality_item["description"])
+        self.assertIn("端子号", image_quality_item["prompt"])
 
     def test_seed_defaults_migrates_image_language_check_item(self):
         db = get_db()
@@ -213,6 +231,32 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("文档主要语种", row["description"])
         self.assertIn("文档主要语种", row["prompt"])
         self.assertEqual(row["sort_order"], 20)
+
+    def test_seed_defaults_migrates_stock_image_prompts_to_qwen_vl_optimized_versions(self):
+        db = get_db()
+        db.execute(
+            """
+            UPDATE check_items
+            SET prompt = ?
+            WHERE code = ?
+            """,
+            (
+                "旧版提示词：必须判为表标题缺失；同一张图片中可能同时出现多个表格。",
+                "image-figure-table-title-standard",
+            ),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE code = ?",
+            ("image-figure-table-title-standard",),
+        ).fetchone()
+        self.assertEqual(row["name"], "图表标题可见性复核")
+        self.assertIn("疑似缺失项", row["description"])
+        self.assertIn("逐项识别当前页面", row["prompt"])
+        self.assertIn("疑似标题缺失", row["prompt"])
 
     def test_next_custom_check_item_sort_order_goes_before_first_item(self):
         self.assertEqual(_next_check_item_sort_order(get_db()), 0)

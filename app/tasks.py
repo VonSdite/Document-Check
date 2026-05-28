@@ -31,11 +31,13 @@ IMAGE_CONTEXT_NEIGHBOR_PAGES = 1
 IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
 IMAGE_PAGE_CHECK_CODES = {
     "image-text-correspondence",
+    "image-ui-step-consistency",
     "image-figure-table-title-standard",
     "image-integrity-clarity",
 }
 IMAGE_RESOURCE_CHECK_CODES = {
     "image-small-language-text",
+    "image-device-installation",
     "image-wiring",
     "image-drawing-standard",
 }
