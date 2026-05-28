@@ -321,7 +321,6 @@ def register_routes(app):
             task=task,
             results=_task_results(task),
             document_groups=_task_document_groups(task),
-            image_items=_task_image_items(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_endpoint=_task_list_endpoint(not _platform_enabled(), task["task_type"]),
         )
@@ -490,7 +489,6 @@ def register_routes(app):
             task=task,
             results=_task_results(task),
             document_groups=_task_document_groups(task),
-            image_items=_task_image_items(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_endpoint=_task_list_endpoint(True, task["task_type"]),
         )
@@ -2452,7 +2450,6 @@ def _export_task_report(task):
         task=task,
         results=_task_results(task),
         document_groups=_task_document_groups(task),
-        image_items=_task_image_items(task),
         app_css=app_css,
     )
     filename = f"document-check-report-{task['id']}.html"

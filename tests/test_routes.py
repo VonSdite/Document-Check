@@ -13,6 +13,7 @@ from openpyxl import Workbook
 from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
+from app.formatting import render_markdown
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
 
@@ -105,6 +106,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             template_folder=str(project_root / "app" / "templates"),
             static_folder=str(project_root / "app" / "static"),
         )
+        self.app.add_template_filter(render_markdown, "markdown")
         self.app.config.update(
             SECRET_KEY="test-secret",
             ADMIN_URL="/admin",
@@ -940,6 +942,73 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
         self.assertEqual(total, 0)
+
+    def test_image_task_detail_hides_extracted_image_list(self):
+        with self.app.app_context():
+            now = "2026-05-22 12:00:00"
+            meta = {
+                "images": [
+                    {
+                        "filename": "0001_page001-image001.png",
+                        "relative_path": "task/0001_page001-image001.png",
+                        "mime_type": "image/png",
+                        "position": "page001-image001",
+                        "size_bytes": 1024,
+                    }
+                ],
+                "page_images": [
+                    {
+                        "filename": "0001_page001-screenshot.png",
+                        "relative_path": "task/0001_page001-screenshot.png",
+                        "mime_type": "image/png",
+                        "position": "page001-screenshot",
+                        "size_bytes": 2048,
+                    }
+                ],
+            }
+            result_json = [
+                {
+                    "code": "image-figure-table-title-standard",
+                    "name": "图表标题规范检查",
+                    "result": "检查结果正文：page001 表格缺少表标题。",
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, document_meta_json, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', '图纸.pdf', 'stored.pdf', 'pdf',
+                        4096, ?, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (
+                    IMAGE_TASK_TYPE,
+                    json.dumps(meta, ensure_ascii=False),
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        exported = self.client.get(f"/admin/tasks/{task_id}/export")
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(exported.status_code, 200)
+        detail_html = detail.get_data(as_text=True)
+        exported_html = exported.get_data(as_text=True)
+        self.assertNotIn("提取图片", detail_html)
+        self.assertNotIn("0001_page001-image001.png", detail_html)
+        self.assertNotIn("0001_page001-screenshot.png", detail_html)
+        self.assertIn("检查结果正文：page001 表格缺少表标题。", detail_html)
+        self.assertNotIn("提取图片", exported_html)
+        self.assertNotIn("0001_page001-image001.png", exported_html)
+        self.assertNotIn("0001_page001-screenshot.png", exported_html)
 
     def test_create_task_uses_trusted_header_identity(self):
         model_id = self._configure_provider("trusted_header:100086")

@@ -70,18 +70,6 @@
           <dd>{{ task.original_filename }}</dd>
         </div>
         {% endif %}
-        {% if image_items %}
-        <div class="report-file-meta">
-          <dt>提取图片</dt>
-          <dd>
-            <ul class="report-file-list image-file-list">
-              {% for image in image_items %}
-              <li>{{ image.filename }} <span>{{ image.position or '未标注位置' }} · {{ (image.size_bytes / 1024)|round(1) }} KB</span></li>
-              {% endfor %}
-            </ul>
-          </dd>
-        </div>
-        {% endif %}
         <div>
           <dt>归属用户</dt>
           <dd>
