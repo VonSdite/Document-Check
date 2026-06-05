@@ -119,6 +119,10 @@
       图片检查页面截图上限
       <input name="image_page_check_max_pages" type="number" min="1" step="1" value="{{ image_page_check_max_pages }}" required>
     </label>
+    <label>
+      检查报告最多保留天数（0 表示不自动清理）
+      <input name="report_retention_days" type="number" min="0" step="1" value="{{ report_retention_days }}" required>
+    </label>
     <button class="primary-button settings-save-button" type="submit">保存设置</button>
   </form>
 </section>

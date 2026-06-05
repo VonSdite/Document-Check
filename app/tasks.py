@@ -3,6 +3,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .db import get_bool_setting, get_db, get_setting, now_text
@@ -29,6 +30,9 @@ DEFAULT_IMAGE_CHECK_BATCH_SIZE = 4
 MAX_IMAGE_CHECK_BATCH_SIZE = 4
 IMAGE_CONTEXT_NEIGHBOR_PAGES = 1
 IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
+DEFAULT_REPORT_RETENTION_DAYS = 0
+REPORT_CLEANUP_INTERVAL_SECONDS = 3600
+REPORT_CLEANUP_BATCH_SIZE = 100
 IMAGE_PAGE_CHECK_CODES = {
     "image-text-correspondence",
     "image-ui-step-consistency",
@@ -52,6 +56,7 @@ class TaskScheduler:
         self.app = app
         self._stop_event = threading.Event()
         self._launcher = threading.Thread(target=self._loop, daemon=True, name="task-launcher")
+        self._last_report_cleanup = 0.0
 
     def start(self):
         self._launcher.start()
@@ -82,10 +87,18 @@ class TaskScheduler:
         while not self._stop_event.is_set():
             try:
                 with self.app.app_context():
+                    self._cleanup_reports_if_due()
                     self._launch_available_tasks()
             except Exception:
                 self.app.logger.exception("任务调度循环异常")
             self._stop_event.wait(2)
+
+    def _cleanup_reports_if_due(self):
+        now = time.monotonic()
+        if now - self._last_report_cleanup < REPORT_CLEANUP_INTERVAL_SECONDS:
+            return
+        self._last_report_cleanup = now
+        cleanup_expired_task_reports(self.app)
 
     def _launch_available_tasks(self):
         db = get_db()
@@ -1265,6 +1278,115 @@ def _task_image_folder(app) -> Path:
     if configured:
         return Path(configured)
     return default_image_folder(app.config["UPLOAD_FOLDER"])
+
+
+def cleanup_expired_task_reports(app) -> int:
+    retention_days = _report_retention_days()
+    if retention_days <= 0:
+        return 0
+
+    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
+    db = get_db()
+    tasks = db.execute(
+        """
+        SELECT *
+        FROM tasks
+        WHERE status IN ('completed', 'failed', 'canceled')
+          AND COALESCE(finished_at, updated_at, created_at) < ?
+        ORDER BY COALESCE(finished_at, updated_at, created_at) ASC, id ASC
+        LIMIT ?
+        """,
+        (cutoff, REPORT_CLEANUP_BATCH_SIZE),
+    ).fetchall()
+    deleted = 0
+    for task in tasks:
+        try:
+            _remove_task_artifacts(app, task)
+            db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
+            deleted += 1
+        except Exception:
+            app.logger.exception("定期清理检查报告失败 task_id=%s", task["id"])
+    if deleted:
+        db.commit()
+        app.logger.info("定期清理检查报告完成 deleted=%s cutoff=%s retention_days=%s", deleted, cutoff, retention_days)
+    return deleted
+
+
+def _report_retention_days() -> int:
+    try:
+        return max(0, int(get_setting("report_retention_days", DEFAULT_REPORT_RETENTION_DAYS)))
+    except (TypeError, ValueError):
+        return DEFAULT_REPORT_RETENTION_DAYS
+
+
+def _remove_task_artifacts(app, task):
+    upload_root = Path(app.config["UPLOAD_FOLDER"])
+    image_root = _task_image_folder(app)
+    paths = _task_artifact_paths(app, task)
+    image_dirs = {
+        path.parent
+        for path in paths
+        if path.parent.resolve() != image_root.resolve() and _path_is_relative_to(path.parent, image_root)
+    }
+    for path in paths:
+        if not (_path_is_relative_to(path, upload_root) or _path_is_relative_to(path, image_root)):
+            app.logger.warning("跳过不在运行目录内的任务文件 task_id=%s path=%s", task["id"], path)
+            continue
+        if path.exists() and path.is_file():
+            path.unlink()
+    for image_dir in sorted(image_dirs, key=lambda value: len(value.parts), reverse=True):
+        _remove_empty_directory(image_dir)
+
+
+def _task_artifact_paths(app, task) -> list[Path]:
+    upload_root = Path(app.config["UPLOAD_FOLDER"])
+    image_root = _task_image_folder(app)
+    raw_meta = _task_value(task, "document_meta_json")
+    paths = []
+    groups = document_groups_from_meta(raw_meta)
+    if groups:
+        for group in groups:
+            for file_info in group["files"]:
+                stored_filename = Path(str(file_info.get("stored_filename") or "")).name
+                if stored_filename:
+                    paths.append(upload_root / stored_filename)
+    else:
+        stored_filename = Path(str(_task_value(task, "stored_filename") or "")).name
+        if stored_filename:
+            paths.append(upload_root / stored_filename)
+
+    for image in image_items_from_meta(raw_meta):
+        paths.append(image_path_from_item(image_root, image))
+    for image in image_items_from_meta(raw_meta, "page_images"):
+        paths.append(image_path_from_item(image_root, image))
+    return _dedupe_paths(paths)
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    result = []
+    seen = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _remove_empty_directory(path: Path):
+    try:
+        path.rmdir()
+    except OSError:
+        return
 
 
 def _ordered_results(check_items: list[dict], completed: dict[str, dict], partial: dict[str, dict]) -> list[dict]:

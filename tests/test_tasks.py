@@ -6,10 +6,11 @@ from unittest.mock import patch
 
 from flask import Flask
 
-from app.db import get_db, init_db, now_text
+from app.db import get_db, init_db, now_text, set_setting
 from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE
 from app.tasks import (
     TaskScheduler,
+    cleanup_expired_task_reports,
     _document_check_items,
     _document_text_for_image_batch,
     _format_image_check_issue_summary,
@@ -35,6 +36,66 @@ class TaskExecutionTest(unittest.TestCase):
     def tearDown(self):
         self.context.pop()
         self.temp_dir.cleanup()
+
+    def test_cleanup_expired_task_reports_removes_old_terminal_tasks_and_files(self):
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        image_root = Path(self.app.config["IMAGE_FOLDER"])
+        old_upload = upload_dir / "old.pdf"
+        recent_upload = upload_dir / "recent.pdf"
+        running_upload = upload_dir / "running.pdf"
+        old_image_dir = image_root / "old-images"
+        old_image = old_image_dir / "old.png"
+        old_upload.write_text("old", encoding="utf-8")
+        recent_upload.write_text("recent", encoding="utf-8")
+        running_upload.write_text("running", encoding="utf-8")
+        old_image_dir.mkdir(parents=True, exist_ok=True)
+        old_image.write_bytes(b"png")
+        set_setting("report_retention_days", 1)
+        db = get_db()
+        old_meta = {
+            "images": [
+                {
+                    "filename": "old.png",
+                    "relative_path": "old-images/old.png",
+                    "mime_type": "image/png",
+                    "position": "page001-image001",
+                }
+            ],
+            "page_images": [],
+        }
+        rows = [
+            ("old.pdf", "old.pdf", IMAGE_TASK_TYPE, json.dumps(old_meta, ensure_ascii=False), "completed", "2000-01-01 00:00:00"),
+            ("recent.pdf", "recent.pdf", IMAGE_TASK_TYPE, "{}", "completed", now_text()),
+            ("running.pdf", "running.pdf", IMAGE_TASK_TYPE, "{}", "running", "2000-01-01 00:00:00"),
+        ]
+        for original, stored, task_type, meta, status, finished_at in rows:
+            db.execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type, file_size,
+                    document_meta_json, checks_json, model_name, api_base, request_timeout,
+                    max_input_chars, status, progress, created_at, updated_at, finished_at
+                )
+                VALUES (?, '127.0.0.1', ?, ?, 'pdf', 1, ?, '[]', 'model-a',
+                        'http://example.test/v1/chat/completions', 30, 5000,
+                        ?, 100, ?, ?, ?)
+                """,
+                (task_type, original, stored, meta, status, finished_at, finished_at, finished_at),
+            )
+        db.commit()
+
+        self.assertEqual(cleanup_expired_task_reports(self.app), 1)
+
+        remaining = {
+            row["stored_filename"]: row["status"]
+            for row in db.execute("SELECT stored_filename, status FROM tasks").fetchall()
+        }
+        self.assertEqual(remaining, {"recent.pdf": "completed", "running.pdf": "running"})
+        self.assertFalse(old_upload.exists())
+        self.assertFalse(old_image.exists())
+        self.assertFalse(old_image_dir.exists())
+        self.assertTrue(recent_upload.exists())
+        self.assertTrue(running_upload.exists())
 
     def test_document_check_sends_full_text_once(self):
         db = get_db()
