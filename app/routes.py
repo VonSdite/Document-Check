@@ -3,7 +3,6 @@ import io
 import json
 import os
 import re
-import shutil
 import uuid
 import zipfile
 from datetime import date, datetime, timedelta
@@ -40,6 +39,12 @@ from .db import (
     set_setting,
 )
 from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
+from .file_cleanup import (
+    describe_failures,
+    remove_directory_tree,
+    remove_empty_directory as cleanup_remove_empty_directory,
+    remove_file,
+)
 from .images import (
     DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES,
     candidate_pdf_pages_for_image_check,
@@ -2244,7 +2249,19 @@ def _delete_task(task):
     db = get_db()
     paths = _task_upload_paths(task)
     image_dirs = {path.parent for path in paths if _image_folder() in path.parents}
-    _remove_uploaded_files(paths)
+    failures = _remove_uploaded_files(paths)
+    if failures:
+        current_app.logger.warning(
+            "删除任务文件失败 task_id=%s failures=%s",
+            task["id"],
+            "; ".join(f"{path}: {error}" for path, error in failures),
+        )
+        flash(
+            f"任务文件正被其他程序使用，暂时无法删除：{describe_failures(failures)}。"
+            "请关闭正在下载、预览或扫描该文件的程序后稍后重试。",
+            "error",
+        )
+        return False
     for image_dir in image_dirs:
         _remove_empty_directory(image_dir)
     db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
@@ -2275,25 +2292,30 @@ def _download_task_document(task, fallback_endpoint: str):
 
 
 def _remove_uploaded_file(path: Path):
-    if path.exists():
-        path.unlink()
+    ok, error = remove_file(path)
+    if not ok:
+        current_app.logger.warning("删除文件失败 path=%s error=%s", path, error)
+    return ok, error
 
 
 def _remove_uploaded_files(paths: list[Path]):
+    failures = []
     for path in paths:
-        _remove_uploaded_file(path)
+        ok, error = _remove_uploaded_file(path)
+        if not ok:
+            failures.append((path, error))
+    return failures
 
 
 def _remove_directory(path: Path):
-    if path.exists() and path.is_dir():
-        shutil.rmtree(path)
+    ok, error = remove_directory_tree(path)
+    if not ok:
+        current_app.logger.warning("删除目录失败 path=%s error=%s", path, error)
+    return ok
 
 
 def _remove_empty_directory(path: Path):
-    try:
-        path.rmdir()
-    except OSError:
-        return
+    return cleanup_remove_empty_directory(path)
 
 
 def _task_upload_path(task) -> Path:

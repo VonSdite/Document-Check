@@ -192,6 +192,23 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
             get_db().commit()
 
+    def test_admin_delete_task_reports_locked_file_without_removing_task(self):
+        self._insert_task()
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "stored.txt"
+        upload_path.write_text("content", encoding="utf-8")
+        with self.app.app_context():
+            task_id = get_db().execute("SELECT id FROM tasks WHERE stored_filename = 'stored.txt'").fetchone()["id"]
+
+        with patch("app.routes.remove_file", return_value=(False, "[WinError 32] 文件正被占用")):
+            response = self.client.post(f"/admin/tasks/{task_id}/delete", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("任务文件正被其他程序使用", response.get_data(as_text=True))
+        with self.app.app_context():
+            task = get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertIsNotNone(task)
+        self.assertTrue(upload_path.exists())
+
     def test_diagnostics_fetch_returns_saved_state(self):
         response = self.client.post(
             "/admin/settings",

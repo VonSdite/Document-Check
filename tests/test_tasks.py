@@ -97,6 +97,34 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertTrue(recent_upload.exists())
         self.assertTrue(running_upload.exists())
 
+    def test_cleanup_expired_task_reports_skips_locked_files(self):
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        old_upload = upload_dir / "old.pdf"
+        old_upload.write_text("old", encoding="utf-8")
+        set_setting("report_retention_days", 1)
+        db = get_db()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, original_filename, stored_filename, file_type, file_size,
+                document_meta_json, checks_json, model_name, api_base, request_timeout,
+                max_input_chars, status, progress, created_at, updated_at, finished_at
+            )
+            VALUES (?, '127.0.0.1', 'old.pdf', 'old.pdf', 'pdf', 1, '{}', '[]', 'model-a',
+                    'http://example.test/v1/chat/completions', 30, 5000,
+                    'completed', 100, '2000-01-01 00:00:00', '2000-01-01 00:00:00', '2000-01-01 00:00:00')
+            """,
+            (IMAGE_TASK_TYPE,),
+        )
+        db.commit()
+
+        with patch("app.tasks.remove_file", return_value=(False, "[WinError 32] 文件正被占用")):
+            self.assertEqual(cleanup_expired_task_reports(self.app), 0)
+
+        task = db.execute("SELECT * FROM tasks WHERE stored_filename = 'old.pdf'").fetchone()
+        self.assertIsNotNone(task)
+        self.assertTrue(old_upload.exists())
+
     def test_document_check_sends_full_text_once(self):
         db = get_db()
         created_at = now_text()

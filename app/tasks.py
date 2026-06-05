@@ -8,6 +8,11 @@ from pathlib import Path
 
 from .db import get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
+from .file_cleanup import (
+    describe_failures,
+    remove_empty_directory as cleanup_remove_empty_directory,
+    remove_file,
+)
 from .images import (
     default_image_folder,
     image_items_from_meta,
@@ -22,6 +27,10 @@ from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TY
 
 
 class TaskCanceled(Exception):
+    pass
+
+
+class TaskArtifactCleanupError(RuntimeError):
     pass
 
 
@@ -1304,6 +1313,8 @@ def cleanup_expired_task_reports(app) -> int:
             _remove_task_artifacts(app, task)
             db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
             deleted += 1
+        except TaskArtifactCleanupError as exc:
+            app.logger.warning("定期清理检查报告跳过 task_id=%s error=%s", task["id"], exc)
         except Exception:
             app.logger.exception("定期清理检查报告失败 task_id=%s", task["id"])
     if deleted:
@@ -1328,14 +1339,22 @@ def _remove_task_artifacts(app, task):
         for path in paths
         if path.parent.resolve() != image_root.resolve() and _path_is_relative_to(path.parent, image_root)
     }
+    failures = []
     for path in paths:
         if not (_path_is_relative_to(path, upload_root) or _path_is_relative_to(path, image_root)):
             app.logger.warning("跳过不在运行目录内的任务文件 task_id=%s path=%s", task["id"], path)
             continue
         if path.exists() and path.is_file():
-            path.unlink()
+            ok, error = remove_file(path)
+            if not ok:
+                failures.append((path, error))
     for image_dir in sorted(image_dirs, key=lambda value: len(value.parts), reverse=True):
         _remove_empty_directory(image_dir)
+    if failures:
+        raise TaskArtifactCleanupError(
+            f"任务文件正被其他程序使用，暂时无法清理：{describe_failures(failures)}。"
+            "请关闭正在下载、预览或扫描该文件的程序后稍后重试。"
+        )
 
 
 def _task_artifact_paths(app, task) -> list[Path]:
@@ -1383,10 +1402,7 @@ def _path_is_relative_to(path: Path, root: Path) -> bool:
 
 
 def _remove_empty_directory(path: Path):
-    try:
-        path.rmdir()
-    except OSError:
-        return
+    return cleanup_remove_empty_directory(path)
 
 
 def _ordered_results(check_items: list[dict], completed: dict[str, dict], partial: dict[str, dict]) -> list[dict]:
