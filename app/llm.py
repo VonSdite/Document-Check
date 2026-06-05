@@ -758,7 +758,53 @@ def _raise_for_http_error(response, *, request_id: str = "-", task_id: Optional[
             response.status_code,
             body,
         )
-        raise LLMError(f"模型服务返回 {response.status_code}：{body}")
+        raise LLMError(_http_error_message(response.status_code, body))
+
+
+def _http_error_message(status_code: int, body: str) -> str:
+    detail = _extract_http_error_detail(body) or body
+    if _is_provider_capacity_error(status_code, detail):
+        return (
+            f"模型服务繁忙或触发限流（HTTP {status_code}）：{_short_text(detail, 500)}。"
+            "请稍后重试，或在系统设置中降低系统同时执行任务数、单用户同时执行任务数、单任务检查项并发数。"
+        )
+    return f"模型服务返回 {status_code}：{detail}"
+
+
+def _extract_http_error_detail(body: str) -> str:
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError):
+        return ""
+    service_error = _extract_service_error(data)
+    if service_error:
+        return service_error
+    if isinstance(data, dict):
+        return _short_text(data.get("message") or data.get("msg") or data)
+    return _short_text(data)
+
+
+def _is_provider_capacity_error(status_code: int, detail: str) -> bool:
+    if status_code == 429:
+        return True
+    text = f"{status_code} {detail}".lower()
+    markers = (
+        "too many requests",
+        "throttled",
+        "rate limit",
+        "ratelimit",
+        "serviceunavailable",
+        "service unavailable",
+        "capacity",
+        "overloaded",
+        "限流",
+        "频率",
+        "请求过多",
+        "服务繁忙",
+        "容量",
+        "过载",
+    )
+    return any(marker in text for marker in markers)
 
 
 def _force_utf8_response(response):

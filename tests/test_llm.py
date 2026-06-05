@@ -140,6 +140,29 @@ class LLMResponseParsingTest(unittest.TestCase):
         with self.assertRaisesRegex(llm.LLMError, "模型调用超时"):
             llm._read_stream_response(response, None)
 
+    def test_reports_provider_capacity_error_from_http_error_body(self):
+        body = {
+            "error": {
+                "message": (
+                    "<503> InternalError.Algo.ModelServingError.ServiceUnavailable: "
+                    "Too many requests. Your requests are being throttled due to system capacity limits."
+                )
+            }
+        }
+        response = FakeResponse(status_code=500, text=json.dumps(body, ensure_ascii=False))
+
+        with self.assertRaises(llm.LLMError) as context:
+            llm._read_stream_response(response, None)
+        message = str(context.exception)
+        self.assertIn("模型服务繁忙或触发限流", message)
+        self.assertIn("降低系统同时执行任务数", message)
+
+    def test_preserves_general_http_error_message(self):
+        response = FakeResponse(status_code=400, text='{"error":{"message":"invalid model"}}')
+
+        with self.assertRaisesRegex(llm.LLMError, "模型服务返回 400：invalid model"):
+            llm._read_stream_response(response, None)
+
     def test_retries_stream_when_stream_has_no_content(self):
         fake_session = FakeSession(
             [
