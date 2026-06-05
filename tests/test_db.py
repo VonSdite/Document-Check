@@ -160,24 +160,24 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("typo", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
-        self.assertIn("image-ui-step-consistency", default_check_item_codes(IMAGE_TASK_TYPE))
-        self.assertIn("image-device-installation", default_check_item_codes(IMAGE_TASK_TYPE))
-        ui_step_item = db.execute(
+        self.assertNotIn("image-ui-step-consistency", default_check_item_codes(IMAGE_TASK_TYPE))
+        self.assertNotIn("image-device-installation", default_check_item_codes(IMAGE_TASK_TYPE))
+        image_text_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
-            (IMAGE_TASK_TYPE, "image-ui-step-consistency"),
+            (IMAGE_TASK_TYPE, "image-text-correspondence"),
         ).fetchone()
-        self.assertIsNotNone(ui_step_item)
-        self.assertEqual(ui_step_item["name"], "界面截图与步骤一致性检查")
-        self.assertIn("按钮", ui_step_item["description"])
-        self.assertIn("旧版界面", ui_step_item["prompt"])
-        device_item = db.execute(
+        self.assertIsNotNone(image_text_item)
+        self.assertEqual(image_text_item["name"], "图文与界面步骤一致性检查")
+        self.assertIn("界面截图", image_text_item["description"])
+        self.assertIn("旧版界面", image_text_item["prompt"])
+        wiring_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
-            (IMAGE_TASK_TYPE, "image-device-installation"),
+            (IMAGE_TASK_TYPE, "image-wiring"),
         ).fetchone()
-        self.assertIsNotNone(device_item)
-        self.assertEqual(device_item["name"], "设备外观与安装图检查")
-        self.assertIn("安装方向", device_item["description"])
-        self.assertIn("壁挂/导轨/机柜/桌面", device_item["prompt"])
+        self.assertIsNotNone(wiring_item)
+        self.assertEqual(wiring_item["name"], "设备安装与接线检查")
+        self.assertIn("设备外观", wiring_item["description"])
+        self.assertIn("壁挂/导轨/机柜/桌面", wiring_item["prompt"])
         image_title_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
             (IMAGE_TASK_TYPE, "image-figure-table-title-standard"),
@@ -257,6 +257,54 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("疑似缺失项", row["description"])
         self.assertIn("逐项识别当前页面", row["prompt"])
         self.assertIn("疑似标题缺失", row["prompt"])
+
+    def test_seed_defaults_disables_merged_stock_image_check_items(self):
+        db = get_db()
+        created_at = "2026-01-01 00:00:00"
+        db.execute(
+            """
+            INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                IMAGE_TASK_TYPE,
+                "image-ui-step-consistency",
+                "界面截图与步骤一致性检查",
+                "旧拆分项",
+                "你是一名产品界面截图与操作步骤审查专家。旧提示词。",
+                15,
+                created_at,
+                created_at,
+            ),
+        )
+        db.execute(
+            """
+            INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                IMAGE_TASK_TYPE,
+                "image-device-installation",
+                "设备外观与安装图检查",
+                "旧拆分项",
+                "你是一名产品设备外观与安装图审查专家。旧提示词。",
+                25,
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        rows = {
+            row["code"]: bool(row["enabled"])
+            for row in db.execute(
+                "SELECT code, enabled FROM check_items WHERE code IN (?, ?)",
+                ("image-ui-step-consistency", "image-device-installation"),
+            ).fetchall()
+        }
+        self.assertEqual(rows, {"image-ui-step-consistency": False, "image-device-installation": False})
 
     def test_next_custom_check_item_sort_order_goes_before_first_item(self):
         self.assertEqual(_next_check_item_sort_order(get_db()), 0)

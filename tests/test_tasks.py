@@ -566,6 +566,8 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("未覆盖 149 页", results[0]["result"])
 
     def test_qwen_vl_optimized_image_checks_use_expected_targets(self):
+        self.assertEqual(_image_check_target({"code": "image-text-correspondence"}), "page")
+        self.assertEqual(_image_check_target({"code": "image-wiring"}), "resource")
         self.assertEqual(_image_check_target({"code": "image-ui-step-consistency"}), "page")
         self.assertEqual(_image_check_target({"code": "image-device-installation"}), "resource")
 

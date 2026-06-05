@@ -302,43 +302,26 @@ DEFAULT_CONSISTENCY_CHECK_ITEMS = (
 DEFAULT_IMAGE_CHECK_ITEMS = (
     {
         "code": "image-text-correspondence",
-        "name": "图文对应检查",
-        "description": "综合文档文本和图片可见内容，检查产品对象、步骤、参数、界面、图号和说明是否对应。",
-        "prompt": """你是一名技术资料图文一致性审查专家，主要审查产品用户手册、安装指南、调测指南等文档。请综合文档文本、图片清单、图片位置和本次提供的图片内容，检查图片是否与附近文字描述、步骤说明、图题图号、表格参数或引用关系一致。
+        "name": "图文与界面步骤一致性检查",
+        "description": "综合检查图片、界面截图、操作步骤、参数、图号和说明是否与文档上下文一致。",
+        "prompt": """你是一名技术资料图文与界面步骤一致性审查专家，主要审查产品用户手册、安装指南、调测指南等文档。请综合文档文本、图片清单、图片位置和本次提供的页面截图或图片内容，检查图片是否与附近文字描述、操作步骤、界面说明、图题图号、表格参数或引用关系一致。
 重点关注：
-1. 文档描述的产品型号、设备外观、端口名称、安装场景、接线对象、流程步骤或调测结果，是否与图片可见内容对应。
-2. 图片中的界面标题、按钮、菜单、字段、编号、参数、方向、状态、图例或告警文字，是否与附近文字描述冲突。
-3. 文档提到必须展示的关键对象或操作结果，但图片没有体现；或图片展示了关键内容，但附近文字没有必要说明。
-4. 同一批图片之间如存在步骤顺序、截图界面、图号、标题或内容重复/错位，也请标注。
-5. 对只凭图片顺序、文件名或页码无法证明的问题，不要硬判错位，放入“需人工确认”。
-
-输出要求：
-1. 先给出总体判断，说明是否发现图文对应风险。
-2. 按条列出问题：图片名称或位置、文档文字线索、图片可见内容、冲突或缺失说明、建议修改。
-3. 将“明确冲突”和“需人工确认”分开描述；对图片不清晰、上下文不足或需要业务判断的问题标注“需人工确认”。
-4. 只有同时看到明确文档线索和图片可见证据时，才判断为“不对应”。
-5. 不要仅凭文件名、页码、图片顺序或未提供的上下文推断图片插入错位；证据不足时写“需人工确认”。
-6. 如果未发现明显问题，明确说明“未发现明显图文对应问题”。不要编造文档或图片中不存在的内容。""",
-        "sort_order": 10,
-    },
-    {
-        "code": "image-ui-step-consistency",
-        "name": "界面截图与步骤一致性检查",
-        "description": "检查软件/Web/App/设备界面截图中的页面标题、菜单、按钮、字段和状态是否与操作步骤一致。",
-        "prompt": """你是一名产品界面截图与操作步骤审查专家。请结合文档上下文、图片位置和本次提供的页面截图或图片内容，检查用户手册、安装指南、调测指南中的界面截图是否与操作步骤一致。
-重点关注：
-1. 文档写到的菜单路径、页面名称、按钮名称、页签、字段名、开关、下拉选项、状态值、告警或结果提示，是否能在截图中对应看到。
-2. 文档说明“点击/选择/输入/保存/提交/重启/验证”的对象，是否与截图中可见控件一致；截图是否停留在错误页面、旧版界面或不相关页面。
+1. 文档描述的产品对象、软件/Web/App/设备界面、菜单路径、页面名称、按钮、页签、字段、参数、状态、告警或调测结果，是否与图片可见内容对应。
+2. 文档说明“点击/选择/输入/保存/提交/重启/验证”的对象，是否能在截图中对应看到；截图是否停留在错误页面、旧版界面、不相关页面或缺少关键结果。
 3. 操作步骤顺序与截图顺序是否明显冲突，例如先保存后配置、前后截图状态倒置、步骤编号与截图内容不匹配。
-4. 截图中的关键字段值、单位、IP、端口号、协议、开关状态或成功/失败结果是否与文档描述冲突。
-5. 界面文字看不清、截图只截取局部、上下文不足或可能是不同软件版本时，标注“需人工确认”，不要直接判错。
+4. 图片中的编号、单位、IP、端口号、协议、开关状态、图例、方向或告警文字，是否与附近文字描述冲突。
+5. 文档提到必须展示的关键对象或操作结果，但图片没有体现；或图片展示了关键内容，但附近文字没有必要说明。
+6. 同一批图片之间如存在步骤顺序、截图界面、图号、标题或内容重复/错位，也请标注。
+7. 对只凭图片顺序、文件名或页码无法证明的问题，不要硬判错位，放入“需人工确认”。
 
 输出要求：
-1. 先说明是否发现界面截图与操作步骤不一致。
-2. 按条列出：图片名称或位置、文档步骤线索、截图可见界面内容、不一致点、建议修改。
-3. 对版本差异、截图裁切、文字模糊或证据不足的问题单独列为“需人工确认”。
-4. 如果未发现明显问题，明确说明“未发现明显界面截图与步骤一致性问题”。""",
-        "sort_order": 15,
+1. 先给出总体判断，说明是否发现图文或界面步骤一致性风险。
+2. 按条列出问题：图片名称或位置、文档文字/步骤线索、图片可见内容、冲突或缺失说明、建议修改。
+3. 将“明确冲突”和“需人工确认”分开描述；对版本差异、截图裁切、文字模糊、上下文不足或需要业务判断的问题标注“需人工确认”。
+4. 只有同时看到明确文档线索和图片可见证据时，才判断为“不一致”。
+5. 不要仅凭文件名、页码、图片顺序或未提供的上下文推断图片插入错位；证据不足时写“需人工确认”。
+6. 如果未发现明显问题，明确说明“未发现明显图文与界面步骤一致性问题”。不要编造文档或图片中不存在的内容。""",
+        "sort_order": 10,
     },
     {
         "code": "image-small-language-text",
@@ -360,41 +343,26 @@ DEFAULT_IMAGE_CHECK_ITEMS = (
         "sort_order": 20,
     },
     {
-        "code": "image-device-installation",
-        "name": "设备外观与安装图检查",
-        "description": "检查设备外观、端口、安装方向、固定方式、附件和安装场景是否与文档说明一致。",
-        "prompt": """你是一名产品设备外观与安装图审查专家。请结合文档文本、图片位置和本次提供的图片内容，检查用户手册、安装指南、调测指南中的设备照片、结构图、安装图、配件图是否与文档说明一致。
+        "code": "image-wiring",
+        "name": "设备安装与接线检查",
+        "description": "检查设备外观、安装方向、端口、附件、端子、极性、线缆颜色、线号和连接关系是否存在明显风险。",
+        "prompt": """你是一名产品设备安装与接线审查专家。请结合文档文本、图片位置和本次提供的设备照片、安装图、结构图、接线图或接线照片，检查设备外观、安装方式、端口端子、线缆和连接关系是否与文档说明一致，并标注明显风险。
 重点关注：
 1. 产品型号、设备正反面、端口/接口/指示灯/按键/拨码/标签位置是否与文档描述或附近图注一致。
 2. 安装方向、壁挂/导轨/机柜/桌面安装方式、固定孔位、螺钉、支架、卡扣、接地位置、线缆出线方向是否与步骤说明冲突。
 3. 图中展示的配件、工具、线缆、天线、电源、端子或保护件是否与文档列出的物料或安装步骤明显不一致。
-4. 图片是否缺少关键安装结果图、方向标识、端口标识或安全提示，导致读者难以按图操作。
-5. 对需要实物规格、BOM、工程设计或现场条件才能确认的问题，标注“需人工确认”。
+4. L/N/PE、+/−、A/B、485+/485−、DI/DO、AI/AO、COM、GND、VCC、电源输入/输出等端子或极性是否与文档说明冲突。
+5. 线缆颜色、线号、端子编号、端口名称、屏蔽层、接地符号、跳线或短接关系是否与图中可见标识和文字说明不一致。
+6. 接线方向、进出线位置、交叉连接、端子排顺序、设备间连接关系是否存在明显反向、错位或漏接风险。
+7. 图片模糊、端子文字过小、线缆被遮挡、缺少现场条件或需要实物规格/BOM/工程设计确认时，标注“需人工确认”。
 
 输出要求：
-1. 先说明是否发现设备外观或安装图风险。
-2. 按条列出：图片名称或位置、文档线索、图片可见内容、问题说明、可能影响、建议修改。
-3. 只依据可见图片和提供文本判断；看不清、被遮挡或缺少上下文时写“需人工确认”。
-4. 如果未发现明显问题，明确说明“未发现明显设备外观与安装图问题”。""",
-        "sort_order": 25,
-    },
-    {
-        "code": "image-wiring",
-        "name": "图片接线问题检查",
-        "description": "检查接线图或接线照片中的端子、极性、线缆颜色、线号和连接关系是否存在明显风险。",
-        "prompt": """你是一名电气接线图和设备接线审查专家。请结合文档文本、图片位置和本次提供的图片内容，检查接线关系、端子编号、线缆走向、极性、颜色/线号标识、连接点和交叉连接是否存在明显风险；如文档中的接线描述、参数表或步骤与图片不一致，也请指出。
-重点关注：
-1. L/N/PE、+/−、A/B、485+/485−、DI/DO、AI/AO、COM、GND、VCC、电源输入/输出等端子或极性是否与文档说明冲突。
-2. 线缆颜色、线号、端子编号、端口名称、屏蔽层、接地符号、跳线或短接关系是否与图中可见标识和文字说明不一致。
-3. 接线方向、进出线位置、交叉连接、端子排顺序、设备间连接关系是否存在明显反向、错位或漏接风险。
-4. 图片模糊、端子文字过小、线缆被遮挡或无法确认真实连接时，标注“需人工确认”。
-
-输出要求：
-1. 先给出总体判断，说明是否发现明显接线风险。
+1. 先给出总体判断，说明是否发现明显设备安装或接线风险。
 2. 按条列出问题：图片名称或位置、文档线索、图片可见证据、问题描述、可能影响、建议修改或需核对的依据。
-3. 对图片分辨率不足、遮挡或无法确认的地方标注“需人工确认”。
-4. 只依据提供的文本和图片可见内容，不要补全不可见接线，也不要替代专业电气设计审核。""",
-        "sort_order": 30,
+3. 将明确问题和“需人工确认”分开描述。
+4. 只依据提供的文本和图片可见内容，不要补全不可见接线，也不要替代专业电气设计审核。
+5. 如果未发现明显问题，明确说明“未发现明显设备安装与接线问题”。""",
+        "sort_order": 25,
     },
     {
         "code": "image-figure-table-title-standard",
@@ -419,7 +387,7 @@ DEFAULT_IMAGE_CHECK_ITEMS = (
 2. 按条列出：图片名称或位置、对象类型（图/表/截图/流程图等）、可见内容线索、附近可见标题文字、问题判断、建议补充的标题形式。
 3. 对证据不足的问题单独列入“需人工确认”。
 4. 如果未发现明显问题，明确说明“未发现明显图表标题可见性问题”。不要编造图片或文档中不存在的标题。""",
-        "sort_order": 35,
+        "sort_order": 30,
     },
     {
         "code": "image-integrity-clarity",
@@ -444,7 +412,7 @@ DEFAULT_IMAGE_CHECK_ITEMS = (
 2. 按条列出问题：图片名称或位置、问题类型（完整性/清晰度）、可见线索、影响、建议处理方式。
 3. 对图片本身分辨率不足、无法判断是否由截图造成、或需要原始文件核对的情况标注“需人工确认”。
 4. 如果未发现明显问题，明确说明“未发现明显图片完整性和清晰度问题”。不要编造图片中不存在的缺陷。""",
-        "sort_order": 38,
+        "sort_order": 35,
     },
     {
         "code": "image-drawing-standard",
@@ -481,11 +449,21 @@ DEFAULT_CHECK_ITEMS_BY_CODE = {item["code"]: item for item in DEFAULT_CHECK_ITEM
 _IMAGE_LANGUAGE_MATCH_CODE = "image-small-language-text"
 _LEGACY_IMAGE_LANGUAGE_MARKERS = ("小语种", "非中文、非英文")
 _QWEN_VL_OPTIMIZED_IMAGE_PROMPT_MARKERS = {
-    "image-text-correspondence": ("同一批图片之间如存在编号、标题、内容顺序或引用关系冲突",),
-    "image-wiring": ("电气接线图和设备接线审查专家", "颜色/线号标识"),
+    "image-text-correspondence": ("图文一致性审查专家",),
+    "image-wiring": ("电气接线图和设备接线审查专家",),
     "image-figure-table-title-standard": ("必须判为表标题缺失", "同一张图片中可能同时出现"),
     "image-integrity-clarity": ("异常红块", "过度拉伸"),
     "image-drawing-standard": ("技术制图和图示规范审查专家", "线型线宽"),
+}
+_MERGED_IMAGE_CHECK_ITEM_MARKERS = {
+    "image-ui-step-consistency": {
+        "name": "界面截图与步骤一致性检查",
+        "markers": ("产品界面截图与操作步骤审查专家",),
+    },
+    "image-device-installation": {
+        "name": "设备外观与安装图检查",
+        "markers": ("产品设备外观与安装图审查专家",),
+    },
 }
 
 
@@ -555,6 +533,7 @@ def seed_defaults():
 
     _sync_renamed_default_check_items(db, now)
     _sync_qwen_vl_optimized_image_check_items(db, now)
+    _disable_merged_image_check_items(db, now)
     db.commit()
 
 
@@ -604,13 +583,22 @@ def _sync_qwen_vl_optimized_image_check_items(db, updated_at: str):
         default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get(code)
         if default_item is None:
             continue
-        row = db.execute("SELECT prompt FROM check_items WHERE code = ?", (code,)).fetchone()
+        row = db.execute(
+            "SELECT name, description, prompt, sort_order FROM check_items WHERE code = ?",
+            (code,),
+        ).fetchone()
         if row is None:
             continue
         prompt = str(row["prompt"] or "")
-        if prompt == default_item["prompt"]:
+        is_stock_prompt = prompt == default_item["prompt"] or all(marker in prompt for marker in markers)
+        if not is_stock_prompt:
             continue
-        if not all(marker in prompt for marker in markers):
+        if (
+            row["name"] == default_item["name"]
+            and (row["description"] or "") == default_item["description"]
+            and prompt == default_item["prompt"]
+            and int(row["sort_order"] or 0) == int(default_item["sort_order"])
+        ):
             continue
         db.execute(
             """
@@ -630,4 +618,22 @@ def _sync_qwen_vl_optimized_image_check_items(db, updated_at: str):
                 updated_at,
                 code,
             ),
+        )
+
+
+def _disable_merged_image_check_items(db, updated_at: str):
+    for code, legacy in _MERGED_IMAGE_CHECK_ITEM_MARKERS.items():
+        row = db.execute(
+            "SELECT name, prompt, enabled FROM check_items WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if row is None:
+            continue
+        prompt = str(row["prompt"] or "")
+        is_stock_item = all(marker in prompt for marker in legacy["markers"])
+        if not is_stock_item or not int(row["enabled"] or 0):
+            continue
+        db.execute(
+            "UPDATE check_items SET enabled = 0, updated_at = ? WHERE code = ?",
+            (updated_at, code),
         )
