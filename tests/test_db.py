@@ -163,6 +163,16 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("typo", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
+        compliance_item = db.execute(
+            "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (DOCUMENT_TASK_TYPE, "compliance"),
+        ).fetchone()
+        typo_item = db.execute(
+            "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (DOCUMENT_TASK_TYPE, "typo"),
+        ).fetchone()
+        self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", compliance_item["prompt"])
+        self.assertIn("不要把解析换行/分页造成的空白当作多余空格", typo_item["prompt"])
         self.assertNotIn("image-ui-step-consistency", default_check_item_codes(IMAGE_TASK_TYPE))
         self.assertNotIn("image-device-installation", default_check_item_codes(IMAGE_TASK_TYPE))
         image_text_item = db.execute(

@@ -56,6 +56,32 @@ class LLMResponseParsingTest(unittest.TestCase):
             "http://example.test/v1/chat/completions",
         )
 
+    def test_document_check_prompt_warns_about_extracted_line_break_spaces(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查多余空格",
+                document_text="第一行\n第二行",
+            )
+
+        user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
+        self.assertIn("解析换行/分页造成的空白", user_content)
+        self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", user_content)
+
     def test_reads_stream_chat_completion_content(self):
         response = FakeResponse(
             lines=[
