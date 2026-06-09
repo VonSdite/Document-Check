@@ -11,6 +11,13 @@ server:
   # 对外开放前请务必修改 admin.password、secret_key 和 admin_url。
   host: 0.0.0.0
   port: 31945
+  # 如果通过 Nginx 子路径发布，例如 https://example.com/infoCheck，请填写 /infoCheck；根路径发布则留空。
+  url_prefix: ""
+  # 如果 Nginx 会覆盖并注入真实客户端 IP，例如 proxy_set_header X-Real-IP $remote_addr，可填写 X-Real-IP。
+  # 只有确认外部用户无法绕过 Nginx 直连本服务时才启用。
+  real_ip_header: X-Real-IP
+  # 如果 Nginx 同时注入 X-Forwarded-Proto/Host/Prefix 等标准代理头，可开启。
+  proxy_fix: false
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。

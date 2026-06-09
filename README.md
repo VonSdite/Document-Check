@@ -78,6 +78,13 @@ server:
   # 对外开放前请务必修改 admin.password、secret_key 和 admin_url。
   host: 0.0.0.0
   port: 31945
+  # 如果通过 Nginx 子路径发布，例如 https://example.com/infoCheck，请填写 /infoCheck；根路径发布则留空。
+  url_prefix: ""
+  # 如果 Nginx 会覆盖并注入真实客户端 IP，例如 proxy_set_header X-Real-IP $remote_addr，可填写 X-Real-IP。
+  # 只有确认外部用户无法绕过 Nginx 直连本服务时才启用。
+  real_ip_header: X-Real-IP
+  # 如果 Nginx 同时注入 X-Forwarded-Proto/Host/Prefix 等标准代理头，可开启。
+  proxy_fix: false
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
@@ -133,6 +140,9 @@ server:
   # 如果需要局域网或服务器访问，请改用 config.platform.example.yaml 的 platform: true。
   host: 127.0.0.1
   port: 31945
+  url_prefix: ""
+  real_ip_header: ""
+  proxy_fix: false
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
@@ -175,6 +185,12 @@ auth:
 `platform` 默认为 `false`，首次启动没有配置文件时会生成非平台模式配置：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录；该模式下 `server.host` 和 `HOST` 环境变量都会被忽略，`PORT` 仍可临时覆盖端口。设置为 `true` 时进入平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。
 
 `admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。平台服务模式下临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
+
+通过 Nginx 等反向代理部署时，可按实际网关配置维护 `server` 下的代理字段：
+
+- `server.url_prefix`：本服务挂在域名子路径下时填写，例如外部访问路径为 `/infoCheck` 就填 `/infoCheck`；根路径发布留空。
+- `server.real_ip_header`：当 Nginx 使用 `proxy_set_header X-Real-IP $remote_addr;` 覆盖并注入真实客户端 IP 时填写 `X-Real-IP`。该字段会影响 `auth.mode: ip` 的用户归属、任务审计 IP、统计和并发控制，必须保证外部用户不能绕过 Nginx 直连 Flask 服务，也不能伪造同名请求头。
+- `server.proxy_fix`：只有在 Nginx 注入并覆盖 `X-Forwarded-Proto`、`X-Forwarded-Host`、`X-Forwarded-Prefix` 等标准代理头时开启，用于修正 Flask 看到的协议、域名和前缀。
 
 ## 系统出站网络配置
 

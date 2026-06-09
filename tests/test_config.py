@@ -28,10 +28,58 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["admin_url"], "/console")
         self.assertEqual(config["server"]["host"], "127.0.0.1")
         self.assertEqual(config["server"]["port"], 31945)
+        self.assertEqual(config["server"]["url_prefix"], "")
+        self.assertEqual(config["server"]["real_ip_header"], "")
+        self.assertFalse(config["server"]["proxy_fix"])
         self.assertEqual(config["network"], {"proxy_mode": "direct", "proxy": "", "ssl_verify": False})
         self.assertEqual(config["auth"]["mode"], "ip")
         self.assertEqual(config["auth"]["trusted_header"], {"user_id": "", "username": ""})
         self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "")
+
+    def test_server_proxy_config_is_normalized(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "platform": True,
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {
+                        "host": "0.0.0.0",
+                        "port": 5000,
+                        "url_prefix": " /infoCheck/ ",
+                        "real_ip_header": " X-Real-IP ",
+                        "proxy_fix": "true",
+                    },
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["server"]["url_prefix"], "/infoCheck")
+        self.assertEqual(config["server"]["real_ip_header"], "X-Real-IP")
+        self.assertTrue(config["server"]["proxy_fix"])
+
+    def test_invalid_real_ip_header_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {
+                        "host": "127.0.0.1",
+                        "port": 5000,
+                        "real_ip_header": "X Real IP",
+                    },
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["server"]["real_ip_header"], "")
 
     def test_auth_trusted_header_config_is_normalized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -245,6 +293,39 @@ class ProviderConfigTest(unittest.TestCase):
                 self.assertFalse(config["platform"])
                 self.assertEqual(config["server"]["host"], "127.0.0.1")
                 self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())
+            finally:
+                created_app.extensions["task_scheduler"].stop()
+
+    def test_app_uses_configured_url_prefix_for_generated_urls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "platform": False,
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {
+                        "host": "127.0.0.1",
+                        "port": 5000,
+                        "url_prefix": "/infoCheck",
+                    },
+                },
+            )
+
+            with (
+                patch("app._runtime_root_dir", return_value=Path(temp_dir)),
+                patch("app._configure_logging"),
+            ):
+                created_app = create_app()
+            try:
+                response = created_app.test_client().get("/")
+                html = response.get_data(as_text=True)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(created_app.config["APPLICATION_ROOT"], "/infoCheck")
+                self.assertIn('href="/infoCheck/static/app.css"', html)
+                self.assertIn('src="/infoCheck/static/app.js"', html)
             finally:
                 created_app.extensions["task_scheduler"].stop()
 

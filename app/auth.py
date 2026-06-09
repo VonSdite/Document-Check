@@ -1,3 +1,4 @@
+import ipaddress
 from dataclasses import dataclass
 
 from flask import current_app, request, session
@@ -25,7 +26,7 @@ class UserIdentity:
 
 
 def current_identity(*, require_sso: bool = False) -> UserIdentity:
-    ip = request.remote_addr or "0.0.0.0"
+    ip = client_ip()
     auth_config = current_app.config.get("AUTH", {})
     if auth_config.get("mode") == "trusted_header":
         identity = _identity_from_trusted_header(auth_config, ip)
@@ -40,6 +41,27 @@ def current_identity(*, require_sso: bool = False) -> UserIdentity:
         if require_sso:
             raise AuthenticationRequired("未收到 SSO 用户信息")
     return UserIdentity(subject=ip_subject(ip), display_name=get_ip_username(ip), source="ip", ip=ip)
+
+
+def client_ip() -> str:
+    header_ip = _real_ip_header_value(current_app.config.get("REAL_IP_HEADER"))
+    if header_ip:
+        return header_ip
+    return str(request.remote_addr or "").strip() or "0.0.0.0"
+
+
+def _real_ip_header_value(header_name) -> str:
+    header_name = str(header_name or "").strip()
+    if not header_name:
+        return ""
+    raw_value = str(request.headers.get(header_name) or "")
+    candidate = raw_value.split(",", 1)[0].strip()
+    if not candidate:
+        return ""
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return ""
 
 
 def _identity_from_trusted_header(auth_config: dict, ip: str) -> UserIdentity | None:

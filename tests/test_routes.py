@@ -577,6 +577,38 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("Console 提供商", user_response.get_data(as_text=True))
         self.assertIn("console-model", user_response.get_data(as_text=True))
 
+    def test_ip_identity_uses_configured_real_ip_header(self):
+        self.app.config["REAL_IP_HEADER"] = "X-Real-IP"
+        model_id = self._configure_provider("ip:10.20.30.40")
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            headers={"X-Real-IP": "10.20.30.40"},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT owner_subject, ip FROM tasks").fetchone()
+        self.assertEqual(task["owner_subject"], "ip:10.20.30.40")
+        self.assertEqual(task["ip"], "10.20.30.40")
+
+    def test_invalid_real_ip_header_falls_back_to_remote_addr(self):
+        self.app.config["REAL_IP_HEADER"] = "X-Real-IP"
+        self._configure_provider("ip:127.0.0.1")
+
+        response = self.client.get("/models", headers={"X-Real-IP": "not-an-ip"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("测试提供商", response.get_data(as_text=True))
+
     def test_local_mode_root_shows_admin_view_without_login(self):
         self.app.config["PLATFORM"] = False
         self._logout_test_client()

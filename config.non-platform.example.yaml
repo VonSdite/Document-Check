@@ -11,6 +11,9 @@ server:
   # 如果需要局域网或服务器访问，请改用 config.platform.example.yaml 的 platform: true。
   host: 127.0.0.1
   port: 31945
+  url_prefix: ""
+  real_ip_header: ""
+  proxy_fix: false
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。

@@ -5,6 +5,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import load_local_config
 from .db import init_db, seed_defaults
@@ -16,16 +17,22 @@ from .tasks import TaskScheduler
 def create_app():
     root_dir = _runtime_root_dir()
     local_config = load_local_config(root_dir)
+    server_config = local_config["server"]
 
     app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True)
+    if server_config["proxy_fix"]:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
     app.config.update(
         SECRET_KEY=local_config["secret_key"],
         PLATFORM=local_config["platform"],
         ADMIN_USERNAME=local_config["admin"]["username"],
         ADMIN_PASSWORD=local_config["admin"]["password"],
         ADMIN_URL=local_config["admin_url"],
-        LISTEN_HOST=local_config["server"]["host"] if local_config["platform"] else "127.0.0.1",
-        LISTEN_PORT=local_config["server"]["port"],
+        LISTEN_HOST=server_config["host"] if local_config["platform"] else "127.0.0.1",
+        LISTEN_PORT=server_config["port"],
+        APPLICATION_ROOT=server_config["url_prefix"] or "/",
+        REAL_IP_HEADER=server_config["real_ip_header"],
         NETWORK=local_config["network"],
         AUTH=local_config["auth"],
         ROOT_DIR=root_dir,

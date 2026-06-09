@@ -1,3 +1,4 @@
+import re
 import secrets
 from pathlib import Path
 
@@ -9,12 +10,16 @@ DEFAULT_PLATFORM = False
 DEFAULT_LISTEN_HOST = "0.0.0.0"
 DEFAULT_LOCAL_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 31945
+DEFAULT_URL_PREFIX = ""
+DEFAULT_REAL_IP_HEADER = ""
+DEFAULT_PROXY_FIX = False
 DEFAULT_AUTH_MODE = "ip"
 AUTH_MODES = {"ip", "trusted_header", "saml"}
 DEFAULT_PROXY_MODE = "direct"
 PROXY_MODES = {"direct", "system", "custom"}
 DEFAULT_SSL_VERIFY = False
 CONFIG_FILENAME = "config.yaml"
+HTTP_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$")
 
 
 def load_local_config(root_dir: Path) -> dict:
@@ -62,6 +67,9 @@ def _default_config() -> dict:
         "server": {
             "host": DEFAULT_LISTEN_HOST if DEFAULT_PLATFORM else DEFAULT_LOCAL_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
+            "url_prefix": DEFAULT_URL_PREFIX,
+            "real_ip_header": DEFAULT_REAL_IP_HEADER,
+            "proxy_fix": DEFAULT_PROXY_FIX,
         },
         "network": {
             "proxy_mode": DEFAULT_PROXY_MODE,
@@ -106,6 +114,11 @@ def _normalize_config(config: dict) -> dict:
     default_host = DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
     config["server"].setdefault("host", default_host)
     config["server"]["port"] = _normalize_port(config["server"].get("port", DEFAULT_LISTEN_PORT))
+    config["server"]["url_prefix"] = _normalize_url_prefix(config["server"].get("url_prefix", DEFAULT_URL_PREFIX))
+    config["server"]["real_ip_header"] = _normalize_header_name(
+        config["server"].get("real_ip_header", DEFAULT_REAL_IP_HEADER)
+    )
+    config["server"]["proxy_fix"] = _normalize_bool(config["server"].get("proxy_fix"), DEFAULT_PROXY_FIX)
     config["network"] = normalize_network_config(config.get("network", {}))
     config["auth"] = _normalize_auth(config.get("auth", {}))
     config.pop("providers", None)
@@ -166,6 +179,22 @@ def _normalize_admin_url(value: str) -> str:
         return DEFAULT_ADMIN_URL
     if not value.startswith("/"):
         value = f"/{value}"
+    return value
+
+
+def _normalize_url_prefix(value: str) -> str:
+    value = str(value or DEFAULT_URL_PREFIX).strip().rstrip("/")
+    if not value or value == "/":
+        return ""
+    if not value.startswith("/"):
+        value = f"/{value}"
+    return value
+
+
+def _normalize_header_name(value: str) -> str:
+    value = str(value or DEFAULT_REAL_IP_HEADER).strip()
+    if not value or not HTTP_HEADER_NAME_RE.fullmatch(value):
+        return ""
     return value
 
 
