@@ -1122,6 +1122,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("model-a", html)
         self.assertIn(f'value="{model_id}"', html)
 
+    def test_consistency_check_items_are_unchecked_by_default(self):
+        self._configure_provider()
+
+        response = self.client.get("/consistency")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = soup.find("form", {"data-require-checks": "true"})
+        self.assertIsNotNone(form)
+        checkboxes = form.select('input[name="checks"]')
+        self.assertTrue(checkboxes)
+        self.assertTrue(all(checkbox.get("checked") is None for checkbox in checkboxes))
+
     def test_saml_user_page_redirects_to_saml_login(self):
         self.app.config["AUTH"] = _saml_auth_config()
 
@@ -1213,6 +1226,25 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn("/auth/saml/login?next=/admin/tasks", response.headers["Location"])
+
+    def test_create_consistency_task_rejects_missing_checks_before_saving_file(self):
+        model_id = self._configure_provider()
+
+        response = self.client.post(
+            "/consistency",
+            data={
+                "master_documents": (io.BytesIO("素材参数 10A".encode("utf-8")), "master.txt"),
+                "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_consistency_task_saves_combined_document_text(self):
         model_id = self._configure_provider()

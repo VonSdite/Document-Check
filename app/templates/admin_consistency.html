@@ -4,7 +4,7 @@
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
-<form method="post" enctype="multipart/form-data" class="panel create-panel">
+<form method="post" enctype="multipart/form-data" class="panel create-panel" data-require-checks="true">
   <div class="panel-head compact-head">
     <h1>创建多文档对照检查</h1>
   </div>
@@ -74,7 +74,7 @@
     <div class="check-chip-grid">
       {% for item in check_items %}
       <label class="check-chip">
-        <input type="checkbox" name="checks" value="{{ item.id }}" checked>
+        <input type="checkbox" name="checks" value="{{ item.id }}">
         <span>{{ item.name }}</span>
         <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
       </label>

@@ -117,6 +117,23 @@ function showToast(message, category = "success") {
   window.setTimeout(() => hideToast(toast), 4200);
 }
 
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || form.dataset.requireChecks !== "true") {
+    return;
+  }
+  if (form.querySelector('input[name="checks"]:checked')) {
+    return;
+  }
+
+  event.preventDefault();
+  showToast("请至少选择一个多文档对照项。", "error");
+  const firstCheck = form.querySelector('input[name="checks"]');
+  if (firstCheck instanceof HTMLElement) {
+    firstCheck.focus();
+  }
+});
+
 document.querySelectorAll(".flash").forEach((toast) => {
   window.setTimeout(() => hideToast(toast), 4200);
 });
