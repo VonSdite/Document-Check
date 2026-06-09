@@ -532,8 +532,9 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["batch_count"], 1)
         self.assertEqual(calls[0]["image_items"][0]["index"], 2)
         self.assertEqual(calls[0]["image_items"][0]["name"], "0001_page001-image001.png")
-        self.assertEqual(calls[0]["image_items"][0]["position"], "page001-image001")
+        self.assertEqual(calls[0]["image_items"][0]["position"], "PDF第1页（page001-image001）")
         self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/png;base64,"))
+        self.assertIn("PDF第1页（page001-image001）：0001_page001-image001.png", results[0]["result"])
         self.assertIn("0001_page001-image001.png", results[0]["result"])
         self.assertIn("0120_page094-image001.bin", results[0]["result"])
         self.assertIn("已跳过的图片", results[0]["result"])
@@ -646,8 +647,10 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["check_name"], "页面级检查合并检查（2项）")
         self.assertIn("image-figure-table-title-standard", calls[0]["prompt"])
         self.assertIn("image-integrity-clarity", calls[0]["prompt"])
-        self.assertEqual(calls[0]["image_items"][0]["position"], "page001-screenshot")
+        self.assertIn("PDF 页码", calls[0]["prompt"])
+        self.assertEqual(calls[0]["image_items"][0]["position"], "PDF第1页（page001-screenshot）")
         self.assertEqual([item["code"] for item in results], ["image-figure-table-title-standard", "image-integrity-clarity"])
+        self.assertIn("PDF第1页（page001-screenshot）：0001_page001-screenshot.png", results[0]["result"])
         self.assertIn("page001 表格缺少表标题", results[0]["result"])
         self.assertIn("page001 表格缺少表标题", results[0]["result"].split("### 检查汇总", 1)[-1])
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"])
@@ -666,6 +669,13 @@ class TaskExecutionTest(unittest.TestCase):
                 {
                     "batch_index": 23,
                     "batch_count": 30,
+                    "images": [
+                        {
+                            "filename": "0089_page089-screenshot.png",
+                            "position": "page089-screenshot",
+                            "page_number": 89,
+                        }
+                    ],
                     "content": """### 检查项：image-figure-table-title-standard｜图表标题规范检查
 总体判断
 发现明确问题：图片 89 页面顶部的表格缺失规范的表编号和标题。
@@ -682,9 +692,45 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         self.assertIn("批次 23/30", summary)
+        self.assertIn("PDF第89页", summary)
         self.assertIn("图片 89（page089-screenshot）：页面顶部的表格缺失表编号", summary)
-        self.assertIn("线索：表格上方仅有", summary)
+        self.assertNotIn("线索：表格上方仅有", summary)
         self.assertNotIn("未汇总到明确问题", summary)
+
+    def test_image_issue_summary_filters_normal_items_from_clear_issues(self):
+        summary = _format_image_check_issue_summary(
+            [
+                {
+                    "batch_index": 1,
+                    "batch_count": 1,
+                    "images": [
+                        {
+                            "filename": "0003_page003-screenshot.png",
+                            "position": "page003-screenshot",
+                            "page_number": 3,
+                        }
+                    ],
+                    "content": """### 检查项：image-integrity-clarity｜图片完整性和清晰度检查
+#### 明确问题
+- PDF第3页：页面显示正常，文字清晰。
+- PDF第3页：未发现明确问题。
+- PDF第3页：页面截图较小，需人工确认清晰度。
+- PDF第3页：右下角表格标题缺失。
+#### 需人工确认
+- 未发现需人工确认项。""",
+                }
+            ],
+            [],
+        )
+
+        issue_section = summary.split("#### 明确问题", 1)[-1].split("#### 需人工确认", 1)[0]
+        manual_section = summary.split("#### 需人工确认", 1)[-1]
+        self.assertIn("PDF第3页", summary)
+        self.assertIn("右下角表格标题缺失", issue_section)
+        self.assertNotIn("页面显示正常", issue_section)
+        self.assertNotIn("未发现明确问题", issue_section)
+        self.assertNotIn("页面截图较小", issue_section)
+        self.assertIn("页面截图较小，需人工确认清晰度", manual_section)
 
     def test_image_batch_uses_nearby_page_text_context(self):
         document_text = "\n\n".join(

@@ -904,13 +904,13 @@ def _combined_image_check_prompt(check_items: list[dict], target_kind: str, targ
         (
             f"### 检查项：{item['code']}｜{item['name']}\n"
             "#### 总体判断\n"
-            "说明是否发现明确问题。\n"
+            "说明是否发现明确问题；没有明确问题时只写“未发现明确问题”。\n"
             "#### 明确问题\n"
-            "- 没有明确问题时写“未发现明确问题”。\n"
+            "- 只列能从当前可见图片直接判定的异常，每条必须以“第N页”或图片位置开头；没有明确问题时只写“未发现明确问题”，不要列正常项。\n"
             "#### 需人工确认\n"
-            "- 没有需人工确认项时写“未发现需人工确认项”。\n"
+            "- 只列证据不足、看不清或需要业务确认的对象，每条必须以“第N页”或图片位置开头；没有需人工确认项时只写“未发现需人工确认项”。\n"
             "#### 未发现问题\n"
-            "- 简述正常项或写“未发现明显异常”。"
+            "- 可简述正常项；这些内容不要写入“明确问题”。"
         )
         for item in check_items
     )
@@ -918,6 +918,8 @@ def _combined_image_check_prompt(check_items: list[dict], target_kind: str, targ
         f"本次执行{target_label}，一次请求中合并 {len(check_items)} 个检查项。请对每个检查项独立判断，"
         "不要把其他检查项的结论混入当前检查项。\n\n"
         f"{target_instruction}\n\n"
+        "定位要求：引用图片时优先使用 PDF 页码（例如“第12页”），同一页有多张图时再补充图片编号/位置；无法识别页码时使用图片编号或原始位置。\n"
+        "汇总约束：明确问题只放已确认异常；正常、未发现、符合、一致、清晰、完整等无问题结论只能放“未发现问题”，不得放入“明确问题”。\n"
         "证据约束：只能依据本次提供的 PDF 页面/图片和文档上下文；看不清、证据不足、跨页缺上下文时放入“需人工确认”，不要编造不可见内容。\n\n"
         "输出必须严格使用以下结构，并保留每个检查项的 code：\n"
         f"{required_sections}\n\n"
@@ -1077,12 +1079,35 @@ def _multimodal_image_inputs(image_folder: Path, image_items: list[dict]) -> lis
             {
                 "index": image_index,
                 "name": str(image.get("filename") or f"image-{image_index:04d}"),
-                "position": str(image.get("position") or ""),
+                "position": _image_location_label(image),
                 "mime_type": mime_type,
                 "data_url": image_to_data_url(image_path, mime_type),
             }
         )
     return inputs
+
+
+def _image_pdf_page_label(image: dict) -> str:
+    try:
+        page_number = int(image.get("page_number") or 0)
+    except (TypeError, ValueError):
+        page_number = 0
+    if page_number <= 0:
+        pages = page_numbers_from_image_item(image)
+        page_number = pages[0] if pages else 0
+    if page_number <= 0:
+        return ""
+    return f"PDF第{page_number}页"
+
+
+def _image_location_label(image: dict) -> str:
+    page_label = _image_pdf_page_label(image)
+    position = str(image.get("position") or "").strip()
+    if page_label and position:
+        return f"{page_label}（{position}）"
+    if page_label:
+        return page_label
+    return position or "未标注"
 
 
 def _format_multimodal_image_check_result(
@@ -1118,8 +1143,8 @@ def _format_image_batch_result(batch: dict, content: str) -> str:
     image_lines = []
     for image in images:
         filename = str(image.get("filename") or image.get("id") or "图片")
-        position = str(image.get("position") or "未标注")
-        image_lines.append(f"- {filename}（位置：{position}）")
+        location = _image_location_label(image)
+        image_lines.append(f"- {location}：{filename}")
     image_list = "\n".join(image_lines) if image_lines else "- 未记录图片"
     return f"{title}\n\n覆盖图片：\n{image_list}\n\n{str(content or '').strip()}"
 
@@ -1156,7 +1181,7 @@ def _format_image_check_issue_summary(batch_results: list[dict], skipped_images:
             continue
         for line in _summary_candidate_lines(str(batch.get("content") or "")):
             normalized = _normalize_summary_line(line)
-            if not normalized or _summary_line_is_negative(normalized):
+            if not normalized or _summary_line_is_negative(normalized) or _summary_line_is_normal(normalized):
                 continue
             entry = f"{batch_label} {normalized}"
             if _summary_line_needs_manual(normalized):
@@ -1165,27 +1190,51 @@ def _format_image_check_issue_summary(batch_results: list[dict], skipped_images:
                 issues.append(entry)
     for image in skipped_images:
         filename = str(image.get("filename") or image.get("id") or "图片")
-        position = str(image.get("position") or "未标注")
-        manual.append(f"{filename}（位置：{position}）提取后不是可识别图片格式，已跳过，需人工确认是否影响检查。")
+        location = _image_location_label(image)
+        manual.append(f"{location}：{filename} 提取后不是可识别图片格式，已跳过，需人工确认是否影响检查。")
     for note in manual_notes or []:
         manual.append(str(note).strip())
 
     issues = _dedupe_limited(issues, 30)
     manual = _dedupe_limited(manual, 30)
     if not issues and not manual:
-        return "### 检查汇总\n\n明确问题：未汇总到明确问题。\n\n需人工确认：未汇总到需人工确认项。"
+        return "### 检查汇总\n\n#### 明确问题\n- 未发现明确问题。\n\n#### 需人工确认\n- 未发现需人工确认项。"
 
-    issue_text = "\n".join(f"- {item}" for item in issues) if issues else "- 未汇总到明确问题。"
-    manual_text = "\n".join(f"- {item}" for item in manual) if manual else "- 未汇总到需人工确认项。"
+    issue_text = "\n".join(f"- {item}" for item in issues) if issues else "- 未发现明确问题。"
+    manual_text = "\n".join(f"- {item}" for item in manual) if manual else "- 未发现需人工确认项。"
     return f"### 检查汇总\n\n#### 明确问题\n{issue_text}\n\n#### 需人工确认\n{manual_text}"
 
 
 def _image_batch_label(batch: dict) -> str:
     batch_index = int(batch.get("batch_index") or 1)
     batch_count = int(batch.get("batch_count") or 1)
+    page_label = _image_batch_pages_label(batch)
     if batch_count > 1:
-        return f"批次 {batch_index}/{batch_count}："
-    return "批次 1："
+        prefix = f"批次 {batch_index}/{batch_count}"
+    else:
+        prefix = "批次 1"
+    if page_label:
+        return f"{prefix}（{page_label}）："
+    return f"{prefix}："
+
+
+def _image_batch_pages_label(batch: dict) -> str:
+    pages = []
+    seen = set()
+    for image in batch.get("images") or []:
+        for page in page_numbers_from_image_item(image):
+            if page in seen:
+                continue
+            seen.add(page)
+            pages.append(page)
+    if not pages:
+        return ""
+    pages = sorted(pages)
+    if len(pages) == 1:
+        return f"PDF第{pages[0]}页"
+    if pages == list(range(pages[0], pages[-1] + 1)):
+        return f"PDF第{pages[0]}-{pages[-1]}页"
+    return "PDF第" + "、".join(str(page) for page in pages) + "页"
 
 
 def _summary_candidate_lines(content: str) -> list[str]:
@@ -1201,10 +1250,19 @@ def _summary_candidate_lines(content: str) -> list[str]:
 
 
 def _structured_summary_items(content: str) -> tuple[list[str], list[str]]:
-    issues = _structured_section_items(content, "明确问题")
-    manual = _structured_section_items(content, "需人工确认")
-    issues = [item for item in issues if not _summary_line_is_negative(item)]
-    manual = [item for item in manual if not _summary_line_is_negative(item)]
+    issues = []
+    manual = []
+    for item in _structured_section_items(content, "明确问题"):
+        if _summary_line_is_negative(item) or _summary_line_is_normal(item):
+            continue
+        if _summary_line_needs_manual(item):
+            manual.append(item)
+        elif _summary_line_is_issue(item):
+            issues.append(item)
+    for item in _structured_section_items(content, "需人工确认"):
+        if _summary_line_is_negative(item) or _summary_line_is_normal(item):
+            continue
+        manual.append(item)
     return issues, manual
 
 
@@ -1237,12 +1295,22 @@ def _summary_section_heading(line: str) -> tuple[str, str]:
     value = value.strip("*_` \t")
     value = re.sub(r"^\d+[.)、]\s*", "", value).strip()
 
-    for title in ("总体判断", "明确问题", "需人工确认", "未发现问题"):
+    title_aliases = (
+        ("总体判断", "总体判断"),
+        ("明确问题", "明确问题"),
+        ("发现问题", "明确问题"),
+        ("发现明确问题", "明确问题"),
+        ("明确冲突", "明确问题"),
+        ("需人工确认", "需人工确认"),
+        ("需要人工确认", "需人工确认"),
+        ("未发现问题", "未发现问题"),
+    )
+    for title, normalized_title in title_aliases:
         if value == title:
-            return title, ""
+            return normalized_title, ""
         match = re.match(rf"^{re.escape(title)}\s*[:：]\s*(.+)$", value)
         if match:
-            return title, match.group(1).strip()
+            return normalized_title, match.group(1).strip()
     return "", ""
 
 
@@ -1254,17 +1322,88 @@ def _normalize_summary_line(line: str) -> str:
 
 
 def _summary_line_is_negative(line: str) -> bool:
-    return any(marker in line for marker in ("未发现", "没有发现", "无明显", "未见明显", "不存在明显", "未汇总到"))
+    text = str(line or "")
+    if any(marker in text for marker in ("未汇总到", "未发现明确问题", "没有明确问题", "无明确问题", "无问题", "没有问题", "未见问题", "无异常", "未见异常")):
+        return True
+    if any(marker in text for marker in ("未发现需人工确认", "没有需人工确认", "无需人工确认", "无须人工确认", "未见需人工确认")):
+        return True
+    return bool(
+        re.search(
+            r"(未发现|没有发现|未见|无明显|不存在明显).{0,12}(问题|异常|风险|冲突|错误|缺失|不一致|不匹配|不符合)",
+            text,
+        )
+    )
+
+
+def _summary_line_is_normal(line: str) -> bool:
+    text = str(line or "")
+    if _summary_line_needs_manual(text) or _summary_line_has_issue_marker(text):
+        return False
+    return any(marker in text for marker in ("正常", "符合要求", "符合规范", "一致", "匹配", "清晰", "完整", "可读", "无误"))
 
 
 def _summary_line_needs_manual(line: str) -> bool:
-    return any(marker in line for marker in ("需人工确认", "需要人工确认", "无法确认", "无法判断", "不确定", "证据不足", "看不清", "分辨率不足"))
+    return any(
+        marker in line
+        for marker in (
+            "需人工确认",
+            "需要人工确认",
+            "建议人工",
+            "建议复核",
+            "无法确认",
+            "无法判断",
+            "无法辨认",
+            "难以辨认",
+            "不确定",
+            "可能",
+            "疑似",
+            "证据不足",
+            "上下文不足",
+            "看不清",
+            "文字过小",
+            "较小",
+            "分辨率不足",
+        )
+    )
 
 
 def _summary_line_is_issue(line: str) -> bool:
+    if _summary_line_is_negative(line) or _summary_line_is_normal(line) or _summary_line_needs_manual(line):
+        return False
+    return _summary_line_has_issue_marker(line)
+
+
+def _summary_line_has_issue_marker(line: str) -> bool:
     return any(
         marker in line
-        for marker in ("发现", "问题", "风险", "不一致", "不匹配", "冲突", "错误", "异常", "不符合", "缺失", "错位", "不对应")
+        for marker in (
+            "问题",
+            "风险",
+            "不一致",
+            "不匹配",
+            "冲突",
+            "错误",
+            "异常",
+            "不符合",
+            "缺失",
+            "缺少",
+            "错位",
+            "不对应",
+            "不完整",
+            "不清晰",
+            "不规范",
+            "模糊",
+            "遮挡",
+            "裁切",
+            "乱码",
+            "断裂",
+            "变形",
+            "过度拉伸",
+            "漏标",
+            "错标",
+            "矛盾",
+            "有误",
+        )
     )
 
 
