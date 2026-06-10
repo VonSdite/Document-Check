@@ -24,7 +24,6 @@ from .images import (
 from .llm import LLMError, run_check, run_multimodal_document_check
 from .network import outbound_network_config
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, document_groups_from_meta
-from .translation_coverage import LOCAL_CONSISTENCY_CHECK_CODES, run_translation_coverage_check
 
 
 class TaskCanceled(Exception):
@@ -491,26 +490,23 @@ def _run_check_items_concurrently(
                     return
                 save_snapshot(db, summary, current_progress())
 
-            if _is_local_consistency_check(item):
-                content = run_translation_coverage_check(document_text)
-            else:
-                network = outbound_network_config()
-                content = run_check(
-                    api_base=task["api_base"],
-                    api_key=task["api_key"],
-                    proxy_mode=network["proxy_mode"],
-                    proxy=network["proxy"],
-                    ssl_verify=network["ssl_verify"],
-                    request_timeout=task["request_timeout"],
-                    model_name=task["model_name"],
-                    force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-                    check_name=item["name"],
-                    prompt=item["prompt"],
-                    document_text=document_text,
-                    on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
-                    task_id=task_id,
-                    stream_trace_enabled=stream_trace_enabled,
-                )
+            network = outbound_network_config()
+            content = run_check(
+                api_base=task["api_base"],
+                api_key=task["api_key"],
+                proxy_mode=network["proxy_mode"],
+                proxy=network["proxy"],
+                ssl_verify=network["ssl_verify"],
+                request_timeout=task["request_timeout"],
+                model_name=task["model_name"],
+                force_disable_thinking=_task_flag(task, "force_disable_thinking"),
+                check_name=item["name"],
+                prompt=item["prompt"],
+                document_text=document_text,
+                on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
+                task_id=task_id,
+                stream_trace_enabled=stream_trace_enabled,
+            )
             progress = mark_unit_completed()
 
             if cancel_event.is_set() or _cancel_requested(db, task_id):
@@ -559,10 +555,6 @@ def _run_check_items_concurrently(
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
         executor.shutdown(wait=True, cancel_futures=True)
-
-
-def _is_local_consistency_check(item: dict) -> bool:
-    return str(item.get("code") or "") in LOCAL_CONSISTENCY_CHECK_CODES
 
 
 def _run_image_check_items_concurrently(

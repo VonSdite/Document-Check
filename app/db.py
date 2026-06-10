@@ -5,7 +5,6 @@ from datetime import datetime
 from flask import current_app, g
 
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
-from .translation_coverage import TRANSLATION_COVERAGE_CHECK_CODE
 
 
 def now_text() -> str:
@@ -300,13 +299,6 @@ DEFAULT_CONSISTENCY_CHECK_ITEMS = (
 4. 如果未发现明显偏差，明确说明“未发现资料内容与素材文档存在明显不一致”。不要编造文档中不存在的内容。""",
         "sort_order": 10,
     },
-    {
-        "code": TRANSLATION_COVERAGE_CHECK_CODE,
-        "name": "跨语言条目完整性检查",
-        "description": "本地规则检查标题、段落、列表、表格行和数字单位是否一一覆盖，不调用模型。",
-        "prompt": """本检查项由本地规则执行，不调用大模型。系统会抽取素材文档与资料中的标题、段落、列表项、表格行、数字、单位、日期、版本和型号，检查是否存在疑似漏翻译、新增条目或关键标识不一致。""",
-        "sort_order": 20,
-    },
 )
 
 DEFAULT_IMAGE_CHECK_ITEMS = (
@@ -457,6 +449,7 @@ DEFAULT_CHECK_ITEMS = tuple(
 )
 DEFAULT_CHECK_ITEMS_BY_CODE = {item["code"]: item for item in DEFAULT_CHECK_ITEMS}
 _IMAGE_LANGUAGE_MATCH_CODE = "image-small-language-text"
+_REMOVED_DEFAULT_CHECK_ITEM_CODES = ("consistency-translation-coverage",)
 _LEGACY_IMAGE_LANGUAGE_MARKERS = ("小语种", "非中文、非英文")
 _QWEN_VL_OPTIMIZED_IMAGE_PROMPT_MARKERS = {
     "image-text-correspondence": ("图文一致性审查专家",),
@@ -545,7 +538,13 @@ def seed_defaults():
     _sync_renamed_default_check_items(db, now)
     _sync_qwen_vl_optimized_image_check_items(db, now)
     _disable_merged_image_check_items(db, now)
+    _remove_retired_default_check_items(db)
     db.commit()
+
+
+def _remove_retired_default_check_items(db):
+    for code in _REMOVED_DEFAULT_CHECK_ITEM_CODES:
+        db.execute("DELETE FROM check_items WHERE code = ?", (code,))
 
 
 def _sync_renamed_default_check_items(db, updated_at: str):

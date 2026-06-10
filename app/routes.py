@@ -68,7 +68,6 @@ from .task_types import (
     document_groups_from_meta,
     task_type_label,
 )
-from .translation_coverage import LOCAL_CONSISTENCY_CHECK_CODES
 
 
 STATUS_LABELS = {
@@ -90,9 +89,6 @@ PROVIDER_INPUT_LIMIT_MIN = 5000
 PROVIDER_INPUT_LIMIT_MAX = 1000000
 CONSOLE_USER_ENDPOINTS = {"admin_tasks", "admin_new_task", "admin_consistency", "admin_images", "admin_models"}
 INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
-LOCAL_CHECK_PROVIDER_NAME = "本地规则"
-LOCAL_CHECK_MODEL_NAME = "跨语言条目完整性检查"
-LOCAL_CHECK_API_BASE = "local://translation-coverage"
 
 
 def register_routes(app):
@@ -275,7 +271,6 @@ def register_routes(app):
             stats=stats,
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
-            local_consistency_check_codes=LOCAL_CONSISTENCY_CHECK_CODES,
             models=get_enabled_models(identity.subject),
             active_nav=CONSISTENCY_TASK_TYPE,
         )
@@ -1084,7 +1079,6 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         global_concurrency=get_setting("global_concurrency", 3),
         user_concurrency=get_setting("user_concurrency", 1),
         check_items=check_items,
-        local_consistency_check_codes=LOCAL_CONSISTENCY_CHECK_CODES,
         models=get_enabled_models(identity.subject),
         active_nav=task_type,
     )
@@ -1998,15 +1992,11 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
         flash("请选择当前可用的多文档对照项。", "error")
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
-    requires_model = _consistency_checks_require_model(check_snapshots)
-    if requires_model:
-        model_id = request.form.get("model_id", "")
-        model = _find_enabled_model(model_id, identity.subject)
-        if model is None:
-            flash("请选择可用模型。", "error")
-            return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-    else:
-        model = _local_check_model()
+    model_id = request.form.get("model_id", "")
+    model = _find_enabled_model(model_id, identity.subject)
+    if model is None:
+        flash("请选择可用模型。", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     created_at = now_text()
     saved_paths = []
@@ -2092,22 +2082,6 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
 
 def _back_to_task_form(admin_created: bool, task_type: str = DOCUMENT_TASK_TYPE):
     return redirect(url_for(_task_list_endpoint(admin_created, task_type)))
-
-
-def _consistency_checks_require_model(check_snapshots: list[dict]) -> bool:
-    return any(str(item.get("code") or "") not in LOCAL_CONSISTENCY_CHECK_CODES for item in check_snapshots)
-
-
-def _local_check_model() -> dict:
-    return {
-        "provider_name": LOCAL_CHECK_PROVIDER_NAME,
-        "model_name": LOCAL_CHECK_MODEL_NAME,
-        "api_base": LOCAL_CHECK_API_BASE,
-        "api_key": "",
-        "request_timeout": PROVIDER_TIMEOUT_DEFAULT,
-        "max_input_chars": PROVIDER_INPUT_LIMIT_MAX,
-        "force_disable_thinking": False,
-    }
 
 
 def _task_list_endpoint(admin_created: bool, task_type: str | None = DOCUMENT_TASK_TYPE) -> str:

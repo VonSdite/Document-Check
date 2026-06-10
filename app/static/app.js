@@ -1263,10 +1263,6 @@ function selectContainsValue(select, value) {
   return Array.from(select.options).some((option) => option.value === value);
 }
 
-function selectedChecksRequireModel(form) {
-  return Array.from(form.querySelectorAll('input[name="checks"]:checked')).some((check) => check.dataset.requiresModel !== "0");
-}
-
 function restoreLastModelSelection(select) {
   const lastModelId = readLastModelId();
   if (lastModelId && selectContainsValue(select, lastModelId)) {
@@ -1286,61 +1282,18 @@ function resetDefaultUncheckedChecks(form) {
   });
 }
 
-function syncOptionalModelRequirement(form) {
-  if (!(form instanceof HTMLFormElement) || form.dataset.modelOptionalChecks !== "true") {
-    return;
-  }
-  const select = form.querySelector('select[name="model_id"][data-optional-for-local-checks="true"]');
-  if (!(select instanceof HTMLSelectElement)) {
-    return;
-  }
-  const modelField = select.closest("[data-model-field]");
-  const localNote = modelField?.querySelector("[data-local-model-note]");
-  const localOption = select.querySelector("[data-local-model-option]");
-  const noModelOption = select.querySelector("[data-no-model-option]");
-  const selectedChecks = Array.from(form.querySelectorAll('input[name="checks"]:checked'));
-  const hasSelectedChecks = selectedChecks.length > 0;
-  const requiresModel = selectedChecksRequireModel(form);
-  const localOnly = hasSelectedChecks && !requiresModel;
-
-  select.required = requiresModel;
-  select.disabled = localOnly;
-  select.hidden = localOnly;
-  if (localOnly) {
-    select.value = "";
-  } else if (requiresModel && !select.value) {
-    restoreLastModelSelection(select);
-  }
-  if (localNote instanceof HTMLElement) {
-    localNote.hidden = !localOnly;
-  }
-  if (localOption instanceof HTMLOptionElement) {
-    localOption.hidden = requiresModel;
-  }
-  if (noModelOption instanceof HTMLOptionElement) {
-    noModelOption.hidden = !requiresModel;
-  }
-}
-
-document.querySelectorAll("form[data-model-optional-checks='true']").forEach((form) => {
+document.querySelectorAll("form[data-default-unchecked-checks='true']").forEach((form) => {
   resetDefaultUncheckedChecks(form);
-  syncOptionalModelRequirement(form);
 });
 
 window.addEventListener("pageshow", () => {
   document.querySelectorAll("form[data-default-unchecked-checks='true']").forEach((form) => {
     resetDefaultUncheckedChecks(form);
-    syncOptionalModelRequirement(form);
   });
 });
 
 document.querySelectorAll('select[name="model_id"]').forEach((select) => {
   if (!(select instanceof HTMLSelectElement)) {
-    return;
-  }
-  const form = select.closest("form");
-  if (select.dataset.optionalForLocalChecks === "true" && form instanceof HTMLFormElement && !selectedChecksRequireModel(form)) {
-    select.value = "";
     return;
   }
   restoreLastModelSelection(select);
@@ -1646,11 +1599,6 @@ document.addEventListener("change", (event) => {
   }
   if (input instanceof HTMLSelectElement && input.name === "model_id") {
     writeLastModelId(input.value);
-    return;
-  }
-  if (input instanceof HTMLInputElement && input.name === "checks") {
-    const form = input.closest("form");
-    syncOptionalModelRequirement(form);
     return;
   }
   if (!(input instanceof HTMLInputElement) || input.type !== "file") {

@@ -3,8 +3,8 @@
 {% block title %}多文档对照检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
-{% set submit_disabled = not check_items %}
-<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-model-optional-checks="true" data-default-unchecked-checks="true">
+{% set submit_disabled = not models or not check_items %}
+<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-default-unchecked-checks="true">
   <div class="panel-head compact-head">
     <h1>创建多文档对照检查</h1>
   </div>
@@ -50,9 +50,7 @@
 
     <label data-model-field>
       模型
-      <span class="local-model-note" data-local-model-note hidden>本地规则检查，无需模型</span>
-      <select name="model_id" data-optional-for-local-checks="true" data-has-models="{{ '1' if models else '0' }}">
-        <option value="" data-local-model-option>本地规则检查无需选择模型</option>
+      <select name="model_id" required {{ "disabled" if submit_disabled else "" }}>
         {% if not models %}
         <option value="" data-no-model-option>暂无可用模型</option>
         {% else %}
@@ -71,12 +69,12 @@
   <div class="check-row">
     <div class="check-row-title">
       <span>多文档对照项</span>
-      <span class="help-tip" tabindex="0" data-tip="可多选；本地规则项不调用模型，语义对照项会按检查项调用模型比对素材文档和资料。">?</span>
+      <span class="help-tip" tabindex="0" data-tip="可多选；系统会按检查项逐项调用模型比对素材文档和资料。">?</span>
     </div>
     <div class="check-chip-grid">
       {% for item in check_items %}
       <label class="check-chip">
-        <input type="checkbox" name="checks" value="{{ item.id }}" autocomplete="off" data-requires-model="{{ '0' if item.code in local_consistency_check_codes else '1' }}">
+        <input type="checkbox" name="checks" value="{{ item.id }}" autocomplete="off">
         <span>{{ item.name }}</span>
         <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
       </label>

@@ -16,7 +16,6 @@ from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults,
 from app.formatting import render_markdown
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
-from app.translation_coverage import TRANSLATION_COVERAGE_CHECK_CODE
 
 
 _TINY_PNG = (
@@ -1171,19 +1170,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(all(checkbox.get("checked") is None for checkbox in checkboxes))
         self.assertTrue(all(checkbox.get("autocomplete") == "off" for checkbox in checkboxes))
 
-    def test_consistency_form_has_local_model_placeholder(self):
-        response = self.client.get("/consistency")
-
-        self.assertEqual(response.status_code, 200)
-        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        select = soup.find("select", {"name": "model_id"})
-        self.assertIsNotNone(select)
-        self.assertIsNone(select.get("required"))
-        local_option = select.find("option", {"data-local-model-option": True})
-        self.assertIsNotNone(local_option)
-        self.assertEqual(local_option.get("value"), "")
-        self.assertIn("无需选择模型", local_option.get_text())
-
     def test_saml_user_page_redirects_to_saml_login(self):
         self.app.config["AUTH"] = _saml_auth_config()
 
@@ -1332,34 +1318,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
-
-    def test_create_local_consistency_task_without_model(self):
-        with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id, code, name, prompt FROM check_items WHERE code = ?",
-                (TRANSLATION_COVERAGE_CHECK_CODE,),
-            ).fetchone()
-
-        response = self.client.post(
-            "/consistency",
-            data={
-                "master_documents": (io.BytesIO("1. 支持断电记忆功能。\n2. 最大输入电流 10A".encode("utf-8")), "master.txt"),
-                "related_documents": (io.BytesIO("1. Memory retention is supported.".encode("utf-8")), "related.txt"),
-                "checks": [str(item["id"])],
-            },
-            content_type="multipart/form-data",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        with self.app.app_context():
-            task = get_db().execute(
-                "SELECT provider_name, model_name, api_base, checks_snapshot_json FROM tasks"
-            ).fetchone()
-        self.assertEqual(task["provider_name"], "本地规则")
-        self.assertEqual(task["model_name"], "跨语言条目完整性检查")
-        self.assertEqual(task["api_base"], "local://translation-coverage")
-        self.assertEqual(json.loads(task["checks_snapshot_json"])[0]["code"], TRANSLATION_COVERAGE_CHECK_CODE)
-
 
 if __name__ == "__main__":
     unittest.main()

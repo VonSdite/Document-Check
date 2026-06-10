@@ -1089,18 +1089,6 @@ td {
   padding-top: 28px;
 }
 
-.local-model-note {
-  min-height: 43px;
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  border: 1px solid #c7d7ec;
-  border-radius: 8px;
-  background: #f6f9fe;
-  color: #31557c;
-  font-weight: 600;
-}
-
 .file-upload-control {
   width: 100%;
   min-width: 0;

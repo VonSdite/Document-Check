@@ -18,7 +18,6 @@ from app.db import (
     set_setting,
 )
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
-from app.translation_coverage import TRANSLATION_COVERAGE_CHECK_CODE
 from app.routes import _next_check_item_sort_order, _reorder_check_items
 
 
@@ -162,9 +161,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ]
 
         self.assertIn("typo", document_codes)
-        self.assertEqual(consistency_codes, ["consistency-cross-document", TRANSLATION_COVERAGE_CHECK_CODE])
+        self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
-        self.assertIn(TRANSLATION_COVERAGE_CHECK_CODE, default_check_item_codes(CONSISTENCY_TASK_TYPE))
         compliance_item = db.execute(
             "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "compliance"),
@@ -213,6 +211,25 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(image_quality_item["name"], "图片完整性和清晰度检查")
         self.assertIn("关键文字", image_quality_item["description"])
         self.assertIn("端子号", image_quality_item["prompt"])
+
+    def test_seed_defaults_removes_retired_translation_coverage_check(self):
+        db = get_db()
+        now = "2026-05-12 00:00:00"
+        db.execute(
+            """
+            INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+            VALUES (?, 'consistency-translation-coverage', '跨语言条目完整性检查', '', '本地规则', 1, 20, ?, ?)
+            """,
+            (CONSISTENCY_TASK_TYPE, now, now),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT 1 FROM check_items WHERE code = 'consistency-translation-coverage'"
+        ).fetchone()
+        self.assertIsNone(row)
 
     def test_seed_defaults_migrates_image_language_check_item(self):
         db = get_db()
