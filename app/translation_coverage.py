@@ -16,6 +16,21 @@ _FILE_HEADING_RE = re.compile(r"^## (?P<label>素材文档|资料)(?P<index>\d+)
 _MARKDOWN_HEADING_RE = re.compile(r"^(?P<level>#{1,6})\s+(?P<body>.+?)\s*$")
 _SHEET_RE = re.compile(r"^# 工作表：(?P<name>.+?)\s*$")
 _PAGE_RE = re.compile(r"^\[第(?P<page>\d+)页\]\s*$")
+_PURE_PAGE_NUMBER_RE = re.compile(r"^(?:第\s*)?\d{1,4}\s*(?:页)?$")
+_PAGE_FURNITURE_MARKERS = (
+    "文档版本",
+    "版权所有",
+    "版权",
+    "©",
+    "copyright",
+    "all rights reserved",
+    "document version",
+    "issue ",
+)
+_EMBEDDED_PAGE_FURNITURE_RE = re.compile(
+    r"\s*(?:文档版本|版权所有|版权|©|Copyright|All rights reserved|Document version|Issue\s+\d+).*$",
+    re.IGNORECASE,
+)
 _SECTION_RE = re.compile(
     r"^(?P<marker>(?:\d+(?:[.．]\d+)+|第[一二三四五六七八九十百千\d]+[章节]))"
     r"[\s、.．]*(?P<body>.+?)\s*$"
@@ -140,6 +155,7 @@ def _entries_for_groups(blocks: list[DocumentBlock], group_label: str) -> list[E
 def _extract_entries(block: DocumentBlock) -> list[Entry]:
     entries: list[Entry] = []
     paragraph_buffer: list[str] = []
+    page_furniture_lines = _repeated_page_furniture_lines(block.text)
     section_key = "root"
     section_index = 0
     sheet_name = ""
@@ -158,7 +174,7 @@ def _extract_entries(block: DocumentBlock) -> list[Entry]:
         return " / ".join(parts)
 
     def add_entry(kind: str, text: str, key: str | None, bucket: str) -> None:
-        text = _compact_text(text)
+        text = _clean_entry_text(text)
         if not text:
             return
         counters[bucket] += 1
@@ -170,7 +186,7 @@ def _extract_entries(block: DocumentBlock) -> list[Entry]:
                 location=location(_kind_label(kind)),
                 key=sequence_key,
                 bucket=bucket,
-                identifiers=_identifier_tokens(text),
+                identifiers=_identifier_tokens(text, kind),
             )
         )
 
@@ -201,6 +217,10 @@ def _extract_entries(block: DocumentBlock) -> list[Entry]:
         if sheet_match:
             flush_paragraph()
             sheet_name = sheet_match.group("name").strip()
+            continue
+
+        if _is_page_furniture_line(line, page_furniture_lines):
+            flush_paragraph()
             continue
 
         heading_match = _MARKDOWN_HEADING_RE.match(line)
@@ -364,19 +384,23 @@ def _format_issue_list(issues: list[Issue]) -> list[str]:
     return lines
 
 
-def _identifier_tokens(text: str) -> tuple[str, ...]:
+def _identifier_tokens(text: str, kind: str = "") -> tuple[str, ...]:
     normalized = _normalize_identifier_text(text)
-    primary_tokens: list[str] = []
+    primary_tokens: list[tuple[str, tuple[int, int]]] = []
     for pattern in (_IP_RE, _DATE_RE, _NUMBER_UNIT_RE, _VERSION_RE, _MODEL_RE):
-        primary_tokens.extend(match.group(0) for match in pattern.finditer(normalized))
+        primary_tokens.extend((match.group(0), match.span()) for match in pattern.finditer(normalized))
     normalized_primary = [
         _normalize_identifier_token(token)
-        for token in primary_tokens
+        for token, _ in primary_tokens
         if token.strip()
     ]
     tokens = list(normalized_primary)
     for match in _NUMBER_RE.finditer(normalized):
         number = _normalize_identifier_token(match.group(0))
+        if not _is_significant_bare_number(number, kind):
+            continue
+        if any(_spans_overlap(match.span(), span) for _, span in primary_tokens):
+            continue
         if any(_token_covers_number(token, number) for token in normalized_primary):
             continue
         tokens.append(number)
@@ -385,6 +409,19 @@ def _identifier_tokens(text: str) -> tuple[str, ...]:
 
 def _token_covers_number(token: str, number: str) -> bool:
     return token != number and token.startswith(number) and any(char.isalpha() or char in "%℃°Ω" for char in token)
+
+
+def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def _is_significant_bare_number(number: str, kind: str) -> bool:
+    if "." in number:
+        return True
+    digits = re.sub(r"\D", "", number)
+    if len(digits) >= 3:
+        return True
+    return kind == "table" and len(digits) >= 2 and not digits.startswith("0")
 
 
 def _normalize_identifier_text(text: str) -> str:
@@ -411,6 +448,82 @@ def _identifier_suggestion(missing_ids: list[str], extra_ids: list[str]) -> str:
         parts.append(f"资料中出现素材未对应的标识：{', '.join(extra_ids)}")
     parts.append("请核对是否漏译、误译或单位换算错误。")
     return "；".join(parts)
+
+
+def _repeated_page_furniture_lines(text: str) -> set[str]:
+    pages: list[set[str]] = []
+    current: set[str] = set()
+    saw_page_marker = False
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if _PAGE_RE.match(line):
+            if saw_page_marker:
+                pages.append(current)
+                current = set()
+            saw_page_marker = True
+            continue
+        normalized = _normalize_page_furniture_line(line)
+        if normalized:
+            current.add(normalized)
+    if saw_page_marker:
+        pages.append(current)
+    if len(pages) < 2:
+        return set()
+
+    counts: defaultdict[str, int] = defaultdict(int)
+    for page in pages:
+        for line in page:
+            counts[line] += 1
+    threshold = 2 if len(pages) <= 8 else max(2, int(len(pages) * 0.2))
+    return {
+        line
+        for line, count in counts.items()
+        if count >= threshold and _looks_like_repeated_page_furniture(line)
+    }
+
+
+def _is_page_furniture_line(line: str, repeated_lines: set[str]) -> bool:
+    normalized = _normalize_page_furniture_line(line)
+    if not normalized:
+        return False
+    if normalized in repeated_lines:
+        return True
+    lowered = normalized.lower()
+    if _is_standalone_page_furniture_line(lowered):
+        return True
+    return bool(_PURE_PAGE_NUMBER_RE.match(normalized))
+
+
+def _looks_like_repeated_page_furniture(line: str) -> bool:
+    if len(line) > 180:
+        return False
+    lowered = line.lower()
+    if any(marker in lowered for marker in _PAGE_FURNITURE_MARKERS):
+        return True
+    if _PURE_PAGE_NUMBER_RE.match(line):
+        return True
+    if any(marker in line for marker in ("安装指南", "用户手册", "操作指南", "维护指南", "User Manual", "Installation Guide")):
+        return True
+    return not line.endswith(("。", "；", "？", "！", ".", ";", "?", "!"))
+
+
+def _is_standalone_page_furniture_line(lowered_line: str) -> bool:
+    stripped = lowered_line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith(("文档版本", "document version", "issue ")):
+        return True
+    return stripped.startswith(("版权所有", "copyright", "©")) or stripped.startswith("all rights reserved")
+
+
+def _normalize_page_furniture_line(line: str) -> str:
+    return _compact_text(str(line or "").strip())
+
+
+def _clean_entry_text(text: str) -> str:
+    text = _compact_text(text)
+    text = _EMBEDDED_PAGE_FURNITURE_RE.sub("", text).strip()
+    return _compact_text(text)
 
 
 def _bucket_counts(entries: list[Entry]) -> dict[str, int]:
