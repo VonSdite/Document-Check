@@ -1263,6 +1263,23 @@ function selectContainsValue(select, value) {
   return Array.from(select.options).some((option) => option.value === value);
 }
 
+function syncOptionalModelRequirement(form) {
+  if (!(form instanceof HTMLFormElement) || form.dataset.modelOptionalChecks !== "true") {
+    return;
+  }
+  const select = form.querySelector('select[name="model_id"][data-optional-for-local-checks="true"]');
+  if (!(select instanceof HTMLSelectElement)) {
+    return;
+  }
+  const selectedChecks = Array.from(form.querySelectorAll('input[name="checks"]:checked'));
+  const requiresModel = selectedChecks.some((check) => check.dataset.requiresModel !== "0");
+  select.required = requiresModel;
+}
+
+document.querySelectorAll("form[data-model-optional-checks='true']").forEach((form) => {
+  syncOptionalModelRequirement(form);
+});
+
 document.querySelectorAll('select[name="model_id"]').forEach((select) => {
   if (!(select instanceof HTMLSelectElement)) {
     return;
@@ -1573,6 +1590,11 @@ document.addEventListener("change", (event) => {
   }
   if (input instanceof HTMLSelectElement && input.name === "model_id") {
     writeLastModelId(input.value);
+    return;
+  }
+  if (input instanceof HTMLInputElement && input.name === "checks") {
+    const form = input.closest("form");
+    syncOptionalModelRequirement(form);
     return;
   }
   if (!(input instanceof HTMLInputElement) || input.type !== "file") {

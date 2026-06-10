@@ -17,6 +17,7 @@ from app.tasks import (
     _image_check_target,
     _run_check_items_concurrently,
 )
+from app.translation_coverage import TRANSLATION_COVERAGE_CHECK_CODE
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -401,6 +402,51 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(calls[0]["check_name"], "参数一致性检查")
         self.assertEqual(calls[0]["prompt"], "只检查参数是否一致")
+
+    def test_consistency_translation_coverage_check_runs_locally(self):
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                ?, '127.0.0.1', '多文档对照检查：素材1个 / 资料1个', 'master.txt', '多文档', 1,
+                '# 素材文档\n## 素材文档1：cn.txt\n### 1 Overview\n1. 支持断电记忆功能。\n2. 最大输入电流 10A。\n\n# 资料\n## 资料1：en.txt\n### 1 Overview\n1. Memory retention is supported.', ?, ?, 'local-rule', 'local://translation-coverage', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                CONSISTENCY_TASK_TYPE,
+                json.dumps([TRANSLATION_COVERAGE_CHECK_CODE], ensure_ascii=False),
+                json.dumps(
+                    [
+                        {
+                            "code": TRANSLATION_COVERAGE_CHECK_CODE,
+                            "name": "跨语言条目完整性检查",
+                            "prompt": "本地规则",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+
+        with patch("app.tasks.run_check", side_effect=AssertionError("不应调用模型")):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(results[0]["code"], TRANSLATION_COVERAGE_CHECK_CODE)
+        self.assertIn("疑似漏翻译或条目缺失", results[0]["result"])
 
     def test_consistency_task_supports_legacy_code_checks_json(self):
         db = get_db()

@@ -5,6 +5,7 @@ from datetime import datetime
 from flask import current_app, g
 
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
+from .translation_coverage import TRANSLATION_COVERAGE_CHECK_CODE
 
 
 def now_text() -> str:
@@ -298,6 +299,13 @@ DEFAULT_CONSISTENCY_CHECK_ITEMS = (
 3. 对证据不足或需要业务判断的问题标注“需人工确认”。
 4. 如果未发现明显偏差，明确说明“未发现资料内容与素材文档存在明显不一致”。不要编造文档中不存在的内容。""",
         "sort_order": 10,
+    },
+    {
+        "code": TRANSLATION_COVERAGE_CHECK_CODE,
+        "name": "跨语言条目完整性检查",
+        "description": "本地规则检查标题、段落、列表、表格行和数字单位是否一一覆盖，不调用模型。",
+        "prompt": """本检查项由本地规则执行，不调用大模型。系统会抽取素材文档与资料中的标题、段落、列表项、表格行、数字、单位、日期、版本和型号，检查是否存在疑似漏翻译、新增条目或关键标识不一致。""",
+        "sort_order": 20,
     },
 )
 

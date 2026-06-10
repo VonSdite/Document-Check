@@ -16,6 +16,7 @@ from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults,
 from app.formatting import render_markdown
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
+from app.translation_coverage import TRANSLATION_COVERAGE_CHECK_CODE
 
 
 _TINY_PNG = (
@@ -1315,6 +1316,33 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_local_consistency_task_without_model(self):
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id, code, name, prompt FROM check_items WHERE code = ?",
+                (TRANSLATION_COVERAGE_CHECK_CODE,),
+            ).fetchone()
+
+        response = self.client.post(
+            "/consistency",
+            data={
+                "master_documents": (io.BytesIO("1. 支持断电记忆功能。\n2. 最大输入电流 10A".encode("utf-8")), "master.txt"),
+                "related_documents": (io.BytesIO("1. Memory retention is supported.".encode("utf-8")), "related.txt"),
+                "checks": [str(item["id"])],
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute(
+                "SELECT provider_name, model_name, api_base, checks_snapshot_json FROM tasks"
+            ).fetchone()
+        self.assertEqual(task["provider_name"], "本地规则")
+        self.assertEqual(task["model_name"], "跨语言条目完整性检查")
+        self.assertEqual(task["api_base"], "local://translation-coverage")
+        self.assertEqual(json.loads(task["checks_snapshot_json"])[0]["code"], TRANSLATION_COVERAGE_CHECK_CODE)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from app.db import (
     set_setting,
 )
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
+from app.translation_coverage import TRANSLATION_COVERAGE_CHECK_CODE
 from app.routes import _next_check_item_sort_order, _reorder_check_items
 
 
@@ -161,8 +162,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ]
 
         self.assertIn("typo", document_codes)
-        self.assertEqual(consistency_codes, ["consistency-cross-document"])
+        self.assertEqual(consistency_codes, ["consistency-cross-document", TRANSLATION_COVERAGE_CHECK_CODE])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
+        self.assertIn(TRANSLATION_COVERAGE_CHECK_CODE, default_check_item_codes(CONSISTENCY_TASK_TYPE))
         compliance_item = db.execute(
             "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "compliance"),
