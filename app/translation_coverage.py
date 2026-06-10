@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 TRANSLATION_COVERAGE_CHECK_CODE = "consistency-translation-coverage"
 LOCAL_CONSISTENCY_CHECK_CODES = frozenset({TRANSLATION_COVERAGE_CHECK_CODE})
+STRUCTURAL_ENTRY_KINDS = frozenset({"heading", "list", "table"})
 
 _MAX_REPORTED_ITEMS = 50
 _MAX_SNIPPET_CHARS = 160
@@ -278,6 +279,8 @@ def _compare_entries(material_entries: list[Entry], related_entries: list[Entry]
     for material in material_entries:
         related = related_by_key.get(material.key)
         if related is None:
+            if not _reports_missing_entry(material):
+                continue
             issues.append(
                 Issue(
                     title="疑似漏翻译或条目缺失",
@@ -304,6 +307,8 @@ def _compare_entries(material_entries: list[Entry], related_entries: list[Entry]
 
     for related in related_entries:
         if related.key and related.key not in material_by_key:
+            if not _reports_extra_entry(related):
+                continue
             issues.append(
                 Issue(
                     title="资料疑似新增条目",
@@ -318,6 +323,8 @@ def _compare_entries(material_entries: list[Entry], related_entries: list[Entry]
     material_buckets = _bucket_counts(material_entries)
     related_buckets = _bucket_counts(related_entries)
     for bucket in sorted(set(material_buckets) | set(related_buckets)):
+        if not _reports_bucket_mismatch(bucket):
+            continue
         left = material_buckets.get(bucket, 0)
         right = related_buckets.get(bucket, 0)
         if left != right:
@@ -351,7 +358,7 @@ def _format_report(
             f"{len(related_entries)} 条；发现明确疑点 {len(hard_issues)} 条，需人工确认 "
             f"{len(soft_issues) + len(manual_notes)} 条。"
         ),
-        "说明：本检查不调用大模型，主要发现标题、段落、列表、表格行、数字、单位、日期、版本和型号的覆盖问题；译文语义准确性仍建议结合多文档对照检查复核。",
+        "说明：本检查不调用大模型，主要发现标题、编号/项目符号列表、表格行等结构项的覆盖问题，并辅助检查数字、单位、日期、版本和型号；普通正文段落不会按英文比中文多出的碎片行逐条报警。译文语义准确性仍建议结合多文档对照检查复核。",
     ]
 
     if hard_issues:
@@ -364,7 +371,7 @@ def _format_report(
         parts.extend(_format_issue_list(manual_items))
 
     if not hard_issues and not manual_items:
-        parts.extend(["", "未发现素材文档与资料在条目结构、数量、数字单位或型号上存在明显不一致。"])
+        parts.extend(["", "未发现素材文档与资料在标题、列表、表格等结构项或关键数字单位上存在明显不一致。"])
 
     total_items = len(hard_issues) + len(manual_items)
     if total_items > _MAX_REPORTED_ITEMS:
@@ -448,6 +455,20 @@ def _identifier_suggestion(missing_ids: list[str], extra_ids: list[str]) -> str:
         parts.append(f"资料中出现素材未对应的标识：{', '.join(extra_ids)}")
     parts.append("请核对是否漏译、误译或单位换算错误。")
     return "；".join(parts)
+
+
+def _reports_missing_entry(entry: Entry) -> bool:
+    if entry.kind in STRUCTURAL_ENTRY_KINDS:
+        return True
+    return bool(entry.identifiers) and entry.kind == "paragraph"
+
+
+def _reports_extra_entry(entry: Entry) -> bool:
+    return entry.kind in STRUCTURAL_ENTRY_KINDS
+
+
+def _reports_bucket_mismatch(bucket: str) -> bool:
+    return not bucket.startswith("paragraph:")
 
 
 def _repeated_page_furniture_lines(text: str) -> set[str]:

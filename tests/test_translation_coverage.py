@@ -96,6 +96,39 @@ Maximum input current 10 A.
         self.assertNotIn("2026-05-20", report)
         self.assertNotIn("版权所有", report)
 
+    def test_ignores_extra_plain_related_paragraph_fragments(self):
+        report = run_translation_coverage_check(
+            """# 素材文档
+## 素材文档1：cn.txt
+接地前请检查设备电气连接。
+
+# 资料
+## 资料1：en.txt
+Check the electrical connection before grounding.
+Before operating the equipment, check its electrical connection to ensure that it is reliably grounded.
+"""
+        )
+
+        self.assertIn("未发现素材文档与资料", report)
+        self.assertNotIn("资料疑似新增条目", report)
+        self.assertNotIn("Before operating", report)
+
+    def test_reports_extra_related_list_item_as_structural_difference(self):
+        report = run_translation_coverage_check(
+            """# 素材文档
+## 素材文档1：cn.txt
+1. 检查设备接地。
+
+# 资料
+## 资料1：en.txt
+1. Check equipment grounding.
+2. Check the electrical connection before operation.
+"""
+        )
+
+        self.assertIn("资料疑似新增条目", report)
+        self.assertIn("Check the electrical connection", report)
+
 
 if __name__ == "__main__":
     unittest.main()
