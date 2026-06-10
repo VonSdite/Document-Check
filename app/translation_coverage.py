@@ -320,24 +320,17 @@ def _compare_entries(material_entries: list[Entry], related_entries: list[Entry]
                 )
             )
 
-    material_buckets = _bucket_counts(material_entries)
-    related_buckets = _bucket_counts(related_entries)
-    for bucket in sorted(set(material_buckets) | set(related_buckets)):
+    material_by_bucket = _entries_by_bucket(material_entries)
+    related_by_bucket = _entries_by_bucket(related_entries)
+    material_buckets = {bucket: len(entries) for bucket, entries in material_by_bucket.items()}
+    related_buckets = {bucket: len(entries) for bucket, entries in related_by_bucket.items()}
+    for bucket in sorted(set(material_by_bucket) | set(related_by_bucket)):
         if not _reports_bucket_mismatch(bucket):
             continue
-        left = material_buckets.get(bucket, 0)
-        right = related_buckets.get(bucket, 0)
-        if left != right:
-            manual_notes.append(
-                Issue(
-                    title="条目数量或拆分方式不一致",
-                    location=_bucket_label(bucket),
-                    material_text=f"素材条目数：{left}",
-                    related_text=f"资料条目数：{right}",
-                    suggestion="请人工确认是否存在漏翻译、新增内容，或只是译文合并/拆分段落。",
-                    manual=True,
-                )
-            )
+        material_bucket_entries = material_by_bucket.get(bucket, [])
+        related_bucket_entries = related_by_bucket.get(bucket, [])
+        if len(material_bucket_entries) != len(related_bucket_entries):
+            manual_notes.append(_bucket_mismatch_issue(bucket, material_bucket_entries, related_bucket_entries))
 
     return _deduplicate_issues(issues), _deduplicate_issues(manual_notes)
 
@@ -360,6 +353,9 @@ def _format_report(
         ),
         "说明：本检查不调用大模型，主要发现标题、编号/项目符号列表、表格行等结构项的覆盖问题，并辅助检查数字、单位、日期、版本和型号；普通正文段落不会按英文比中文多出的碎片行逐条报警。译文语义准确性仍建议结合多文档对照检查复核。",
     ]
+    extraction_notes = _extraction_quality_notes(material_entries, related_entries)
+    if extraction_notes:
+        parts.extend(extraction_notes)
 
     if hard_issues:
         parts.extend(["", "## 明确问题"])
@@ -471,6 +467,45 @@ def _reports_bucket_mismatch(bucket: str) -> bool:
     return not bucket.startswith("paragraph:")
 
 
+def _bucket_mismatch_issue(bucket: str, material_entries: list[Entry], related_entries: list[Entry]) -> Issue:
+    label = _bucket_label(bucket)
+    return Issue(
+        title=f"{label}数量或拆分方式不一致",
+        location=_bucket_mismatch_location(label, material_entries, related_entries),
+        material_text=_bucket_side_summary("素材", material_entries),
+        related_text=_bucket_side_summary("资料", related_entries),
+        suggestion=_bucket_mismatch_suggestion(bucket, material_entries, related_entries),
+        manual=True,
+    )
+
+
+def _bucket_mismatch_location(label: str, material_entries: list[Entry], related_entries: list[Entry]) -> str:
+    locations = []
+    if material_entries:
+        locations.append(f"素材：{material_entries[0].location}")
+    if related_entries:
+        locations.append(f"资料：{related_entries[0].location}")
+    if not locations:
+        return label
+    return f"{label}；" + "；".join(locations)
+
+
+def _bucket_side_summary(label: str, entries: list[Entry]) -> str:
+    if not entries:
+        return f"{label}识别到 0 条。"
+    examples = "；".join(_snippet(entry.text) for entry in entries[:3])
+    suffix = f"；另有 {len(entries) - 3} 条" if len(entries) > 3 else ""
+    return f"{label}识别到 {len(entries)} 条。示例：{examples}{suffix}"
+
+
+def _bucket_mismatch_suggestion(bucket: str, material_entries: list[Entry], related_entries: list[Entry]) -> str:
+    if not material_entries or not related_entries:
+        side = "资料" if material_entries else "素材"
+        hint = "；如果原文件是 PDF，可能是抽取时丢失了列表符号、表格行或标题层级，建议优先上传 Word/DOCX 源文件复核。"
+        return f"请检查{side}侧是否缺少对应结构项，或是否被解析成普通段落{hint}"
+    return "请根据示例定位附近章节，确认是否存在漏翻译、新增内容，或只是译文合并/拆分了结构项。"
+
+
 def _repeated_page_furniture_lines(text: str) -> set[str]:
     pages: list[set[str]] = []
     current: set[str] = set()
@@ -547,11 +582,40 @@ def _clean_entry_text(text: str) -> str:
     return _compact_text(text)
 
 
-def _bucket_counts(entries: list[Entry]) -> dict[str, int]:
+def _entries_by_bucket(entries: list[Entry]) -> dict[str, list[Entry]]:
+    buckets: defaultdict[str, list[Entry]] = defaultdict(list)
+    for entry in entries:
+        buckets[entry.bucket].append(entry)
+    return dict(buckets)
+
+
+def _extraction_quality_notes(material_entries: list[Entry], related_entries: list[Entry]) -> list[str]:
+    if not (_has_pdf_entries(material_entries) or _has_pdf_entries(related_entries)):
+        return []
+    notes = []
+    material_counts = _kind_counts(material_entries)
+    related_counts = _kind_counts(related_entries)
+    for kind, label in (("list", "列表项"), ("table", "表格行")):
+        left = material_counts.get(kind, 0)
+        right = related_counts.get(kind, 0)
+        if (left > 0 and right == 0) or (right > 0 and left == 0):
+            notes.append(
+                f"抽取提示：PDF 文档中一侧识别到 {max(left, right)} 个{label}、另一侧为 0，"
+                "这常见于 PDF 抽取丢失自动编号、项目符号或表格结构；如有 Word/DOCX 源文件，建议优先使用源文件重新检查。"
+            )
+            break
+    return notes
+
+
+def _kind_counts(entries: list[Entry]) -> dict[str, int]:
     counts: defaultdict[str, int] = defaultdict(int)
     for entry in entries:
-        counts[entry.bucket] += 1
+        counts[entry.kind] += 1
     return dict(counts)
+
+
+def _has_pdf_entries(entries: list[Entry]) -> bool:
+    return any(".pdf" in entry.location.lower() for entry in entries)
 
 
 def _deduplicate_issues(issues: list[Issue]) -> list[Issue]:

@@ -129,6 +129,27 @@ Before operating the equipment, check its electrical connection to ensure that i
         self.assertIn("资料疑似新增条目", report)
         self.assertIn("Check the electrical connection", report)
 
+    def test_bucket_mismatch_includes_examples_and_pdf_hint(self):
+        report = run_translation_coverage_check(
+            """# 素材文档
+## 素材文档1：cn.pdf
+1. 检查设备接地。
+2. 检查电气连接。
+
+# 资料
+## 资料1：en.pdf
+Check equipment grounding.
+Check the electrical connection.
+"""
+        )
+
+        self.assertIn("列表组数量或拆分方式不一致", report)
+        self.assertIn("检查设备接地", report)
+        self.assertIn("素材识别到 2 条", report)
+        self.assertIn("资料识别到 0 条", report)
+        self.assertIn("抽取提示：PDF 文档", report)
+        self.assertIn("建议优先使用源文件", report)
+
 
 if __name__ == "__main__":
     unittest.main()
