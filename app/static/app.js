@@ -1271,9 +1271,18 @@ function syncOptionalModelRequirement(form) {
   if (!(select instanceof HTMLSelectElement)) {
     return;
   }
+  const modelField = select.closest("[data-model-field]");
   const selectedChecks = Array.from(form.querySelectorAll('input[name="checks"]:checked'));
+  const hasSelectedChecks = selectedChecks.length > 0;
   const requiresModel = selectedChecks.some((check) => check.dataset.requiresModel !== "0");
+  const localOnly = hasSelectedChecks && !requiresModel;
+  const hasModelOptions = select.dataset.hasModels === "1";
+
   select.required = requiresModel;
+  select.disabled = localOnly || !hasModelOptions;
+  if (modelField instanceof HTMLElement) {
+    modelField.hidden = localOnly;
+  }
 }
 
 document.querySelectorAll("form[data-model-optional-checks='true']").forEach((form) => {
@@ -1296,7 +1305,7 @@ document.addEventListener("submit", (event) => {
     return;
   }
   const select = form.querySelector('select[name="model_id"]');
-  if (select instanceof HTMLSelectElement && select.value) {
+  if (select instanceof HTMLSelectElement && !select.disabled && select.value) {
     writeLastModelId(select.value);
   }
 });

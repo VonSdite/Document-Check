@@ -48,9 +48,9 @@
       <div class="selected-file-list" data-file-list hidden></div>
     </div>
 
-    <label>
+    <label data-model-field>
       模型
-      <select name="model_id" data-optional-for-local-checks="true" {{ "disabled" if not models else "" }}>
+      <select name="model_id" data-optional-for-local-checks="true" data-has-models="{{ '1' if models else '0' }}" {{ "disabled" if not models else "" }}>
         {% if not models %}
         <option value="">暂无可用模型</option>
         {% else %}
