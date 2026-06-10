@@ -1164,9 +1164,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         form = soup.find("form", {"data-require-checks": "true"})
         self.assertIsNotNone(form)
+        self.assertEqual(form.get("autocomplete"), "off")
+        self.assertEqual(form.get("data-default-unchecked-checks"), "true")
         checkboxes = form.select('input[name="checks"]')
         self.assertTrue(checkboxes)
         self.assertTrue(all(checkbox.get("checked") is None for checkbox in checkboxes))
+        self.assertTrue(all(checkbox.get("autocomplete") == "off" for checkbox in checkboxes))
 
     def test_consistency_form_has_local_model_placeholder(self):
         response = self.client.get("/consistency")

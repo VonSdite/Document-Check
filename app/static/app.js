@@ -1274,6 +1274,18 @@ function restoreLastModelSelection(select) {
   }
 }
 
+function resetDefaultUncheckedChecks(form) {
+  if (!(form instanceof HTMLFormElement) || form.dataset.defaultUncheckedChecks !== "true") {
+    return;
+  }
+  form.querySelectorAll('input[name="checks"]').forEach((input) => {
+    if (input instanceof HTMLInputElement) {
+      input.checked = false;
+      input.defaultChecked = false;
+    }
+  });
+}
+
 function syncOptionalModelRequirement(form) {
   if (!(form instanceof HTMLFormElement) || form.dataset.modelOptionalChecks !== "true") {
     return;
@@ -1311,7 +1323,15 @@ function syncOptionalModelRequirement(form) {
 }
 
 document.querySelectorAll("form[data-model-optional-checks='true']").forEach((form) => {
+  resetDefaultUncheckedChecks(form);
   syncOptionalModelRequirement(form);
+});
+
+window.addEventListener("pageshow", () => {
+  document.querySelectorAll("form[data-default-unchecked-checks='true']").forEach((form) => {
+    resetDefaultUncheckedChecks(form);
+    syncOptionalModelRequirement(form);
+  });
 });
 
 document.querySelectorAll('select[name="model_id"]').forEach((select) => {

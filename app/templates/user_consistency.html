@@ -4,7 +4,7 @@
 
 {% block content %}
 {% set submit_disabled = not check_items %}
-<form method="post" enctype="multipart/form-data" class="panel create-panel" data-require-checks="true" data-model-optional-checks="true">
+<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-model-optional-checks="true" data-default-unchecked-checks="true">
   <div class="panel-head compact-head">
     <h1>创建多文档对照检查</h1>
   </div>
@@ -76,7 +76,7 @@
     <div class="check-chip-grid">
       {% for item in check_items %}
       <label class="check-chip">
-        <input type="checkbox" name="checks" value="{{ item.id }}" data-requires-model="{{ '0' if item.code in local_consistency_check_codes else '1' }}">
+        <input type="checkbox" name="checks" value="{{ item.id }}" autocomplete="off" data-requires-model="{{ '0' if item.code in local_consistency_check_codes else '1' }}">
         <span>{{ item.name }}</span>
         <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
       </label>
