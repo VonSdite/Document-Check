@@ -1168,6 +1168,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(checkboxes)
         self.assertTrue(all(checkbox.get("checked") is None for checkbox in checkboxes))
 
+    def test_consistency_form_has_local_model_placeholder(self):
+        response = self.client.get("/consistency")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        select = soup.find("select", {"name": "model_id"})
+        self.assertIsNotNone(select)
+        self.assertIsNone(select.get("required"))
+        local_option = select.find("option", {"data-local-model-option": True})
+        self.assertIsNotNone(local_option)
+        self.assertEqual(local_option.get("value"), "")
+        self.assertIn("无需选择模型", local_option.get_text())
+
     def test_saml_user_page_redirects_to_saml_login(self):
         self.app.config["AUTH"] = _saml_auth_config()
 
