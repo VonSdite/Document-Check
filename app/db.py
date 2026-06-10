@@ -272,8 +272,12 @@ DEFAULT_DOCUMENT_CHECK_ITEMS = (
         "description": "检查错别字、漏字、多字、标点和常见语病。",
         "prompt": """你是一名中文校对专家。请检查文档中的错别字、漏字、多字、标点误用、重复表达、常见语病和明显不通顺句子。
 注意：文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；不要把解析换行/分页造成的空白当作多余空格或标点问题。
+定位要求：
+1. 每条问题必须给出可定位信息，不要只写问题本身。
+2. 位置中优先引用文档文本里的页码标记，例如“[第12页]”；如果文档文本没有页码标记，明确写“页码：未提取”，不要编造页码。
+3. 同时给出最近的章节/标题/小节编号、工作表名或表格行线索；如果无法识别章节，写“章节：未识别”，并补充附近短文本作为定位线索。
 输出要求：
-1. 按条列出：原文片段、疑似问题、建议修改、理由。
+1. 按条列出：位置（文件/页码/章节或工作表/附近线索）、原文片段、疑似问题、建议修改、理由。
 2. 对专业术语、人名、地名、品牌名保持谨慎，不确定时标注“疑似”。
 3. 如果未发现明显问题，明确说明“未发现明显错别字或语病”。""",
         "sort_order": 30,
@@ -450,6 +454,10 @@ DEFAULT_CHECK_ITEMS = tuple(
 DEFAULT_CHECK_ITEMS_BY_CODE = {item["code"]: item for item in DEFAULT_CHECK_ITEMS}
 _IMAGE_LANGUAGE_MATCH_CODE = "image-small-language-text"
 _REMOVED_DEFAULT_CHECK_ITEM_CODES = ("consistency-translation-coverage",)
+_TYPO_LOCATION_PROMPT_MARKERS = (
+    "按条列出：原文片段、疑似问题、建议修改、理由",
+    "未发现明显错别字或语病",
+)
 _LEGACY_IMAGE_LANGUAGE_MARKERS = ("小语种", "非中文、非英文")
 _QWEN_VL_OPTIMIZED_IMAGE_PROMPT_MARKERS = {
     "image-text-correspondence": ("图文一致性审查专家",),
@@ -536,6 +544,7 @@ def seed_defaults():
             )
 
     _sync_renamed_default_check_items(db, now)
+    _sync_typo_location_prompt(db, now)
     _sync_qwen_vl_optimized_image_check_items(db, now)
     _disable_merged_image_check_items(db, now)
     _remove_retired_default_check_items(db)
@@ -545,6 +554,49 @@ def seed_defaults():
 def _remove_retired_default_check_items(db):
     for code in _REMOVED_DEFAULT_CHECK_ITEM_CODES:
         db.execute("DELETE FROM check_items WHERE code = ?", (code,))
+
+
+def _sync_typo_location_prompt(db, updated_at: str):
+    default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get("typo")
+    if default_item is None:
+        return
+    row = db.execute(
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'typo'"
+    ).fetchone()
+    if row is None:
+        return
+    prompt = str(row["prompt"] or "")
+    is_legacy_stock_prompt = (
+        all(marker in prompt for marker in _TYPO_LOCATION_PROMPT_MARKERS)
+        and "页码：未提取" not in prompt
+    )
+    if not is_legacy_stock_prompt:
+        return
+    if (
+        row["name"] == default_item["name"]
+        and (row["description"] or "") == default_item["description"]
+        and prompt == default_item["prompt"]
+        and int(row["sort_order"] or 0) == int(default_item["sort_order"])
+    ):
+        return
+    db.execute(
+        """
+        UPDATE check_items
+        SET name = ?,
+            description = ?,
+            prompt = ?,
+            sort_order = ?,
+            updated_at = ?
+        WHERE code = 'typo'
+        """,
+        (
+            default_item["name"],
+            default_item["description"],
+            default_item["prompt"],
+            default_item["sort_order"],
+            updated_at,
+        ),
+    )
 
 
 def _sync_renamed_default_check_items(db, updated_at: str):

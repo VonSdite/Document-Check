@@ -173,6 +173,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ).fetchone()
         self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", compliance_item["prompt"])
         self.assertIn("不要把解析换行/分页造成的空白当作多余空格", typo_item["prompt"])
+        self.assertIn("页码：未提取", typo_item["prompt"])
+        self.assertIn("章节：未识别", typo_item["prompt"])
+        self.assertIn("位置（文件/页码/章节或工作表/附近线索）", typo_item["prompt"])
         self.assertNotIn("image-ui-step-consistency", default_check_item_codes(IMAGE_TASK_TYPE))
         self.assertNotIn("image-device-installation", default_check_item_codes(IMAGE_TASK_TYPE))
         image_text_item = db.execute(
@@ -230,6 +233,27 @@ class CheckItemDefaultsTest(unittest.TestCase):
             "SELECT 1 FROM check_items WHERE code = 'consistency-translation-coverage'"
         ).fetchone()
         self.assertIsNone(row)
+
+    def test_seed_defaults_migrates_stock_typo_prompt_to_location_version(self):
+        db = get_db()
+        legacy_prompt = """你是一名中文校对专家。请检查文档中的错别字、漏字、多字、标点误用、重复表达、常见语病和明显不通顺句子。
+注意：文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；不要把解析换行/分页造成的空白当作多余空格或标点问题。
+输出要求：
+1. 按条列出：原文片段、疑似问题、建议修改、理由。
+2. 对专业术语、人名、地名、品牌名保持谨慎，不确定时标注“疑似”。
+3. 如果未发现明显问题，明确说明“未发现明显错别字或语病”。"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'typo'",
+            (legacy_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute("SELECT prompt FROM check_items WHERE code = 'typo'").fetchone()
+        self.assertIn("页码：未提取", row["prompt"])
+        self.assertIn("章节：未识别", row["prompt"])
+        self.assertIn("位置（文件/页码/章节或工作表/附近线索）", row["prompt"])
 
     def test_seed_defaults_migrates_image_language_check_item(self):
         db = get_db()
