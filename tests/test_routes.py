@@ -312,6 +312,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "user_concurrency": "2",
                 "check_item_concurrency": "3",
                 "image_page_check_max_pages": "36",
+                "issue_output_limit": "0",
                 "report_retention_days": "14",
             },
         )
@@ -322,6 +323,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(get_setting("user_concurrency"), 2)
             self.assertEqual(get_setting("check_item_concurrency"), 3)
             self.assertEqual(get_setting("image_page_check_max_pages"), 36)
+            self.assertEqual(get_setting("issue_output_limit"), 0)
             self.assertEqual(get_setting("report_retention_days"), 14)
 
     def test_admin_settings_saves_network_to_yaml_config(self):

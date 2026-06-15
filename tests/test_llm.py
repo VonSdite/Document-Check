@@ -82,6 +82,60 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("解析换行/分页造成的空白", user_content)
         self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", user_content)
 
+    def test_document_check_prompt_uses_configured_issue_output_limit(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                issue_output_limit=50,
+            )
+
+        user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
+        self.assertIn("单次回复最多列出 50 条问题", user_content)
+        self.assertIn("如果超过 50 条", user_content)
+
+    def test_document_check_prompt_can_disable_issue_output_limit(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                issue_output_limit=0,
+            )
+
+        user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
+        self.assertIn("单次回复不限制问题条数", user_content)
+        self.assertNotIn("最多列出 20 条问题", user_content)
+
     def test_reads_stream_chat_completion_content(self):
         response = FakeResponse(
             lines=[
@@ -327,6 +381,7 @@ class LLMResponseParsingTest(unittest.TestCase):
                 image_name="0001_page001-image001.png",
                 image_position="page001-image001",
                 image_data_url="data:image/png;base64,AAAA",
+                issue_output_limit=12,
             )
 
         self.assertEqual(result, "图片检查完成")
@@ -335,6 +390,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIsInstance(content, list)
         self.assertEqual(content[0]["type"], "text")
         self.assertIn("图片语种匹配检查", content[0]["text"])
+        self.assertIn("单张图片回复最多列出 12 条问题", content[0]["text"])
         self.assertEqual(content[1], {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
 
     def test_run_multimodal_document_check_sends_text_and_multiple_images(self):
@@ -370,6 +426,7 @@ class LLMResponseParsingTest(unittest.TestCase):
                 ],
                 batch_index=1,
                 batch_count=2,
+                issue_output_limit=33,
             )
 
         self.assertEqual(result, "图文检查完成")
@@ -378,6 +435,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual([item["type"] for item in content], ["text", "text", "image_url", "text", "image_url"])
         self.assertIn("图文对应检查", content[0]["text"])
         self.assertIn("当前图片批次：1/2", content[0]["text"])
+        self.assertIn("单次回复最多列出 33 条问题", content[0]["text"])
         self.assertIn("正文提到图 1 是电源接线图", content[0]["text"])
         self.assertIn("0001_page001-image001.png", content[1]["text"])
         self.assertEqual(content[2]["image_url"]["url"], "data:image/png;base64,AAAA")

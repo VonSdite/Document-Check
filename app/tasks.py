@@ -21,7 +21,7 @@ from .images import (
     page_numbers_from_image_item,
     page_sections_from_document_text,
 )
-from .llm import LLMError, run_check, run_multimodal_document_check
+from .llm import DEFAULT_ISSUE_OUTPUT_LIMIT, LLMError, run_check, run_multimodal_document_check
 from .network import outbound_network_config
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, document_groups_from_meta
 
@@ -452,6 +452,8 @@ def _run_check_items_concurrently(
             completed_units += 1
             return 5 + int(completed_units / total_units * 85)
 
+    issue_output_limit = _issue_output_limit()
+
     def run_item(index: int, item: dict) -> dict:
         with app.app_context():
             db = get_db()
@@ -503,6 +505,7 @@ def _run_check_items_concurrently(
                 check_name=item["name"],
                 prompt=item["prompt"],
                 document_text=document_text,
+                issue_output_limit=issue_output_limit,
                 on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
                 task_id=task_id,
                 stream_trace_enabled=stream_trace_enabled,
@@ -616,6 +619,8 @@ def _run_image_check_items_concurrently(
         with result_lock:
             completed_units += 1
             return 5 + int(completed_units / total_units * 85)
+
+    issue_output_limit = _issue_output_limit()
 
     def run_group(group_index: int, group: dict):
         with app.app_context():
@@ -734,6 +739,7 @@ def _run_image_check_items_concurrently(
                     image_items=multimodal_images,
                     batch_index=batch_index,
                     batch_count=batch_count,
+                    issue_output_limit=issue_output_limit,
                     on_content=lambda content, current=current_batch: save_partial(
                         current,
                         content,
@@ -1467,6 +1473,13 @@ def _report_retention_days() -> int:
         return max(0, int(get_setting("report_retention_days", DEFAULT_REPORT_RETENTION_DAYS)))
     except (TypeError, ValueError):
         return DEFAULT_REPORT_RETENTION_DAYS
+
+
+def _issue_output_limit() -> int:
+    try:
+        return max(0, int(get_setting("issue_output_limit", DEFAULT_ISSUE_OUTPUT_LIMIT)))
+    except (TypeError, ValueError):
+        return DEFAULT_ISSUE_OUTPUT_LIMIT
 
 
 def _remove_task_artifacts(app, task):

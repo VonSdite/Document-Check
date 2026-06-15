@@ -512,6 +512,7 @@ def seed_defaults():
         "check_item_concurrency": 1,
         "image_check_batch_size": 4,
         "image_page_check_max_pages": 120,
+        "issue_output_limit": 20,
         "report_retention_days": 0,
         "llm_stream_trace_enabled": False,
     }

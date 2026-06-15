@@ -55,7 +55,7 @@ from .images import (
     image_path_from_item,
     render_pdf_page_images,
 )
-from .llm import LLMError, test_model_connection
+from .llm import DEFAULT_ISSUE_OUTPUT_LIMIT, LLMError, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
 from .network import outbound_network_config
 from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
@@ -80,6 +80,7 @@ STATUS_LABELS = {
 TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 REPORT_RETENTION_DAYS_DEFAULT = 0
+ISSUE_OUTPUT_LIMIT_DEFAULT = DEFAULT_ISSUE_OUTPUT_LIMIT
 PROVIDER_TIMEOUT_DEFAULT = 3600
 PROVIDER_TIMEOUT_MIN = 30
 PROVIDER_TIMEOUT_MAX = 7200
@@ -550,17 +551,22 @@ def register_routes(app):
                         1,
                         int(request.form.get("image_page_check_max_pages", str(DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES))),
                     )
+                    issue_output_limit = max(
+                        0,
+                        int(request.form.get("issue_output_limit", str(ISSUE_OUTPUT_LIMIT_DEFAULT))),
+                    )
                     report_retention_days = max(
                         0,
                         int(request.form.get("report_retention_days", str(REPORT_RETENTION_DAYS_DEFAULT))),
                     )
                 except ValueError:
-                    flash("任务设置必须是整数，报告保留天数可为 0，其余必须为正整数。", "error")
+                    flash("任务设置必须是整数，报告保留天数和问题条数上限可为 0，其余必须为正整数。", "error")
                     return redirect(url_for("admin_settings"))
                 set_setting("global_concurrency", global_concurrency)
                 set_setting("user_concurrency", user_concurrency)
                 set_setting("check_item_concurrency", check_item_concurrency)
                 set_setting("image_page_check_max_pages", image_page_check_max_pages)
+                set_setting("issue_output_limit", issue_output_limit)
                 set_setting("report_retention_days", report_retention_days)
                 flash("任务设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
@@ -753,6 +759,7 @@ def register_routes(app):
             user_concurrency=get_setting("user_concurrency", 1),
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
             image_page_check_max_pages=get_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES),
+            issue_output_limit=get_setting("issue_output_limit", ISSUE_OUTPUT_LIMIT_DEFAULT),
             report_retention_days=get_setting("report_retention_days", REPORT_RETENTION_DAYS_DEFAULT),
             network=current_app.config["NETWORK"],
             llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),

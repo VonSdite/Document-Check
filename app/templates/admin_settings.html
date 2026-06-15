@@ -120,6 +120,10 @@
       <input name="image_page_check_max_pages" type="number" min="1" step="1" value="{{ image_page_check_max_pages }}" required>
     </label>
     <label>
+      每次模型回复最多问题条数（0 表示不限制）
+      <input name="issue_output_limit" type="number" min="0" step="1" value="{{ issue_output_limit }}" required>
+    </label>
+    <label>
       检查报告最多保留天数（0 表示不自动清理）
       <input name="report_retention_days" type="number" min="0" step="1" value="{{ report_retention_days }}" required>
     </label>

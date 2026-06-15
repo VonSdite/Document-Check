@@ -147,6 +147,7 @@ class TaskExecutionTest(unittest.TestCase):
         task = db.execute("SELECT * FROM tasks").fetchone()
         check_items = [{"code": "typo", "name": "错别字检查", "prompt": "检查错别字"}]
         document_text = "\n\n".join(f"第{i}段 " + ("内容" * 700) for i in range(1, 5))
+        set_setting("issue_output_limit", 45)
         calls = []
 
         def fake_run_check(**kwargs):
@@ -168,6 +169,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["check_name"], "错别字检查")
         self.assertEqual(calls[0]["prompt"], "检查错别字")
         self.assertEqual(calls[0]["document_text"], document_text)
+        self.assertEqual(calls[0]["issue_output_limit"], 45)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["result"], "最终结果")
 
@@ -510,6 +512,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
         db.commit()
         task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+        set_setting("issue_output_limit", 0)
         calls = []
 
         def fake_run_multimodal_document_check(**kwargs):
@@ -530,6 +533,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("图 1 是电源接线图", calls[0]["document_text"])
         self.assertEqual(calls[0]["batch_index"], 1)
         self.assertEqual(calls[0]["batch_count"], 1)
+        self.assertEqual(calls[0]["issue_output_limit"], 0)
         self.assertEqual(calls[0]["image_items"][0]["index"], 2)
         self.assertEqual(calls[0]["image_items"][0]["name"], "0001_page001-image001.png")
         self.assertEqual(calls[0]["image_items"][0]["position"], "PDF第1页（page001-image001）")

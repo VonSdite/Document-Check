@@ -13,20 +13,21 @@ logger.addHandler(logging.NullHandler())
 _REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
-_EXECUTION_BOUNDARY = """执行边界：
+DEFAULT_ISSUE_OUTPUT_LIMIT = 20
+_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据提供的文档内容，不补全文档外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 优先输出明确问题；不确定请标注“需人工确认”。
 4. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
 5. 没有发现问题时只给出简短结论。
-6. 单次回复最多列出 20 条问题。"""
-_IMAGE_EXECUTION_BOUNDARY = """执行边界：
+6. {issue_output_limit_instruction}"""
+_IMAGE_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据当前图片和提供的图片位置信息进行检查，不补全图片外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 优先输出明确问题；不确定请标注“需人工确认”。
 4. 没有发现问题时只给出简短结论。
-5. 单张图片回复最多列出 20 条问题。"""
-_MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY = """执行边界：
+5. {issue_output_limit_instruction}"""
+_MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 可以综合文档文本、图片清单、图片位置和本次提供的图片内容进行检查，尤其关注图文是否对应。
 2. 只依据提供的文档上下文和图片内容，不补全文档外信息。
 3. 不输出思考过程、推理链、草稿或分析计划。
@@ -34,7 +35,46 @@ _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY = """执行边界：
 5. 输出问题时尽量引用图片名称、图片位置或文档中的文字线索。
 6. 判断图文不对应时，必须同时给出明确文档线索和图片可见证据。
 7. 不要仅凭文件名、页码、图片顺序或未提供的上下文断言图片插入错位；证据不足时写“需人工确认”。
-8. 单次回复最多列出 20 条问题。"""
+8. {issue_output_limit_instruction}"""
+
+
+def _normalized_issue_output_limit(value) -> int:
+    if value is None:
+        return DEFAULT_ISSUE_OUTPUT_LIMIT
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return DEFAULT_ISSUE_OUTPUT_LIMIT
+
+
+def _issue_output_limit_instruction(value, subject: str) -> str:
+    limit = _normalized_issue_output_limit(value)
+    if limit <= 0:
+        return f"{subject}不限制问题条数；请完整列出可确认的问题，并按严重程度和证据明确程度排序。"
+    return f"{subject}最多列出 {limit} 条问题；如果超过 {limit} 条，优先列出影响最大、证据最明确的问题。"
+
+
+def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
+    return _EXECUTION_BOUNDARY_TEMPLATE.format(
+        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复")
+    )
+
+
+def _image_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
+    return _IMAGE_EXECUTION_BOUNDARY_TEMPLATE.format(
+        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单张图片回复")
+    )
+
+
+def _multimodal_document_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
+    return _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE.format(
+        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复")
+    )
+
+
+_EXECUTION_BOUNDARY = _execution_boundary()
+_IMAGE_EXECUTION_BOUNDARY = _image_execution_boundary()
+_MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY = _multimodal_document_execution_boundary()
 
 
 class LLMError(Exception):
@@ -62,6 +102,7 @@ def run_check(
     check_name: str,
     prompt: str,
     document_text: str,
+    issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -85,7 +126,7 @@ def run_check(
                 "role": "user",
                 "content": (
                     f"检查项：{check_name}\n\n"
-                    f"{_EXECUTION_BOUNDARY}\n\n"
+                    f"{_execution_boundary(issue_output_limit)}\n\n"
                     f"检查提示词：\n{prompt}\n\n"
                     f"待检查文档：\n{document_text}"
                 ),
@@ -142,6 +183,7 @@ def run_image_check(
     image_name: str,
     image_position: str,
     image_data_url: str,
+    issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -172,7 +214,7 @@ def run_image_check(
                         "type": "text",
                         "text": (
                             f"检查项：{check_name}\n\n"
-                            f"{_IMAGE_EXECUTION_BOUNDARY}\n\n"
+                            f"{_image_execution_boundary(issue_output_limit)}\n\n"
                             f"图片名称：{image_name}\n"
                             f"图片位置：{image_position or '未标注'}\n\n"
                             f"检查提示词：\n{prompt}"
@@ -241,6 +283,7 @@ def run_multimodal_document_check(
     image_items: list[dict],
     batch_index: int = 1,
     batch_count: int = 1,
+    issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -280,6 +323,7 @@ def run_multimodal_document_check(
                 image_items=normalized_images,
                 batch_index=batch_index,
                 batch_count=batch_count,
+                issue_output_limit=issue_output_limit,
             ),
         }
     ]
@@ -364,6 +408,7 @@ def _multimodal_document_prompt_text(
     image_items: list[dict],
     batch_index: int,
     batch_count: int,
+    issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
 ) -> str:
     image_lines = []
     for image in image_items:
@@ -373,7 +418,7 @@ def _multimodal_document_prompt_text(
     batch_label = f"{batch_index}/{batch_count}" if batch_count > 1 else "1/1"
     return (
         f"检查项：{check_name}\n\n"
-        f"{_MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY}\n\n"
+        f"{_multimodal_document_execution_boundary(issue_output_limit)}\n\n"
         f"当前图片批次：{batch_label}\n\n"
         f"本次可见图片：\n{chr(10).join(image_lines)}\n\n"
         f"检查提示词：\n{prompt}\n\n"
