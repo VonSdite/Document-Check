@@ -1115,6 +1115,101 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("AI 检查条目统计", exported.get_data(as_text=True))
         self.assertIn("条目 1", exported.get_data(as_text=True))
 
+    def test_task_detail_splits_bold_numbered_compliance_items(self):
+        with self.app.app_context():
+            now = "2026-05-24 09:00:00"
+            result_json = [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": (
+                        "总体规范性结论：该资料存在面向客户表达风险。\n\n"
+                        "---\n\n"
+                        "## 问题逐条列表\n\n"
+                        "**1. 问题类型：技术信息呈现（严重错误）**\n"
+                        "- 位置：第29页 / 3.2 参数说明\n"
+                        "- 原文摘录：支持 220V 输入。\n"
+                        "- 问题描述：参数呈现与客户资料规范不一致。\n"
+                        "- 客户影响：客户可能按错误信息配置。\n"
+                        "- 修改建议：核实并修正文档参数。\n\n"
+                        "**2. 问题类型：客户资料定位（内部口吻）**\n"
+                        "- 位置：第3页 / 注意事项\n"
+                        "- 原文摘录：研发确认后再发布。\n"
+                        "- 问题描述：面向客户资料出现内部流程口吻。\n"
+                        "- 客户影响：影响客户对资料正式性的判断。\n"
+                        "- 修改建议：改为客户可理解的正式表述。"
+                    ),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(detail.status_code, 200)
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        items = soup.select("[data-report-item]")
+        self.assertEqual(len(items), 2)
+        self.assertIn("技术信息呈现", items[0].get_text(" ", strip=True))
+        self.assertIn("客户资料定位", items[1].get_text(" ", strip=True))
+        self.assertNotIn("总体规范性结论", items[0].get_text(" ", strip=True))
+        self.assertEqual(soup.select_one('[data-report-count="total"]').get_text(strip=True), "2")
+
+    def test_admin_task_list_shows_report_item_totals(self):
+        with self.app.app_context():
+            now = "2026-05-24 10:00:00"
+            result_json = [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": (
+                        "1. 问题类型：参数错误\n"
+                        "位置：第1页\n"
+                        "问题描述：参数前后不一致。\n\n"
+                        "2. 建议：补充适用范围\n"
+                        "修改建议：增加适用范围说明。\n\n"
+                        "3. 非问题：未发现客户风险\n"
+                        "问题描述：该表述无需修改。"
+                    ),
+                }
+            ]
+            get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+
+        response = self.client.get("/admin/tasks")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        self.assertEqual(soup.select_one('[data-admin-report-count="issue"]').get_text(strip=True), "1")
+        self.assertEqual(soup.select_one('[data-admin-report-count="suggestion"]').get_text(strip=True), "1")
+        self.assertEqual(soup.select_one('[data-admin-report-count="non_issue"]').get_text(strip=True), "1")
+        self.assertEqual(soup.select_one('[data-admin-report-count="total"]').get_text(strip=True), "3")
+
     def test_report_item_type_update_persists_classification(self):
         with self.app.app_context():
             now = "2026-05-24 12:00:00"

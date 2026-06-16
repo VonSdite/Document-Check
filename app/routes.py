@@ -98,7 +98,11 @@ REPORT_ITEM_TYPES = {
 }
 REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
 REPORT_ITEM_START_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|(?:\d{1,3}[.、)]|（\d{1,3}）)\s*\S)"
+    r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
+    r"(?:\d{1,3}[.、)]|\(\d{1,3}\)|（\d{1,3}）)\s*(?:[*_`~]{1,3}\s*)?\S)"
+)
+REPORT_ITEM_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:[-+*]\s+)|(?:#{1,6}\s+)|(?:[*_`~]{1,3}\s*))*"
 )
 
 
@@ -1678,6 +1682,11 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         """,
         (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, start_at, end_at, *mode_params),
     ).fetchone()
+    totals = dict(totals or {})
+    totals["report_items"] = _admin_report_item_totals_for_where(
+        f"created_at >= ? AND created_at < ? AND {mode_clause}",
+        (start_at, end_at, *mode_params),
+    )
     mode_clause, mode_params = _mode_subject_filter("")
     daily_rows = db.execute(
         f"""
@@ -1733,7 +1742,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
 def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
     db = get_db()
     mode_clause, mode_params = _mode_subject_filter("")
-    return {
+    totals = {
         "tasks": db.execute(
             f"SELECT COUNT(*) AS total FROM tasks WHERE task_type = ? AND {mode_clause}",
             (task_type, *mode_params),
@@ -1767,6 +1776,35 @@ def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
             (task_type, *mode_params),
         ).fetchone()["total"],
     }
+    totals["report_items"] = _admin_report_item_totals(task_type, mode_clause, mode_params)
+    return totals
+
+
+def _admin_report_item_totals(task_type: str, mode_clause: str, mode_params: tuple[str, ...]) -> dict:
+    return _admin_report_item_totals_for_where(
+        f"task_type = ? AND {mode_clause}",
+        (task_type, *mode_params),
+    )
+
+
+def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dict:
+    totals = {key: 0 for key in REPORT_ITEM_TYPE_ORDER}
+    rows = get_db().execute(
+        f"""
+        SELECT result_json
+        FROM tasks
+        WHERE result_json IS NOT NULL
+          AND TRIM(result_json) != ''
+          AND {where_clause}
+        """,
+        params,
+    ).fetchall()
+    for row in rows:
+        item_totals = _report_item_totals(_prepare_task_results(_parse_result_json(row["result_json"])))
+        for key in REPORT_ITEM_TYPE_ORDER:
+            totals[key] += item_totals[key]
+    totals["total"] = sum(totals.values())
+    return totals
 
 
 def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
@@ -2504,10 +2542,14 @@ def _task_results(task):
 
 
 def _raw_task_results(task) -> list[dict]:
-    if not task["result_json"]:
+    return _parse_result_json(task["result_json"])
+
+
+def _parse_result_json(result_json) -> list[dict]:
+    if not result_json:
         return []
     try:
-        data = json.loads(task["result_json"])
+        data = json.loads(result_json)
     except json.JSONDecodeError:
         return []
     if not isinstance(data, list):
@@ -2575,9 +2617,10 @@ def _is_report_item_start(line: str) -> bool:
     stripped = str(line or "").strip()
     if not stripped:
         return False
-    if stripped.startswith(("#", "|", "```", ">")):
+    if stripped.startswith(("|", "```", ">")):
         return False
-    return bool(REPORT_ITEM_START_RE.match(stripped))
+    match_text = REPORT_ITEM_PREFIX_RE.sub("", stripped).strip()
+    return bool(REPORT_ITEM_START_RE.match(match_text))
 
 
 def _report_item_id(result_code: str, index: int, text: str) -> str:

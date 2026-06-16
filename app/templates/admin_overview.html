@@ -24,12 +24,16 @@
   </form>
 </section>
 
-<section class="metric-grid five">
+<section class="metric-grid nine">
   <div class="metric"><span>活跃用户</span><strong>{{ totals.users }}</strong></div>
   <div class="metric"><span>提交任务</span><strong>{{ totals.tasks }}</strong></div>
   <div class="metric"><span>单文档检查任务</span><strong>{{ totals.document_tasks }}</strong></div>
   <div class="metric"><span>多文档对照任务</span><strong>{{ totals.consistency_tasks }}</strong></div>
   <div class="metric"><span>图片检查任务</span><strong>{{ totals.image_tasks }}</strong></div>
+  <div class="metric"><span>AI问题</span><strong data-admin-report-count="issue">{{ totals.report_items.issue }}</strong></div>
+  <div class="metric"><span>AI建议</span><strong data-admin-report-count="suggestion">{{ totals.report_items.suggestion }}</strong></div>
+  <div class="metric"><span>AI非问题</span><strong data-admin-report-count="non_issue">{{ totals.report_items.non_issue }}</strong></div>
+  <div class="metric"><span>AI合计</span><strong data-admin-report-count="total">{{ totals.report_items.total }}</strong></div>
 </section>
 
 <section class="overview-status-grid">

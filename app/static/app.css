@@ -504,6 +504,10 @@ td {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.metric-grid.nine {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
 .metric,
 .panel {
   background: var(--panel);
