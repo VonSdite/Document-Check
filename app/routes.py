@@ -846,7 +846,7 @@ def _mode_subject_filter(table_alias: str = "t") -> tuple[str, tuple[str]]:
 
 
 def _ip_username_management_enabled() -> bool:
-    return _platform_enabled() and _auth_mode() == "ip"
+    return _auth_mode() == "ip"
 
 
 def _settings_tab() -> str:

@@ -27,7 +27,7 @@
         <a href="{{ url_for('admin_consistency') if platform_mode else url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}">多文档对照检查</a>
         <a href="{{ url_for('admin_images') if platform_mode else url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}">图片检查</a>
         <a href="{{ url_for('admin_models') if platform_mode else url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}">模型管理</a>
-        {% if platform_mode and auth_mode == 'ip' %}
+        {% if auth_mode == 'ip' %}
         <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if is_ip_users_page else '' }}">IP 用户标记</a>
         {% endif %}
         <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] and not is_ip_users_page else '' }}">系统设置</a>

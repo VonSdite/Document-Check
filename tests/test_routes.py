@@ -380,6 +380,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(json_response.status_code, 200)
         self.assertEqual(json_response.get_json(), {"ok": True, "ip": "10.0.0.8", "username": "李四"})
 
+    def test_admin_settings_shows_ip_username_mapping_in_local_ip_mode(self):
+        self.app.config["PLATFORM"] = False
+        self._insert_task(ip="10.0.0.8")
+
+        settings_response = self.client.get("/admin/settings")
+        ip_tab_response = self.client.get("/admin/settings?tab=ip_users")
+
+        self.assertEqual(settings_response.status_code, 200)
+        self.assertIn("IP 用户标记", settings_response.get_data(as_text=True))
+        self.assertEqual(ip_tab_response.status_code, 200)
+        ip_tab_html = ip_tab_response.get_data(as_text=True)
+        self.assertIn("IP 用户标记", ip_tab_html)
+        self.assertIn("10.0.0.8", ip_tab_html)
+        self.assertNotIn("系统出站网络", ip_tab_html)
+
     def test_admin_settings_hides_ip_username_mapping_outside_ip_mode(self):
         self.app.config["AUTH"] = {
             "mode": "trusted_header",
