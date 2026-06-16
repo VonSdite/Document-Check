@@ -90,15 +90,51 @@
     </section>
 
     {% if results %}
+    <section class="panel report-classification-summary">
+      <div>
+        <h2>AI 检查条目统计</h2>
+      </div>
+      <div class="report-counts">
+        <span><strong>{{ report_totals.issue }}</strong>问题</span>
+        <span><strong>{{ report_totals.suggestion }}</strong>建议</span>
+        <span><strong>{{ report_totals.non_issue }}</strong>非问题</span>
+        <span><strong>{{ report_totals.total }}</strong>合计</span>
+      </div>
+    </section>
+
     <section class="result-stack">
       {% for result in results %}
       <article class="panel result-panel">
         <div class="panel-head">
           <div>
             <h2>{{ result.name }}</h2>
+            <p>
+              共 {{ result.report_counts.total }} 条：
+              问题 {{ result.report_counts.issue }}，
+              建议 {{ result.report_counts.suggestion }}，
+              非问题 {{ result.report_counts.non_issue }}
+            </p>
           </div>
         </div>
+        {% if result.report_items %}
+        <div class="report-item-list">
+          {% for item in result.report_items %}
+          <section class="report-item" data-item-type="{{ item.type }}">
+            <div class="report-item-body">
+              <div class="report-item-title">条目 {{ item.index }}</div>
+              <div class="markdown-body">{{ item.text|markdown }}</div>
+            </div>
+            <div class="report-item-type-badge">{{ item.type_label }}</div>
+          </section>
+          {% endfor %}
+        </div>
+        <details class="result-raw-details">
+          <summary>查看原始结果</summary>
+          <div class="result-text markdown-body">{{ result.result|markdown }}</div>
+        </details>
+        {% else %}
         <div class="result-text markdown-body">{{ result.result|markdown }}</div>
+        {% endif %}
       </article>
       {% endfor %}
     </section>

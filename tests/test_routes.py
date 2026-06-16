@@ -1063,6 +1063,115 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("0001_page001-image001.png", exported_html)
         self.assertNotIn("0001_page001-screenshot.png", exported_html)
 
+    def test_task_detail_renders_report_items_and_counts(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:00:00"
+            result_json = [
+                {
+                    "code": "consistency",
+                    "name": "全文一致性检查",
+                    "result": (
+                        "总体结论：存在一致性风险。\n\n"
+                        "1. 问题类型：参数不一致\n"
+                        "位置：第1章、第2章\n"
+                        "原文摘录：A 为 10；A 为 20\n"
+                        "问题描述：同一参数前后不一致\n"
+                        "影响说明：客户可能按错误参数配置\n"
+                        "修改建议：统一参数值。\n\n"
+                        "2. 建议：补充适用范围\n"
+                        "位置：第3章\n"
+                        "原文摘录：安装前检查环境\n"
+                        "修改建议：补充温度范围。"
+                    ),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        exported = self.client.get(f"/admin/tasks/{task_id}/export")
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(exported.status_code, 200)
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        items = soup.select("[data-report-item]")
+        self.assertEqual(len(items), 2)
+        self.assertEqual(soup.select_one('[data-report-count="issue"]').get_text(strip=True), "1")
+        self.assertEqual(soup.select_one('[data-report-count="suggestion"]').get_text(strip=True), "1")
+        self.assertEqual(soup.select_one('[data-report-count="non_issue"]').get_text(strip=True), "0")
+        self.assertIn("AI 检查条目统计", exported.get_data(as_text=True))
+        self.assertIn("条目 1", exported.get_data(as_text=True))
+
+    def test_report_item_type_update_persists_classification(self):
+        with self.app.app_context():
+            now = "2026-05-24 12:00:00"
+            result_json = [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": (
+                        "1. 问题类型：内部备注残留\n"
+                        "位置：第1章\n"
+                        "原文摘录：TODO：研发确认\n"
+                        "问题描述：面向客户资料中残留内部备注\n"
+                        "影响说明：影响客户信任\n"
+                        "修改建议：删除内部备注。"
+                    ),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        item = soup.select_one("[data-report-item]")
+        item_id = item["data-item-id"]
+
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "non_issue",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["totals"]["issue"], 0)
+        self.assertEqual(payload["totals"]["non_issue"], 1)
+        with self.app.app_context():
+            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            stored = json.loads(task["result_json"])
+        self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
+
     def test_create_task_uses_trusted_header_identity(self):
         model_id = self._configure_provider("trusted_header:100086")
         self.app.config["AUTH"] = {

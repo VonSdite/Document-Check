@@ -1915,6 +1915,125 @@ td {
   overflow-wrap: anywhere;
 }
 
+.report-classification-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.report-classification-summary h2 {
+  margin: 0 0 4px;
+}
+
+.report-classification-summary p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.report-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.report-counts span {
+  min-width: 82px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f8fbff;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.report-counts strong {
+  display: block;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.1;
+}
+
+.report-item-list {
+  border-top: 1px solid var(--line);
+}
+
+.report-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 148px;
+  gap: 16px;
+  align-items: start;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.report-item:first-child {
+  padding-top: 0;
+}
+
+.report-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.report-item.is-saving {
+  opacity: 0.72;
+}
+
+.report-item-title {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.report-item-type {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.report-item-type select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+}
+
+.report-item-type-badge {
+  justify-self: end;
+  min-width: 72px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: #eef5ff;
+  color: #17345c;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.result-raw-details {
+  margin-top: 16px;
+  color: var(--muted);
+}
+
+.result-raw-details summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.result-raw-details .result-text {
+  margin-top: 12px;
+}
+
 .markdown-body {
   color: var(--text);
   font-size: 15px;
@@ -2485,6 +2604,30 @@ td {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .report-classification-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .report-counts {
+    justify-content: stretch;
+  }
+
+  .report-counts span {
+    flex: 1 1 120px;
+  }
+
+  .report-item {
+    grid-template-columns: 1fr;
+  }
+
+  .report-item-type,
+  .report-item-type-badge {
+    justify-self: stretch;
+  }
 }
 
 @keyframes toast-in {

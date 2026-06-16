@@ -206,6 +206,88 @@ document.addEventListener("change", (event) => {
     });
 });
 
+document.addEventListener("change", (event) => {
+  const select = event.target.closest("[data-report-item-type]");
+  if (!(select instanceof HTMLSelectElement)) {
+    return;
+  }
+  const item = select.closest("[data-report-item]");
+  const results = select.closest("[data-report-results]");
+  if (!(item instanceof HTMLElement) || !(results instanceof HTMLElement)) {
+    return;
+  }
+  const savedValue = select.dataset.savedValue || "issue";
+  const nextValue = select.value;
+  const url = results.dataset.reportClassificationUrl;
+  if (!url || nextValue === savedValue) {
+    return;
+  }
+
+  select.disabled = true;
+  item.classList.add("is-saving");
+  fetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "X-Requested-With": "fetch",
+    },
+    body: JSON.stringify({
+      result_code: item.dataset.resultCode,
+      item_id: item.dataset.itemId,
+      item_type: nextValue,
+    }),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("save failed");
+      }
+      return response.json();
+    })
+    .then((data) => {
+      if (!data.ok) {
+        throw new Error(data.error || "save failed");
+      }
+      const savedType = data.item_type || nextValue;
+      select.value = savedType;
+      select.dataset.savedValue = savedType;
+      item.dataset.itemType = savedType;
+      updateReportCounts(data.totals || {});
+      updateResultCounts(item, data.result_counts || {});
+      showToast("报告条目标记已保存。", "success");
+    })
+    .catch(() => {
+      select.value = savedValue;
+      item.dataset.itemType = savedValue;
+      showToast("报告条目标记保存失败，请稍后重试。", "error");
+    })
+    .finally(() => {
+      select.disabled = false;
+      item.classList.remove("is-saving");
+    });
+});
+
+function updateReportCounts(totals) {
+  Object.entries(totals || {}).forEach(([key, value]) => {
+    document.querySelectorAll(`[data-report-count="${key}"]`).forEach((node) => {
+      node.textContent = String(value ?? 0);
+    });
+  });
+}
+
+function updateResultCounts(item, counts) {
+  const result = item.closest("[data-report-result]");
+  if (!(result instanceof HTMLElement)) {
+    return;
+  }
+  Object.entries(counts || {}).forEach(([key, value]) => {
+    result.querySelectorAll(`[data-report-result-count="${key}"]`).forEach((node) => {
+      node.textContent = String(value ?? 0);
+    });
+  });
+}
+
 const ipUsernameSaveTimers = new WeakMap();
 
 function scheduleIpUsernameInputSave(input, delay = 700) {

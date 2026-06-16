@@ -1,4 +1,5 @@
 import hmac
+import hashlib
 import io
 import json
 import os
@@ -90,6 +91,15 @@ PROVIDER_INPUT_LIMIT_MIN = 5000
 PROVIDER_INPUT_LIMIT_MAX = 1000000
 CONSOLE_USER_ENDPOINTS = {"admin_tasks", "admin_new_task", "admin_consistency", "admin_images", "admin_models"}
 INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
+REPORT_ITEM_TYPES = {
+    "issue": "问题",
+    "suggestion": "建议",
+    "non_issue": "非问题",
+}
+REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
+REPORT_ITEM_START_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|(?:\d{1,3}[.、)]|（\d{1,3}）)\s*\S)"
+)
 
 
 def register_routes(app):
@@ -322,15 +332,24 @@ def register_routes(app):
     @app.get("/tasks/<int:task_id>")
     def user_task_detail(task_id):
         task = _get_user_task_or_local_admin(task_id)
+        results = _task_results(task)
         return render_template(
             "task_detail.html",
             mode="admin" if not _platform_enabled() else "user",
             task=task,
-            results=_task_results(task),
+            results=results,
+            report_totals=_report_item_totals(results),
+            report_item_types=REPORT_ITEM_TYPES,
+            report_classification_url=url_for("admin_update_report_item_type" if not _platform_enabled() else "user_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_endpoint=_task_list_endpoint(not _platform_enabled(), task["task_type"]),
         )
+
+    @app.post("/tasks/<int:task_id>/report-items")
+    def user_update_report_item_type(task_id):
+        task = _get_user_task_or_local_admin(task_id)
+        return _update_report_item_type(task)
 
     @app.get("/tasks/<int:task_id>/export")
     def user_export_task(task_id):
@@ -490,15 +509,25 @@ def register_routes(app):
     @admin_required
     def admin_task_detail(task_id):
         task = _get_task_or_404(task_id)
+        results = _task_results(task)
         return render_template(
             "task_detail.html",
             mode="admin",
             task=task,
-            results=_task_results(task),
+            results=results,
+            report_totals=_report_item_totals(results),
+            report_item_types=REPORT_ITEM_TYPES,
+            report_classification_url=url_for("admin_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_endpoint=_task_list_endpoint(True, task["task_type"]),
         )
+
+    @app.post(f"{admin_prefix}/tasks/<int:task_id>/report-items")
+    @admin_required
+    def admin_update_report_item_type(task_id):
+        task = _get_task_or_404(task_id)
+        return _update_report_item_type(task)
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/export")
     @admin_required
@@ -2471,20 +2500,194 @@ def _limit_utf8_bytes(value: str, max_bytes: int) -> str:
 
 
 def _task_results(task):
+    return _prepare_task_results(_raw_task_results(task))
+
+
+def _raw_task_results(task) -> list[dict]:
     if not task["result_json"]:
         return []
     try:
-        return json.loads(task["result_json"])
+        data = json.loads(task["result_json"])
     except json.JSONDecodeError:
         return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _prepare_task_results(results: list[dict]) -> list[dict]:
+    prepared = []
+    for result in results:
+        item = dict(result)
+        report_items = _result_report_items(item)
+        classifications = item.get("item_classifications")
+        if not isinstance(classifications, dict):
+            classifications = {}
+        for report_item in report_items:
+            saved_type = classifications.get(report_item["id"])
+            report_item["type"] = _normalize_report_item_type(saved_type) or report_item["type"]
+            report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
+        item["report_items"] = report_items
+        item["report_counts"] = _count_report_items(report_items)
+        prepared.append(item)
+    return prepared
+
+
+def _result_report_items(result: dict) -> list[dict]:
+    code = str(result.get("code") or "")
+    text = str(result.get("result") or "").strip()
+    if not text:
+        return []
+    chunks = _extract_report_item_chunks(text) or [text]
+    items = []
+    for index, chunk in enumerate(chunks, start=1):
+        item_text = chunk.strip()
+        if not item_text:
+            continue
+        items.append(
+            {
+                "id": _report_item_id(code, index, item_text),
+                "index": index,
+                "text": item_text,
+                "type": _infer_report_item_type(item_text),
+            }
+        )
+    return items
+
+
+def _extract_report_item_chunks(text: str) -> list[str]:
+    chunks = []
+    current = []
+    for line in str(text or "").splitlines():
+        if _is_report_item_start(line):
+            if current:
+                chunks.append("\n".join(current).strip())
+            current = [line]
+            continue
+        if current:
+            current.append(line)
+    if current:
+        chunks.append("\n".join(current).strip())
+    return [chunk for chunk in chunks if chunk]
+
+
+def _is_report_item_start(line: str) -> bool:
+    stripped = str(line or "").strip()
+    if not stripped:
+        return False
+    if stripped.startswith(("#", "|", "```", ">")):
+        return False
+    return bool(REPORT_ITEM_START_RE.match(stripped))
+
+
+def _report_item_id(result_code: str, index: int, text: str) -> str:
+    source = f"{result_code}\n{index}\n{text}"
+    return hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+
+
+def _infer_report_item_type(text: str) -> str:
+    compact = re.sub(r"\s+", "", str(text or ""))
+    if any(marker in compact for marker in ("非问题", "未发现", "无明显", "未见明显", "无需修改")):
+        return "non_issue"
+    issue_markers = (
+        "问题",
+        "错误",
+        "不一致",
+        "矛盾",
+        "冲突",
+        "缺失",
+        "风险",
+        "不规范",
+        "不匹配",
+        "异常",
+    )
+    if "建议" in compact and not any(marker in compact for marker in issue_markers):
+        return "suggestion"
+    return "issue"
+
+
+def _normalize_report_item_type(value) -> str | None:
+    value = str(value or "").strip()
+    return value if value in REPORT_ITEM_TYPES else None
+
+
+def _count_report_items(items: list[dict]) -> dict:
+    counts = {key: 0 for key in REPORT_ITEM_TYPE_ORDER}
+    for item in items:
+        item_type = _normalize_report_item_type(item.get("type")) or "issue"
+        counts[item_type] += 1
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def _report_item_totals(results: list[dict]) -> dict:
+    totals = {key: 0 for key in REPORT_ITEM_TYPE_ORDER}
+    for result in results:
+        counts = result.get("report_counts") or {}
+        for key in REPORT_ITEM_TYPE_ORDER:
+            totals[key] += int(counts.get(key) or 0)
+    totals["total"] = sum(totals.values())
+    return totals
+
+
+def _update_report_item_type(task):
+    if task["status"] in {"queued", "running"}:
+        return {"ok": False, "error": "任务尚未完成，暂不能标记报告条目。"}, 409
+    data = request.get_json(silent=True) if request.is_json else None
+    if not isinstance(data, dict):
+        data = request.form
+    result_code = str(data.get("result_code") or "").strip()
+    item_id = str(data.get("item_id") or "").strip()
+    item_type = _normalize_report_item_type(data.get("item_type"))
+    if not result_code or not item_id or not item_type:
+        return {"ok": False, "error": "报告条目标记数据无效。"}, 400
+
+    results = _raw_task_results(task)
+    target = None
+    valid_item_ids = set()
+    for result in results:
+        if str(result.get("code") or "") != result_code:
+            continue
+        target = result
+        valid_item_ids = {item["id"] for item in _result_report_items(result)}
+        break
+    if target is None or item_id not in valid_item_ids:
+        return {"ok": False, "error": "报告条目不存在。"}, 404
+
+    classifications = target.get("item_classifications")
+    if not isinstance(classifications, dict):
+        classifications = {}
+    classifications[item_id] = item_type
+    target["item_classifications"] = classifications
+
+    db = get_db()
+    db.execute(
+        "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(results, ensure_ascii=False), now_text(), task["id"]),
+    )
+    db.commit()
+
+    prepared = _prepare_task_results(results)
+    updated_result = next((item for item in prepared if str(item.get("code") or "") == result_code), None)
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "item_type": item_type,
+        "item_type_label": REPORT_ITEM_TYPES[item_type],
+        "result_counts": (updated_result or {}).get("report_counts", {}),
+        "totals": _report_item_totals(prepared),
+    }
 
 
 def _export_task_report(task):
     app_css = (Path(current_app.static_folder) / "app.css").read_text(encoding="utf-8")
+    results = _task_results(task)
     html = render_template(
         "task_report_export.html",
         task=task,
-        results=_task_results(task),
+        results=results,
+        report_totals=_report_item_totals(results),
+        report_item_types=REPORT_ITEM_TYPES,
         document_groups=_task_document_groups(task),
         app_css=app_css,
     )

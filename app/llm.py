@@ -19,14 +19,16 @@ _EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 优先输出明确问题；不确定请标注“需人工确认”。
 4. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
-5. 没有发现问题时只给出简短结论。
-6. {issue_output_limit_instruction}"""
+5. 输出明确问题或建议时，请使用可拆分的编号条目，每条只描述一个问题或建议。
+6. 没有发现问题时只给出简短结论。
+7. {issue_output_limit_instruction}"""
 _IMAGE_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据当前图片和提供的图片位置信息进行检查，不补全图片外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 优先输出明确问题；不确定请标注“需人工确认”。
-4. 没有发现问题时只给出简短结论。
-5. {issue_output_limit_instruction}"""
+4. 输出明确问题或建议时，请使用可拆分的编号条目，每条只描述一个问题或建议。
+5. 没有发现问题时只给出简短结论。
+6. {issue_output_limit_instruction}"""
 _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 可以综合文档文本、图片清单、图片位置和本次提供的图片内容进行检查，尤其关注图文是否对应。
 2. 只依据提供的文档上下文和图片内容，不补全文档外信息。
@@ -35,7 +37,8 @@ _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 5. 输出问题时尽量引用图片名称、图片位置或文档中的文字线索。
 6. 判断图文不对应时，必须同时给出明确文档线索和图片可见证据。
 7. 不要仅凭文件名、页码、图片顺序或未提供的上下文断言图片插入错位；证据不足时写“需人工确认”。
-8. {issue_output_limit_instruction}"""
+8. 输出明确问题或建议时，请使用可拆分的编号条目，每条只描述一个问题或建议。
+9. {issue_output_limit_instruction}"""
 
 
 def _normalized_issue_output_limit(value) -> int:
