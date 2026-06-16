@@ -259,11 +259,28 @@ DEFAULT_DOCUMENT_CHECK_ITEMS = (
         "code": "consistency",
         "name": "全文一致性检查",
         "description": "检查全文内时间、数字、名称、术语、口径和前后表述是否一致。",
-        "prompt": """你是一名全文一致性审查专家。请检查文档内部是否存在前后矛盾或口径不一致，包括但不限于人名/组织名、项目名、日期、金额、数量、单位、缩写、术语定义、章节引用、结论与正文依据。
+        "prompt": """你是一名严谨的文档审查专家兼资深技术文档编辑，擅长发现资料文档内部结构、逻辑、内容、术语、技术参数及约束性表述之间的矛盾与不一致。请检查文档内部是否存在前后不一致、互相矛盾、引用错误或口径漂移，不要进行一般润色，也不要脱离文档内容补充判断。
+重点关注：
+1. 结构与内容一致性：章节标题、段落主题、小节范围是否与正文内容匹配；目录、标题、编号、附件、图表编号、交叉引用是否对应。
+2. 逻辑与结论一致性：前后文条件、步骤顺序、因果关系、结论与依据是否矛盾；同一事项在不同章节是否出现相反或遗漏的前提。
+3. 数据与技术参数一致性：正文、表格、图片说明、参数表、示例中的数值、单位、阈值、范围、默认值、版本号、接口名、产品型号、产品名称是否一致；单位写法是否统一且不造成歧义。
+4. 约束性与安全信息一致性：重点检查安全、环境、安装、运行、维护、故障处理等章节中关于同一事项的强制程度是否一致，包括“严禁、禁止、不可、不得、必须、应、建议、可、允许、例外、请咨询”等表述；对禁令、建议、可选、例外条件和适用范围的冲突要特别标注。
+5. 术语与命名一致性：人名/组织名、项目名、产品名、部件名、功能名、术语定义、缩写、中英文名称是否前后一致。
+6. 引用与编号一致性：章节号、图号、表号、步骤号、附录号、公式号、链接或引用对象是否存在错指、缺失、重复或与实际标题/内容不匹配。
+7. 其他潜在不一致：同一对象的状态、版本、配置、权限、操作对象、适用范围、例外条件、环境要求、维护周期等是否前后不一致。
+
+检查方法：
+1. 对同一事项跨章节、正文与表格、正文与图表说明、参数表与步骤说明进行对照。
+2. 可优先检索并比对约束性关键词：严禁、禁止、不可、不得、必须、应、建议、可、允许、例外、请咨询。
+3. 只依据文档中可定位的文字证据判断；证据不足或需要业务确认时标注“需人工确认”。
+
 输出要求：
-1. 先概括一致性风险等级。
-2. 按条列出不一致内容：涉及位置线索、冲突表述、判断依据、建议统一口径。
-3. 对不确定的问题标注“需人工确认”，不要武断下结论。""",
+1. 先给出总体一致性风险结论，说明风险等级（高/中/低/未发现明显风险）和主要风险类别。
+2. 按条清晰列出：问题类型、位置、原文摘录、问题描述、影响说明、修改建议。
+3. 每条问题至少提供两处可对照的位置线索或说明缺少对应依据；位置优先包含页码/章节/表格/图号/附近文本。
+4. 对约束性表述冲突，明确写出两处表述的强制程度差异（如“必须”与“建议”、“禁止”与“允许”）及适用条件是否一致。
+5. 不要把同义表达、合理简称、单位等价换算或上下文已明确的差异误判为不一致。
+6. 如果未发现明显问题，明确说明“未发现明显全文一致性问题”。""",
         "sort_order": 20,
     },
     {
@@ -458,6 +475,11 @@ _TYPO_LOCATION_PROMPT_MARKERS = (
     "按条列出：原文片段、疑似问题、建议修改、理由",
     "未发现明显错别字或语病",
 )
+_CONSISTENCY_PROMPT_MARKERS = (
+    "包括但不限于人名/组织名、项目名、日期、金额、数量、单位",
+    "先概括一致性风险等级",
+    "建议统一口径",
+)
 _LEGACY_IMAGE_LANGUAGE_MARKERS = ("小语种", "非中文、非英文")
 _QWEN_VL_OPTIMIZED_IMAGE_PROMPT_MARKERS = {
     "image-text-correspondence": ("图文一致性审查专家",),
@@ -546,6 +568,7 @@ def seed_defaults():
 
     _sync_renamed_default_check_items(db, now)
     _sync_typo_location_prompt(db, now)
+    _sync_consistency_prompt(db, now)
     _sync_qwen_vl_optimized_image_check_items(db, now)
     _disable_merged_image_check_items(db, now)
     _remove_retired_default_check_items(db)
@@ -589,6 +612,49 @@ def _sync_typo_location_prompt(db, updated_at: str):
             sort_order = ?,
             updated_at = ?
         WHERE code = 'typo'
+        """,
+        (
+            default_item["name"],
+            default_item["description"],
+            default_item["prompt"],
+            default_item["sort_order"],
+            updated_at,
+        ),
+    )
+
+
+def _sync_consistency_prompt(db, updated_at: str):
+    default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get("consistency")
+    if default_item is None:
+        return
+    row = db.execute(
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'consistency'"
+    ).fetchone()
+    if row is None:
+        return
+    prompt = str(row["prompt"] or "")
+    is_legacy_stock_prompt = (
+        all(marker in prompt for marker in _CONSISTENCY_PROMPT_MARKERS)
+        and "约束性与安全信息一致性" not in prompt
+    )
+    if not is_legacy_stock_prompt:
+        return
+    if (
+        row["name"] == default_item["name"]
+        and (row["description"] or "") == default_item["description"]
+        and prompt == default_item["prompt"]
+        and int(row["sort_order"] or 0) == int(default_item["sort_order"])
+    ):
+        return
+    db.execute(
+        """
+        UPDATE check_items
+        SET name = ?,
+            description = ?,
+            prompt = ?,
+            sort_order = ?,
+            updated_at = ?
+        WHERE code = 'consistency'
         """,
         (
             default_item["name"],

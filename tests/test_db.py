@@ -146,6 +146,15 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertFalse(get_bool_setting("llm_stream_trace_enabled", False))
 
+    def test_default_consistency_prompt_covers_constraint_conflicts(self):
+        db = get_db()
+        item = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
+
+        self.assertIn("约束性与安全信息一致性", item["prompt"])
+        self.assertIn("严禁、禁止、不可、不得、必须", item["prompt"])
+        self.assertIn("章节标题、段落主题、小节范围", item["prompt"])
+        self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
+
     def test_default_check_items_are_grouped_by_task_type(self):
         db = get_db()
         document_codes = [
@@ -257,6 +266,40 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("页码：未提取", row["prompt"])
         self.assertIn("章节：未识别", row["prompt"])
         self.assertIn("位置（文件/页码/章节或工作表/附近线索）", row["prompt"])
+
+    def test_seed_defaults_migrates_stock_consistency_prompt_to_constraint_version(self):
+        db = get_db()
+        legacy_prompt = """你是一名全文一致性审查专家。请检查文档内部是否存在前后矛盾或口径不一致，包括但不限于人名/组织名、项目名、日期、金额、数量、单位、缩写、术语定义、章节引用、结论与正文依据。
+输出要求：
+1. 先概括一致性风险等级。
+2. 按条列出不一致内容：涉及位置线索、冲突表述、判断依据、建议统一口径。
+3. 对不确定的问题标注“需人工确认”，不要武断下结论。"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'consistency'",
+            (legacy_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
+        self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
+        self.assertIn("约束性与安全信息一致性", row["prompt"])
+        self.assertIn("严禁、禁止、不可、不得、必须", row["prompt"])
+
+    def test_seed_defaults_keeps_custom_consistency_prompt(self):
+        db = get_db()
+        custom_prompt = "自定义全文一致性提示词：只检查产品名称是否统一。"
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'consistency'",
+            (custom_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
+        self.assertEqual(row["prompt"], custom_prompt)
 
     def test_seed_defaults_migrates_image_language_check_item(self):
         db = get_db()
