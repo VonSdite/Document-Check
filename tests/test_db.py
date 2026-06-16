@@ -155,6 +155,16 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("章节标题、段落主题、小节范围", item["prompt"])
         self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
 
+    def test_default_compliance_prompt_targets_customer_documents(self):
+        db = get_db()
+        item = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
+
+        self.assertIn("客户资料规范审查专家", item["prompt"])
+        self.assertIn("面向客户发布", item["prompt"])
+        self.assertIn("TODO/占位符", item["prompt"])
+        self.assertIn("注意/警告/危险/提示", item["prompt"])
+        self.assertIn("问题类型、位置、原文摘录、问题描述、客户影响、修改建议", item["prompt"])
+
     def test_default_check_items_are_grouped_by_task_type(self):
         db = get_db()
         document_codes = [
@@ -266,6 +276,42 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("页码：未提取", row["prompt"])
         self.assertIn("章节：未识别", row["prompt"])
         self.assertIn("位置（文件/页码/章节或工作表/附近线索）", row["prompt"])
+
+    def test_seed_defaults_migrates_stock_compliance_prompt_to_customer_document_version(self):
+        db = get_db()
+        legacy_prompt = """你是一名严谨的文档规范审查专家。请检查文档的标题层级、章节结构、编号、术语、格式表达、引用说明、表格/图片说明、落款与附件等规范性问题。
+注意：文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
+输出要求：
+1. 先给出总体结论，说明是否存在明显规范风险。
+2. 按问题逐条列出：位置线索、问题描述、影响、修改建议。
+3. 如果未发现问题，明确说明“未发现明显规范性问题”。
+4. 不要编造文档中不存在的内容。"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            (legacy_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
+        self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"])
+        self.assertIn("客户资料规范审查专家", row["prompt"])
+        self.assertIn("面向客户发布", row["prompt"])
+
+    def test_seed_defaults_keeps_custom_compliance_prompt(self):
+        db = get_db()
+        custom_prompt = "自定义文档规范性提示词：只检查标题格式。"
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            (custom_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
+        self.assertEqual(row["prompt"], custom_prompt)
 
     def test_seed_defaults_migrates_stock_consistency_prompt_to_constraint_version(self):
         db = get_db()

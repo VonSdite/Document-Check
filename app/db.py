@@ -246,13 +246,25 @@ DEFAULT_DOCUMENT_CHECK_ITEMS = (
         "code": "compliance",
         "name": "文档规范性检查",
         "description": "检查文档是否符合正式文档写作规范、结构规范和表达规范。",
-        "prompt": """你是一名严谨的文档规范审查专家。请检查文档的标题层级、章节结构、编号、术语、格式表达、引用说明、表格/图片说明、落款与附件等规范性问题。
+        "prompt": """你是一名严谨的客户资料规范审查专家兼资深技术文档编辑，主要审查面向客户发布的产品资料、用户手册、安装指南、维护指南、调测指南、白皮书或交付文档。请检查文档是否符合正式客户资料的写作规范、结构规范、表达规范和发布规范，重点发现会影响客户理解、信任、交付质量或发布合规性的规范问题。
 注意：文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
+重点关注：
+1. 客户资料定位：是否存在内部沟通口吻、研发备注、评审意见、TODO/占位符、草稿痕迹、内部系统名、内部责任人或不应面向客户暴露的信息。
+2. 结构与层级：标题层级、章节顺序、编号、目录/章节/附录关系是否清晰；是否存在标题缺失、层级跳跃、同级标题风格不一致、章节内容与标题不匹配。
+3. 表达与语气：是否使用正式、客观、面向客户的表达；是否存在口语化、含糊承诺、夸大宣传、主观评价、过度绝对化或不适合客户资料的措辞。
+4. 术语与命名规范：产品名称、功能名称、部件名称、界面名称、菜单路径、按钮名、参数名、中英文术语、缩写解释是否符合正式资料写法并保持规范。
+5. 图表与引用规范：图题、表题、图号、表号、步骤号、章节引用、附录引用、链接、公式、示例编号是否规范；图表说明、正文引用与对象关系是否清楚。
+6. 操作与安全提示规范：前提条件、操作步骤、注意/警告/危险/提示等安全信息是否格式清晰、语气恰当、位置合理；禁令、强制要求和建议是否表达明确。
+7. 技术信息呈现：参数、单位、范围、默认值、版本、环境要求、约束条件、例外条件是否以客户可理解的方式呈现；表格字段和说明是否完整。
+8. 发布完整性：是否存在空章节、重复章节、明显缺失的说明、未定义术语、未解释缩写、附件/参考资料缺失、版本/修订记录/适用范围表达不清等问题。
+
 输出要求：
-1. 先给出总体结论，说明是否存在明显规范风险。
-2. 按问题逐条列出：位置线索、问题描述、影响、修改建议。
-3. 如果未发现问题，明确说明“未发现明显规范性问题”。
-4. 不要编造文档中不存在的内容。""",
+1. 先给出总体规范性结论，说明是否适合作为面向客户发布资料，以及主要风险类别。
+2. 按问题逐条列出：问题类型、位置、原文摘录、问题描述、客户影响、修改建议。
+3. 位置优先包含页码/章节/标题/表格/图号/附近文本；无法定位时说明“位置线索不足”。
+4. 对可能涉及业务口径、法务合规或品牌规范但文档证据不足的问题，标注“需人工确认”。
+5. 不要把解析换行、分页、表格分隔符造成的格式变化误判为版式问题；不要编造文档中不存在的内容。
+6. 如果未发现明显问题，明确说明“未发现明显客户资料规范性问题”。""",
         "sort_order": 10,
     },
     {
@@ -475,6 +487,11 @@ _TYPO_LOCATION_PROMPT_MARKERS = (
     "按条列出：原文片段、疑似问题、建议修改、理由",
     "未发现明显错别字或语病",
 )
+_COMPLIANCE_PROMPT_MARKERS = (
+    "标题层级、章节结构、编号、术语、格式表达、引用说明",
+    "先给出总体结论",
+    "未发现明显规范性问题",
+)
 _CONSISTENCY_PROMPT_MARKERS = (
     "包括但不限于人名/组织名、项目名、日期、金额、数量、单位",
     "先概括一致性风险等级",
@@ -567,6 +584,7 @@ def seed_defaults():
             )
 
     _sync_renamed_default_check_items(db, now)
+    _sync_compliance_prompt(db, now)
     _sync_typo_location_prompt(db, now)
     _sync_consistency_prompt(db, now)
     _sync_qwen_vl_optimized_image_check_items(db, now)
@@ -578,6 +596,49 @@ def seed_defaults():
 def _remove_retired_default_check_items(db):
     for code in _REMOVED_DEFAULT_CHECK_ITEM_CODES:
         db.execute("DELETE FROM check_items WHERE code = ?", (code,))
+
+
+def _sync_compliance_prompt(db, updated_at: str):
+    default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get("compliance")
+    if default_item is None:
+        return
+    row = db.execute(
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'compliance'"
+    ).fetchone()
+    if row is None:
+        return
+    prompt = str(row["prompt"] or "")
+    is_legacy_stock_prompt = (
+        all(marker in prompt for marker in _COMPLIANCE_PROMPT_MARKERS)
+        and "客户资料规范审查专家" not in prompt
+    )
+    if not is_legacy_stock_prompt:
+        return
+    if (
+        row["name"] == default_item["name"]
+        and (row["description"] or "") == default_item["description"]
+        and prompt == default_item["prompt"]
+        and int(row["sort_order"] or 0) == int(default_item["sort_order"])
+    ):
+        return
+    db.execute(
+        """
+        UPDATE check_items
+        SET name = ?,
+            description = ?,
+            prompt = ?,
+            sort_order = ?,
+            updated_at = ?
+        WHERE code = 'compliance'
+        """,
+        (
+            default_item["name"],
+            default_item["description"],
+            default_item["prompt"],
+            default_item["sort_order"],
+            updated_at,
+        ),
+    )
 
 
 def _sync_typo_location_prompt(db, updated_at: str):
