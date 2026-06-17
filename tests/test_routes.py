@@ -1130,6 +1130,71 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("AI 检查条目统计", exported.get_data(as_text=True))
         self.assertIn("条目 1", exported.get_data(as_text=True))
 
+    def test_task_detail_renders_structured_json_report_table(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:30:00"
+            structured_report = {
+                "summary": "发现 1 个明确问题，1 个需人工确认项。",
+                "items": [
+                    {
+                        "status": "issue",
+                        "category": "参数不一致",
+                        "location": "第1章、第2章",
+                        "excerpt": "A 为 10；A 为 20",
+                        "description": "同一参数前后不一致",
+                        "impact": "客户可能按错误参数配置",
+                        "suggestion": "统一参数值。",
+                    },
+                    {
+                        "status": "suggestion",
+                        "category": "需人工确认",
+                        "location": "第3章",
+                        "excerpt": "安装前检查环境",
+                        "description": "未说明温度范围，证据不足需人工确认。",
+                        "impact": "",
+                        "suggestion": "确认后补充适用范围。",
+                    },
+                ],
+            }
+            result_json = [
+                {
+                    "code": "consistency",
+                    "name": "全文一致性检查",
+                    "result": json.dumps(structured_report, ensure_ascii=False),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(detail.status_code, 200)
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
+        self.assertIn("状态", headers)
+        self.assertIn("问题描述", headers)
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].select_one("[data-report-item-type]")["data-saved-value"], "issue")
+        self.assertEqual(rows[1].select_one("[data-report-item-type]")["data-saved-value"], "suggestion")
+        self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
+        self.assertIn("确认后补充适用范围", rows[1].get_text(" ", strip=True))
+        self.assertEqual(soup.select_one('[data-report-count="issue"]').get_text(strip=True), "1")
+        self.assertEqual(soup.select_one('[data-report-count="suggestion"]').get_text(strip=True), "1")
+
     def test_task_detail_splits_bold_numbered_compliance_items(self):
         with self.app.app_context():
             now = "2026-05-24 09:00:00"

@@ -255,12 +255,12 @@ document.addEventListener("change", (event) => {
       item.dataset.itemType = savedType;
       updateReportCounts(data.totals || {});
       updateResultCounts(item, data.result_counts || {});
-      showToast("报告条目标记已保存。", "success");
+      showToast("报告条目状态已保存。", "success");
     })
     .catch(() => {
       select.value = savedValue;
       item.dataset.itemType = savedValue;
-      showToast("报告条目标记保存失败，请稍后重试。", "error");
+      showToast("报告条目状态保存失败，请稍后重试。", "error");
     })
     .finally(() => {
       select.disabled = false;

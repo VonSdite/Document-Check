@@ -97,6 +97,14 @@ REPORT_ITEM_TYPES = {
     "non_issue": "非问题",
 }
 REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
+REPORT_ITEM_FIELDS = (
+    ("category", "问题类型"),
+    ("location", "位置"),
+    ("excerpt", "原文/证据"),
+    ("description", "问题描述"),
+    ("impact", "影响"),
+    ("suggestion", "修改建议"),
+)
 REPORT_ITEM_START_RE = re.compile(
     r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
     r"(?:\d{1,3}[.、)]|\(\d{1,3}\)|（\d{1,3}）)\s*(?:[*_`~]{1,3}\s*)?\S)"
@@ -104,10 +112,58 @@ REPORT_ITEM_START_RE = re.compile(
 REPORT_ITEM_PREFIX_RE = re.compile(
     r"^\s*(?:(?:[-+*]\s+)|(?:#{1,6}\s+)|(?:[*_`~]{1,3}\s*))*"
 )
+REPORT_JSON_ITEM_KEYS = ("items", "issues", "report_items", "findings", "problems")
+REPORT_JSON_SUMMARY_KEYS = ("summary", "overall", "conclusion", "总体结论", "总结")
+REPORT_STATUS_KEYS = ("status", "状态", "classification", "item_type", "结论类型", "问题状态", "type")
+REPORT_FIELD_ALIASES = {
+    "category": ("category", "issue_type", "problem_type", "type", "问题类型", "类型", "检查类型"),
+    "location": ("location", "position", "where", "位置", "位置线索", "页码", "章节", "图片位置"),
+    "excerpt": ("excerpt", "quote", "original", "evidence", "原文摘录", "原文", "证据", "文档线索", "图片可见证据", "可见线索"),
+    "description": ("description", "issue", "problem", "finding", "疑似问题", "问题描述", "偏差说明", "冲突或缺失说明", "问题判断"),
+    "impact": ("impact", "risk", "影响", "影响说明", "客户影响", "可能影响"),
+    "suggestion": ("suggestion", "recommendation", "fix", "修改建议", "建议修改", "建议处理方式", "需核对的依据"),
+}
+REPORT_LEGACY_LABEL_FIELDS = {
+    "问题类型": "category",
+    "类型": "category",
+    "对象类型": "category",
+    "位置": "location",
+    "位置线索": "location",
+    "图片名称或位置": "location",
+    "图片位置": "location",
+    "文档线索": "location",
+    "原文": "excerpt",
+    "原文摘录": "excerpt",
+    "资料表述": "excerpt",
+    "冲突表述": "excerpt",
+    "图片可见内容": "excerpt",
+    "图片可见证据": "excerpt",
+    "可见内容线索": "excerpt",
+    "可见线索": "excerpt",
+    "识别到的文字": "excerpt",
+    "问题": "description",
+    "问题描述": "description",
+    "疑似问题": "description",
+    "偏差说明": "description",
+    "冲突或缺失说明": "description",
+    "问题判断": "description",
+    "不匹配原因": "description",
+    "理由": "description",
+    "影响": "impact",
+    "影响说明": "impact",
+    "客户影响": "impact",
+    "可能影响": "impact",
+    "建议": "suggestion",
+    "修改建议": "suggestion",
+    "建议修改": "suggestion",
+    "建议处理方式": "suggestion",
+    "建议补充的标题形式": "suggestion",
+}
 
 
 def register_routes(app):
     app.add_template_global(STATUS_LABELS, "STATUS_LABELS")
+    app.add_template_global(REPORT_ITEM_FIELDS, "REPORT_ITEM_FIELDS")
     app.add_template_global(lambda: app.config["ADMIN_URL"], "admin_url")
     app.add_template_global(subject_label, "subject_label")
     app.add_template_global(_owner_display, "owner_display")
@@ -2561,7 +2617,8 @@ def _prepare_task_results(results: list[dict]) -> list[dict]:
     prepared = []
     for result in results:
         item = dict(result)
-        report_items = _result_report_items(item)
+        structured_report = _result_structured_report(item)
+        report_items = _result_report_items(item, structured_report)
         classifications = item.get("item_classifications")
         if not isinstance(classifications, dict):
             classifications = {}
@@ -2569,14 +2626,20 @@ def _prepare_task_results(results: list[dict]) -> list[dict]:
             saved_type = classifications.get(report_item["id"])
             report_item["type"] = _normalize_report_item_type(saved_type) or report_item["type"]
             report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
+        item["result_summary"] = _result_report_summary(item, structured_report)
         item["report_items"] = report_items
         item["report_counts"] = _count_report_items(report_items)
         prepared.append(item)
     return prepared
 
 
-def _result_report_items(result: dict) -> list[dict]:
+def _result_report_items(result: dict, structured_report: dict | None = None) -> list[dict]:
     code = str(result.get("code") or "")
+    if structured_report is None:
+        structured_report = _result_structured_report(result)
+    if structured_report is not None:
+        return _structured_report_items(code, structured_report)
+
     text = str(result.get("result") or "").strip()
     if not text:
         return []
@@ -2586,15 +2649,241 @@ def _result_report_items(result: dict) -> list[dict]:
         item_text = chunk.strip()
         if not item_text:
             continue
+        fields = _legacy_report_item_fields(item_text)
         items.append(
             {
                 "id": _report_item_id(code, index, item_text),
                 "index": index,
                 "text": item_text,
+                **fields,
                 "type": _infer_report_item_type(item_text),
             }
         )
     return items
+
+
+def _result_structured_report(result: dict) -> dict | None:
+    for key in ("structured_report", "report_json"):
+        structured = _normalize_structured_report_payload(result.get(key))
+        if structured is not None:
+            return structured
+
+    structured_items = result.get("structured_items")
+    if isinstance(structured_items, list):
+        summary = _first_report_field(result, REPORT_JSON_SUMMARY_KEYS)
+        return {"summary": summary, "items": structured_items}
+
+    return _normalize_structured_report_payload(result.get("result"))
+
+
+def _result_report_summary(result: dict, structured_report: dict | None) -> str:
+    if structured_report is not None:
+        return str(structured_report.get("summary") or "").strip()
+    return ""
+
+
+def _normalize_structured_report_payload(value) -> dict | None:
+    payload = value
+    if isinstance(value, str):
+        payload = _parse_structured_report_json(value)
+    if isinstance(payload, list):
+        return {"summary": "", "items": payload}
+    if not isinstance(payload, dict):
+        return None
+
+    items = None
+    for key in REPORT_JSON_ITEM_KEYS:
+        candidate = payload.get(key)
+        if isinstance(candidate, list):
+            items = candidate
+            break
+    summary = _first_report_field(payload, REPORT_JSON_SUMMARY_KEYS)
+    if items is None:
+        if any(_first_report_field(payload, aliases) for aliases in REPORT_FIELD_ALIASES.values()):
+            items = [payload]
+        elif summary:
+            items = []
+        else:
+            return None
+    return {"summary": summary, "items": items}
+
+
+def _parse_structured_report_json(text: str):
+    text = str(text or "").strip()
+    if not text:
+        return None
+    for candidate in _structured_json_candidates(text):
+        try:
+            return json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def _structured_json_candidates(text: str) -> list[str]:
+    candidates = [text]
+    for match in re.finditer(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL):
+        candidates.append(match.group(1).strip())
+    object_start = text.find("{")
+    object_end = text.rfind("}")
+    if object_start >= 0 and object_end > object_start:
+        candidates.append(text[object_start : object_end + 1])
+    array_start = text.find("[")
+    array_end = text.rfind("]")
+    if array_start >= 0 and array_end > array_start:
+        candidates.append(text[array_start : array_end + 1])
+
+    seen = set()
+    unique = []
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _structured_report_items(result_code: str, structured_report: dict) -> list[dict]:
+    raw_items = structured_report.get("items")
+    if not isinstance(raw_items, list):
+        return []
+
+    items = []
+    for raw_item in raw_items:
+        fields = _normalize_structured_report_item(raw_item)
+        if not fields:
+            continue
+        index = len(items) + 1
+        item_text = _structured_report_item_text(fields)
+        item_type = fields.pop("type", "") or _infer_report_item_type(item_text)
+        items.append(
+            {
+                "id": _report_item_id(result_code, index, item_text),
+                "index": index,
+                "text": item_text,
+                **fields,
+                "type": item_type,
+            }
+        )
+    return items
+
+
+def _normalize_structured_report_item(raw_item) -> dict:
+    if isinstance(raw_item, str):
+        text = raw_item.strip()
+        return {
+            "category": "",
+            "location": "",
+            "excerpt": "",
+            "description": text,
+            "impact": "",
+            "suggestion": "",
+            "type": _infer_report_item_type(text),
+        } if text else {}
+    if not isinstance(raw_item, dict):
+        return {}
+
+    status = _normalize_report_item_status(_first_report_field(raw_item, REPORT_STATUS_KEYS))
+    fields = {
+        field: _first_report_field(raw_item, aliases)
+        for field, aliases in REPORT_FIELD_ALIASES.items()
+    }
+    if _looks_like_status_only(fields["category"]):
+        status = status or _normalize_report_item_status(fields["category"])
+        fields["category"] = ""
+    if not any(fields.values()):
+        fields["description"] = _report_field_text(raw_item)
+    item_text = _structured_report_item_text(fields)
+    fields["type"] = status or _infer_report_item_type(item_text)
+    return fields
+
+
+def _first_report_field(source: dict, aliases: tuple[str, ...]) -> str:
+    if not isinstance(source, dict):
+        return ""
+    for key in aliases:
+        if key in source:
+            text = _report_field_text(source.get(key))
+            if text:
+                return text
+    return ""
+
+
+def _report_field_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            text = _report_field_text(item)
+            if text:
+                parts.append(text)
+        return "；".join(parts)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value).strip()
+
+
+def _structured_report_item_text(fields: dict) -> str:
+    lines = []
+    for key, label in REPORT_ITEM_FIELDS:
+        value = str(fields.get(key) or "").strip()
+        if value:
+            lines.append(f"{label}：{value}")
+    return "\n".join(lines).strip()
+
+
+def _legacy_report_item_fields(text: str) -> dict:
+    fields = {key: "" for key, _ in REPORT_ITEM_FIELDS}
+    body_lines = []
+    for raw_line in str(text or "").splitlines():
+        line = _clean_report_item_line(raw_line)
+        if not line:
+            continue
+        match = re.match(r"^([^:：]{1,28})[:：]\s*(.*)$", line)
+        if match:
+            label = match.group(1).strip()
+            value = match.group(2).strip()
+            field = REPORT_LEGACY_LABEL_FIELDS.get(label)
+            if field and value:
+                fields[field] = _append_report_field(fields[field], value)
+                continue
+        body_lines.append(line)
+    if not fields["description"]:
+        fields["description"] = "\n".join(body_lines).strip() or fields["suggestion"] or str(text or "").strip()
+    return fields
+
+
+def _clean_report_item_line(line: str) -> str:
+    stripped = REPORT_ITEM_PREFIX_RE.sub("", str(line or "").strip()).strip()
+    stripped = re.sub(r"^(?:\d{1,3}[.、)]|\(\d{1,3}\)|（\d{1,3}）)\s*", "", stripped)
+    return stripped.strip("*_`~ ")
+
+
+def _append_report_field(current: str, value: str) -> str:
+    current = str(current or "").strip()
+    value = str(value or "").strip()
+    if not current:
+        return value
+    if not value or value in current.split("；"):
+        return current
+    return f"{current}；{value}"
+
+
+def _looks_like_status_only(value: str) -> bool:
+    compact = re.sub(r"\s+", "", str(value or "")).strip()
+    return compact.lower() in {"issue", "problem", "suggestion", "advice", "non_issue", "nonissue", "not_issue"} or compact in {
+        "问题",
+        "明确问题",
+        "建议",
+        "需人工确认",
+        "非问题",
+        "不是问题",
+    }
 
 
 def _extract_report_item_chunks(text: str) -> list[str]:
@@ -2630,8 +2919,10 @@ def _report_item_id(result_code: str, index: int, text: str) -> str:
 
 def _infer_report_item_type(text: str) -> str:
     compact = re.sub(r"\s+", "", str(text or ""))
-    if any(marker in compact for marker in ("非问题", "未发现", "无明显", "未见明显", "无需修改")):
+    if any(marker in compact for marker in ("非问题", "未发现", "无明显", "未见明显", "无需修改", "未见异常", "无异常")):
         return "non_issue"
+    if any(marker in compact for marker in ("需人工确认", "人工确认", "疑似", "不确定", "证据不足", "建议核实", "建议复核", "看不清", "无法确认")):
+        return "suggestion"
     issue_markers = (
         "问题",
         "错误",
@@ -2646,7 +2937,25 @@ def _infer_report_item_type(text: str) -> str:
     )
     if "建议" in compact and not any(marker in compact for marker in issue_markers):
         return "suggestion"
-    return "issue"
+    if any(marker in compact for marker in issue_markers):
+        return "issue"
+    return "suggestion"
+
+
+def _normalize_report_item_status(value) -> str | None:
+    exact = _normalize_report_item_type(value)
+    if exact:
+        return exact
+    compact = re.sub(r"\s+", "", str(value or "")).strip().lower()
+    if not compact:
+        return None
+    if any(marker in compact for marker in ("non_issue", "nonissue", "not_issue", "非问题", "不是问题", "无需修改", "无问题")):
+        return "non_issue"
+    if any(marker in compact for marker in ("suggestion", "advise", "manual", "uncertain", "建议", "需人工确认", "人工确认", "疑似", "不确定", "证据不足")):
+        return "suggestion"
+    if any(marker in compact for marker in ("issue", "problem", "明确问题", "问题", "错误", "不一致", "缺失", "冲突")):
+        return "issue"
+    return None
 
 
 def _normalize_report_item_type(value) -> str | None:
@@ -2675,7 +2984,7 @@ def _report_item_totals(results: list[dict]) -> dict:
 
 def _update_report_item_type(task):
     if task["status"] in {"queued", "running"}:
-        return {"ok": False, "error": "任务尚未完成，暂不能标记报告条目。"}, 409
+        return {"ok": False, "error": "任务尚未完成，暂不能修改报告条目状态。"}, 409
     data = request.get_json(silent=True) if request.is_json else None
     if not isinstance(data, dict):
         data = request.form
@@ -2683,7 +2992,7 @@ def _update_report_item_type(task):
     item_id = str(data.get("item_id") or "").strip()
     item_type = _normalize_report_item_type(data.get("item_type"))
     if not result_code or not item_id or not item_type:
-        return {"ok": False, "error": "报告条目标记数据无效。"}, 400
+        return {"ok": False, "error": "报告条目状态数据无效。"}, 400
 
     results = _raw_task_results(task)
     target = None

@@ -108,6 +108,8 @@ class LLMResponseParsingTest(unittest.TestCase):
         user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
         self.assertIn("单次回复最多列出 50 条问题", user_content)
         self.assertIn("如果超过 50 条", user_content)
+        self.assertIn("只输出一个 JSON 对象", user_content)
+        self.assertIn('"status":"issue|suggestion|non_issue"', user_content)
 
     def test_document_check_prompt_can_disable_issue_output_limit(self):
         fake_session = FakeSession(

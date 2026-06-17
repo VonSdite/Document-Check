@@ -117,23 +117,46 @@
           </div>
         </div>
         {% if result.report_items %}
-        <div class="report-item-list">
-          {% for item in result.report_items %}
-          <section class="report-item" data-item-type="{{ item.type }}">
-            <div class="report-item-body">
-              <div class="report-item-title">条目 {{ item.index }}</div>
-              <div class="markdown-body">{{ item.text|markdown }}</div>
-            </div>
-            <div class="report-item-type-badge">{{ item.type_label }}</div>
-          </section>
-          {% endfor %}
+        {% if result.result_summary %}
+        <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
+        {% endif %}
+        <div class="report-table-wrap">
+          <table class="report-table">
+            <thead>
+              <tr>
+                <th class="report-index-cell">条目</th>
+                <th class="report-status-cell">状态</th>
+                {% for field, label in REPORT_ITEM_FIELDS %}
+                <th>{{ label }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in result.report_items %}
+              <tr class="report-item" data-item-type="{{ item.type }}">
+                <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
+                <td class="report-status-cell"><span class="report-item-type-badge">{{ item.type_label }}</span></td>
+                {% for field, label in REPORT_ITEM_FIELDS %}
+                {% set field_value = item[field] %}
+                <td class="report-field report-field-{{ field }}">
+                  {% if field_value %}
+                  <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
+                  {% else %}
+                  <span class="report-empty-cell">-</span>
+                  {% endif %}
+                </td>
+                {% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
         <details class="result-raw-details">
           <summary>查看原始结果</summary>
           <div class="result-text markdown-body">{{ result.result|markdown }}</div>
         </details>
         {% else %}
-        <div class="result-text markdown-body">{{ result.result|markdown }}</div>
+        <div class="result-text markdown-body">{{ (result.result_summary or result.result)|markdown }}</div>
         {% endif %}
       </article>
       {% endfor %}

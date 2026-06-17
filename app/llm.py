@@ -14,21 +14,31 @@ _REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "rea
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
 DEFAULT_ISSUE_OUTPUT_LIMIT = 20
+_STRUCTURED_REPORT_OUTPUT_CONTRACT = """结构化输出要求：
+1. 只输出一个 JSON 对象，不要使用 Markdown、代码块、表格或解释性前后缀。
+2. JSON 对象格式必须为：{"summary":"...", "items":[{"status":"issue|suggestion|non_issue","category":"...","location":"...","excerpt":"...","description":"...","impact":"...","suggestion":"..."}]}。
+3. status 规则：能从证据明确判定的问题填 "issue"；证据不足、需人工确认、疑似、建议补充或不确定项填 "suggestion"；明确不是问题或无需修改填 "non_issue"。
+4. 每个 items 元素只描述一个问题、建议或非问题；没有发现问题时 items 为空数组，summary 写简短结论。
+5. 所有字段使用中文字符串；未知或不适用字段填空字符串；不要输出 null。"""
 _EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据提供的文档内容，不补全文档外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 优先输出明确问题；不确定请标注“需人工确认”。
 4. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
-5. 输出明确问题或建议时，请使用可拆分的编号条目，每条只描述一个问题或建议。
-6. 没有发现问题时只给出简短结论。
-7. {issue_output_limit_instruction}"""
+5. 输出明确问题或建议时，每条只描述一个问题或建议。
+6. 没有发现问题时不要编造条目。
+7. {issue_output_limit_instruction}
+
+{structured_report_output_contract}"""
 _IMAGE_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据当前图片和提供的图片位置信息进行检查，不补全图片外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 优先输出明确问题；不确定请标注“需人工确认”。
-4. 输出明确问题或建议时，请使用可拆分的编号条目，每条只描述一个问题或建议。
-5. 没有发现问题时只给出简短结论。
-6. {issue_output_limit_instruction}"""
+4. 输出明确问题或建议时，每条只描述一个问题或建议。
+5. 没有发现问题时不要编造条目。
+6. {issue_output_limit_instruction}
+
+{structured_report_output_contract}"""
 _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 可以综合文档文本、图片清单、图片位置和本次提供的图片内容进行检查，尤其关注图文是否对应。
 2. 只依据提供的文档上下文和图片内容，不补全文档外信息。
@@ -59,13 +69,15 @@ def _issue_output_limit_instruction(value, subject: str) -> str:
 
 def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _EXECUTION_BOUNDARY_TEMPLATE.format(
-        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复")
+        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复"),
+        structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
 
 def _image_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _IMAGE_EXECUTION_BOUNDARY_TEMPLATE.format(
-        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单张图片回复")
+        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单张图片回复"),
+        structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
 
