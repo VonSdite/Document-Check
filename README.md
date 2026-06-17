@@ -301,7 +301,7 @@ SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、A
 - 单次请求文本上限按提供商单独设置，默认 80000 字。
 - 模型 ID 列表使用表格维护，可手动新增、整理，也可从当前 API 地址拉取模型后在弹窗中选择加入。
 - 每个模型 ID 行都有“测试”按钮，用于从平台服务端按当前 API 地址、API Key、系统出站网络配置和模型 ID 发起一次 Chat Completions 连通性测试。
-- 每个模型可单独开启“强制关闭思考”。开启后，请求该模型时会附加 `enable_thinking=false`，并同时写入 `chat_template_kwargs: {"enable_thinking": false}`，用于关闭部分思考模型的思考模式；不支持这些参数的服务可能忽略或返回错误。
+- 每个模型可单独开启“强制关闭思考”。开启后，请求该模型时会附加通用的 `enable_thinking=false` 和 `chat_template_kwargs: {"enable_thinking": false}`；DeepSeek V4/官方 DeepSeek API 会额外写入 `thinking: {"type": "disabled"}`。不支持这些参数的服务可能忽略或返回错误。
 
 ## 检查流程
 

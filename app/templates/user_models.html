@@ -29,7 +29,7 @@
           <div>
             <span class="field-with-help">
               <span class="field-label">模型 ID 列表</span>
-              <span class="help-tip" tabindex="0" data-tip="每行模型会保存名称和是否强制关闭思考。关闭思考会在请求中附加 enable_thinking=false，并同时写入 chat_template_kwargs，适用于支持这些参数的思考模型。">?</span>
+              <span class="help-tip" tabindex="0" data-tip="每行模型会保存名称和是否强制关闭思考。关闭思考会附加通用 enable_thinking/chat_template_kwargs；DeepSeek V4 会额外发送 thinking.type=disabled。">?</span>
             </span>
           </div>
           <div class="model-editor-actions">
@@ -49,7 +49,7 @@
                 <th>
                   <span class="table-heading-help">
                     强制关闭思考
-                    <span class="help-tip" tabindex="0" data-tip="开启后，请求该模型时会附加 enable_thinking=false，并同时写入 chat_template_kwargs，用于关闭部分思考模型的思考输出或思考模式；不支持这些参数的服务可能忽略或返回错误。">?</span>
+                    <span class="help-tip" tabindex="0" data-tip="开启后，请求该模型时会附加通用 enable_thinking/chat_template_kwargs；DeepSeek V4 会额外发送 thinking.type=disabled。不支持这些参数的服务可能忽略或返回错误。">?</span>
                   </span>
                 </th>
                 <th class="right">操作</th>

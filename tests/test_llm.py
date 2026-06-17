@@ -365,6 +365,31 @@ class LLMResponseParsingTest(unittest.TestCase):
         payload = fake_session.calls[0][1]["json"]
         self.assertIs(payload["enable_thinking"], False)
         self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertNotIn("thinking", payload)
+
+    def test_force_disable_thinking_adds_deepseek_payload_flag(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_check(
+                api_base="https://api.deepseek.com/v1/chat/completions",
+                api_key="key",
+                model_name="deepseek-v4-flash",
+                force_disable_thinking=True,
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, "完成")
+        payload = fake_session.calls[0][1]["json"]
+        self.assertIs(payload["enable_thinking"], False)
+        self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
 
     def test_run_image_check_sends_multimodal_chat_content(self):
         fake_session = FakeSession(

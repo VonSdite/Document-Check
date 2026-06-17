@@ -150,7 +150,7 @@ def run_check(
         "temperature": 0.2,
     }
     if force_disable_thinking:
-        _disable_thinking_in_payload(payload)
+        _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
         "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s document_chars=%s",
@@ -247,7 +247,7 @@ def run_image_check(
         "temperature": 0.2,
     }
     if force_disable_thinking:
-        _disable_thinking_in_payload(payload)
+        _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
         "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s data_url_chars=%s",
@@ -377,7 +377,7 @@ def run_multimodal_document_check(
         "temperature": 0.2,
     }
     if force_disable_thinking:
-        _disable_thinking_in_payload(payload)
+        _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     data_url_chars = sum(len(image["data_url"]) for image in normalized_images)
     logger.info(
@@ -546,7 +546,7 @@ def test_model_connection(
         "max_tokens": 16,
     }
     if force_disable_thinking:
-        _disable_thinking_in_payload(payload)
+        _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     try:
         with requests.Session() as session:
@@ -683,9 +683,23 @@ def _chat_completions_endpoint(api_base: str) -> str:
     return endpoint
 
 
-def _disable_thinking_in_payload(payload: dict):
+def _disable_thinking_in_payload(payload: dict, *, api_base: str = "", model_name: str = ""):
     payload["enable_thinking"] = False
     payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if _uses_deepseek_thinking_toggle(api_base, model_name):
+        payload["thinking"] = {"type": "disabled"}
+
+
+def _uses_deepseek_thinking_toggle(api_base: str, model_name: str) -> bool:
+    model = str(model_name or "").strip().lower().replace("_", "-")
+    model_id = model.rsplit("/", 1)[-1]
+    if model_id in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+        return True
+    if model_id.startswith("deepseek-v4-"):
+        return True
+
+    endpoint = str(api_base or "").strip().lower()
+    return "api.deepseek.com/" in endpoint and model_id.startswith("deepseek-")
 
 
 def _read_stream_response(
