@@ -26,7 +26,12 @@ class UserIdentity:
 
 
 def current_identity(*, require_sso: bool = False) -> UserIdentity:
-    ip = client_ip()
+    ip = (
+        _real_ip_header_value("X-Real-IP")
+        or _real_ip_header_value("X-Forwarded-For")
+        or str(request.remote_addr or "").strip()
+        or "0.0.0.0"
+    )
     auth_config = current_app.config.get("AUTH", {})
     if auth_config.get("mode") == "trusted_header":
         identity = _identity_from_trusted_header(auth_config, ip)
