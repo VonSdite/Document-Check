@@ -42,6 +42,7 @@ class DocumentFormattingTest(unittest.TestCase):
             path = Path(temp_dir) / "素材.xlsx"
             workbook = Workbook()
             sheet = workbook.active
+            assert sheet is not None
             sheet.title = "参数表"
             sheet.append(["项目", "参数", "单位"])
             sheet.append(["额定电流", 10, "A"])

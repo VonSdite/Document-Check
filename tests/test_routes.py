@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import yaml
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 from flask import Flask
 from openpyxl import Workbook
 
@@ -25,10 +26,17 @@ _TINY_PNG = (
 )
 
 
+def _required_tag(value: object) -> Tag:
+    if not isinstance(value, Tag):
+        raise AssertionError("expected HTML tag")
+    return value
+
+
 def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
     output = io.BytesIO()
     workbook = Workbook()
     sheet = workbook.active
+    assert sheet is not None
     sheet.title = title
     for row in rows:
         sheet.append(row)
@@ -226,8 +234,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        toggle = soup.find("input", {"name": "llm_stream_trace_enabled"})
-        self.assertIsNotNone(toggle)
+        toggle = _required_tag(soup.find("input", {"name": "llm_stream_trace_enabled"}))
         self.assertEqual(toggle.get("data-saved-checked"), "false")
         self.assertIsNone(toggle.get("checked"))
 
@@ -239,8 +246,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        toggle = soup.find("input", {"name": "llm_stream_trace_enabled"})
-        self.assertIsNotNone(toggle)
+        toggle = _required_tag(soup.find("input", {"name": "llm_stream_trace_enabled"}))
         self.assertEqual(toggle.get("data-saved-checked"), "false")
         self.assertIsNone(toggle.get("checked"))
 
@@ -283,22 +289,25 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        form = soup.find("form", {"class": "settings-network-form"})
+        form = _required_tag(soup.find("form", {"class": "settings-network-form"}))
+        proxy_mode_select = _required_tag(soup.find("select", {"name": "proxy_mode"}))
+        selected_option = _required_tag(proxy_mode_select.find("option", selected=True))
         self.assertEqual(form.get("data-network-proxy-mode"), "custom")
-        self.assertEqual(soup.find("select", {"name": "proxy_mode"}).find("option", selected=True)["value"], "custom")
-        proxy_input = soup.find("input", {"name": "proxy"})
+        self.assertEqual(selected_option.get("value"), "custom")
+        proxy_input = _required_tag(soup.find("input", {"name": "proxy"}))
         self.assertEqual(proxy_input.get("value"), "http://127.0.0.1:7890")
         self.assertIsNotNone(proxy_input.get("required"))
-        self.assertIsNotNone(soup.find("input", {"name": "ssl_verify"}).get("checked"))
+        ssl_verify_input = _required_tag(soup.find("input", {"name": "ssl_verify"}))
+        self.assertIsNotNone(ssl_verify_input.get("checked"))
 
     def test_admin_settings_marks_proxy_field_hidden_by_default(self):
         response = self.client.get("/admin/settings")
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        form = soup.find("form", {"class": "settings-network-form"})
+        form = _required_tag(soup.find("form", {"class": "settings-network-form"}))
         proxy_field = soup.select_one(".settings-network-proxy-field")
-        proxy_input = soup.find("input", {"name": "proxy"})
+        proxy_input = _required_tag(soup.find("input", {"name": "proxy"}))
         self.assertEqual(form.get("data-network-proxy-mode"), "direct")
         self.assertIsNotNone(proxy_field)
         self.assertIsNone(proxy_input.get("required"))
@@ -366,7 +375,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         ip_tab_response = self.client.get("/admin/settings?tab=ip_users")
         ip_tab_html = ip_tab_response.get_data(as_text=True)
         ip_tab_soup = BeautifulSoup(ip_tab_html, "html.parser")
-        row_form = ip_tab_soup.select_one(".settings-ip-row-form")
+        row_form = _required_tag(ip_tab_soup.select_one(".settings-ip-row-form"))
         self.assertIn("张三", ip_tab_html)
         self.assertNotIn("系统出站网络", ip_tab_html)
         self.assertIsNone(row_form.find("button"))
@@ -434,14 +443,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("consistency_check", html)
         self.assertIn("language_consistency_check", html)
         self.assertIn("image_check", html)
-        document_tip = soup.find("button", {"aria-label": "单文档检查-提示词设置说明"})
-        consistency_tip = soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"})
-        language_tip = soup.find("button", {"aria-label": "跨语种文档一致性对比-提示词设置说明"})
-        image_tip = soup.find("button", {"aria-label": "图片检查-提示词设置说明"})
-        self.assertIsNotNone(document_tip)
-        self.assertIsNotNone(consistency_tip)
-        self.assertIsNotNone(language_tip)
-        self.assertIsNotNone(image_tip)
+        document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查-提示词设置说明"}))
+        consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"}))
+        language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种文档一致性对比-提示词设置说明"}))
+        image_tip = _required_tag(soup.find("button", {"aria-label": "图片检查-提示词设置说明"}))
         self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
         self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
         self.assertEqual(language_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。")
@@ -506,8 +511,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         soup = BeautifulSoup(html, "html.parser")
-        owner_cell = soup.select_one(".task-owner-cell")
-        self.assertIsNotNone(owner_cell)
+        owner_cell = _required_tag(soup.select_one(".task-owner-cell"))
         self.assertEqual(owner_cell.get_text(" ", strip=True), "127.0.0.1")
         self.assertNotIn("ip:127.0.0.1 · IP 127.0.0.1", html)
 
@@ -771,8 +775,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(len(models), 2)
             self.assertEqual(len({model["id"] for model in models}), 2)
             by_mode = {model["force_disable_thinking"]: model for model in models}
-            self.assertFalse(_find_enabled_model(by_mode[False]["id"], "ip:127.0.0.1")["force_disable_thinking"])
-            self.assertTrue(_find_enabled_model(by_mode[True]["id"], "ip:127.0.0.1")["force_disable_thinking"])
+            thinking_enabled_model = _find_enabled_model(by_mode[False]["id"], "ip:127.0.0.1")
+            thinking_disabled_model = _find_enabled_model(by_mode[True]["id"], "ip:127.0.0.1")
+            assert thinking_enabled_model is not None
+            assert thinking_disabled_model is not None
+            self.assertFalse(thinking_enabled_model["force_disable_thinking"])
+            self.assertTrue(thinking_disabled_model["force_disable_thinking"])
 
     def test_user_model_test_endpoint_uses_submitted_model_config(self):
         self.app.config["NETWORK"] = {
@@ -1132,9 +1140,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         items = soup.select("[data-report-item]")
         self.assertEqual(len(items), 2)
-        self.assertEqual(soup.select_one('[data-report-count="issue"]').get_text(strip=True), "1")
-        self.assertEqual(soup.select_one('[data-report-count="suggestion"]').get_text(strip=True), "1")
-        self.assertEqual(soup.select_one('[data-report-count="non_issue"]').get_text(strip=True), "0")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "0")
         self.assertIn("AI 检查条目统计", exported.get_data(as_text=True))
         self.assertIn("条目 1", exported.get_data(as_text=True))
 
@@ -1196,12 +1204,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("问题描述", headers)
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0].select_one("[data-report-item-type]")["data-saved-value"], "issue")
-        self.assertEqual(rows[1].select_one("[data-report-item-type]")["data-saved-value"], "suggestion")
+        self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
+        self.assertEqual(_required_tag(rows[1].select_one("[data-report-item-type]")).get("data-saved-value"), "suggestion")
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
         self.assertIn("确认后补充适用范围", rows[1].get_text(" ", strip=True))
-        self.assertEqual(soup.select_one('[data-report-count="issue"]').get_text(strip=True), "1")
-        self.assertEqual(soup.select_one('[data-report-count="suggestion"]').get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
 
     def test_task_detail_splits_bold_numbered_compliance_items(self):
         with self.app.app_context():
@@ -1254,7 +1262,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("技术信息呈现", items[0].get_text(" ", strip=True))
         self.assertIn("客户资料定位", items[1].get_text(" ", strip=True))
         self.assertNotIn("总体规范性结论", items[0].get_text(" ", strip=True))
-        self.assertEqual(soup.select_one('[data-report-count="total"]').get_text(strip=True), "2")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="total"]')).get_text(strip=True), "2")
 
     def test_admin_task_list_shows_report_item_totals(self):
         with self.app.app_context():
@@ -1293,10 +1301,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        self.assertEqual(soup.select_one('[data-admin-report-count="issue"]').get_text(strip=True), "1")
-        self.assertEqual(soup.select_one('[data-admin-report-count="suggestion"]').get_text(strip=True), "1")
-        self.assertEqual(soup.select_one('[data-admin-report-count="non_issue"]').get_text(strip=True), "1")
-        self.assertEqual(soup.select_one('[data-admin-report-count="total"]').get_text(strip=True), "3")
+        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="issue"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="suggestion"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="non_issue"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="total"]')).get_text(strip=True), "3")
 
     def test_report_item_type_update_persists_classification(self):
         with self.app.app_context():
@@ -1333,7 +1341,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         detail = self.client.get(f"/admin/tasks/{task_id}")
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
-        item = soup.select_one("[data-report-item]")
+        item = _required_tag(soup.select_one("[data-report-item]"))
         item_id = item["data-item-id"]
 
         response = self.client.post(
@@ -1455,8 +1463,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        form = soup.find("form", {"data-require-checks": "true"})
-        self.assertIsNotNone(form)
+        form = _required_tag(soup.find("form", {"data-require-checks": "true"}))
         self.assertEqual(form.get("autocomplete"), "off")
         self.assertEqual(form.get("data-default-unchecked-checks"), "true")
         checkboxes = form.select('input[name="checks"]')
@@ -1471,8 +1478,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        form = soup.find("form", {"data-require-checks": "true"})
-        self.assertIsNotNone(form)
+        form = _required_tag(soup.find("form", {"data-require-checks": "true"}))
         self.assertEqual(form.get("data-check-required-message"), "请至少选择一个跨语种对比项。")
         self.assertIsNotNone(form.select_one('input[name="document_a"]'))
         self.assertIsNotNone(form.select_one('input[name="document_b"]'))
