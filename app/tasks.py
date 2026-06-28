@@ -23,7 +23,13 @@ from .images import (
 )
 from .llm import DEFAULT_ISSUE_OUTPUT_LIMIT, LLMError, run_check, run_multimodal_document_check
 from .network import outbound_network_config
-from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, document_groups_from_meta
+from .task_types import (
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    IMAGE_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+    document_groups_from_meta,
+)
 
 
 class TaskCanceled(Exception):
@@ -219,9 +225,9 @@ class TaskScheduler:
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                     )
                 else:
-                    if task_type == CONSISTENCY_TASK_TYPE:
+                    if task_type in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
                         document_text = _task_value(task, "document_text") or _extract_consistency_document_text(self.app, task)
-                        check_items = _task_check_items(db, task, CONSISTENCY_TASK_TYPE)
+                        check_items = _task_check_items(db, task, task_type)
                     else:
                         document_text = _task_value(task, "document_text")
                         if not document_text:

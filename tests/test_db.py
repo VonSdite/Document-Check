@@ -17,7 +17,7 @@ from app.db import (
     set_ip_username,
     set_setting,
 )
-from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE
 from app.routes import _next_check_item_sort_order, _reorder_check_items
 
 
@@ -181,10 +181,28 @@ class CheckItemDefaultsTest(unittest.TestCase):
                 (CONSISTENCY_TASK_TYPE,),
             ).fetchall()
         ]
+        language_consistency_codes = [
+            row["code"]
+            for row in db.execute(
+                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                (LANGUAGE_CONSISTENCY_TASK_TYPE,),
+            ).fetchall()
+        ]
 
         self.assertIn("typo", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
+        self.assertEqual(language_consistency_codes, ["language-consistency-cross-lingual"])
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
+        self.assertIn("language-consistency-cross-lingual", default_check_item_codes(LANGUAGE_CONSISTENCY_TASK_TYPE))
+        language_consistency_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (LANGUAGE_CONSISTENCY_TASK_TYPE, "language-consistency-cross-lingual"),
+        ).fetchone()
+        self.assertIsNotNone(language_consistency_item)
+        self.assertEqual(language_consistency_item["name"], "跨语种内容一致性对比")
+        self.assertIn("缺失、增补、翻译偏差", language_consistency_item["description"])
+        self.assertIn("最终报告必须使用中文陈述", language_consistency_item["prompt"])
+        self.assertIn("静态预检摘要只作为优先核对线索", language_consistency_item["prompt"])
         compliance_item = db.execute(
             "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "compliance"),

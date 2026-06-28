@@ -15,7 +15,7 @@ from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
 from app.formatting import render_markdown
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
-from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE
 
 
 _TINY_PNG = (
@@ -429,21 +429,27 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(html, "html.parser")
         self.assertIn("单文档检查-提示词设置", html)
         self.assertIn("多文档对照检查-提示词设置", html)
+        self.assertIn("跨语种文档一致性对比-提示词设置", html)
         self.assertIn("图片检查-提示词设置", html)
         self.assertIn("consistency_check", html)
+        self.assertIn("language_consistency_check", html)
         self.assertIn("image_check", html)
         document_tip = soup.find("button", {"aria-label": "单文档检查-提示词设置说明"})
         consistency_tip = soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"})
+        language_tip = soup.find("button", {"aria-label": "跨语种文档一致性对比-提示词设置说明"})
         image_tip = soup.find("button", {"aria-label": "图片检查-提示词设置说明"})
         self.assertIsNotNone(document_tip)
         self.assertIsNotNone(consistency_tip)
+        self.assertIsNotNone(language_tip)
         self.assertIsNotNone(image_tip)
         self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
         self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
+        self.assertEqual(language_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。")
         self.assertEqual(image_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。")
         visible_descriptions = [item.get_text(strip=True) for item in soup.select(".settings-section-head p")]
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。", visible_descriptions)
+        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。", visible_descriptions)
 
     def test_admin_overview_counts_tasks_in_selected_range(self):
@@ -456,6 +462,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             created_at="2026-05-01 11:00:00",
         )
         self._insert_task(ip="10.0.0.2", status="queued", created_at="2026-05-02 08:00:00")
+        self._insert_task(task_type=LANGUAGE_CONSISTENCY_TASK_TYPE, ip="10.0.0.2", created_at="2026-05-02 09:00:00")
         self._insert_task(ip="10.0.0.3", created_at="2026-04-30 23:59:59")
 
         response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-02")
@@ -466,9 +473,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("平台统计", html)
         self.assertNotIn("2026-05-01 至 2026-05-02", html)
         self.assertIn("<span>活跃用户</span><strong>2</strong>", html)
-        self.assertIn("<span>提交任务</span><strong>3</strong>", html)
+        self.assertIn("<span>提交任务</span><strong>4</strong>", html)
         self.assertIn("<span>单文档检查任务</span><strong>2</strong>", html)
         self.assertIn("<span>多文档对照任务</span><strong>1</strong>", html)
+        self.assertIn("<span>跨语种对比任务</span><strong>1</strong>", html)
         self.assertIn("<span>排队</span><strong>1</strong>", html)
         self.assertIn("<span>失败</span><strong>1</strong>", html)
         self.assertIn("测试用户A", html)
@@ -1456,6 +1464,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(all(checkbox.get("checked") is None for checkbox in checkboxes))
         self.assertTrue(all(checkbox.get("autocomplete") == "off" for checkbox in checkboxes))
 
+    def test_language_consistency_check_items_are_checked_by_default(self):
+        self._configure_provider()
+
+        response = self.client.get("/language-consistency")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = soup.find("form", {"data-require-checks": "true"})
+        self.assertIsNotNone(form)
+        self.assertEqual(form.get("data-check-required-message"), "请至少选择一个跨语种对比项。")
+        self.assertIsNotNone(form.select_one('input[name="document_a"]'))
+        self.assertIsNotNone(form.select_one('input[name="document_b"]'))
+        checkboxes = form.select('input[name="checks"]')
+        self.assertTrue(checkboxes)
+        self.assertTrue(all(checkbox.get("checked") is not None for checkbox in checkboxes))
+
     def test_saml_user_page_redirects_to_saml_login(self):
         self.app.config["AUTH"] = _saml_auth_config()
 
@@ -1593,6 +1617,79 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("# 工作表：素材参数表", task["document_text"])
         self.assertIn("素材参数 | 10A", task["document_text"])
         self.assertIn("## 资料1：related.txt", task["document_text"])
+        self.assertEqual(
+            json.loads(task["checks_snapshot_json"]),
+            [
+                {
+                    "id": item["id"],
+                    "code": item["code"],
+                    "name": item["name"],
+                    "prompt": item["prompt"],
+                }
+            ],
+        )
+
+    def test_create_language_consistency_task_rejects_missing_checks_before_saving_file(self):
+        model_id = self._configure_provider()
+
+        response = self.client.post(
+            "/language-consistency",
+            data={
+                "document_a": (io.BytesIO("中文参数 10A".encode("utf-8")), "zh.txt"),
+                "document_b": (io.BytesIO("English parameter 10A".encode("utf-8")), "en.txt"),
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
+    def test_create_language_consistency_task_saves_static_precheck(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id, code, name, prompt FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+            ).fetchone()
+
+        response = self.client.post(
+            "/language-consistency",
+            data={
+                "document_a": (
+                    io.BytesIO("1. 安装要求\n设备电流为 10A。\n访问 https://example.com/a。".encode("utf-8")),
+                    "zh.txt",
+                ),
+                "document_b": (
+                    io.BytesIO("1. Installation requirements\nThe device current is 12A.\nVisit https://example.com/b.".encode("utf-8")),
+                    "en.txt",
+                ),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute(
+                "SELECT task_type, original_filename, file_type, document_text, document_meta_json, checks_snapshot_json FROM tasks"
+            ).fetchone()
+        self.assertEqual(task["task_type"], LANGUAGE_CONSISTENCY_TASK_TYPE)
+        self.assertEqual(task["file_type"], "双文档")
+        self.assertIn("跨语种对比：zh.txt / en.txt", task["original_filename"])
+        self.assertIn("# 静态预检摘要", task["document_text"])
+        self.assertIn("文档A独有硬线索", task["document_text"])
+        self.assertIn("文档B独有硬线索", task["document_text"])
+        self.assertIn("10a", task["document_text"])
+        self.assertIn("12a", task["document_text"])
+        self.assertIn("# 文档A：zh.txt", task["document_text"])
+        self.assertIn("# 文档B：en.txt", task["document_text"])
+        meta = json.loads(task["document_meta_json"])
+        self.assertEqual([group["role"] for group in meta["groups"]], ["document_a", "document_b"])
+        self.assertIn("文档A独有硬线索", meta["static_precheck"])
         self.assertEqual(
             json.loads(task["checks_snapshot_json"]),
             [

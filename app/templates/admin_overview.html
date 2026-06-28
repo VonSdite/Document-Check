@@ -29,6 +29,7 @@
   <div class="metric"><span>提交任务</span><strong>{{ totals.tasks }}</strong></div>
   <div class="metric"><span>单文档检查任务</span><strong>{{ totals.document_tasks }}</strong></div>
   <div class="metric"><span>多文档对照任务</span><strong>{{ totals.consistency_tasks }}</strong></div>
+  <div class="metric"><span>跨语种对比任务</span><strong>{{ totals.language_consistency_tasks }}</strong></div>
   <div class="metric"><span>图片检查任务</span><strong>{{ totals.image_tasks }}</strong></div>
   <div class="metric"><span>AI问题</span><strong data-admin-report-count="issue">{{ totals.report_items.issue }}</strong></div>
   <div class="metric"><span>AI建议</span><strong data-admin-report-count="suggestion">{{ totals.report_items.suggestion }}</strong></div>
@@ -59,6 +60,7 @@
             <th>提交任务</th>
             <th>单文档检查</th>
             <th>多文档对照</th>
+            <th>跨语种对比</th>
             <th>图片检查</th>
           </tr>
         </thead>
@@ -70,6 +72,7 @@
             <td>{{ row.tasks }}</td>
             <td>{{ row.document_tasks }}</td>
             <td>{{ row.consistency_tasks }}</td>
+            <td>{{ row.language_consistency_tasks }}</td>
             <td>{{ row.image_tasks }}</td>
           </tr>
           {% endfor %}
@@ -97,6 +100,7 @@
             <th>提交任务</th>
             <th>单文档</th>
             <th>多文档</th>
+            <th>跨语种</th>
             <th>图片</th>
             <th>最近提交</th>
           </tr>
@@ -117,6 +121,7 @@
             <td>{{ row.tasks }}</td>
             <td>{{ row.document_tasks }}</td>
             <td>{{ row.consistency_tasks }}</td>
+            <td>{{ row.language_consistency_tasks }}</td>
             <td>{{ row.image_tasks }}</td>
             <td>{{ row.last_task_at }}</td>
           </tr>

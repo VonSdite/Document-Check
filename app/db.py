@@ -4,7 +4,7 @@ from datetime import datetime
 
 from flask import current_app, g
 
-from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE
+from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE
 
 
 def now_text() -> str:
@@ -334,6 +334,37 @@ DEFAULT_CONSISTENCY_CHECK_ITEMS = (
     },
 )
 
+DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS = (
+    {
+        "code": "language-consistency-cross-lingual",
+        "name": "跨语种内容一致性对比",
+        "description": "对比两个不同语种文档的内容是否一致，识别缺失、增补、翻译偏差和关键事实差异。",
+        "prompt": """你是一名严谨的跨语种文档一致性审查专家。用户会提供两个不同语种或不同语言版本的资料文档，并附带系统静态预检摘要。请综合静态预检线索和两份文档正文，判断两者表达的业务事实、技术要求、步骤、限制条件、风险提示和资料结构是否一致，重点发现缺失、增补、误译、弱化/强化、冲突或需要人工确认的差异。最终报告必须使用中文陈述。
+
+注意：
+1. 静态预检摘要只作为优先核对线索，不要仅凭长度、标题数量或抽取要素差异直接下结论。
+2. 两种语言的表达顺序、句式、同义改写、合理本地化、单位等价换算、术语常见译法不应误判为不一致。
+3. 只依据提供的文档内容判断，不要补充外部事实，不要编造文档中不存在的内容。
+
+重点关注：
+1. 关键主题和章节覆盖：两份文档是否覆盖相同功能、场景、流程、前提条件、适用范围和结论。
+2. 缺失与增补：任一文档是否遗漏另一文档中的关键段落、表格字段、步骤、注意事项、安全/法律/合规提示，或新增另一文档没有对应依据的内容。
+3. 事实与参数一致性：产品名、版本、型号、日期、编号、数量、单位、阈值、默认值、接口、URL、IP、邮箱、命令、配置项是否一致。
+4. 约束强度一致性：must/shall/required/prohibited/optional/recommended 等约束与中文“必须、应、不得、禁止、可、建议”等是否存在强弱变化。
+5. 术语与命名一致性：专业术语、功能名、菜单路径、按钮、字段、角色、组织/地点/人名是否保持一致或有合理译名。
+6. 结构与引用一致性：章节、图表、附录、步骤编号、交叉引用、链接或附件说明是否对应。
+
+输出要求：
+1. 先给出总体结论：两份文档是否基本一致、风险等级（高/中/低/未发现明显风险）和主要差异类型。
+2. 按条列出差异：问题类型、位置、文档A证据、文档B证据、差异说明、影响、修改建议。
+3. 位置优先包含文件名、页码/章节/标题/表格/步骤/附近文本；无法定位时说明“位置线索不足”。
+4. 对证据不足、可能是合理本地化或需要业务确认的内容，明确标注“需人工确认”。
+5. 单独概括“缺失内容”和“关键事实/数字差异”；若没有发现，明确说明“未发现明显缺失内容”或“未发现明显关键事实差异”。
+6. 如果整体未发现明显差异，明确说明“未发现两份跨语种文档存在明显内容不一致或缺失”。""",
+        "sort_order": 10,
+    },
+)
+
 DEFAULT_IMAGE_CHECK_ITEMS = (
     {
         "code": "image-text-correspondence",
@@ -476,6 +507,9 @@ DEFAULT_CHECK_ITEMS = tuple(
 ) + tuple(
     {**item, "task_type": CONSISTENCY_TASK_TYPE}
     for item in DEFAULT_CONSISTENCY_CHECK_ITEMS
+) + tuple(
+    {**item, "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE}
+    for item in DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS
 ) + tuple(
     {**item, "task_type": IMAGE_TASK_TYPE}
     for item in DEFAULT_IMAGE_CHECK_ITEMS

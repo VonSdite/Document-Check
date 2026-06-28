@@ -127,7 +127,7 @@ document.addEventListener("submit", (event) => {
   }
 
   event.preventDefault();
-  showToast("请至少选择一个多文档对照项。", "error");
+  showToast(form.dataset.checkRequiredMessage || "请至少选择一个多文档对照项。", "error");
   const firstCheck = form.querySelector('input[name="checks"]');
   if (firstCheck instanceof HTMLElement) {
     firstCheck.focus();

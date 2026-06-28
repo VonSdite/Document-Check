@@ -66,6 +66,7 @@ from .task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
     document_groups_from_meta,
     task_type_label,
 )
@@ -89,7 +90,14 @@ MODEL_TEST_TIMEOUT_MAX = 60
 PROVIDER_INPUT_LIMIT_DEFAULT = 80000
 PROVIDER_INPUT_LIMIT_MIN = 5000
 PROVIDER_INPUT_LIMIT_MAX = 1000000
-CONSOLE_USER_ENDPOINTS = {"admin_tasks", "admin_new_task", "admin_consistency", "admin_images", "admin_models"}
+CONSOLE_USER_ENDPOINTS = {
+    "admin_tasks",
+    "admin_new_task",
+    "admin_consistency",
+    "admin_language_consistency",
+    "admin_images",
+    "admin_models",
+}
 INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
 REPORT_ITEM_TYPES = {
     "issue": "问题",
@@ -118,8 +126,23 @@ REPORT_STATUS_KEYS = ("status", "状态", "classification", "item_type", "结论
 REPORT_FIELD_ALIASES = {
     "category": ("category", "issue_type", "problem_type", "type", "问题类型", "类型", "检查类型"),
     "location": ("location", "position", "where", "位置", "位置线索", "页码", "章节", "图片位置"),
-    "excerpt": ("excerpt", "quote", "original", "evidence", "原文摘录", "原文", "证据", "文档线索", "图片可见证据", "可见线索"),
-    "description": ("description", "issue", "problem", "finding", "疑似问题", "问题描述", "偏差说明", "冲突或缺失说明", "问题判断"),
+    "excerpt": (
+        "excerpt",
+        "quote",
+        "original",
+        "evidence",
+        "document_a_evidence",
+        "document_b_evidence",
+        "原文摘录",
+        "原文",
+        "证据",
+        "文档A证据",
+        "文档B证据",
+        "文档线索",
+        "图片可见证据",
+        "可见线索",
+    ),
+    "description": ("description", "issue", "problem", "finding", "疑似问题", "问题描述", "偏差说明", "差异说明", "冲突或缺失说明", "问题判断"),
     "impact": ("impact", "risk", "影响", "影响说明", "客户影响", "可能影响"),
     "suggestion": ("suggestion", "recommendation", "fix", "修改建议", "建议修改", "建议处理方式", "需核对的依据"),
 }
@@ -134,6 +157,8 @@ REPORT_LEGACY_LABEL_FIELDS = {
     "文档线索": "location",
     "原文": "excerpt",
     "原文摘录": "excerpt",
+    "文档A证据": "excerpt",
+    "文档B证据": "excerpt",
     "资料表述": "excerpt",
     "冲突表述": "excerpt",
     "图片可见内容": "excerpt",
@@ -145,6 +170,7 @@ REPORT_LEGACY_LABEL_FIELDS = {
     "问题描述": "description",
     "疑似问题": "description",
     "偏差说明": "description",
+    "差异说明": "description",
     "冲突或缺失说明": "description",
     "问题判断": "description",
     "不匹配原因": "description",
@@ -159,6 +185,19 @@ REPORT_LEGACY_LABEL_FIELDS = {
     "建议处理方式": "suggestion",
     "建议补充的标题形式": "suggestion",
 }
+LANGUAGE_STATIC_TOKEN_RE = re.compile(
+    r"https?://[^\s<>\]\)\"']+"
+    r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"|\b\d{1,3}(?:\.\d{1,3}){3}\b"
+    r"|\bv?\d+(?:\.\d+){1,4}\b"
+    r"|\b\d{4}[-/年]\d{1,2}(?:[-/月]\d{1,2}日?)?\b"
+    r"|\b\d+(?:[.,]\d+)*(?:\s?(?:%|ms|s|m|mm|cm|km|kg|g|KB|MB|GB|TB|V|A|W|Hz|kHz|MHz|GHz|°C|℃))?\b",
+    re.IGNORECASE,
+)
+LANGUAGE_HEADING_RE = re.compile(
+    r"^\s*(?:#{1,6}\s+|第[一二三四五六七八九十百千万\d]+[章节篇部]\s*|"
+    r"(?:\d+|[A-Z])(?:[.\-、)]\d*){0,5}[.\-、)]?\s+|[一二三四五六七八九十]+[、.]\s*)\S"
+)
 
 
 def register_routes(app):
@@ -344,6 +383,52 @@ def register_routes(app):
             check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(identity.subject),
             active_nav=CONSISTENCY_TASK_TYPE,
+        )
+
+    @app.route("/language-consistency", methods=["GET", "POST"])
+    def user_language_consistency():
+        if not _platform_enabled():
+            if request.method == "POST":
+                return create_language_consistency_task_for_identity(current_identity(), admin_created=True)
+            return _render_admin_language_consistency_page()
+
+        identity = _current_user_identity()
+        if request.method == "POST":
+            return create_language_consistency_task_for_identity(identity, admin_created=False)
+
+        page = _page_arg()
+        total = get_db().execute(
+            "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
+            (identity.subject, LANGUAGE_CONSISTENCY_TASK_TYPE),
+        ).fetchone()["total"]
+        page = _bounded_page(page, total, TASKS_PER_PAGE)
+        rows = get_db().execute(
+            """
+            SELECT t.*,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+                   COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
+            FROM tasks t
+            WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (identity.subject, LANGUAGE_CONSISTENCY_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
+        ).fetchall()
+        stats = _task_stats_for_where(
+            "COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
+            (identity.subject, LANGUAGE_CONSISTENCY_TASK_TYPE),
+        )
+        return render_template(
+            "user_language_consistency.html",
+            ip=identity.ip,
+            identity=identity,
+            tasks=rows,
+            stats=stats,
+            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
+            models=get_enabled_models(identity.subject),
+            active_nav=LANGUAGE_CONSISTENCY_TASK_TYPE,
         )
 
     @app.route("/images", methods=["GET", "POST"])
@@ -550,6 +635,13 @@ def register_routes(app):
         if request.method == "POST":
             return create_consistency_task_for_identity(_console_user_identity(), admin_created=True)
         return _render_admin_consistency_page()
+
+    @app.route(f"{admin_prefix}/language-consistency", methods=["GET", "POST"])
+    @admin_required
+    def admin_language_consistency():
+        if request.method == "POST":
+            return create_language_consistency_task_for_identity(_console_user_identity(), admin_created=True)
+        return _render_admin_language_consistency_page()
 
     @app.route(f"{admin_prefix}/images", methods=["GET", "POST"])
     @admin_required
@@ -805,6 +897,7 @@ def register_routes(app):
 
         document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
         consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
+        language_consistency_check_items = _check_items_for_task_type(db, LANGUAGE_CONSISTENCY_TASK_TYPE)
         image_check_items = _check_items_for_task_type(db, IMAGE_TASK_TYPE)
         settings_tab = _settings_tab()
         return render_template(
@@ -831,6 +924,17 @@ def register_routes(app):
                     "prompt_placeholder": "描述素材与资料的比对规则、关注范围和输出要求",
                     "items": consistency_check_items,
                     "default_check_codes": default_check_item_codes(CONSISTENCY_TASK_TYPE),
+                },
+                {
+                    "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
+                    "title": "跨语种文档一致性对比-提示词设置",
+                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。",
+                    "new_title": "新增跨语种对比项",
+                    "name_placeholder": "例如：翻译缺失与事实差异检查",
+                    "description_placeholder": "用于说明该跨语种对比项的范围",
+                    "prompt_placeholder": "描述两份不同语种文档的比对规则、关注范围和中文输出要求",
+                    "items": language_consistency_check_items,
+                    "default_check_codes": default_check_item_codes(LANGUAGE_CONSISTENCY_TASK_TYPE),
                 },
                 {
                     "task_type": IMAGE_TASK_TYPE,
@@ -1092,6 +1196,15 @@ def _render_admin_consistency_page():
     )
 
 
+def _render_admin_language_consistency_page():
+    return _render_admin_task_list(
+        task_type=LANGUAGE_CONSISTENCY_TASK_TYPE,
+        template_name="admin_language_consistency.html",
+        totals_task_type=LANGUAGE_CONSISTENCY_TASK_TYPE,
+        check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
+    )
+
+
 def _render_admin_images_page():
     return _render_admin_task_list(
         task_type=IMAGE_TASK_TYPE,
@@ -1183,6 +1296,8 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
 def _check_item_task_type(value: str | None) -> str:
     if value == CONSISTENCY_TASK_TYPE:
         return CONSISTENCY_TASK_TYPE
+    if value == LANGUAGE_CONSISTENCY_TASK_TYPE:
+        return LANGUAGE_CONSISTENCY_TASK_TYPE
     if value == IMAGE_TASK_TYPE:
         return IMAGE_TASK_TYPE
     return DOCUMENT_TASK_TYPE
@@ -1191,6 +1306,8 @@ def _check_item_task_type(value: str | None) -> str:
 def _check_item_code_prefix(task_type: str) -> str:
     if task_type == CONSISTENCY_TASK_TYPE:
         return "custom-consistency"
+    if task_type == LANGUAGE_CONSISTENCY_TASK_TYPE:
+        return "custom-language-consistency"
     if task_type == IMAGE_TASK_TYPE:
         return "custom-image"
     return "custom"
@@ -1727,6 +1844,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS language_consistency_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks,
             COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
             COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
@@ -1736,7 +1854,15 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         FROM tasks
         WHERE created_at >= ? AND created_at < ? AND {mode_clause}
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, start_at, end_at, *mode_params),
+        (
+            DOCUMENT_TASK_TYPE,
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+            IMAGE_TASK_TYPE,
+            start_at,
+            end_at,
+            *mode_params,
+        ),
     ).fetchone()
     totals = dict(totals or {})
     totals["report_items"] = _admin_report_item_totals_for_where(
@@ -1752,13 +1878,22 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS language_consistency_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks
         FROM tasks
         WHERE created_at >= ? AND created_at < ? AND {mode_clause}
         GROUP BY day
         ORDER BY day DESC
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, start_at, end_at, *mode_params),
+        (
+            DOCUMENT_TASK_TYPE,
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+            IMAGE_TASK_TYPE,
+            start_at,
+            end_at,
+            *mode_params,
+        ),
     ).fetchall()
     join_ip_usernames = _auth_mode() == "ip"
     ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
@@ -1777,6 +1912,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS document_tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS consistency_tasks,
+            COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS language_consistency_tasks,
             COALESCE(SUM(CASE WHEN t.task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks,
             MAX(t.created_at) AS last_task_at
         FROM tasks t
@@ -1786,7 +1922,15 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         ORDER BY tasks DESC, last_task_at DESC, COALESCE(t.owner_subject, 'ip:' || t.ip) ASC
         LIMIT 10
         """,
-        (DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, start_at, end_at, *mode_params),
+        (
+            DOCUMENT_TASK_TYPE,
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+            IMAGE_TASK_TYPE,
+            start_at,
+            end_at,
+            *mode_params,
+        ),
     ).fetchall()
     return {
         "totals": totals,
@@ -2210,6 +2354,106 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
     return redirect(url_for(_task_list_endpoint(admin_created, CONSISTENCY_TASK_TYPE)))
 
 
+def create_language_consistency_task_for_identity(identity: UserIdentity, *, admin_created: bool):
+    db = get_db()
+    document_a = request.files.get("document_a")
+    document_b = request.files.get("document_b")
+    if not _validate_language_consistency_upload(document_a, "文档A"):
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+    if not _validate_language_consistency_upload(document_b, "文档B"):
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+
+    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
+    if not check_ids:
+        flash("请至少选择一个跨语种对比项。", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+    check_snapshots = _enabled_check_item_snapshots(db, check_ids, LANGUAGE_CONSISTENCY_TASK_TYPE)
+    if len(check_snapshots) != len(set(check_ids)):
+        flash("请选择当前可用的跨语种对比项。", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+
+    model_id = request.form.get("model_id", "")
+    model = _find_enabled_model(model_id, identity.subject)
+    if model is None:
+        flash("请选择可用模型。", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+
+    created_at = now_text()
+    saved_paths = []
+    try:
+        file_a = _save_consistency_upload_group([document_a], identity.subject, created_at, "文档A", saved_paths)[0]
+        file_b = _save_consistency_upload_group([document_b], identity.subject, created_at, "文档B", saved_paths)[0]
+    except DocumentReadError as exc:
+        _remove_uploaded_files(saved_paths)
+        flash(f"文档读取失败：{exc}", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+
+    validation_text = _compose_language_consistency_validation_text(file_a, file_b)
+    if len(validation_text) > model["max_input_chars"]:
+        _remove_uploaded_files(saved_paths)
+        flash(f"文档文本 {len(validation_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+
+    document_meta = {
+        "groups": [
+            {
+                "role": "document_a",
+                "label": "文档A",
+                "files": [_persisted_file_info(file_a)],
+            },
+            {
+                "role": "document_b",
+                "label": "文档B",
+                "files": [_persisted_file_info(file_b)],
+            },
+        ],
+        "static_precheck": _language_consistency_static_summary(file_a, file_b),
+    }
+    file_size = file_a["file_size"] + file_b["file_size"]
+    original_filename = f"跨语种对比：{file_a['original_filename']} / {file_b['original_filename']}"
+    owner_name = identity.display_name or None
+
+    db.execute(
+        """
+        INSERT INTO tasks(
+            task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+            original_filename, stored_filename, file_type, file_size,
+            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+            request_timeout, max_input_chars, force_disable_thinking,
+            status, progress, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        """,
+        (
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+            identity.ip,
+            owner_name,
+            identity.subject,
+            owner_name,
+            identity.source,
+            original_filename,
+            file_a["stored_filename"],
+            "双文档",
+            file_size,
+            validation_text,
+            json.dumps(document_meta, ensure_ascii=False),
+            json.dumps(check_ids, ensure_ascii=False),
+            json.dumps(check_snapshots, ensure_ascii=False),
+            model["provider_name"],
+            model["model_name"],
+            model["api_base"],
+            model["api_key"],
+            model["request_timeout"],
+            model["max_input_chars"],
+            1 if model["force_disable_thinking"] else 0,
+            created_at,
+            created_at,
+        ),
+    )
+    db.commit()
+    return redirect(url_for(_task_list_endpoint(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)))
+
+
 def _back_to_task_form(admin_created: bool, task_type: str = DOCUMENT_TASK_TYPE):
     return redirect(url_for(_task_list_endpoint(admin_created, task_type)))
 
@@ -2217,6 +2461,8 @@ def _back_to_task_form(admin_created: bool, task_type: str = DOCUMENT_TASK_TYPE)
 def _task_list_endpoint(admin_created: bool, task_type: str | None = DOCUMENT_TASK_TYPE) -> str:
     if task_type == CONSISTENCY_TASK_TYPE:
         return "admin_consistency" if admin_created else "user_consistency"
+    if task_type == LANGUAGE_CONSISTENCY_TASK_TYPE:
+        return "admin_language_consistency" if admin_created else "user_language_consistency"
     if task_type == IMAGE_TASK_TYPE:
         return "admin_images" if admin_created else "user_images"
     return "admin_tasks" if admin_created else "user_tasks"
@@ -2237,6 +2483,16 @@ def _validate_consistency_uploads(uploads: list, label: str, max_files: int) -> 
         if not allowed_file(upload.filename):
             flash(f"{label}仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
             return False
+    return True
+
+
+def _validate_language_consistency_upload(upload, label: str) -> bool:
+    if upload is None or not upload.filename:
+        flash(f"请选择{label}。", "error")
+        return False
+    if not allowed_file(upload.filename):
+        flash(f"{label}仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
+        return False
     return True
 
 
@@ -2275,6 +2531,110 @@ def _compose_consistency_validation_text(groups: list[dict]) -> str:
             group_parts.append(f"## {group['label']}{index}：{file_info['original_filename']}\n{file_info['text']}")
         sections.append("\n\n".join(group_parts))
     return "\n\n".join(sections).strip()
+
+
+def _compose_language_consistency_validation_text(file_a: dict, file_b: dict) -> str:
+    return "\n\n".join(
+        [
+            "# 静态预检摘要\n"
+            + _language_consistency_static_summary(file_a, file_b)
+            + "\n\n说明：静态预检仅提供优先核对线索，最终差异判断需结合两份文档正文。",
+            f"# 文档A：{file_a['original_filename']}\n{file_a['text']}",
+            f"# 文档B：{file_b['original_filename']}\n{file_b['text']}",
+        ]
+    ).strip()
+
+
+def _language_consistency_static_summary(file_a: dict, file_b: dict) -> str:
+    profile_a = _document_static_profile(file_a)
+    profile_b = _document_static_profile(file_b)
+    only_a = _limited_sorted(profile_a["tokens"] - profile_b["tokens"], 40)
+    only_b = _limited_sorted(profile_b["tokens"] - profile_a["tokens"], 40)
+    ratio = _safe_ratio(profile_b["nonspace_chars"], profile_a["nonspace_chars"])
+    lines = [
+        (
+            f"- 文档A：{file_a['original_filename']}；格式：{file_a['file_type']}；"
+            f"语种估计：{profile_a['language']}；非空白字符：{profile_a['nonspace_chars']}；"
+            f"段落：{profile_a['paragraphs']}；标题线索：{len(profile_a['headings'])}"
+        ),
+        (
+            f"- 文档B：{file_b['original_filename']}；格式：{file_b['file_type']}；"
+            f"语种估计：{profile_b['language']}；非空白字符：{profile_b['nonspace_chars']}；"
+            f"段落：{profile_b['paragraphs']}；标题线索：{len(profile_b['headings'])}"
+        ),
+        f"- 长度比例：文档B / 文档A = {ratio}",
+        f"- 文档A独有硬线索：{_format_preview_list(only_a)}",
+        f"- 文档B独有硬线索：{_format_preview_list(only_b)}",
+        f"- 文档A标题线索：{_format_preview_list(profile_a['headings'])}",
+        f"- 文档B标题线索：{_format_preview_list(profile_b['headings'])}",
+    ]
+    return "\n".join(lines)
+
+
+def _document_static_profile(file_info: dict) -> dict:
+    text = str(file_info.get("text") or "")
+    nonspace_text = re.sub(r"\s+", "", text)
+    paragraphs = [part for part in re.split(r"\n\s*\n+", text.strip()) if part.strip()]
+    tokens = {
+        _normalize_static_token(match.group(0))
+        for match in LANGUAGE_STATIC_TOKEN_RE.finditer(text)
+    }
+    tokens = {token for token in tokens if token}
+    cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_chars = len(re.findall(r"[A-Za-z]", text))
+    return {
+        "language": _estimate_text_language(cjk_chars, latin_chars),
+        "nonspace_chars": len(nonspace_text),
+        "paragraphs": len(paragraphs),
+        "tokens": tokens,
+        "headings": _extract_static_headings(text, 12),
+    }
+
+
+def _extract_static_headings(text: str, limit: int) -> list[str]:
+    headings = []
+    seen = set()
+    for line in text.splitlines():
+        value = re.sub(r"\s+", " ", line).strip()
+        if not value or len(value) > 120 or not LANGUAGE_HEADING_RE.match(value):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        headings.append(value)
+        if len(headings) >= limit:
+            break
+    return headings
+
+
+def _estimate_text_language(cjk_chars: int, latin_chars: int) -> str:
+    if cjk_chars >= 40 and latin_chars >= 80 and min(cjk_chars, latin_chars) / max(cjk_chars, latin_chars) >= 0.2:
+        return "中英混合"
+    if cjk_chars >= max(20, latin_chars):
+        return "中文为主"
+    if latin_chars >= max(40, cjk_chars):
+        return "拉丁语系为主"
+    if cjk_chars or latin_chars:
+        return "语种特征较少，需人工确认"
+    return "未识别"
+
+
+def _normalize_static_token(value: str) -> str:
+    return value.strip(" \t\r\n,.;:，。；：、()（）[]【】<>《》\"'“”‘’").lower()
+
+
+def _limited_sorted(values: set[str] | list[str], limit: int) -> list[str]:
+    return sorted(values, key=lambda value: (len(value), value))[:limit]
+
+
+def _format_preview_list(values: list[str]) -> str:
+    return "、".join(values) if values else "未发现"
+
+
+def _safe_ratio(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "无法计算"
+    return f"{numerator / denominator:.2f}"
 
 
 def _persisted_file_info(file_info: dict) -> dict:
@@ -2407,7 +2767,7 @@ def _task_action_redirect(default_endpoint: str):
 
 
 def _download_task_document(task, fallback_endpoint: str):
-    if task["task_type"] == CONSISTENCY_TASK_TYPE:
+    if task["task_type"] in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
         return _download_task_documents_zip(task, fallback_endpoint)
 
     upload_path = _task_upload_path(task)
@@ -2532,7 +2892,7 @@ def _download_task_documents_zip(task, fallback_endpoint: str):
         buffer,
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"consistency-task-{task['id']}-documents.zip",
+        download_name=f"{task['task_type'] or 'document-check'}-{task['id']}-documents.zip",
     )
 
 

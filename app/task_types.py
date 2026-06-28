@@ -3,6 +3,7 @@ import json
 
 DOCUMENT_TASK_TYPE = "document_check"
 CONSISTENCY_TASK_TYPE = "consistency_check"
+LANGUAGE_CONSISTENCY_TASK_TYPE = "language_consistency_check"
 IMAGE_TASK_TYPE = "image_check"
 CONSISTENCY_MAX_MATERIAL_FILES = 5
 CONSISTENCY_MAX_DATA_FILES = 3
@@ -10,6 +11,7 @@ CONSISTENCY_MAX_DATA_FILES = 3
 TASK_TYPE_LABELS = {
     DOCUMENT_TASK_TYPE: "单文档检查",
     CONSISTENCY_TASK_TYPE: "多文档对照检查",
+    LANGUAGE_CONSISTENCY_TASK_TYPE: "跨语种文档一致性对比",
     IMAGE_TASK_TYPE: "图片检查",
 }
 

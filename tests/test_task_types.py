@@ -5,7 +5,13 @@ from pathlib import Path
 
 from flask import Flask
 
-from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, document_groups_from_meta, task_type_label
+from app.task_types import (
+    CONSISTENCY_TASK_TYPE,
+    IMAGE_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+    document_groups_from_meta,
+    task_type_label,
+)
 from app.tasks import _extract_consistency_document_text
 
 
@@ -34,6 +40,9 @@ class TaskTypesTest(unittest.TestCase):
 
     def test_task_type_label_for_consistency(self):
         self.assertEqual(task_type_label(CONSISTENCY_TASK_TYPE), "多文档对照检查")
+
+    def test_task_type_label_for_language_consistency(self):
+        self.assertEqual(task_type_label(LANGUAGE_CONSISTENCY_TASK_TYPE), "跨语种文档一致性对比")
 
     def test_task_type_label_for_image_check(self):
         self.assertEqual(task_type_label(IMAGE_TASK_TYPE), "图片检查")

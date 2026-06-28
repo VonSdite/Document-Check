@@ -25,6 +25,7 @@
         {% endif %}
         <a href="{{ url_for('admin_tasks') if platform_mode else url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks'] else '' }}">单文档检查</a>
         <a href="{{ url_for('admin_consistency') if platform_mode else url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}">多文档对照检查</a>
+        <a href="{{ url_for('admin_language_consistency') if platform_mode else url_for('user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_language_consistency'] else '' }}">跨语种对比</a>
         <a href="{{ url_for('admin_images') if platform_mode else url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}">图片检查</a>
         <a href="{{ url_for('admin_models') if platform_mode else url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}">模型管理</a>
         {% if auth_mode == 'ip' %}
@@ -43,6 +44,7 @@
       <nav class="nav">
         <a href="{{ url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['user_tasks', 'user_new_task'] else '' }}">单文档检查</a>
         <a href="{{ url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint == 'user_consistency' else '' }}">多文档对照检查</a>
+        <a href="{{ url_for('user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint == 'user_language_consistency' else '' }}">跨语种对比</a>
         <a href="{{ url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint == 'user_images' else '' }}">图片检查</a>
         <a href="{{ url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint == 'user_models' else '' }}">模型管理</a>
       </nav>
