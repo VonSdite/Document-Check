@@ -52,7 +52,7 @@ def format_document_text(filename: str, text: str) -> str:
 
 
 def _extract_docx(path: Path) -> str:
-    document = Document(path)
+    document = Document(str(path))
     parts = []
     for paragraph in document.paragraphs:
         text = paragraph.text.strip()

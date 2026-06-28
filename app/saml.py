@@ -36,7 +36,9 @@ def saml_sp_metadata() -> str:
     errors = settings.validate_metadata(metadata)
     if errors:
         raise SamlConfigError("SAML SP metadata 配置无效：" + "; ".join(errors))
-    return metadata
+    if isinstance(metadata, bytes):
+        return metadata.decode("utf-8")
+    return str(metadata)
 
 
 def _saml_config(auth_config: dict) -> dict:

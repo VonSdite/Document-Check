@@ -1128,31 +1128,37 @@ def _console_user_identity() -> UserIdentity:
 
 
 def _owner_display(task) -> str:
+    ip = str(_row_value(task, "ip") or "").strip()
     subject = (
         _row_value(task, "effective_owner_subject")
         or _row_value(task, "owner_subject")
-        or owner_subject_from_ip(_row_value(task, "ip"))
+        or owner_subject_from_ip(ip)
     )
+    subject = str(subject)
     if subject.startswith("ip:"):
-        current_ip_username = get_ip_username(_row_value(task, "ip") or subject[3:])
+        current_ip_username = get_ip_username(ip or subject[3:])
         if current_ip_username:
             return current_ip_username
-    if _row_value(task, "current_owner_name"):
-        return _row_value(task, "current_owner_name")
-    if _row_value(task, "owner_name_snapshot"):
-        return _row_value(task, "owner_name_snapshot")
-    if _row_value(task, "username_snapshot"):
-        return _row_value(task, "username_snapshot")
+    current_owner_name = _row_value(task, "current_owner_name")
+    if current_owner_name:
+        return str(current_owner_name)
+    owner_name_snapshot = _row_value(task, "owner_name_snapshot")
+    if owner_name_snapshot:
+        return str(owner_name_snapshot)
+    username_snapshot = _row_value(task, "username_snapshot")
+    if username_snapshot:
+        return str(username_snapshot)
     return subject_label(subject)
 
 
 def _owner_meta(task) -> str:
+    ip = str(_row_value(task, "ip") or "").strip()
     subject = (
         _row_value(task, "effective_owner_subject")
         or _row_value(task, "owner_subject")
-        or owner_subject_from_ip(_row_value(task, "ip"))
+        or owner_subject_from_ip(ip)
     )
-    ip = str(_row_value(task, "ip") or "").strip()
+    subject = str(subject)
     if subject.startswith("ip:"):
         subject_ip = subject[3:].strip()
         display = _owner_display(task)
@@ -1639,6 +1645,8 @@ def _save_user_model_provider(owner_subject: str, provider_id, provider_data: di
             ),
         )
         saved_provider_id = cursor.lastrowid
+        if saved_provider_id is None:
+            raise RuntimeError("模型提供商保存失败，请稍后重试。")
     _replace_user_model_configs(saved_provider_id, provider_data["models"], now)
     db.commit()
 
@@ -2667,7 +2675,7 @@ def _get_task_or_404(task_id: int):
         else "COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
     )
     clauses = ["t.id = ?"]
-    params = [task_id]
+    params: list[object] = [task_id]
     if _platform_enabled():
         mode_clause, mode_params = _mode_subject_filter("t")
         clauses.append(mode_clause)
@@ -2852,10 +2860,17 @@ def _image_output_dir_for_stored(stored_filename: str) -> Path:
 
 
 def _image_page_check_max_pages() -> int:
+    return max(1, _int_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES))
+
+
+def _int_setting(key: str, default: int) -> int:
+    value = get_setting(key, default)
+    if value is None:
+        return default
     try:
-        return max(1, int(get_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES)))
+        return int(value)
     except (TypeError, ValueError):
-        return DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES
+        return default
 
 
 def _download_task_documents_zip(task, fallback_endpoint: str):
@@ -3392,7 +3407,10 @@ def _update_report_item_type(task):
 
 
 def _export_task_report(task):
-    app_css = (Path(current_app.static_folder) / "app.css").read_text(encoding="utf-8")
+    static_folder = current_app.static_folder
+    if not static_folder:
+        raise RuntimeError("静态资源目录未配置，无法导出报告。")
+    app_css = (Path(static_folder) / "app.css").read_text(encoding="utf-8")
     results = _task_results(task)
     html = render_template(
         "task_report_export.html",

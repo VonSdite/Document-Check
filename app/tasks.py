@@ -117,8 +117,8 @@ class TaskScheduler:
 
     def _launch_available_tasks(self):
         db = get_db()
-        global_limit = max(1, int(get_setting("global_concurrency", 3)))
-        user_limit = max(1, int(get_setting("user_concurrency", 1)))
+        global_limit = max(1, _int_setting("global_concurrency", 3))
+        user_limit = max(1, _int_setting("user_concurrency", 1))
 
         running_total = db.execute(
             "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'"
@@ -195,7 +195,7 @@ class TaskScheduler:
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
                 max_workers = max(
                     1,
-                    int(get_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY)),
+                    _int_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY),
                 )
                 if task_type == IMAGE_TASK_TYPE:
                     document_meta_raw = _task_value(task, "document_meta_json")
@@ -989,10 +989,7 @@ def _missing_check_section(item: dict, reason: str) -> str:
 
 
 def _image_check_batch_size() -> int:
-    try:
-        return max(1, min(MAX_IMAGE_CHECK_BATCH_SIZE, int(get_setting("image_check_batch_size", DEFAULT_IMAGE_CHECK_BATCH_SIZE))))
-    except (TypeError, ValueError):
-        return DEFAULT_IMAGE_CHECK_BATCH_SIZE
+    return max(1, min(MAX_IMAGE_CHECK_BATCH_SIZE, _int_setting("image_check_batch_size", DEFAULT_IMAGE_CHECK_BATCH_SIZE)))
 
 
 def _image_batches(image_items: list[dict], batch_size: int) -> list[list[dict]]:
@@ -1475,17 +1472,21 @@ def cleanup_expired_task_reports(app) -> int:
 
 
 def _report_retention_days() -> int:
-    try:
-        return max(0, int(get_setting("report_retention_days", DEFAULT_REPORT_RETENTION_DAYS)))
-    except (TypeError, ValueError):
-        return DEFAULT_REPORT_RETENTION_DAYS
+    return max(0, _int_setting("report_retention_days", DEFAULT_REPORT_RETENTION_DAYS))
 
 
 def _issue_output_limit() -> int:
+    return max(0, _int_setting("issue_output_limit", DEFAULT_ISSUE_OUTPUT_LIMIT))
+
+
+def _int_setting(key: str, default: int) -> int:
+    value = get_setting(key, default)
+    if value is None:
+        return default
     try:
-        return max(0, int(get_setting("issue_output_limit", DEFAULT_ISSUE_OUTPUT_LIMIT)))
+        return int(value)
     except (TypeError, ValueError):
-        return DEFAULT_ISSUE_OUTPUT_LIMIT
+        return default
 
 
 def _remove_task_artifacts(app, task):

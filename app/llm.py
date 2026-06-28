@@ -130,6 +130,7 @@ def run_check(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    issue_limit = _normalized_issue_output_limit(issue_output_limit)
     payload = {
         "model": model_name,
         "messages": [
@@ -141,7 +142,7 @@ def run_check(
                 "role": "user",
                 "content": (
                     f"检查项：{check_name}\n\n"
-                    f"{_execution_boundary(issue_output_limit)}\n\n"
+                    f"{_execution_boundary(issue_limit)}\n\n"
                     f"检查提示词：\n{prompt}\n\n"
                     f"待检查文档：\n{document_text}"
                 ),
@@ -215,6 +216,7 @@ def run_image_check(
     if not image_data_url.startswith("data:image/"):
         raise LLMError("图片数据格式无效，无法发送给多模态模型。")
 
+    issue_limit = _normalized_issue_output_limit(issue_output_limit)
     payload = {
         "model": model_name,
         "messages": [
@@ -229,7 +231,7 @@ def run_image_check(
                         "type": "text",
                         "text": (
                             f"检查项：{check_name}\n\n"
-                            f"{_image_execution_boundary(issue_output_limit)}\n\n"
+                            f"{_image_execution_boundary(issue_limit)}\n\n"
                             f"图片名称：{image_name}\n"
                             f"图片位置：{image_position or '未标注'}\n\n"
                             f"检查提示词：\n{prompt}"
@@ -328,7 +330,7 @@ def run_multimodal_document_check(
             }
         )
 
-    content = [
+    content: list[dict[str, object]] = [
         {
             "type": "text",
             "text": _multimodal_document_prompt_text(
@@ -431,9 +433,10 @@ def _multimodal_document_prompt_text(
             f"- 图片 {image['index']}: {image['name']}，位置：{image['position']}，格式：{image['mime_type'] or '未知'}"
         )
     batch_label = f"{batch_index}/{batch_count}" if batch_count > 1 else "1/1"
+    issue_limit = _normalized_issue_output_limit(issue_output_limit)
     return (
         f"检查项：{check_name}\n\n"
-        f"{_multimodal_document_execution_boundary(issue_output_limit)}\n\n"
+        f"{_multimodal_document_execution_boundary(issue_limit)}\n\n"
         f"当前图片批次：{batch_label}\n\n"
         f"本次可见图片：\n{chr(10).join(image_lines)}\n\n"
         f"检查提示词：\n{prompt}\n\n"
