@@ -19,7 +19,9 @@ def create_app():
     local_config = load_local_config(root_dir)
     server_config = local_config["server"]
 
-    app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True)
+    app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True, static_url_path='/infoCheck/static', static_folder='static')
+    app.config['APPLICATION_ROOT'] = '/infoCheck/'
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
     if server_config["proxy_fix"]:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
