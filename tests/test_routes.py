@@ -930,6 +930,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
+    def test_document_task_form_allows_multiple_uploads(self):
+        self._configure_provider()
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        upload = _required_tag(soup.find("input", {"name": "document"}))
+        self.assertTrue(upload.has_attr("multiple"))
+        self.assertEqual(upload.get("data-file-limit"), "20")
+        field = _required_tag(upload.find_parent(class_="multi-file-field"))
+        self.assertIsNotNone(field.select_one("[data-file-list]"))
+
     def test_create_task_saves_check_snapshot_and_extracted_text(self):
         model_id = self._configure_provider()
         with self.app.app_context():
@@ -961,6 +974,71 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_task_creates_one_task_per_uploaded_document(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id, code, name, prompt FROM check_items WHERE code = 'typo'"
+            ).fetchone()
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": [
+                    (io.BytesIO(b"first document"), "alpha.txt"),
+                    (io.BytesIO(b"second document"), "beta.txt"),
+                ],
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            tasks = get_db().execute(
+                """
+                SELECT original_filename, document_text, status, checks_snapshot_json
+                FROM tasks
+                ORDER BY original_filename ASC
+                """
+            ).fetchall()
+            uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
+
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual([task["original_filename"] for task in tasks], ["alpha.txt", "beta.txt"])
+        self.assertEqual([task["status"] for task in tasks], ["queued", "queued"])
+        self.assertEqual(tasks[0]["document_text"], "file: alpha.txt\n\nfirst document")
+        self.assertEqual(tasks[1]["document_text"], "file: beta.txt\n\nsecond document")
+        self.assertEqual(len(uploaded_files), 2)
+        snapshots = [json.loads(task["checks_snapshot_json"]) for task in tasks]
+        self.assertTrue(all(snapshot[0]["code"] == item["code"] for snapshot in snapshots))
+
+    def test_create_task_rejects_entire_batch_when_one_document_has_no_text(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": [
+                    (io.BytesIO(b"valid document"), "valid.txt"),
+                    (io.BytesIO(b"   "), "blank.txt"),
+                ],
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
+        self.assertEqual(total, 0)
+        self.assertEqual(uploaded_files, [])
 
     def test_create_image_task_saves_extracted_image_metadata(self):
         model_id = self._configure_provider()

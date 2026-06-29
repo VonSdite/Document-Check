@@ -80,6 +80,7 @@ STATUS_LABELS = {
     "canceled": "已取消",
 }
 TASKS_PER_PAGE = 20
+DOCUMENT_BATCH_MAX_FILES = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 REPORT_RETENTION_DAYS_DEFAULT = 0
 ISSUE_OUTPUT_LIMIT_DEFAULT = DEFAULT_ISSUE_OUTPUT_LIMIT
@@ -2017,13 +2018,20 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
 
 def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     db = get_db()
-    upload = request.files.get("document")
-    if upload is None or not upload.filename:
+    uploads = _selected_uploads("document")
+    if not uploads:
         flash("请选择要上传的文档。", "error")
         return _back_to_task_form(admin_created)
-    if not allowed_file(upload.filename):
-        flash("仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
+    if len(uploads) > DOCUMENT_BATCH_MAX_FILES:
+        flash(f"单文档检查一次最多上传 {DOCUMENT_BATCH_MAX_FILES} 个文档。", "error")
         return _back_to_task_form(admin_created)
+    for upload in uploads:
+        if not allowed_file(upload.filename):
+            flash(
+                f"“{upload.filename}”不是支持的文件类型，仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。",
+                "error",
+            )
+            return _back_to_task_form(admin_created)
 
     check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
     if not check_ids:
@@ -2040,68 +2048,104 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
         flash("请选择可用模型。", "error")
         return _back_to_task_form(admin_created)
 
+    saved_paths: list[Path] = []
+    try:
+        rows = [
+            _prepare_document_task_row(upload, identity, model, check_ids, check_snapshots, saved_paths)
+            for upload in uploads
+        ]
+    except DocumentReadError as exc:
+        _remove_uploaded_files(saved_paths)
+        flash(f"文档读取失败：{exc}", "error")
+        return _back_to_task_form(admin_created)
+    except RuntimeError as exc:
+        _remove_uploaded_files(saved_paths)
+        flash(str(exc), "error")
+        return _back_to_task_form(admin_created)
+
+    try:
+        db.executemany(
+            """
+            INSERT INTO tasks(
+                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+                original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+                request_timeout, max_input_chars, force_disable_thinking,
+                status, progress, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            """,
+            rows,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        _remove_uploaded_files(saved_paths)
+        current_app.logger.exception("创建单文档检查任务失败")
+        flash("创建任务失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created)
+    if admin_created:
+        return redirect(url_for("admin_tasks"))
+    return redirect(url_for("user_tasks"))
+
+
+def _prepare_document_task_row(
+    upload,
+    identity: UserIdentity,
+    model: dict,
+    check_ids: list[int],
+    check_snapshots: list[dict],
+    saved_paths: list[Path],
+):
     file_type = extension_of(upload.filename)
     original_filename = _clean_upload_filename(upload.filename, file_type)
     created_at = now_text()
-    stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
+    stored_filename, destination = _upload_destination(
+        original_filename,
+        identity.subject,
+        created_at,
+        file_type,
+    )
     upload.save(destination)
+    saved_paths.append(destination)
     file_size = os.path.getsize(destination)
     try:
         document_text = extract_text(destination, file_type).strip()
     except DocumentReadError as exc:
-        _remove_uploaded_file(destination)
-        flash(f"文档读取失败：{exc}", "error")
-        return _back_to_task_form(admin_created)
+        raise DocumentReadError(f"“{original_filename}”：{exc}") from exc
     if not document_text:
-        _remove_uploaded_file(destination)
-        flash("未能从文档中提取到可检查文本。", "error")
-        return _back_to_task_form(admin_created)
+        raise RuntimeError(f"“{original_filename}”未能提取到可检查文本。")
     prepared_document_text = format_document_text(original_filename, document_text)
     if len(prepared_document_text) > model["max_input_chars"]:
-        _remove_uploaded_file(destination)
-        flash(f"文档文本 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
-        return _back_to_task_form(admin_created)
-    owner_name = identity.display_name or None
-    db.execute(
-        """
-        INSERT INTO tasks(
-            task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-            original_filename, stored_filename, file_type, file_size,
-            document_text, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-            request_timeout, max_input_chars, force_disable_thinking,
-            status, progress, created_at, updated_at
+        raise RuntimeError(
+            f"“{original_filename}”文档文本 {len(prepared_document_text)} 字，"
+            f"超过当前模型文本上限 {model['max_input_chars']} 字。"
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-        """,
-        (
-            DOCUMENT_TASK_TYPE,
-            identity.ip,
-            owner_name,
-            identity.subject,
-            owner_name,
-            identity.source,
-            original_filename,
-            stored_filename,
-            file_type,
-            file_size,
-            prepared_document_text,
-            json.dumps(check_ids, ensure_ascii=False),
-            json.dumps(check_snapshots, ensure_ascii=False),
-            model["provider_name"],
-            model["model_name"],
-            model["api_base"],
-            model["api_key"],
-            model["request_timeout"],
-            model["max_input_chars"],
-            1 if model["force_disable_thinking"] else 0,
-            created_at,
-            created_at,
-        ),
+    owner_name = identity.display_name or None
+    return (
+        DOCUMENT_TASK_TYPE,
+        identity.ip,
+        owner_name,
+        identity.subject,
+        owner_name,
+        identity.source,
+        original_filename,
+        stored_filename,
+        file_type,
+        file_size,
+        prepared_document_text,
+        json.dumps(check_ids, ensure_ascii=False),
+        json.dumps(check_snapshots, ensure_ascii=False),
+        model["provider_name"],
+        model["model_name"],
+        model["api_base"],
+        model["api_key"],
+        model["request_timeout"],
+        model["max_input_chars"],
+        1 if model["force_disable_thinking"] else 0,
+        created_at,
+        created_at,
     )
-    db.commit()
-    if admin_created:
-        return redirect(url_for("admin_tasks"))
-    return redirect(url_for("user_tasks"))
 
 
 def create_image_task_for_identity(identity: UserIdentity, *, admin_created: bool):
