@@ -80,7 +80,6 @@ STATUS_LABELS = {
     "canceled": "已取消",
 }
 TASKS_PER_PAGE = 20
-DOCUMENT_BATCH_MAX_FILES = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 REPORT_RETENTION_DAYS_DEFAULT = 0
 ISSUE_OUTPUT_LIMIT_DEFAULT = DEFAULT_ISSUE_OUTPUT_LIMIT
@@ -2021,9 +2020,6 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     uploads = _selected_uploads("document")
     if not uploads:
         flash("请选择要上传的文档。", "error")
-        return _back_to_task_form(admin_created)
-    if len(uploads) > DOCUMENT_BATCH_MAX_FILES:
-        flash(f"单文档检查一次最多上传 {DOCUMENT_BATCH_MAX_FILES} 个文档。", "error")
         return _back_to_task_form(admin_created)
     for upload in uploads:
         if not allowed_file(upload.filename):

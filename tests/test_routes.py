@@ -939,7 +939,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         upload = _required_tag(soup.find("input", {"name": "document"}))
         self.assertTrue(upload.has_attr("multiple"))
-        self.assertEqual(upload.get("data-file-limit"), "20")
+        self.assertIsNone(upload.get("data-file-limit"))
         field = _required_tag(upload.find_parent(class_="multi-file-field"))
         self.assertIsNotNone(field.select_one("[data-file-list]"))
 
@@ -986,8 +986,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "/",
             data={
                 "document": [
-                    (io.BytesIO(b"first document"), "alpha.txt"),
-                    (io.BytesIO(b"second document"), "beta.txt"),
+                    (io.BytesIO(f"document {index}".encode("utf-8")), f"doc-{index:02d}.txt")
+                    for index in range(21)
                 ],
                 "checks": [str(item["id"])],
                 "model_id": model_id,
@@ -1006,12 +1006,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ).fetchall()
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
 
-        self.assertEqual(len(tasks), 2)
-        self.assertEqual([task["original_filename"] for task in tasks], ["alpha.txt", "beta.txt"])
-        self.assertEqual([task["status"] for task in tasks], ["queued", "queued"])
-        self.assertEqual(tasks[0]["document_text"], "file: alpha.txt\n\nfirst document")
-        self.assertEqual(tasks[1]["document_text"], "file: beta.txt\n\nsecond document")
-        self.assertEqual(len(uploaded_files), 2)
+        self.assertEqual(len(tasks), 21)
+        self.assertEqual(tasks[0]["original_filename"], "doc-00.txt")
+        self.assertEqual(tasks[-1]["original_filename"], "doc-20.txt")
+        self.assertTrue(all(task["status"] == "queued" for task in tasks))
+        self.assertEqual(tasks[0]["document_text"], "file: doc-00.txt\n\ndocument 0")
+        self.assertEqual(tasks[-1]["document_text"], "file: doc-20.txt\n\ndocument 20")
+        self.assertEqual(len(uploaded_files), 21)
         snapshots = [json.loads(task["checks_snapshot_json"]) for task in tasks]
         self.assertTrue(all(snapshot[0]["code"] == item["code"] for snapshot in snapshots))
 
