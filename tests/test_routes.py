@@ -1385,6 +1385,43 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="non_issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="total"]')).get_text(strip=True), "3")
 
+    def test_user_task_list_pagination_allows_page_jump(self):
+        for index in range(21):
+            self._insert_task(created_at=f"2026-05-01 10:{index:02d}:00")
+
+        response = self.client.get("/?page=2")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = _required_tag(soup.select_one(".pagination .page-jump-form"))
+        page_input = _required_tag(form.select_one('input[name="page"]'))
+        self.assertEqual(form.get("method"), "get")
+        self.assertEqual(form.get("action"), "/")
+        self.assertEqual(page_input.get("type"), "number")
+        self.assertEqual(page_input.get("min"), "1")
+        self.assertEqual(page_input.get("max"), "2")
+        self.assertEqual(page_input.get("value"), "2")
+        self.assertIsNotNone(form.select_one('button[type="submit"]'))
+
+    def test_admin_task_list_page_jump_preserves_filters(self):
+        for index in range(21):
+            self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
+
+        response = self.client.get("/admin/tasks?status=completed&owner=127.0.0.1&page=2")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = _required_tag(soup.select_one(".pagination .page-jump-form"))
+        page_input = _required_tag(form.select_one('input[name="page"]'))
+        status_input = _required_tag(form.select_one('input[name="status"]'))
+        owner_input = _required_tag(form.select_one('input[name="owner"]'))
+        self.assertEqual(form.get("method"), "get")
+        self.assertEqual(form.get("action"), "/admin/tasks")
+        self.assertEqual(page_input.get("value"), "2")
+        self.assertEqual(page_input.get("max"), "2")
+        self.assertEqual(status_input.get("value"), "completed")
+        self.assertEqual(owner_input.get("value"), "127.0.0.1")
+
     def test_report_item_type_update_persists_classification(self):
         with self.app.app_context():
             now = "2026-05-24 12:00:00"

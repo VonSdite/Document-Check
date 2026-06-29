@@ -167,6 +167,15 @@
     <div>
       <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('admin_tasks', status=status, owner=owner, page=pagination.prev_page) }}">上一页</a>
       <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
+      <form class="page-jump-form" method="get" action="{{ url_for('admin_tasks') }}">
+        <input type="hidden" name="status" value="{{ status }}">
+        <input type="hidden" name="owner" value="{{ owner }}">
+        <label>
+          跳至
+          <input name="page" type="number" min="1" max="{{ pagination.pages }}" value="{{ pagination.page }}" inputmode="numeric" aria-label="跳转页码">
+        </label>
+        <button class="page-link" type="submit">跳转</button>
+      </form>
       <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('admin_tasks', status=status, owner=owner, page=pagination.next_page) }}">下一页</a>
     </div>
   </nav>
