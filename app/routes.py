@@ -3697,8 +3697,6 @@ def _export_task_report_excel(task):
 
     _fill_report_items_sheet(report_sheet, task, results, document_groups)
     _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
-    _fill_task_info_sheet(workbook.create_sheet("任务信息"), task, document_groups)
-    _fill_raw_results_sheet(workbook.create_sheet("原始结果"), results)
 
     output = io.BytesIO()
     workbook.save(output)
@@ -3773,41 +3771,6 @@ def _fill_report_totals_sheet(sheet, report_totals: dict) -> None:
     sheet.append(["指标", "值"])
     for label, key in REPORT_TOTAL_EXPORT_ROWS:
         sheet.append([label, report_totals.get(key, 0)])
-    _style_excel_sheet(sheet)
-
-
-def _fill_task_info_sheet(sheet, task, document_groups: list[dict]) -> None:
-    rows = [
-        ("任务ID", _row_value(task, "id", "")),
-        ("任务类型", task_type_label(_row_value(task, "task_type", DOCUMENT_TASK_TYPE))),
-        ("文件名称", _excel_document_names(task, document_groups)),
-        ("归属用户", _owner_display(task)),
-        ("归属用户信息", _owner_meta(task)),
-        ("文件类型", _row_value(task, "file_type", "")),
-        ("文件大小(KB)", round(float(_row_value(task, "file_size", 0) or 0) / 1024, 1)),
-        ("模型", _excel_model_label(task)),
-        ("任务状态", STATUS_LABELS.get(_row_value(task, "status", ""), _row_value(task, "status", ""))),
-        ("创建时间", _row_value(task, "created_at", "")),
-        ("开始时间", _row_value(task, "started_at", "")),
-        ("结束时间", _row_value(task, "finished_at", "")),
-    ]
-    sheet.append(["字段", "值"])
-    for row in rows:
-        sheet.append(row)
-    _style_excel_sheet(sheet)
-
-
-def _fill_raw_results_sheet(sheet, results: list[dict]) -> None:
-    sheet.append(["检查项编号", "检查项", "结果摘要", "原始结果"])
-    for result in results:
-        sheet.append(
-            [
-                _excel_cell_text(result.get("code")),
-                _excel_cell_text(result.get("name")),
-                _excel_cell_text(result.get("result_summary")),
-                _excel_cell_text(result.get("result")),
-            ]
-        )
     _style_excel_sheet(sheet)
 
 

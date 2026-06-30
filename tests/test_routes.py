@@ -1306,8 +1306,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn(f'document-check-report-{task_id}.xlsx', response.headers["Content-Disposition"])
         workbook = load_workbook(io.BytesIO(response.data), read_only=True, data_only=True)
         try:
-            self.assertIn("报告条目", workbook.sheetnames)
-            self.assertIn("统计", workbook.sheetnames)
+            self.assertEqual(workbook.sheetnames, ["报告条目", "统计"])
             report_rows = list(workbook["报告条目"].iter_rows(values_only=True))
             self.assertEqual(
                 report_rows[0],
