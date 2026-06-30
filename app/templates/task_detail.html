@@ -13,7 +13,7 @@
   {% if task.status == "completed" %}
   <div class="report-export-actions">
     <a class="secondary-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">导出 HTML</a>
-    <a class="secondary-button" href="{{ url_for('admin_export_task_excel' if mode == 'admin' else 'user_export_task_excel', task_id=task.id) }}">导出 Excel</a>
+    <a class="secondary-button" href="{{ url_for('admin_export_task_excel' if mode == 'admin' else 'user_export_task_excel', task_id=task.id) }}">导出 EXCEL</a>
   </div>
   {% endif %}
 </div>
