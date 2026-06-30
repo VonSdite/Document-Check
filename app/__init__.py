@@ -40,7 +40,8 @@ def create_app():
         UPLOAD_FOLDER=str(root_dir / "instance" / "uploads"),
         IMAGE_FOLDER=str(root_dir / "instance" / "extracted_images"),
         LOG_FILE=str(root_dir / "instance" / "logs" / "app.log"),
-        MAX_CONTENT_LENGTH=50 * 1024 * 1024,
+        MAX_UPLOAD_MB=server_config["max_upload_mb"],
+        MAX_CONTENT_LENGTH=server_config["max_upload_mb"] * 1024 * 1024,
     )
 
     Path(app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)

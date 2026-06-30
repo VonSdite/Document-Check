@@ -121,6 +121,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ROOT_DIR=root_dir,
             DATABASE=str(root_dir / "test.sqlite3"),
             UPLOAD_FOLDER=str(root_dir / "uploads"),
+            MAX_UPLOAD_MB=1024,
+            MAX_CONTENT_LENGTH=1024 * 1024 * 1024,
             NETWORK={"proxy_mode": "direct", "proxy": "", "ssl_verify": False},
         )
         Path(self.app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
@@ -1243,6 +1245,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
         self.assertEqual(total, 0)
+
+    def test_oversized_upload_shows_chinese_limit_message(self):
+        self.app.config["MAX_UPLOAD_MB"] = 1
+        self.app.config["MAX_CONTENT_LENGTH"] = 1
+
+        response = self.client.post(
+            "/videos",
+            data={"video": (io.BytesIO(b"video-bytes"), "install.mp4")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("上传文件过大，当前上传上限为 1MB", html)
+        self.assertIn("创建视频检查", html)
 
     def test_image_task_detail_hides_extracted_image_list(self):
         with self.app.app_context():

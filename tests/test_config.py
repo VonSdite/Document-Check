@@ -7,7 +7,7 @@ from unittest.mock import patch
 import yaml
 
 from app import _runtime_root_dir, create_app
-from app.config import CONFIG_FILENAME, load_local_config, save_network_config
+from app.config import CONFIG_FILENAME, DEFAULT_MAX_UPLOAD_MB, load_local_config, save_network_config
 
 
 def _write_config(root_dir: str, config: dict):
@@ -31,6 +31,7 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["server"]["url_prefix"], "")
         self.assertEqual(config["server"]["real_ip_header"], "")
         self.assertFalse(config["server"]["proxy_fix"])
+        self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
         self.assertEqual(config["network"], {"proxy_mode": "direct", "proxy": "", "ssl_verify": False})
         self.assertEqual(config["auth"]["mode"], "ip")
         self.assertEqual(config["auth"]["trusted_header"], {"user_id": "", "username": ""})
@@ -51,6 +52,7 @@ class ProviderConfigTest(unittest.TestCase):
                         "url_prefix": " /infoCheck/ ",
                         "real_ip_header": " X-Real-IP ",
                         "proxy_fix": "true",
+                        "max_upload_mb": "2048",
                     },
                 },
             )
@@ -60,6 +62,27 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["server"]["url_prefix"], "/infoCheck")
         self.assertEqual(config["server"]["real_ip_header"], "X-Real-IP")
         self.assertTrue(config["server"]["proxy_fix"])
+        self.assertEqual(config["server"]["max_upload_mb"], 2048)
+
+    def test_invalid_max_upload_limit_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": "password"},
+                    "admin_url": "/admin",
+                    "server": {
+                        "host": "127.0.0.1",
+                        "port": 5000,
+                        "max_upload_mb": 0,
+                    },
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
 
     def test_invalid_real_ip_header_is_ignored(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -275,6 +298,8 @@ class ProviderConfigTest(unittest.TestCase):
                 self.assertFalse(created_app.config["PLATFORM"])
                 self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
                 self.assertEqual(created_app.config["LISTEN_PORT"], 5000)
+                self.assertEqual(created_app.config["MAX_UPLOAD_MB"], DEFAULT_MAX_UPLOAD_MB)
+                self.assertEqual(created_app.config["MAX_CONTENT_LENGTH"], DEFAULT_MAX_UPLOAD_MB * 1024 * 1024)
             finally:
                 created_app.extensions["task_scheduler"].stop()
 
@@ -292,6 +317,7 @@ class ProviderConfigTest(unittest.TestCase):
                 self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
                 self.assertFalse(config["platform"])
                 self.assertEqual(config["server"]["host"], "127.0.0.1")
+                self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
                 self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())
             finally:
                 created_app.extensions["task_scheduler"].stop()

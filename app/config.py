@@ -13,6 +13,7 @@ DEFAULT_LISTEN_PORT = 31945
 DEFAULT_URL_PREFIX = ""
 DEFAULT_REAL_IP_HEADER = ""
 DEFAULT_PROXY_FIX = False
+DEFAULT_MAX_UPLOAD_MB = 1024
 DEFAULT_AUTH_MODE = "ip"
 AUTH_MODES = {"ip", "trusted_header", "saml"}
 DEFAULT_PROXY_MODE = "direct"
@@ -70,6 +71,7 @@ def _default_config() -> dict:
             "url_prefix": DEFAULT_URL_PREFIX,
             "real_ip_header": DEFAULT_REAL_IP_HEADER,
             "proxy_fix": DEFAULT_PROXY_FIX,
+            "max_upload_mb": DEFAULT_MAX_UPLOAD_MB,
         },
         "network": {
             "proxy_mode": DEFAULT_PROXY_MODE,
@@ -119,6 +121,10 @@ def _normalize_config(config: dict) -> dict:
         config["server"].get("real_ip_header", DEFAULT_REAL_IP_HEADER)
     )
     config["server"]["proxy_fix"] = _normalize_bool(config["server"].get("proxy_fix"), DEFAULT_PROXY_FIX)
+    config["server"]["max_upload_mb"] = _normalize_positive_int(
+        config["server"].get("max_upload_mb", DEFAULT_MAX_UPLOAD_MB),
+        DEFAULT_MAX_UPLOAD_MB,
+    )
     config["network"] = normalize_network_config(config.get("network", {}))
     config["auth"] = _normalize_auth(config.get("auth", {}))
     config.pop("providers", None)
@@ -206,6 +212,16 @@ def _normalize_port(value) -> int:
     if 1 <= port <= 65535:
         return port
     return DEFAULT_LISTEN_PORT
+
+
+def _normalize_positive_int(value, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    if number <= 0:
+        return default
+    return number
 
 
 def _normalize_bool(value, default: bool) -> bool:

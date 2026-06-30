@@ -27,6 +27,7 @@ from flask import (
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, current_identity, subject_label
 from .config import save_network_config
@@ -296,7 +297,18 @@ def register_routes(app):
             "status_labels": STATUS_LABELS,
             "nav_identity": _identity_label(identity),
             "task_type_label": task_type_label,
+            "max_upload_mb": _max_upload_mb(),
         }
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def request_entity_too_large(error):
+        del error
+        limit = _max_upload_mb()
+        flash(
+            f"上传文件过大，当前上传上限为 {limit}MB。请压缩视频，或在本地 config.yaml 中调整 server.max_upload_mb 后重启服务。",
+            "error",
+        )
+        return redirect(_request_entity_too_large_redirect()), 303
 
     @app.before_request
     def require_saml_user_session():
@@ -1129,6 +1141,48 @@ def _form_bool(value) -> bool:
 
 def _platform_enabled() -> bool:
     return bool(current_app.config.get("PLATFORM", True))
+
+
+def _max_upload_mb() -> int:
+    try:
+        return max(1, int(current_app.config.get("MAX_UPLOAD_MB") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _request_entity_too_large_redirect() -> str:
+    upload_endpoints = {
+        "user_tasks",
+        "user_new_task",
+        "user_consistency",
+        "user_language_consistency",
+        "user_images",
+        "user_videos",
+        "admin_tasks",
+        "admin_consistency",
+        "admin_language_consistency",
+        "admin_images",
+        "admin_videos",
+    }
+    if request.endpoint in upload_endpoints:
+        return url_for(request.endpoint)
+    referrer = _same_origin_referrer_path()
+    if referrer:
+        return referrer
+    return url_for("user_tasks")
+
+
+def _same_origin_referrer_path() -> str:
+    referrer = str(request.referrer or "").strip()
+    if not referrer:
+        return ""
+    parsed = urlsplit(referrer)
+    if parsed.netloc and parsed.netloc != request.host:
+        return ""
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    return _safe_next_path(path)
 
 
 def _auth_mode() -> str:
