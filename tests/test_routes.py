@@ -1314,10 +1314,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "任务ID",
                     "任务类型",
                     "文件名称",
-                    "归属用户",
-                    "归属用户信息",
-                    "模型",
-                    "检查项编号",
                     "检查项",
                     "条目",
                     "问题类型",
@@ -1326,7 +1322,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "问题描述",
                     "影响",
                     "修改建议",
-                    "结果摘要",
                     "状态",
                     "是否接纳",
                     "不接纳原因",
@@ -1336,16 +1331,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(len(report_rows), 3)
             self.assertEqual(report_rows[1][0], task_id)
             self.assertEqual(report_rows[1][2], "report.txt")
-            self.assertEqual(report_rows[1][7], "全文一致性检查")
-            self.assertEqual(report_rows[1][8], "条目 1")
-            self.assertEqual(report_rows[1][9], "参数不一致")
-            self.assertEqual(report_rows[1][15], "发现 1 个明确问题，1 个建议。")
-            self.assertEqual(report_rows[1][16], "问题")
-            self.assertEqual(report_rows[1][17], "不接纳")
-            self.assertEqual(report_rows[1][18], "模型误报")
-            self.assertEqual(report_rows[1][19], "上下文可解释")
-            self.assertEqual(report_rows[2][14], "补充适用范围。")
-            self.assertEqual(report_rows[2][16], "建议")
+            self.assertEqual(report_rows[1][3], "全文一致性检查")
+            self.assertEqual(report_rows[1][4], "条目 1")
+            self.assertEqual(report_rows[1][5], "参数不一致")
+            self.assertEqual(report_rows[1][11], "问题")
+            self.assertEqual(report_rows[1][12], "不接纳")
+            self.assertEqual(report_rows[1][13], "模型误报")
+            self.assertEqual(report_rows[1][14], "上下文可解释")
+            self.assertEqual(report_rows[2][10], "补充适用范围。")
+            self.assertEqual(report_rows[2][11], "建议")
             stats = dict(workbook["统计"].iter_rows(min_row=2, values_only=True))
             self.assertEqual(stats["问题"], 1)
             self.assertEqual(stats["建议"], 1)

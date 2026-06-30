@@ -3716,14 +3716,9 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
         "任务ID",
         "任务类型",
         "文件名称",
-        "归属用户",
-        "归属用户信息",
-        "模型",
-        "检查项编号",
         "检查项",
         "条目",
         *[label for _, label in REPORT_ITEM_FIELDS],
-        "结果摘要",
         "状态",
         "是否接纳",
         "不接纳原因",
@@ -3737,11 +3732,9 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
             sheet.append(
                 [
                     *context,
-                    _excel_cell_text(result.get("code")),
                     _excel_cell_text(result.get("name")),
                     "",
                     *["" for _ in REPORT_ITEM_FIELDS],
-                    _excel_cell_text(result.get("result_summary") or result.get("result")),
                     "未拆分",
                     "",
                     "",
@@ -3753,11 +3746,9 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
             sheet.append(
                 [
                     *context,
-                    _excel_cell_text(result.get("code")),
                     _excel_cell_text(result.get("name")),
                     f"条目 {item.get('index')}",
                     *[_excel_cell_text(item.get(field)) for field, _ in REPORT_ITEM_FIELDS],
-                    _excel_cell_text(result.get("result_summary")),
                     _excel_cell_text(item.get("type_label")),
                     _excel_cell_text(item.get("acceptance_label")),
                     _excel_cell_text(item.get("rejection_reason_label")) if item.get("acceptance_status") == "rejected" else "",
@@ -3779,9 +3770,6 @@ def _excel_task_context(task, document_groups: list[dict]) -> list:
         _row_value(task, "id", ""),
         task_type_label(_row_value(task, "task_type", DOCUMENT_TASK_TYPE)),
         _excel_document_names(task, document_groups),
-        _owner_display(task),
-        _owner_meta(task),
-        _excel_model_label(task),
     ]
 
 
@@ -3795,12 +3783,6 @@ def _excel_document_names(task, document_groups: list[dict]) -> str:
     if names:
         return "\n".join(names)
     return _excel_cell_text(_row_value(task, "original_filename", ""))
-
-
-def _excel_model_label(task) -> str:
-    provider = _excel_cell_text(_row_value(task, "provider_name", "")) or "-"
-    model = _excel_cell_text(_row_value(task, "model_name", ""))
-    return f"{provider} / {model}".strip()
 
 
 def _excel_cell_text(value) -> str:
