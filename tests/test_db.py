@@ -203,6 +203,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("缺失、增补、翻译偏差", language_consistency_item["description"])
         self.assertIn("最终报告必须使用中文陈述", language_consistency_item["prompt"])
         self.assertIn("静态预检摘要只作为优先核对线索", language_consistency_item["prompt"])
+        self.assertIn("不要列出“无实质影响”“影响不大”“无需修改”“无需处理”的条目", language_consistency_item["prompt"])
         compliance_item = db.execute(
             "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "compliance"),
@@ -364,6 +365,32 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
+
+    def test_seed_defaults_migrates_stock_language_consistency_prompt_to_skip_no_action_items(self):
+        db = get_db()
+        legacy_prompt = """你是一名严谨的跨语种文档一致性审查专家。用户会提供两个不同语种或不同语言版本的资料文档，并附带系统静态预检摘要。请综合静态预检线索和两份文档正文，判断两者表达的业务事实、技术要求、步骤、限制条件、风险提示和资料结构是否一致，重点发现缺失、增补、误译、弱化/强化、冲突或需要人工确认的差异。最终报告必须使用中文陈述。
+
+注意：
+1. 静态预检摘要只作为优先核对线索，不要仅凭长度、标题数量或抽取要素差异直接下结论。
+2. 两种语言的表达顺序、句式、同义改写、合理本地化、单位等价换算、术语常见译法不应误判为不一致。
+3. 只依据提供的文档内容判断，不要补充外部事实，不要编造文档中不存在的内容。
+
+输出要求：
+1. 先给出总体结论。
+2. 按条列出差异：问题类型、位置、文档A证据、文档B证据、差异说明、影响、修改建议。
+3. 单独概括“缺失内容”和“关键事实/数字差异”；若没有发现，明确说明未发现。"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'language-consistency-cross-lingual'",
+            (legacy_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute("SELECT prompt FROM check_items WHERE code = 'language-consistency-cross-lingual'").fetchone()
+        self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["language-consistency-cross-lingual"]["prompt"])
+        self.assertIn("无实质影响", row["prompt"])
+        self.assertIn("无需修改", row["prompt"])
 
     def test_seed_defaults_migrates_image_language_check_item(self):
         db = get_db()

@@ -1422,6 +1422,67 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
 
+    def test_language_consistency_no_action_items_are_non_issues(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:45:00"
+            structured_report = {
+                "summary": "发现 1 个实质差异，1 个无须修改差异。",
+                "items": [
+                    {
+                        "status": "issue",
+                        "category": "缺失与增补",
+                        "location": "文档B 第10页目录",
+                        "excerpt": "Measurement Methods of PV Optimizers",
+                        "description": "中文版目录缺少英文标题中的冠词，但不影响用户理解。",
+                        "impact": "无实质影响。",
+                        "suggestion": "无需修改。",
+                    },
+                    {
+                        "status": "issue",
+                        "category": "关键事实差异",
+                        "location": "文档A 第3页 / 文档B 第4页",
+                        "excerpt": "额定功率 500W / Rated power 550W",
+                        "description": "同一型号的额定功率不一致。",
+                        "impact": "客户可能按错误参数配置。",
+                        "suggestion": "核实并统一额定功率。",
+                    },
+                ],
+            }
+            result_json = [
+                {
+                    "code": "language-consistency-cross-lingual",
+                    "name": "跨语种内容一致性对比",
+                    "result": json.dumps(structured_report, ensure_ascii=False),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'cross-language.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (LANGUAGE_CONSISTENCY_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "non_issue")
+        self.assertEqual(_required_tag(rows[1].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "50.0%")
+
     def test_task_detail_parses_double_encoded_structured_json_report(self):
         with self.app.app_context():
             now = "2026-05-23 13:00:00"

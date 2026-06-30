@@ -345,6 +345,7 @@ DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS = (
 1. 静态预检摘要只作为优先核对线索，不要仅凭长度、标题数量或抽取要素差异直接下结论。
 2. 两种语言的表达顺序、句式、同义改写、合理本地化、单位等价换算、术语常见译法不应误判为不一致。
 3. 只依据提供的文档内容判断，不要补充外部事实，不要编造文档中不存在的内容。
+4. 对仅存在措辞、标题或结构细微差异，但不影响理解、无实质影响且无需修改的内容，不要作为差异条目输出。
 
 重点关注：
 1. 关键主题和章节覆盖：两份文档是否覆盖相同功能、场景、流程、前提条件、适用范围和结论。
@@ -359,8 +360,9 @@ DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS = (
 2. 按条列出差异：问题类型、位置、文档A证据、文档B证据、差异说明、影响、修改建议。
 3. 位置优先包含文件名、页码/章节/标题/表格/步骤/附近文本；无法定位时说明“位置线索不足”。
 4. 对证据不足、可能是合理本地化或需要业务确认的内容，明确标注“需人工确认”。
-5. 单独概括“缺失内容”和“关键事实/数字差异”；若没有发现，明确说明“未发现明显缺失内容”或“未发现明显关键事实差异”。
-6. 如果整体未发现明显差异，明确说明“未发现两份跨语种文档存在明显内容不一致或缺失”。""",
+5. 只列出需要修改、需要补充或需要人工确认的实质性差异；不要列出“无实质影响”“影响不大”“无需修改”“无需处理”的条目。
+6. 单独概括“缺失内容”和“关键事实/数字差异”；若没有发现，明确说明“未发现明显缺失内容”或“未发现明显关键事实差异”。
+7. 如果整体未发现明显差异，明确说明“未发现两份跨语种文档存在明显内容不一致或缺失”。""",
         "sort_order": 10,
     },
 )
@@ -531,6 +533,11 @@ _CONSISTENCY_PROMPT_MARKERS = (
     "先概括一致性风险等级",
     "建议统一口径",
 )
+_LANGUAGE_CONSISTENCY_PROMPT_MARKERS = (
+    "最终报告必须使用中文陈述",
+    "静态预检摘要只作为优先核对线索",
+    "单独概括“缺失内容”和“关键事实/数字差异”",
+)
 _LEGACY_IMAGE_LANGUAGE_MARKERS = ("小语种", "非中文、非英文")
 _QWEN_VL_OPTIMIZED_IMAGE_PROMPT_MARKERS = {
     "image-text-correspondence": ("图文一致性审查专家",),
@@ -621,6 +628,7 @@ def seed_defaults():
     _sync_compliance_prompt(db, now)
     _sync_typo_location_prompt(db, now)
     _sync_consistency_prompt(db, now)
+    _sync_language_consistency_prompt(db, now)
     _sync_qwen_vl_optimized_image_check_items(db, now)
     _disable_merged_image_check_items(db, now)
     _remove_retired_default_check_items(db)
@@ -750,6 +758,50 @@ def _sync_consistency_prompt(db, updated_at: str):
             sort_order = ?,
             updated_at = ?
         WHERE code = 'consistency'
+        """,
+        (
+            default_item["name"],
+            default_item["description"],
+            default_item["prompt"],
+            default_item["sort_order"],
+            updated_at,
+        ),
+    )
+
+
+def _sync_language_consistency_prompt(db, updated_at: str):
+    default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get("language-consistency-cross-lingual")
+    if default_item is None:
+        return
+    row = db.execute(
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+    ).fetchone()
+    if row is None:
+        return
+    prompt = str(row["prompt"] or "")
+    is_legacy_stock_prompt = (
+        all(marker in prompt for marker in _LANGUAGE_CONSISTENCY_PROMPT_MARKERS)
+        and "无实质影响" not in prompt
+        and "无需修改" not in prompt
+    )
+    if not is_legacy_stock_prompt:
+        return
+    if (
+        row["name"] == default_item["name"]
+        and (row["description"] or "") == default_item["description"]
+        and prompt == default_item["prompt"]
+        and int(row["sort_order"] or 0) == int(default_item["sort_order"])
+    ):
+        return
+    db.execute(
+        """
+        UPDATE check_items
+        SET name = ?,
+            description = ?,
+            prompt = ?,
+            sort_order = ?,
+            updated_at = ?
+        WHERE code = 'language-consistency-cross-lingual'
         """,
         (
             default_item["name"],

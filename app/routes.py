@@ -176,6 +176,48 @@ REPORT_FIELD_ALIASES = {
     "impact": ("impact", "risk", "影响", "影响说明", "客户影响", "可能影响"),
     "suggestion": ("suggestion", "recommendation", "fix", "修改建议", "建议修改", "建议处理方式", "需核对的依据"),
 }
+REPORT_NO_ACTION_IMPACT_MARKERS = (
+    "无实质影响",
+    "无实际影响",
+    "没有实质影响",
+    "没有实际影响",
+    "无明显影响",
+    "不造成实质影响",
+    "影响不大",
+    "影响较小",
+    "影响很小",
+    "无影响",
+    "不影响理解",
+    "不影响使用",
+    "nosubstantiveimpact",
+    "nomaterialimpact",
+    "nosignificantimpact",
+    "norealimpact",
+    "noactualimpact",
+    "doesnotaffect",
+)
+REPORT_NO_ACTION_SUGGESTION_MARKERS = (
+    "无需修改",
+    "无须修改",
+    "不需修改",
+    "不需要修改",
+    "无需处理",
+    "无须处理",
+    "不需处理",
+    "不需要处理",
+    "无需调整",
+    "无须调整",
+    "不需调整",
+    "无需修正",
+    "保持不变",
+    "nomodificationrequired",
+    "nomodificationneeded",
+    "noneedtomodify",
+    "noneedtochange",
+    "nochangeneeded",
+    "noactionrequired",
+    "noactionneeded",
+)
 REPORT_LEGACY_LABEL_FIELDS = {
     "问题类型": "category",
     "类型": "category",
@@ -3323,7 +3365,7 @@ def _normalize_structured_report_item(raw_item) -> dict:
     if not any(fields.values()):
         fields["description"] = _report_field_text(raw_item)
     item_text = _structured_report_item_text(fields)
-    fields["type"] = status or _infer_report_item_type(item_text)
+    fields["type"] = "non_issue" if _is_no_action_report_item(fields) else status or _infer_report_item_type(item_text)
     return fields
 
 
@@ -3364,6 +3406,23 @@ def _structured_report_item_text(fields: dict) -> str:
         if value:
             lines.append(f"{label}：{value}")
     return "\n".join(lines).strip()
+
+
+def _is_no_action_report_item(fields: dict) -> bool:
+    impact = _compact_report_text(fields.get("impact"))
+    suggestion = _compact_report_text(fields.get("suggestion"))
+    return _has_report_marker(impact, REPORT_NO_ACTION_IMPACT_MARKERS) and _has_report_marker(
+        suggestion,
+        REPORT_NO_ACTION_SUGGESTION_MARKERS,
+    )
+
+
+def _compact_report_text(value) -> str:
+    return re.sub(r"[\s，。；、,.!！?？:：;；/\\|()（）【】\\[\\]\"'“”‘’_-]+", "", str(value or "")).lower()
+
+
+def _has_report_marker(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text for marker in markers)
 
 
 def _legacy_report_item_fields(text: str) -> dict:
