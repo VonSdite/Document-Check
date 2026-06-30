@@ -9,7 +9,7 @@ import yaml
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 from flask import Flask
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
@@ -1233,6 +1233,128 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_acceptance_rate"]')).get_text(strip=True), "-")
         self.assertIn("AI 检查条目统计", exported.get_data(as_text=True))
         self.assertIn("条目 1", exported.get_data(as_text=True))
+
+    def test_task_report_exports_excel_for_statistics(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:10:00"
+            structured_report = {
+                "summary": "发现 1 个明确问题，1 个建议。",
+                "items": [
+                    {
+                        "status": "issue",
+                        "category": "参数不一致",
+                        "location": "第1章、第2章",
+                        "excerpt": "A 为 10；A 为 20",
+                        "description": "同一参数前后不一致",
+                        "impact": "客户可能按错误参数配置",
+                        "suggestion": "统一参数值。",
+                    },
+                    {
+                        "status": "suggestion",
+                        "category": "补充说明",
+                        "location": "第3章",
+                        "excerpt": "安装前检查环境",
+                        "description": "未说明温度范围",
+                        "impact": "",
+                        "suggestion": "补充适用范围。",
+                    },
+                ],
+            }
+            result_json = [
+                {
+                    "code": "consistency",
+                    "name": "全文一致性检查",
+                    "result": json.dumps(structured_report, ensure_ascii=False),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        item_id = _required_tag(soup.select_one("[data-report-item]"))["data-item-id"]
+        review_response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "consistency",
+                "item_id": item_id,
+                "item_type": "issue",
+                "acceptance_status": "rejected",
+                "rejection_reason": "false_positive",
+                "rejection_note": "上下文可解释",
+            },
+        )
+        self.assertEqual(review_response.status_code, 200)
+
+        response = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertIn(f'document-check-report-{task_id}.xlsx', response.headers["Content-Disposition"])
+        workbook = load_workbook(io.BytesIO(response.data), read_only=True, data_only=True)
+        try:
+            self.assertIn("报告条目", workbook.sheetnames)
+            self.assertIn("统计", workbook.sheetnames)
+            report_rows = list(workbook["报告条目"].iter_rows(values_only=True))
+            self.assertEqual(
+                report_rows[0],
+                (
+                    "任务ID",
+                    "任务类型",
+                    "文件名称",
+                    "归属用户",
+                    "归属用户信息",
+                    "模型",
+                    "检查项编号",
+                    "检查项",
+                    "条目",
+                    "状态",
+                    "是否接纳",
+                    "不接纳原因",
+                    "人工原因",
+                    "问题类型",
+                    "位置",
+                    "原文/证据",
+                    "问题描述",
+                    "影响",
+                    "修改建议",
+                    "结果摘要",
+                ),
+            )
+            self.assertEqual(len(report_rows), 3)
+            self.assertEqual(report_rows[1][0], task_id)
+            self.assertEqual(report_rows[1][2], "report.txt")
+            self.assertEqual(report_rows[1][7], "全文一致性检查")
+            self.assertEqual(report_rows[1][8], "条目 1")
+            self.assertEqual(report_rows[1][9], "问题")
+            self.assertEqual(report_rows[1][10], "不接纳")
+            self.assertEqual(report_rows[1][11], "模型误报")
+            self.assertEqual(report_rows[1][12], "上下文可解释")
+            self.assertEqual(report_rows[1][13], "参数不一致")
+            self.assertEqual(report_rows[1][19], "发现 1 个明确问题，1 个建议。")
+            self.assertEqual(report_rows[2][9], "建议")
+            self.assertEqual(report_rows[2][18], "补充适用范围。")
+            stats = dict(workbook["统计"].iter_rows(min_row=2, values_only=True))
+            self.assertEqual(stats["问题"], 1)
+            self.assertEqual(stats["建议"], 1)
+            self.assertEqual(stats["不接纳问题"], 1)
+            self.assertEqual(stats["问题检出率"], "50.0%")
+            self.assertEqual(stats["问题接纳率"], "0.0%")
+        finally:
+            workbook.close()
 
     def test_task_detail_renders_structured_json_report_table(self):
         with self.app.app_context():

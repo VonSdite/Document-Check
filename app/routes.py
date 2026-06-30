@@ -24,6 +24,9 @@ from flask import (
     session,
     url_for,
 )
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, current_identity, subject_label
 from .config import save_network_config
@@ -124,6 +127,20 @@ REPORT_ITEM_FIELDS = (
     ("description", "问题描述"),
     ("impact", "影响"),
     ("suggestion", "修改建议"),
+)
+REPORT_EXPORT_MIMETYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+REPORT_EXPORT_HEADER_FILL = PatternFill("solid", fgColor="EAF0F8")
+REPORT_EXPORT_HEADER_FONT = Font(bold=True)
+REPORT_TOTAL_EXPORT_ROWS = (
+    ("问题", "issue"),
+    ("建议", "suggestion"),
+    ("非问题", "non_issue"),
+    ("接纳问题", "accepted_issue"),
+    ("不接纳问题", "rejected_issue"),
+    ("待确认问题", "pending_issue_acceptance"),
+    ("问题检出率", "issue_detection_rate"),
+    ("问题接纳率", "issue_acceptance_rate"),
+    ("合计", "total"),
 )
 REPORT_ITEM_START_RE = re.compile(
     r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
@@ -515,6 +532,11 @@ def register_routes(app):
         task = _get_user_task_or_local_admin(task_id)
         return _export_task_report(task)
 
+    @app.get("/tasks/<int:task_id>/export.xlsx")
+    def user_export_task_excel(task_id):
+        task = _get_user_task_or_local_admin(task_id)
+        return _export_task_report_excel(task)
+
     @app.get("/tasks/<int:task_id>/document")
     def user_download_task_document(task_id):
         task = _get_user_task_or_local_admin(task_id)
@@ -700,6 +722,12 @@ def register_routes(app):
     def admin_export_task(task_id):
         task = _get_task_or_404(task_id)
         return _export_task_report(task)
+
+    @app.get(f"{admin_prefix}/tasks/<int:task_id>/export.xlsx")
+    @admin_required
+    def admin_export_task_excel(task_id):
+        task = _get_task_or_404(task_id)
+        return _export_task_report_excel(task)
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/document")
     @admin_required
@@ -3657,6 +3685,183 @@ def _export_task_report(task):
         mimetype="text/html",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _export_task_report_excel(task):
+    results = _task_results(task)
+    report_totals = _report_item_totals(results)
+    document_groups = _task_document_groups(task)
+    workbook = Workbook()
+    report_sheet = workbook.active
+    report_sheet.title = "报告条目"
+
+    _fill_report_items_sheet(report_sheet, task, results, document_groups)
+    _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
+    _fill_task_info_sheet(workbook.create_sheet("任务信息"), task, document_groups)
+    _fill_raw_results_sheet(workbook.create_sheet("原始结果"), results)
+
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    output.seek(0)
+    filename = f"document-check-report-{task['id']}.xlsx"
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype=REPORT_EXPORT_MIMETYPE,
+    )
+
+
+def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: list[dict]) -> None:
+    headers = [
+        "任务ID",
+        "任务类型",
+        "文件名称",
+        "归属用户",
+        "归属用户信息",
+        "模型",
+        "检查项编号",
+        "检查项",
+        "条目",
+        "状态",
+        "是否接纳",
+        "不接纳原因",
+        "人工原因",
+        *[label for _, label in REPORT_ITEM_FIELDS],
+        "结果摘要",
+    ]
+    sheet.append(headers)
+    context = _excel_task_context(task, document_groups)
+    for result in results:
+        report_items = result.get("report_items") or []
+        if not report_items:
+            sheet.append(
+                [
+                    *context,
+                    _excel_cell_text(result.get("code")),
+                    _excel_cell_text(result.get("name")),
+                    "",
+                    "未拆分",
+                    "",
+                    "",
+                    "",
+                    *["" for _ in REPORT_ITEM_FIELDS],
+                    _excel_cell_text(result.get("result_summary") or result.get("result")),
+                ]
+            )
+            continue
+        for item in report_items:
+            sheet.append(
+                [
+                    *context,
+                    _excel_cell_text(result.get("code")),
+                    _excel_cell_text(result.get("name")),
+                    f"条目 {item.get('index')}",
+                    _excel_cell_text(item.get("type_label")),
+                    _excel_cell_text(item.get("acceptance_label")),
+                    _excel_cell_text(item.get("rejection_reason_label")) if item.get("acceptance_status") == "rejected" else "",
+                    _excel_cell_text(item.get("rejection_note")) if item.get("acceptance_status") == "rejected" else "",
+                    *[_excel_cell_text(item.get(field)) for field, _ in REPORT_ITEM_FIELDS],
+                    _excel_cell_text(result.get("result_summary")),
+                ]
+            )
+    _style_excel_sheet(sheet)
+
+
+def _fill_report_totals_sheet(sheet, report_totals: dict) -> None:
+    sheet.append(["指标", "值"])
+    for label, key in REPORT_TOTAL_EXPORT_ROWS:
+        sheet.append([label, report_totals.get(key, 0)])
+    _style_excel_sheet(sheet)
+
+
+def _fill_task_info_sheet(sheet, task, document_groups: list[dict]) -> None:
+    rows = [
+        ("任务ID", _row_value(task, "id", "")),
+        ("任务类型", task_type_label(_row_value(task, "task_type", DOCUMENT_TASK_TYPE))),
+        ("文件名称", _excel_document_names(task, document_groups)),
+        ("归属用户", _owner_display(task)),
+        ("归属用户信息", _owner_meta(task)),
+        ("文件类型", _row_value(task, "file_type", "")),
+        ("文件大小(KB)", round(float(_row_value(task, "file_size", 0) or 0) / 1024, 1)),
+        ("模型", _excel_model_label(task)),
+        ("任务状态", STATUS_LABELS.get(_row_value(task, "status", ""), _row_value(task, "status", ""))),
+        ("创建时间", _row_value(task, "created_at", "")),
+        ("开始时间", _row_value(task, "started_at", "")),
+        ("结束时间", _row_value(task, "finished_at", "")),
+    ]
+    sheet.append(["字段", "值"])
+    for row in rows:
+        sheet.append(row)
+    _style_excel_sheet(sheet)
+
+
+def _fill_raw_results_sheet(sheet, results: list[dict]) -> None:
+    sheet.append(["检查项编号", "检查项", "结果摘要", "原始结果"])
+    for result in results:
+        sheet.append(
+            [
+                _excel_cell_text(result.get("code")),
+                _excel_cell_text(result.get("name")),
+                _excel_cell_text(result.get("result_summary")),
+                _excel_cell_text(result.get("result")),
+            ]
+        )
+    _style_excel_sheet(sheet)
+
+
+def _excel_task_context(task, document_groups: list[dict]) -> list:
+    return [
+        _row_value(task, "id", ""),
+        task_type_label(_row_value(task, "task_type", DOCUMENT_TASK_TYPE)),
+        _excel_document_names(task, document_groups),
+        _owner_display(task),
+        _owner_meta(task),
+        _excel_model_label(task),
+    ]
+
+
+def _excel_document_names(task, document_groups: list[dict]) -> str:
+    names = []
+    for group in document_groups:
+        for file in group.get("files", []):
+            name = str(file.get("original_filename") or "").strip()
+            if name:
+                names.append(name)
+    if names:
+        return "\n".join(names)
+    return _excel_cell_text(_row_value(task, "original_filename", ""))
+
+
+def _excel_model_label(task) -> str:
+    provider = _excel_cell_text(_row_value(task, "provider_name", "")) or "-"
+    model = _excel_cell_text(_row_value(task, "model_name", ""))
+    return f"{provider} / {model}".strip()
+
+
+def _excel_cell_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return value
+    return str(value).strip()
+
+
+def _style_excel_sheet(sheet) -> None:
+    sheet.freeze_panes = "A2"
+    for cell in sheet[1]:
+        cell.font = REPORT_EXPORT_HEADER_FONT
+        cell.fill = REPORT_EXPORT_HEADER_FILL
+        cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for column_cells in sheet.columns:
+        width = max(len(str(cell.value or "")) for cell in column_cells[:200]) + 2
+        sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(width, 10), 60)
 
 
 def _page_arg() -> int:
