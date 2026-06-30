@@ -28,6 +28,7 @@ from .task_types import (
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
+    VIDEO_TASK_TYPE,
     document_groups_from_meta,
 )
 
@@ -219,6 +220,30 @@ class TaskScheduler:
                         check_items,
                         image_items,
                         page_image_items,
+                        document_text,
+                        document_meta=_document_meta(document_meta_raw),
+                        max_workers=max_workers,
+                        stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
+                    )
+                elif task_type == VIDEO_TASK_TYPE:
+                    document_meta_raw = _task_value(task, "document_meta_json")
+                    frame_items = image_items_from_meta(document_meta_raw, "frames")
+                    if not frame_items:
+                        raise RuntimeError("未能从视频中抽取到可检查画面")
+                    document_text = _task_value(task, "document_text") or ""
+                    if not document_text:
+                        document_text = (
+                            f"file: {task['original_filename']}\n\n"
+                            f"video_frames: {len(frame_items)}"
+                        )
+                    check_items = _task_check_items(db, task, VIDEO_TASK_TYPE)
+                    if not check_items:
+                        raise RuntimeError("没有可执行的视频检查项")
+                    results = _run_video_check_items_concurrently(
+                        self.app,
+                        task,
+                        check_items,
+                        frame_items,
                         document_text,
                         document_meta=_document_meta(document_meta_raw),
                         max_workers=max_workers,
@@ -830,6 +855,313 @@ def _run_image_check_items_concurrently(
         executor.shutdown(wait=True, cancel_futures=True)
 
 
+def _run_video_check_items_concurrently(
+    app,
+    task,
+    check_items: list[dict],
+    frame_items: list[dict],
+    document_text: str,
+    *,
+    document_meta: dict | None,
+    max_workers: int,
+    stream_trace_enabled: bool,
+) -> list[dict]:
+    task_id = task["id"]
+    total = len(check_items)
+    checkable_frames, skipped_frames = _split_checkable_image_items(frame_items)
+    if not checkable_frames and not skipped_frames:
+        raise RuntimeError("没有可检查的视频抽帧画面")
+
+    batches = _image_batches(checkable_frames, _image_check_batch_size())
+    total_units = max(1, len(batches))
+    completed_units = 0
+    completed_by_code: dict[str, dict] = {}
+    partial_by_code: dict[str, dict] = {}
+    result_lock = threading.Lock()
+    save_lock = threading.Lock()
+    cancel_event = threading.Event()
+    heartbeat_stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_progress_heartbeat,
+        args=(
+            app,
+            task_id,
+            heartbeat_stop,
+            5,
+            89,
+            task["request_timeout"],
+        ),
+        daemon=True,
+        name=f"task-video-heartbeat-{task_id}",
+    )
+    with save_lock:
+        db = get_db()
+        _update_progress(db, task_id, 5)
+    heartbeat.start()
+
+    def save_snapshot(db, summary: str, progress: int):
+        with result_lock:
+            snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
+        with save_lock:
+            _save_intermediate_results(db, task_id, snapshot, summary, progress)
+
+    def current_progress() -> int:
+        with result_lock:
+            units = completed_units
+        return 5 + int(units / total_units * 85)
+
+    def mark_unit_completed() -> int:
+        nonlocal completed_units
+        with result_lock:
+            completed_units += 1
+            return 5 + int(completed_units / total_units * 85)
+
+    issue_output_limit = _issue_output_limit()
+
+    def run_checks():
+        with app.app_context():
+            db = get_db()
+            if cancel_event.is_set() or _cancel_requested(db, task_id):
+                raise TaskCanceled
+
+            app.logger.info(
+                "任务视频多模态检查开始 task_id=%s checks=%s frames=%s skipped_frames=%s batches=%s",
+                task_id,
+                len(check_items),
+                len(checkable_frames),
+                len(skipped_frames),
+                len(batches),
+            )
+            prompt = _combined_video_check_prompt(check_items)
+            batch_results_by_code = {item["code"]: [] for item in check_items}
+            last_stream_write = 0.0
+
+            def save_partial(current_batch: dict | None, content: str, summary: str, *, force: bool = False):
+                nonlocal last_stream_write
+                content = content.strip()
+                now = time.monotonic()
+                if not force and content and now - last_stream_write < 1.2:
+                    return
+                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                    raise TaskCanceled
+
+                with result_lock:
+                    sections = _split_combined_check_output(content, check_items) if content else {}
+                    for item in check_items:
+                        item_content = sections.get(item["code"], "")
+                        result_text = _format_multimodal_image_check_result(
+                            batch_results_by_code[item["code"]],
+                            current_batch=current_batch if item_content else None,
+                            current_content=item_content,
+                            skipped_images=skipped_frames,
+                        )
+                        if result_text:
+                            partial_by_code[item["code"]] = {
+                                "code": item["code"],
+                                "name": item["name"],
+                                "result": result_text,
+                            }
+                        elif not batch_results_by_code[item["code"]]:
+                            partial_by_code.pop(item["code"], None)
+
+                last_stream_write = now
+                save_snapshot(db, summary, current_progress())
+
+            network = outbound_network_config()
+            image_folder = _task_image_folder(app)
+            if not batches:
+                progress = mark_unit_completed()
+                with result_lock:
+                    for item in check_items:
+                        completed_by_code[item["code"]] = {
+                            "code": item["code"],
+                            "name": item["name"],
+                            "result": _format_multimodal_image_check_result(
+                                [],
+                                skipped_images=skipped_frames,
+                            ),
+                        }
+                        partial_by_code.pop(item["code"], None)
+                    completed_count = len(completed_by_code)
+                save_snapshot(
+                    db,
+                    f"已完成 {completed_count}/{total} 个视频检查项。",
+                    progress,
+                )
+                return
+
+            for batch_index, batch in enumerate(batches, start=1):
+                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                    raise TaskCanceled
+                multimodal_images = _multimodal_image_inputs(image_folder, batch)
+                current_batch = {
+                    "batch_index": batch_index,
+                    "batch_count": len(batches),
+                    "images": batch,
+                    "target_label": "视频帧检查",
+                    "target_kind": "video_frame",
+                }
+                content = run_multimodal_document_check(
+                    api_base=task["api_base"],
+                    api_key=task["api_key"],
+                    proxy_mode=network["proxy_mode"],
+                    proxy=network["proxy"],
+                    ssl_verify=network["ssl_verify"],
+                    request_timeout=task["request_timeout"],
+                    model_name=task["model_name"],
+                    force_disable_thinking=_task_flag(task, "force_disable_thinking"),
+                    check_name=f"视频帧检查合并检查（{len(check_items)}项）",
+                    prompt=prompt,
+                    document_text=_document_text_for_video_batch(document_text, batch, document_meta or {}),
+                    image_items=multimodal_images,
+                    batch_index=batch_index,
+                    batch_count=len(batches),
+                    issue_output_limit=issue_output_limit,
+                    on_content=lambda content, current=current_batch: save_partial(
+                        current,
+                        content,
+                        f"正在进行视频帧检查：批次 {current['batch_index']}/{current['batch_count']}",
+                    ),
+                    task_id=task_id,
+                    stream_trace_enabled=stream_trace_enabled,
+                )
+                sections = _split_combined_check_output(content, check_items)
+                for item in check_items:
+                    batch_results_by_code[item["code"]].append(
+                        {
+                            "batch_index": batch_index,
+                            "batch_count": len(batches),
+                            "images": batch,
+                            "target_label": "视频帧检查",
+                            "target_kind": "video_frame",
+                            "content": sections.get(item["code"], ""),
+                        }
+                    )
+                progress = mark_unit_completed()
+                save_partial(
+                    None,
+                    "",
+                    f"已完成视频帧检查：{batch_index}/{len(batches)} 个批次",
+                    force=True,
+                )
+                save_snapshot(
+                    db,
+                    f"正在进行视频检查，已完成 {completed_units}/{total_units} 个视频批次。",
+                    progress,
+                )
+
+            with result_lock:
+                for item in check_items:
+                    completed_by_code[item["code"]] = {
+                        "code": item["code"],
+                        "name": item["name"],
+                        "result": _format_multimodal_image_check_result(
+                            batch_results_by_code[item["code"]],
+                            skipped_images=skipped_frames,
+                        ),
+                    }
+                    partial_by_code.pop(item["code"], None)
+                completed_count = len(completed_by_code)
+            save_snapshot(
+                db,
+                f"已完成 {completed_count}/{total} 个视频检查项。",
+                current_progress(),
+            )
+            app.logger.info(
+                "任务视频多模态检查完成 task_id=%s checks=%s frames=%s skipped_frames=%s batches=%s",
+                task_id,
+                len(check_items),
+                len(checkable_frames),
+                len(skipped_frames),
+                len(batches),
+            )
+
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"task-video-check-{task_id}")
+    futures = []
+    try:
+        futures = [executor.submit(run_checks)]
+        for future in as_completed(futures):
+            future.result()
+        with result_lock:
+            ordered = _ordered_results(check_items, completed_by_code, {})
+        if len(ordered) != total:
+            raise RuntimeError("部分视频检查项未完成")
+        return ordered
+    except Exception:
+        cancel_event.set()
+        for future in futures:
+            future.cancel()
+        raise
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=2)
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _combined_video_check_prompt(check_items: list[dict]) -> str:
+    item_blocks = []
+    for item in check_items:
+        item_blocks.append(
+            f"### 检查项：{item['code']}｜{item['name']}\n"
+            f"{str(item.get('prompt') or '').strip()}"
+        )
+    required_sections = "\n".join(
+        (
+            f"### 检查项：{item['code']}｜{item['name']}\n"
+            "#### 总体判断\n"
+            "说明是否发现明确问题；没有明确问题时只写“未发现明确问题”。\n"
+            "#### 明确问题\n"
+            "- 只列能够从当前采样帧直接判定的异常，每条必须以视频时间点或帧文件名开头；没有明确问题时只写“未发现明确问题”，不要列正常项。\n"
+            "#### 需人工确认\n"
+            "- 只列证据不足、看不清、需要连续片段或业务资料确认的对象；没有需人工确认项时只写“未发现需人工确认项”。\n"
+            "#### 未发现问题\n"
+            "- 可简述正常项；这些内容不要写入“明确问题”。"
+        )
+        for item in check_items
+    )
+    return (
+        f"本次执行硬件产品安装调测视频质检，一次请求中合并 {len(check_items)} 个检查项。"
+        "请对每个检查项独立判断，不要把其他检查项的结论混入当前检查项。\n\n"
+        "检查对象说明：系统只提供从视频时间轴均匀抽取的采样帧，模型不能直接观看完整连续视频。"
+        "请重点观察安装顺序、接线端子、安全防护、调测界面/参数、视频清晰度和关键步骤完整性。\n\n"
+        "定位要求：引用画面时优先使用视频时间点（例如 00:12.300），必要时补充帧文件名；不要使用 PDF 页码定位。\n"
+        "证据约束：只依据当前提供的采样帧和视频上下文判断；看不清、被遮挡、动作连续性证据不足或缺少产品图纸依据时放入“需人工确认”，不要编造不可见内容。\n"
+        "汇总约束：明确问题只放已确认异常；正常、未发现、符合、清晰、完整、无实质影响、无需修改、无需处理等无问题结论不得放入“明确问题”。\n\n"
+        "输出必须严格使用以下结构，并保留每个检查项的 code：\n"
+        f"{required_sections}\n\n"
+        "检查项提示词如下：\n\n"
+        f"{chr(10).join(item_blocks)}"
+    )
+
+
+def _document_text_for_video_batch(document_text: str, frame_items: list[dict], document_meta: dict) -> str:
+    text = _trim_document_context(str(document_text or "").strip(), IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
+    selection = document_meta.get("frame_selection") if isinstance(document_meta, dict) else {}
+    frame_lines = []
+    for frame in frame_items:
+        filename = str(frame.get("filename") or frame.get("id") or "视频帧")
+        position = str(frame.get("position") or "未标注")
+        frame_lines.append(f"- {filename}：视频时间点 {position}")
+    selection_lines = []
+    if isinstance(selection, dict):
+        duration = selection.get("duration_seconds")
+        frame_count = selection.get("frame_count")
+        if duration is not None:
+            selection_lines.append(f"- 视频时长：{duration} 秒")
+        if frame_count is not None:
+            selection_lines.append(f"- 总抽帧数：{frame_count}")
+        if selection.get("strategy"):
+            selection_lines.append(f"- 抽帧策略：{selection.get('strategy')}")
+
+    parts = []
+    if text:
+        parts.append(text)
+    if selection_lines:
+        parts.append("video_sampling:\n" + "\n".join(selection_lines))
+    parts.append("current_batch_video_frames:\n" + ("\n".join(frame_lines) if frame_lines else "- 未记录视频帧"))
+    return "\n\n".join(parts).strip()
+
+
 def _image_check_groups(
     check_items: list[dict],
     image_items: list[dict],
@@ -1148,14 +1480,15 @@ def _format_image_batch_result(batch: dict, content: str) -> str:
     batch_count = int(batch.get("batch_count") or 1)
     images = batch.get("images") or []
     target_label = str(batch.get("target_label") or "图文联合检查")
+    media_label = "视频帧" if batch.get("target_kind") == "video_frame" else "图片"
     title = f"### {target_label}结果" if batch_count <= 1 else f"### {target_label}结果（批次 {batch_index}/{batch_count}）"
     image_lines = []
     for image in images:
-        filename = str(image.get("filename") or image.get("id") or "图片")
+        filename = str(image.get("filename") or image.get("id") or media_label)
         location = _image_location_label(image)
         image_lines.append(f"- {location}：{filename}")
-    image_list = "\n".join(image_lines) if image_lines else "- 未记录图片"
-    return f"{title}\n\n覆盖图片：\n{image_list}\n\n{str(content or '').strip()}"
+    image_list = "\n".join(image_lines) if image_lines else f"- 未记录{media_label}"
+    return f"{title}\n\n覆盖{media_label}：\n{image_list}\n\n{str(content or '').strip()}"
 
 
 def _format_skipped_image_result(skipped_images: list[dict]) -> str:
@@ -1217,7 +1550,7 @@ def _format_image_check_issue_summary(batch_results: list[dict], skipped_images:
 def _image_batch_label(batch: dict) -> str:
     batch_index = int(batch.get("batch_index") or 1)
     batch_count = int(batch.get("batch_count") or 1)
-    page_label = _image_batch_pages_label(batch)
+    page_label = _video_batch_time_label(batch) if batch.get("target_kind") == "video_frame" else _image_batch_pages_label(batch)
     if batch_count > 1:
         prefix = f"批次 {batch_index}/{batch_count}"
     else:
@@ -1225,6 +1558,22 @@ def _image_batch_label(batch: dict) -> str:
     if page_label:
         return f"{prefix}（{page_label}）："
     return f"{prefix}："
+
+
+def _video_batch_time_label(batch: dict) -> str:
+    positions = []
+    seen = set()
+    for image in batch.get("images") or []:
+        position = str(image.get("position") or "").strip()
+        if not position or position in seen:
+            continue
+        seen.add(position)
+        positions.append(position)
+    if not positions:
+        return ""
+    if len(positions) == 1:
+        return f"视频时间 {positions[0]}"
+    return f"视频时间 {positions[0]}-{positions[-1]}"
 
 
 def _image_batch_pages_label(batch: dict) -> str:
@@ -1252,7 +1601,7 @@ def _summary_candidate_lines(content: str) -> list[str]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if re.match(r"^[-*]?\s*(覆盖图片|图片名称|图片位置|输出要求|详细问题列表)[:：]?$", line):
+        if re.match(r"^[-*]?\s*(覆盖图片|覆盖视频帧|图片名称|图片位置|输出要求|详细问题列表)[:：]?$", line):
             continue
         lines.append(line)
     return lines
@@ -1536,6 +1885,8 @@ def _task_artifact_paths(app, task) -> list[Path]:
     for image in image_items_from_meta(raw_meta):
         paths.append(image_path_from_item(image_root, image))
     for image in image_items_from_meta(raw_meta, "page_images"):
+        paths.append(image_path_from_item(image_root, image))
+    for image in image_items_from_meta(raw_meta, "frames"):
         paths.append(image_path_from_item(image_root, image))
     return _dedupe_paths(paths)
 

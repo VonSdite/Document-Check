@@ -13,6 +13,7 @@ from app.images import (
     image_items_from_meta,
     select_pdf_page_numbers,
 )
+from app.videos import allowed_video_file, format_video_document_text, video_extension_of, _sample_video_timestamps
 
 
 _TINY_PNG = (
@@ -139,6 +140,39 @@ class DocumentFormattingTest(unittest.TestCase):
         )
 
         self.assertEqual(pages, [2, 5])
+
+    def test_video_helpers_format_sampling_context(self):
+        self.assertTrue(allowed_video_file("安装调测.MP4"))
+        self.assertFalse(allowed_video_file("安装调测.pdf"))
+        self.assertEqual(video_extension_of("demo.MOV"), "mov")
+        timestamps = _sample_video_timestamps(5.2, 3)
+
+        text = format_video_document_text(
+            "安装调测.mp4",
+            [
+                {
+                    "filename": "0001_t000000000.jpg",
+                    "position": "00:00.000",
+                    "mime_type": "image/jpeg",
+                    "size_bytes": 2048,
+                },
+                {
+                    "filename": "0002_t000002000.jpg",
+                    "position": "00:02.000",
+                    "mime_type": "image/jpeg",
+                    "size_bytes": 4096,
+                },
+            ],
+            {"duration_seconds": 5.2},
+        )
+
+        self.assertEqual(len(timestamps), 3)
+        self.assertEqual(timestamps[0], 0.0)
+        self.assertLessEqual(timestamps[-1], 5.1)
+        self.assertIn("file: 安装调测.mp4", text)
+        self.assertIn("视频时长：00:05.200", text)
+        self.assertIn("抽取帧数：2", text)
+        self.assertIn("时间点 00:02.000", text)
 
 
 def _write_docx_with_inline_image(path: Path):

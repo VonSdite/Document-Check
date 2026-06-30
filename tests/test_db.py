@@ -17,7 +17,7 @@ from app.db import (
     set_ip_username,
     set_setting,
 )
-from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 from app.routes import _next_check_item_sort_order, _reorder_check_items
 
 
@@ -188,12 +188,30 @@ class CheckItemDefaultsTest(unittest.TestCase):
                 (LANGUAGE_CONSISTENCY_TASK_TYPE,),
             ).fetchall()
         ]
+        video_codes = [
+            row["code"]
+            for row in db.execute(
+                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                (VIDEO_TASK_TYPE,),
+            ).fetchall()
+        ]
 
         self.assertIn("typo", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertEqual(language_consistency_codes, ["language-consistency-cross-lingual"])
+        self.assertEqual(
+            video_codes,
+            [
+                "video-installation-sequence",
+                "video-wiring-terminal",
+                "video-safety-protection",
+                "video-commissioning-ui-parameter",
+                "video-clarity-completeness",
+            ],
+        )
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
         self.assertIn("language-consistency-cross-lingual", default_check_item_codes(LANGUAGE_CONSISTENCY_TASK_TYPE))
+        self.assertIn("video-installation-sequence", default_check_item_codes(VIDEO_TASK_TYPE))
         language_consistency_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
             (LANGUAGE_CONSISTENCY_TASK_TYPE, "language-consistency-cross-lingual"),
@@ -255,6 +273,14 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(image_quality_item["name"], "图片完整性和清晰度检查")
         self.assertIn("关键文字", image_quality_item["description"])
         self.assertIn("端子号", image_quality_item["prompt"])
+        video_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (VIDEO_TASK_TYPE, "video-installation-sequence"),
+        ).fetchone()
+        self.assertIsNotNone(video_item)
+        self.assertEqual(video_item["name"], "安装步骤顺序检查")
+        self.assertIn("硬件安装视频", video_item["description"])
+        self.assertIn("按时间轴抽取关键帧", video_item["prompt"])
 
     def test_seed_defaults_removes_retired_translation_coverage_check(self):
         db = get_db()

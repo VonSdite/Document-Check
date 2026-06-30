@@ -16,7 +16,7 @@ from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
 from app.formatting import render_markdown
 from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
-from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 
 
 _TINY_PNG = (
@@ -440,22 +440,27 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("多文档对照检查-提示词设置", html)
         self.assertIn("跨语种文档一致性对比-提示词设置", html)
         self.assertIn("图片检查-提示词设置", html)
+        self.assertIn("视频检查-提示词设置", html)
         self.assertIn("consistency_check", html)
         self.assertIn("language_consistency_check", html)
         self.assertIn("image_check", html)
+        self.assertIn("video_check", html)
         document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查-提示词设置说明"}))
         consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"}))
         language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种文档一致性对比-提示词设置说明"}))
         image_tip = _required_tag(soup.find("button", {"aria-label": "图片检查-提示词设置说明"}))
+        video_tip = _required_tag(soup.find("button", {"aria-label": "视频检查-提示词设置说明"}))
         self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
         self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
         self.assertEqual(language_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。")
         self.assertEqual(image_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。")
+        self.assertEqual(video_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。")
         visible_descriptions = [item.get_text(strip=True) for item in soup.select(".settings-section-head p")]
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。", visible_descriptions)
+        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。", visible_descriptions)
 
     def test_admin_overview_counts_tasks_in_selected_range(self):
         self._insert_task(ip="10.0.0.1", username_snapshot="测试用户A", created_at="2026-05-01 10:00:00")
@@ -468,6 +473,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         self._insert_task(ip="10.0.0.2", status="queued", created_at="2026-05-02 08:00:00")
         self._insert_task(task_type=LANGUAGE_CONSISTENCY_TASK_TYPE, ip="10.0.0.2", created_at="2026-05-02 09:00:00")
+        self._insert_task(task_type=VIDEO_TASK_TYPE, ip="10.0.0.2", created_at="2026-05-02 10:00:00")
         self._insert_task(ip="10.0.0.3", created_at="2026-04-30 23:59:59")
 
         response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-02")
@@ -478,10 +484,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("平台统计", html)
         self.assertNotIn("2026-05-01 至 2026-05-02", html)
         self.assertIn("<span>活跃用户</span><strong>2</strong>", html)
-        self.assertIn("<span>提交任务</span><strong>4</strong>", html)
+        self.assertIn("<span>提交任务</span><strong>5</strong>", html)
         self.assertIn("<span>单文档检查任务</span><strong>2</strong>", html)
         self.assertIn("<span>多文档对照任务</span><strong>1</strong>", html)
         self.assertIn("<span>跨语种对比任务</span><strong>1</strong>", html)
+        self.assertIn("<span>视频检查任务</span><strong>1</strong>", html)
         self.assertIn("<span>排队</span><strong>1</strong>", html)
         self.assertIn("<span>失败</span><strong>1</strong>", html)
         self.assertIn("测试用户A", html)
@@ -898,6 +905,35 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(item["prompt"], "只检查接线颜色。")
         self.assertEqual(item["enabled"], 1)
 
+    def test_admin_settings_creates_video_check_item(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "create_check_item",
+                "task_type": VIDEO_TASK_TYPE,
+                "name": "铭牌信息检查",
+                "description": "检查视频中设备铭牌是否清晰",
+                "prompt": "只检查铭牌清晰度。",
+                "enabled": "on",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            item = get_db().execute(
+                """
+                SELECT task_type, code, name, description, prompt, enabled
+                FROM check_items
+                WHERE name = ?
+                """,
+                ("铭牌信息检查",),
+            ).fetchone()
+        self.assertEqual(item["task_type"], VIDEO_TASK_TYPE)
+        self.assertTrue(item["code"].startswith("custom-video-"))
+        self.assertEqual(item["description"], "检查视频中设备铭牌是否清晰")
+        self.assertEqual(item["prompt"], "只检查铭牌清晰度。")
+        self.assertEqual(item["enabled"], 1)
+
     def test_upload_destination_uses_unique_name_for_same_second_uploads(self):
         with self.app.app_context():
             first_name, _ = _upload_destination("报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt")
@@ -1101,6 +1137,102 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "/images",
             data={
                 "document": (io.BytesIO(b"<html></html>"), "diagram.html"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
+
+    def test_create_video_task_saves_extracted_frame_metadata(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id, code, name, prompt FROM check_items WHERE code = 'video-installation-sequence'"
+            ).fetchone()
+
+        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            frame_path = output_dir / "0001_t000001000.jpg"
+            frame_path.write_bytes(_TINY_PNG)
+            return (
+                [
+                    {
+                        "id": "frame-0001",
+                        "filename": "0001_t000001000.jpg",
+                        "stored_filename": "0001_t000001000.jpg",
+                        "relative_path": "0001_t000001000.jpg",
+                        "mime_type": "image/jpeg",
+                        "position": "00:01.000",
+                        "source": source_filename,
+                        "size_bytes": frame_path.stat().st_size,
+                        "kind": "video_frame",
+                        "timestamp_seconds": 1.0,
+                    }
+                ],
+                {
+                    "duration_seconds": 8.0,
+                    "selected_timestamps": [1.0],
+                    "max_frames": max_frames,
+                    "frame_count": 1,
+                    "strategy": "uniform-sampling",
+                },
+            )
+
+        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+            response = self.client.post(
+                "/videos",
+                data={
+                    "video": (io.BytesIO(b"video-bytes"), "install.mp4"),
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT * FROM tasks").fetchone()
+            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+        meta = json.loads(task["document_meta_json"])
+        snapshots = json.loads(task["checks_snapshot_json"])
+        self.assertEqual(task["task_type"], VIDEO_TASK_TYPE)
+        self.assertEqual(task["file_type"], "mp4")
+        self.assertEqual(meta["source_video"]["file_type"], "mp4")
+        self.assertEqual(meta["frame_selection"]["frame_count"], 1)
+        self.assertEqual(len(meta["frames"]), 1)
+        self.assertEqual(meta["frames"][0]["position"], "00:01.000")
+        self.assertTrue((image_root / meta["frames"][0]["relative_path"]).is_file())
+        self.assertIn("video_context:", task["document_text"])
+        self.assertIn("video_frames:", task["document_text"])
+        self.assertIn("00:01.000", task["document_text"])
+        self.assertEqual(
+            snapshots,
+            [
+                {
+                    "id": item["id"],
+                    "code": item["code"],
+                    "name": item["name"],
+                    "prompt": item["prompt"],
+                }
+            ],
+        )
+
+    def test_create_video_task_rejects_unsupported_file(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+            ).fetchone()
+
+        response = self.client.post(
+            "/videos",
+            data={
+                "video": (io.BytesIO(b"<html></html>"), "install.html"),
                 "checks": [str(item["id"])],
                 "model_id": model_id,
             },

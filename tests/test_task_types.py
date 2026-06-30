@@ -9,6 +9,7 @@ from app.task_types import (
     CONSISTENCY_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
+    VIDEO_TASK_TYPE,
     document_groups_from_meta,
     task_type_label,
 )
@@ -46,6 +47,9 @@ class TaskTypesTest(unittest.TestCase):
 
     def test_task_type_label_for_image_check(self):
         self.assertEqual(task_type_label(IMAGE_TASK_TYPE), "图片检查")
+
+    def test_task_type_label_for_video_check(self):
+        self.assertEqual(task_type_label(VIDEO_TASK_TYPE), "视频检查")
 
     def test_extracts_grouped_consistency_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:

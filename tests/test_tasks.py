@@ -7,7 +7,7 @@ from unittest.mock import patch
 from flask import Flask
 
 from app.db import get_db, init_db, now_text, set_setting
-from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
 from app.tasks import (
     TaskScheduler,
     cleanup_expired_task_reports,
@@ -45,11 +45,15 @@ class TaskExecutionTest(unittest.TestCase):
         running_upload = upload_dir / "running.pdf"
         old_image_dir = image_root / "old-images"
         old_image = old_image_dir / "old.png"
+        old_frame_dir = image_root / "old-video"
+        old_frame = old_frame_dir / "frame.jpg"
         old_upload.write_text("old", encoding="utf-8")
         recent_upload.write_text("recent", encoding="utf-8")
         running_upload.write_text("running", encoding="utf-8")
         old_image_dir.mkdir(parents=True, exist_ok=True)
         old_image.write_bytes(b"png")
+        old_frame_dir.mkdir(parents=True, exist_ok=True)
+        old_frame.write_bytes(b"jpg")
         set_setting("report_retention_days", 1)
         db = get_db()
         old_meta = {
@@ -62,6 +66,14 @@ class TaskExecutionTest(unittest.TestCase):
                 }
             ],
             "page_images": [],
+            "frames": [
+                {
+                    "filename": "frame.jpg",
+                    "relative_path": "old-video/frame.jpg",
+                    "mime_type": "image/jpeg",
+                    "position": "00:01.000",
+                }
+            ],
         }
         rows = [
             ("old.pdf", "old.pdf", IMAGE_TASK_TYPE, json.dumps(old_meta, ensure_ascii=False), "completed", "2000-01-01 00:00:00"),
@@ -93,7 +105,9 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(remaining, {"recent.pdf": "completed", "running.pdf": "running"})
         self.assertFalse(old_upload.exists())
         self.assertFalse(old_image.exists())
+        self.assertFalse(old_frame.exists())
         self.assertFalse(old_image_dir.exists())
+        self.assertFalse(old_frame_dir.exists())
         self.assertTrue(recent_upload.exists())
         self.assertTrue(running_upload.exists())
 
@@ -660,6 +674,102 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"])
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"].split("### 检查汇总", 1)[-1])
         self.assertIn("未覆盖 149 页", results[0]["result"])
+
+    def test_video_task_runs_multimodal_check_for_extracted_frames(self):
+        frame_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-video"
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        (frame_dir / "0001_t000001000.jpg").write_bytes(b"jpeg-bytes")
+        db = get_db()
+        created_at = now_text()
+        video_meta = {
+            "frame_selection": {
+                "duration_seconds": 8.0,
+                "selected_timestamps": [1.0],
+                "max_frames": 16,
+                "frame_count": 1,
+                "strategy": "uniform-sampling",
+            },
+            "frames": [
+                {
+                    "id": "frame-0001",
+                    "filename": "0001_t000001000.jpg",
+                    "relative_path": "task-video/0001_t000001000.jpg",
+                    "mime_type": "image/jpeg",
+                    "position": "00:01.000",
+                    "source": "安装.mp4",
+                    "size_bytes": 10,
+                    "kind": "video_frame",
+                    "timestamp_seconds": 1.0,
+                }
+            ],
+        }
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                ?, '127.0.0.1', '安装.mp4', '安装.mp4', 'mp4', 10,
+                ?, ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                VIDEO_TASK_TYPE,
+                "file: 安装.mp4\n\nvideo_context:\n- 视频时长：00:08.000（8.0 秒）\nvideo_frames:\n- 0001_t000001000.jpg: 时间点 00:01.000",
+                json.dumps(video_meta, ensure_ascii=False),
+                json.dumps([91]),
+                json.dumps(
+                    [
+                        {
+                            "id": 91,
+                            "code": "video-installation-sequence",
+                            "name": "安装步骤顺序检查",
+                            "prompt": "检查硬件安装视频中的步骤顺序",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task_id = db.execute("SELECT id FROM tasks").fetchone()["id"]
+        calls = []
+
+        def fake_run_multimodal_document_check(**kwargs):
+            calls.append(kwargs)
+            return """### 检查项：video-installation-sequence｜安装步骤顺序检查
+#### 总体判断
+发现明确问题。
+#### 明确问题
+- 00:01.000：未确认接地线后直接上电，存在安全风险。
+#### 需人工确认
+- 未发现需人工确认项。
+#### 未发现问题
+- 未发现其他安装顺序问题。"""
+
+        with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["check_name"], "视频帧检查合并检查（1项）")
+        self.assertIn("硬件产品安装调测视频质检", calls[0]["prompt"])
+        self.assertIn("视频时间点", calls[0]["prompt"])
+        self.assertIn("current_batch_video_frames", calls[0]["document_text"])
+        self.assertEqual(calls[0]["image_items"][0]["position"], "00:01.000")
+        self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual([item["code"] for item in results], ["video-installation-sequence"])
+        self.assertIn("覆盖视频帧", results[0]["result"])
+        self.assertIn("视频时间 00:01.000", results[0]["result"])
+        self.assertIn("未确认接地线后直接上电", results[0]["result"])
+        self.assertIn("未确认接地线后直接上电", results[0]["result"].split("### 检查汇总", 1)[-1])
 
     def test_qwen_vl_optimized_image_checks_use_expected_targets(self):
         self.assertEqual(_image_check_target({"code": "image-text-correspondence"}), "page")

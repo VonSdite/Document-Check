@@ -4,7 +4,7 @@ from datetime import datetime
 
 from flask import current_app, g
 
-from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE
+from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 
 
 def now_text() -> str:
@@ -367,6 +367,90 @@ DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS = (
     },
 )
 
+DEFAULT_VIDEO_CHECK_ITEMS = (
+    {
+        "code": "video-installation-sequence",
+        "name": "安装步骤顺序检查",
+        "description": "检查硬件安装视频中的部件安装、固定、接线前后顺序和关键步骤是否合理。",
+        "prompt": """你是一名硬件产品安装调测视频质检专家。系统会从视频中按时间轴抽取关键帧，请结合帧顺序判断安装过程是否存在明显风险。
+重点关注：
+1. 安装顺序是否合理，例如先断电/验电再接线、先固定设备再接线、先检查配件再上电。
+2. 是否遗漏关键步骤，例如固定螺钉、接地、线缆整理、端子紧固、防护盖复位、上电前检查。
+3. 是否出现明显反向、跳步、重复操作、拆装顺序冲突或与硬件产品常规安装要求不符的操作。
+4. 只依据可见视频帧判断；由于视频是抽帧采样，前后连续动作证据不足时标注“需人工确认”。
+
+输出要求：
+1. 先给出总体判断。
+2. 按条列出问题：时间点、可见证据、问题描述、可能影响、修改建议。
+3. 没有明确问题时说明“未发现明显安装步骤顺序问题”。""",
+        "sort_order": 10,
+    },
+    {
+        "code": "video-wiring-terminal",
+        "name": "接线与端子检查",
+        "description": "检查视频中端子、线缆、极性、接地、线序和接线操作是否存在明显风险。",
+        "prompt": """你是一名硬件接线与端子操作审查专家。请检查安装调测视频中可见的接线、端子、线缆和接地操作。
+重点关注：
+1. 电源线、信号线、通信线、接地线是否接到明显正确的位置，是否存在 L/N/PE、正负极、A/B、DI/DO 等可见混接风险。
+2. 端子是否有明显未插紧、裸铜外露、压接不牢、屏蔽/接地遗漏、线缆拉扯、线序混乱或防护不足。
+3. 工具操作是否可能损伤端子、线缆或外壳。
+4. 仅在画面能看清标识和接线关系时判定为明确问题；看不清、被遮挡或缺少图纸依据时标注“需人工确认”。
+
+输出要求：
+1. 按条列出：时间点、可见端子/线缆证据、问题描述、可能影响、修改建议。
+2. 没有明确问题时说明“未发现明显接线与端子问题”。""",
+        "sort_order": 20,
+    },
+    {
+        "code": "video-safety-protection",
+        "name": "安全与防护检查",
+        "description": "检查安装调测视频中的断电、防护、工具使用、个人安全和设备保护风险。",
+        "prompt": """你是一名硬件安装安全质检专家。请检查视频中是否存在安全防护和设备保护方面的明显风险。
+重点关注：
+1. 是否出现带电接线、上电前未检查、手部接近裸露导体、未复位防护盖、未佩戴必要防护用品等风险。
+2. 是否存在工具误用、用力过大、设备跌落/磕碰、线缆被夹压、液体/金属异物靠近设备等风险。
+3. 是否缺少安全提醒或关键安全动作无法确认。
+4. 抽帧无法证明的连续动作放入“需人工确认”，不要凭空推断。
+
+输出要求：
+1. 按条列出：时间点、可见风险、可能后果、建议处理。
+2. 没有明确问题时说明“未发现明显安全与防护问题”。""",
+        "sort_order": 30,
+    },
+    {
+        "code": "video-commissioning-ui-parameter",
+        "name": "调测界面与参数检查",
+        "description": "检查调测视频中屏幕、仪表、指示灯、参数配置和验证结果是否存在明显异常。",
+        "prompt": """你是一名硬件产品调测过程质检专家。请检查视频中可见的调测界面、仪表读数、指示灯、参数配置和验证结果。
+重点关注：
+1. 界面/仪表上的关键参数、告警、状态灯、测试结果是否显示异常或与操作目标明显不符。
+2. 是否存在未保存配置、未执行验证、测试失败仍继续、告警未处理、指示灯状态异常等问题。
+3. 参数值、单位、端口、设备型号、软件界面文字如看不清，应标注“需人工确认”。
+4. 不要编造画面中不可见的参数或结果。
+
+输出要求：
+1. 按条列出：时间点、界面/仪表证据、问题描述、影响、修改建议。
+2. 没有明确问题时说明“未发现明显调测界面与参数问题”。""",
+        "sort_order": 40,
+    },
+    {
+        "code": "video-clarity-completeness",
+        "name": "视频清晰度与完整性检查",
+        "description": "检查视频是否清晰覆盖关键安装调测动作，是否存在遮挡、失焦、跳剪或关键步骤不可见。",
+        "prompt": """你是一名安装调测视频质量审查专家。请检查视频帧是否足以支撑用户理解完整安装调测过程。
+重点关注：
+1. 关键动作是否被手、工具、设备外壳或画面边缘遮挡。
+2. 是否存在画面模糊、曝光过暗/过亮、文字过小、镜头抖动、关键端子或界面看不清。
+3. 是否疑似缺少关键步骤、跳剪过大、只展示结果不展示过程。
+4. 由于视频按帧采样，若需要回看连续片段才能确认，请标注“需人工确认”。
+
+输出要求：
+1. 按条列出：时间点、画面问题、影响、拍摄或补录建议。
+2. 没有明确问题时说明“未发现明显视频清晰度与完整性问题”。""",
+        "sort_order": 50,
+    },
+)
+
 DEFAULT_IMAGE_CHECK_ITEMS = (
     {
         "code": "image-text-correspondence",
@@ -512,6 +596,9 @@ DEFAULT_CHECK_ITEMS = tuple(
 ) + tuple(
     {**item, "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE}
     for item in DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS
+) + tuple(
+    {**item, "task_type": VIDEO_TASK_TYPE}
+    for item in DEFAULT_VIDEO_CHECK_ITEMS
 ) + tuple(
     {**item, "task_type": IMAGE_TASK_TYPE}
     for item in DEFAULT_IMAGE_CHECK_ITEMS
