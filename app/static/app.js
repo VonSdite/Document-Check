@@ -262,24 +262,126 @@ document.addEventListener("change", (event) => {
     });
 });
 
-document.addEventListener("change", (event) => {
-  const select = event.target.closest("[data-report-item-type]");
-  if (!(select instanceof HTMLSelectElement)) {
-    return;
-  }
-  const item = select.closest("[data-report-item]");
-  const results = select.closest("[data-report-results]");
-  if (!(item instanceof HTMLElement) || !(results instanceof HTMLElement)) {
-    return;
-  }
-  const savedValue = select.dataset.savedValue || "issue";
-  const nextValue = select.value;
-  const url = results.dataset.reportClassificationUrl;
-  if (!url || nextValue === savedValue) {
-    return;
-  }
+function reportItemControls(item) {
+  return {
+    type: item.querySelector("[data-report-item-type]"),
+    acceptance: item.querySelector("[data-report-acceptance-status]"),
+    reason: item.querySelector("[data-report-rejection-reason]"),
+    note: item.querySelector("[data-report-rejection-note]"),
+  };
+}
 
-  select.disabled = true;
+function syncReportAcceptanceFields(item) {
+  const controls = reportItemControls(item);
+  if (!(controls.acceptance instanceof HTMLSelectElement)) {
+    return;
+  }
+  const rejected = controls.acceptance.value === "rejected";
+  [controls.reason, controls.note].forEach((control) => {
+    if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) {
+      control.disabled = controls.acceptance.disabled || !rejected;
+    }
+  });
+}
+
+function setReportItemControlsDisabled(item, disabled) {
+  Object.values(reportItemControls(item)).forEach((control) => {
+    if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) {
+      control.disabled = disabled;
+    }
+  });
+}
+
+function revertReportItemControls(item) {
+  const controls = reportItemControls(item);
+  if (controls.type instanceof HTMLSelectElement) {
+    controls.type.value = controls.type.dataset.savedValue || "issue";
+    item.dataset.itemType = controls.type.value;
+  }
+  if (controls.acceptance instanceof HTMLSelectElement) {
+    controls.acceptance.value = controls.acceptance.dataset.savedValue || "pending";
+    item.dataset.acceptanceStatus = controls.acceptance.value;
+  }
+  if (controls.reason instanceof HTMLSelectElement) {
+    controls.reason.value = controls.reason.dataset.savedValue || "";
+  }
+  if (controls.note instanceof HTMLInputElement) {
+    controls.note.value = controls.note.dataset.savedValue || "";
+  }
+  syncReportAcceptanceFields(item);
+}
+
+function applyReportItemSave(item, data) {
+  const controls = reportItemControls(item);
+  const savedType = data.item_type || controls.type?.value || "issue";
+  const savedAcceptance = data.acceptance_status || controls.acceptance?.value || "pending";
+  const savedReason = data.rejection_reason || "";
+  const savedNote = data.rejection_note || "";
+  if (controls.type instanceof HTMLSelectElement) {
+    controls.type.value = savedType;
+    controls.type.dataset.savedValue = savedType;
+  }
+  if (controls.acceptance instanceof HTMLSelectElement) {
+    controls.acceptance.value = savedAcceptance;
+    controls.acceptance.dataset.savedValue = savedAcceptance;
+  }
+  if (controls.reason instanceof HTMLSelectElement) {
+    controls.reason.value = savedReason;
+    controls.reason.dataset.savedValue = savedReason;
+  }
+  if (controls.note instanceof HTMLInputElement) {
+    controls.note.value = savedNote;
+    controls.note.dataset.savedValue = savedNote;
+  }
+  item.dataset.itemType = savedType;
+  item.dataset.acceptanceStatus = savedAcceptance;
+  syncReportAcceptanceFields(item);
+}
+
+function reportItemPayload(item) {
+  const controls = reportItemControls(item);
+  return {
+    result_code: item.dataset.resultCode,
+    item_id: item.dataset.itemId,
+    item_type: controls.type instanceof HTMLSelectElement ? controls.type.value : "issue",
+    acceptance_status: controls.acceptance instanceof HTMLSelectElement ? controls.acceptance.value : "pending",
+    rejection_reason: controls.reason instanceof HTMLSelectElement ? controls.reason.value : "",
+    rejection_note: controls.note instanceof HTMLInputElement ? controls.note.value.trim() : "",
+  };
+}
+
+function validateReportAcceptance(item) {
+  const controls = reportItemControls(item);
+  const payload = reportItemPayload(item);
+  syncReportAcceptanceFields(item);
+  if (payload.acceptance_status !== "rejected") {
+    return true;
+  }
+  if (!payload.rejection_reason && !payload.rejection_note) {
+    showToast("不接纳时必须选择或填写原因。", "error");
+    controls.reason?.focus();
+    return false;
+  }
+  if (payload.rejection_reason === "other" && !payload.rejection_note) {
+    showToast("选择其他原因时必须填写具体原因。", "error");
+    controls.note?.focus();
+    return false;
+  }
+  return true;
+}
+
+function saveReportItemReview(item) {
+  const results = item.closest("[data-report-results]");
+  if (!(results instanceof HTMLElement)) {
+    return;
+  }
+  const url = results.dataset.reportClassificationUrl;
+  if (!url || !validateReportAcceptance(item)) {
+    return;
+  }
+  const payload = reportItemPayload(item);
+
+  setReportItemControlsDisabled(item, true);
   item.classList.add("is-saving");
   fetch(url, {
     method: "POST",
@@ -289,11 +391,7 @@ document.addEventListener("change", (event) => {
       "Content-Type": "application/json",
       "X-Requested-With": "fetch",
     },
-    body: JSON.stringify({
-      result_code: item.dataset.resultCode,
-      item_id: item.dataset.itemId,
-      item_type: nextValue,
-    }),
+    body: JSON.stringify(payload),
   })
     .then((response) => {
       if (!response.ok) {
@@ -305,23 +403,34 @@ document.addEventListener("change", (event) => {
       if (!data.ok) {
         throw new Error(data.error || "save failed");
       }
-      const savedType = data.item_type || nextValue;
-      select.value = savedType;
-      select.dataset.savedValue = savedType;
-      item.dataset.itemType = savedType;
+      applyReportItemSave(item, data);
       updateReportCounts(data.totals || {});
       updateResultCounts(item, data.result_counts || {});
-      showToast("报告条目状态已保存。", "success");
+      showToast("报告条目复核结果已保存。", "success");
     })
     .catch(() => {
-      select.value = savedValue;
-      item.dataset.itemType = savedValue;
-      showToast("报告条目状态保存失败，请稍后重试。", "error");
+      revertReportItemControls(item);
+      showToast("报告条目复核结果保存失败，请稍后重试。", "error");
     })
     .finally(() => {
-      select.disabled = false;
+      setReportItemControlsDisabled(item, false);
+      syncReportAcceptanceFields(item);
       item.classList.remove("is-saving");
     });
+}
+
+document.addEventListener("change", (event) => {
+  const control = event.target.closest(
+    "[data-report-item-type], [data-report-acceptance-status], [data-report-rejection-reason], [data-report-rejection-note]",
+  );
+  if (!(control instanceof HTMLSelectElement) && !(control instanceof HTMLInputElement)) {
+    return;
+  }
+  const item = control.closest("[data-report-item]");
+  if (!(item instanceof HTMLElement)) {
+    return;
+  }
+  saveReportItemReview(item);
 });
 
 function updateReportCounts(totals) {

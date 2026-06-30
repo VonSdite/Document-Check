@@ -98,6 +98,11 @@
         <span><strong>{{ report_totals.issue }}</strong>问题</span>
         <span><strong>{{ report_totals.suggestion }}</strong>建议</span>
         <span><strong>{{ report_totals.non_issue }}</strong>非问题</span>
+        <span><strong>{{ report_totals.accepted_issue }}</strong>接纳问题</span>
+        <span><strong>{{ report_totals.rejected_issue }}</strong>不接纳问题</span>
+        <span><strong>{{ report_totals.pending_issue_acceptance }}</strong>待确认问题</span>
+        <span><strong>{{ report_totals.issue_detection_rate }}</strong>问题检出率</span>
+        <span><strong>{{ report_totals.issue_acceptance_rate }}</strong>问题接纳率</span>
         <span><strong>{{ report_totals.total }}</strong>合计</span>
       </div>
     </section>
@@ -112,7 +117,9 @@
               共 {{ result.report_counts.total }} 条：
               问题 {{ result.report_counts.issue }}，
               建议 {{ result.report_counts.suggestion }}，
-              非问题 {{ result.report_counts.non_issue }}
+              非问题 {{ result.report_counts.non_issue }}；
+              问题检出率 {{ result.report_counts.issue_detection_rate }}，
+              问题接纳率 {{ result.report_counts.issue_acceptance_rate }}
             </p>
           </div>
         </div>
@@ -126,6 +133,8 @@
               <tr>
                 <th class="report-index-cell">条目</th>
                 <th class="report-status-cell">状态</th>
+                <th class="report-acceptance-cell">是否接纳</th>
+                <th class="report-rejection-cell">不接纳原因</th>
                 {% for field, label in REPORT_ITEM_FIELDS %}
                 <th>{{ label }}</th>
                 {% endfor %}
@@ -136,6 +145,14 @@
               <tr class="report-item" data-item-type="{{ item.type }}">
                 <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
                 <td class="report-status-cell"><span class="report-item-type-badge">{{ item.type_label }}</span></td>
+                <td class="report-acceptance-cell">{{ item.acceptance_label }}</td>
+                <td class="report-rejection-cell">
+                  {% if item.acceptance_status == "rejected" %}
+                  {{ item.rejection_reason_label or "-" }}{% if item.rejection_note %}：{{ item.rejection_note }}{% endif %}
+                  {% else %}
+                  -
+                  {% endif %}
+                </td>
                 {% for field, label in REPORT_ITEM_FIELDS %}
                 {% set field_value = item[field] %}
                 <td class="report-field report-field-{{ field }}">

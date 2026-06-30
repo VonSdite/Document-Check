@@ -2023,7 +2023,7 @@ td {
 }
 
 .report-table {
-  min-width: 1220px;
+  min-width: 1500px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -2057,6 +2057,14 @@ td {
   width: 132px;
 }
 
+.report-acceptance-cell {
+  width: 124px;
+}
+
+.report-rejection-cell {
+  width: 190px;
+}
+
 .report-item-title {
   display: inline-block;
   color: var(--muted);
@@ -2065,7 +2073,10 @@ td {
   white-space: nowrap;
 }
 
-.report-status-cell select {
+.report-status-cell select,
+.report-acceptance-cell select,
+.report-rejection-cell select,
+.report-rejection-cell input {
   width: 100%;
   min-height: 36px;
   padding: 7px 9px;
@@ -2075,6 +2086,20 @@ td {
   color: var(--text);
   font: inherit;
   font-weight: 700;
+}
+
+.report-rejection-cell input {
+  margin-top: 6px;
+}
+
+.report-rejection-cell :disabled {
+  color: #94a3b8;
+  background: var(--panel-soft);
+}
+
+.rejection-controls {
+  display: grid;
+  gap: 6px;
 }
 
 .report-field {

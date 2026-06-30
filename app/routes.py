@@ -105,6 +105,18 @@ REPORT_ITEM_TYPES = {
     "non_issue": "非问题",
 }
 REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
+REPORT_ACCEPTANCE_STATUSES = {
+    "pending": "未确认",
+    "accepted": "接纳",
+    "rejected": "不接纳",
+}
+REPORT_REJECTION_REASONS = {
+    "model_hallucination": "模型幻觉",
+    "false_positive": "模型误报",
+    "evidence_insufficient": "证据不足",
+    "not_applicable": "不适用",
+    "other": "其他",
+}
 REPORT_ITEM_FIELDS = (
     ("category", "问题类型"),
     ("location", "位置"),
@@ -203,6 +215,8 @@ LANGUAGE_HEADING_RE = re.compile(
 def register_routes(app):
     app.add_template_global(STATUS_LABELS, "STATUS_LABELS")
     app.add_template_global(REPORT_ITEM_FIELDS, "REPORT_ITEM_FIELDS")
+    app.add_template_global(REPORT_ACCEPTANCE_STATUSES, "REPORT_ACCEPTANCE_STATUSES")
+    app.add_template_global(REPORT_REJECTION_REASONS, "REPORT_REJECTION_REASONS")
     app.add_template_global(lambda: app.config["ADMIN_URL"], "admin_url")
     app.add_template_global(subject_label, "subject_label")
     app.add_template_global(_owner_display, "owner_display")
@@ -1997,6 +2011,13 @@ def _admin_report_item_totals(task_type: str, mode_clause: str, mode_params: tup
 
 def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dict:
     totals = {key: 0 for key in REPORT_ITEM_TYPE_ORDER}
+    totals.update(
+        {
+            "accepted_issue": 0,
+            "rejected_issue": 0,
+            "pending_issue_acceptance": 0,
+        }
+    )
     rows = get_db().execute(
         f"""
         SELECT result_json
@@ -2009,10 +2030,9 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
     ).fetchall()
     for row in rows:
         item_totals = _report_item_totals(_prepare_task_results(_parse_result_json(row["result_json"])))
-        for key in REPORT_ITEM_TYPE_ORDER:
+        for key in tuple(REPORT_ITEM_TYPE_ORDER) + ("accepted_issue", "rejected_issue", "pending_issue_acceptance"):
             totals[key] += item_totals[key]
-    totals["total"] = sum(totals.values())
-    return totals
+    return _finalize_report_counts(totals)
 
 
 def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
@@ -3037,10 +3057,15 @@ def _prepare_task_results(results: list[dict]) -> list[dict]:
         classifications = item.get("item_classifications")
         if not isinstance(classifications, dict):
             classifications = {}
+        acceptances = item.get("item_acceptances")
+        if not isinstance(acceptances, dict):
+            acceptances = {}
         for report_item in report_items:
             saved_type = classifications.get(report_item["id"])
             report_item["type"] = _normalize_report_item_type(saved_type) or report_item["type"]
             report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
+            acceptance = _normalize_report_acceptance(acceptances.get(report_item["id"]))
+            report_item.update(acceptance)
         item["result_summary"] = _result_report_summary(item, structured_report)
         item["report_items"] = report_items
         item["report_counts"] = _count_report_items(report_items)
@@ -3378,23 +3403,90 @@ def _normalize_report_item_type(value) -> str | None:
     return value if value in REPORT_ITEM_TYPES else None
 
 
+def _normalize_report_acceptance_status(value) -> str | None:
+    value = str(value or "").strip()
+    return value if value in REPORT_ACCEPTANCE_STATUSES else None
+
+
+def _normalize_report_rejection_reason(value) -> str:
+    value = str(value or "").strip()
+    return value if value in REPORT_REJECTION_REASONS else ""
+
+
+def _normalize_report_acceptance(value) -> dict:
+    if not isinstance(value, dict):
+        status = _normalize_report_acceptance_status(value) or "pending"
+        return {
+            "acceptance_status": status,
+            "acceptance_label": REPORT_ACCEPTANCE_STATUSES[status],
+            "rejection_reason": "",
+            "rejection_reason_label": "",
+            "rejection_note": "",
+        }
+
+    status = _normalize_report_acceptance_status(value.get("status")) or "pending"
+    reason = _normalize_report_rejection_reason(value.get("rejection_reason")) if status == "rejected" else ""
+    note = str(value.get("rejection_note") or "").strip() if status == "rejected" else ""
+    return {
+        "acceptance_status": status,
+        "acceptance_label": REPORT_ACCEPTANCE_STATUSES[status],
+        "rejection_reason": reason,
+        "rejection_reason_label": REPORT_REJECTION_REASONS.get(reason, ""),
+        "rejection_note": note,
+    }
+
+
+def _report_rate_label(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "-"
+    return f"{numerator / denominator * 100:.1f}%"
+
+
+def _finalize_report_counts(counts: dict) -> dict:
+    counts["total"] = sum(int(counts.get(key) or 0) for key in REPORT_ITEM_TYPE_ORDER)
+    confirmed_issues = int(counts.get("accepted_issue") or 0) + int(counts.get("rejected_issue") or 0)
+    counts["issue_detection_rate"] = _report_rate_label(int(counts.get("issue") or 0), counts["total"])
+    counts["issue_acceptance_rate"] = _report_rate_label(int(counts.get("accepted_issue") or 0), confirmed_issues)
+    return counts
+
+
 def _count_report_items(items: list[dict]) -> dict:
     counts = {key: 0 for key in REPORT_ITEM_TYPE_ORDER}
+    counts.update(
+        {
+            "accepted_issue": 0,
+            "rejected_issue": 0,
+            "pending_issue_acceptance": 0,
+        }
+    )
     for item in items:
         item_type = _normalize_report_item_type(item.get("type")) or "issue"
         counts[item_type] += 1
-    counts["total"] = sum(counts.values())
-    return counts
+        if item_type == "issue":
+            acceptance_status = _normalize_report_acceptance_status(item.get("acceptance_status")) or "pending"
+            if acceptance_status == "accepted":
+                counts["accepted_issue"] += 1
+            elif acceptance_status == "rejected":
+                counts["rejected_issue"] += 1
+            else:
+                counts["pending_issue_acceptance"] += 1
+    return _finalize_report_counts(counts)
 
 
 def _report_item_totals(results: list[dict]) -> dict:
     totals = {key: 0 for key in REPORT_ITEM_TYPE_ORDER}
+    totals.update(
+        {
+            "accepted_issue": 0,
+            "rejected_issue": 0,
+            "pending_issue_acceptance": 0,
+        }
+    )
     for result in results:
         counts = result.get("report_counts") or {}
-        for key in REPORT_ITEM_TYPE_ORDER:
+        for key in tuple(REPORT_ITEM_TYPE_ORDER) + ("accepted_issue", "rejected_issue", "pending_issue_acceptance"):
             totals[key] += int(counts.get(key) or 0)
-    totals["total"] = sum(totals.values())
-    return totals
+    return _finalize_report_counts(totals)
 
 
 def _update_report_item_type(task):
@@ -3408,6 +3500,21 @@ def _update_report_item_type(task):
     item_type = _normalize_report_item_type(data.get("item_type"))
     if not result_code or not item_id or not item_type:
         return {"ok": False, "error": "报告条目状态数据无效。"}, 400
+    acceptance_supplied = "acceptance_status" in data
+    acceptance_status = None
+    rejection_reason = ""
+    rejection_note = ""
+    if acceptance_supplied:
+        acceptance_status = _normalize_report_acceptance_status(data.get("acceptance_status"))
+        rejection_reason = _normalize_report_rejection_reason(data.get("rejection_reason"))
+        rejection_note = str(data.get("rejection_note") or "").strip()
+        if acceptance_status is None:
+            return {"ok": False, "error": "接纳状态数据无效。"}, 400
+        if acceptance_status == "rejected":
+            if not rejection_reason and not rejection_note:
+                return {"ok": False, "error": "不接纳时必须选择或填写原因。"}, 400
+            if rejection_reason == "other" and not rejection_note:
+                return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
 
     results = _raw_task_results(task)
     target = None
@@ -3426,6 +3533,19 @@ def _update_report_item_type(task):
         classifications = {}
     classifications[item_id] = item_type
     target["item_classifications"] = classifications
+    if acceptance_supplied:
+        acceptances = target.get("item_acceptances")
+        if not isinstance(acceptances, dict):
+            acceptances = {}
+        if acceptance_status == "pending":
+            acceptances.pop(item_id, None)
+        else:
+            record = {"status": acceptance_status}
+            if acceptance_status == "rejected":
+                record["rejection_reason"] = rejection_reason
+                record["rejection_note"] = rejection_note
+            acceptances[item_id] = record
+        target["item_acceptances"] = acceptances
 
     db = get_db()
     db.execute(
@@ -3436,11 +3556,22 @@ def _update_report_item_type(task):
 
     prepared = _prepare_task_results(results)
     updated_result = next((item for item in prepared if str(item.get("code") or "") == result_code), None)
+    updated_report_item = None
+    if updated_result:
+        updated_report_item = next(
+            (item for item in updated_result.get("report_items", []) if item.get("id") == item_id),
+            None,
+        )
     return {
         "ok": True,
         "item_id": item_id,
         "item_type": item_type,
         "item_type_label": REPORT_ITEM_TYPES[item_type],
+        "acceptance_status": (updated_report_item or {}).get("acceptance_status", "pending"),
+        "acceptance_label": (updated_report_item or {}).get("acceptance_label", REPORT_ACCEPTANCE_STATUSES["pending"]),
+        "rejection_reason": (updated_report_item or {}).get("rejection_reason", ""),
+        "rejection_reason_label": (updated_report_item or {}).get("rejection_reason_label", ""),
+        "rejection_note": (updated_report_item or {}).get("rejection_note", ""),
         "result_counts": (updated_result or {}).get("report_counts", {}),
         "totals": _report_item_totals(prepared),
     }

@@ -1228,6 +1228,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "0")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="pending_issue_acceptance"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "50.0%")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_acceptance_rate"]')).get_text(strip=True), "-")
         self.assertIn("AI 检查条目统计", exported.get_data(as_text=True))
         self.assertIn("条目 1", exported.get_data(as_text=True))
 
@@ -1286,11 +1289,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
         self.assertIn("状态", headers)
+        self.assertIn("是否接纳", headers)
+        self.assertIn("不接纳原因", headers)
         self.assertIn("问题描述", headers)
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 2)
         self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
         self.assertEqual(_required_tag(rows[1].select_one("[data-report-item-type]")).get("data-saved-value"), "suggestion")
+        acceptance = _required_tag(rows[0].select_one("[data-report-acceptance-status]"))
+        reason = _required_tag(rows[0].select_one("[data-report-rejection-reason]"))
+        note = _required_tag(rows[0].select_one("[data-report-rejection-note]"))
+        self.assertEqual(acceptance.get("data-saved-value"), "pending")
+        self.assertTrue(reason.has_attr("disabled"))
+        self.assertTrue(note.has_attr("disabled"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
         self.assertIn("确认后补充适用范围", rows[1].get_text(" ", strip=True))
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
@@ -1472,6 +1483,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "result_code": "compliance",
                 "item_id": item_id,
                 "item_type": "non_issue",
+                "acceptance_status": "rejected",
+                "rejection_reason": "false_positive",
+                "rejection_note": "原文上下文可解释",
             },
         )
 
@@ -1480,10 +1494,91 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["totals"]["issue"], 0)
         self.assertEqual(payload["totals"]["non_issue"], 1)
+        self.assertEqual(payload["acceptance_status"], "rejected")
+        self.assertEqual(payload["rejection_reason"], "false_positive")
+        self.assertEqual(payload["rejection_note"], "原文上下文可解释")
+        self.assertEqual(payload["totals"]["issue_detection_rate"], "0.0%")
+        self.assertEqual(payload["totals"]["issue_acceptance_rate"], "-")
         with self.app.app_context():
             task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
             stored = json.loads(task["result_json"])
         self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
+        self.assertEqual(
+            stored[0]["item_acceptances"][item_id],
+            {
+                "status": "rejected",
+                "rejection_reason": "false_positive",
+                "rejection_note": "原文上下文可解释",
+            },
+        )
+
+        accepted_response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "issue",
+                "acceptance_status": "accepted",
+            },
+        )
+
+        self.assertEqual(accepted_response.status_code, 200)
+        accepted_payload = accepted_response.get_json()
+        self.assertEqual(accepted_payload["totals"]["issue"], 1)
+        self.assertEqual(accepted_payload["totals"]["accepted_issue"], 1)
+        self.assertEqual(accepted_payload["totals"]["pending_issue_acceptance"], 0)
+        self.assertEqual(accepted_payload["totals"]["issue_detection_rate"], "100.0%")
+        self.assertEqual(accepted_payload["totals"]["issue_acceptance_rate"], "100.0%")
+
+    def test_report_item_reject_requires_reason(self):
+        with self.app.app_context():
+            now = "2026-05-24 12:30:00"
+            result_json = [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": (
+                        "1. 问题类型：参数错误\n"
+                        "位置：第1章\n"
+                        "问题描述：参数错误\n"
+                        "修改建议：修正参数。"
+                    ),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        item_id = _required_tag(soup.select_one("[data-report-item]"))["data-item-id"]
+
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "issue",
+                "acceptance_status": "rejected",
+                "rejection_reason": "",
+                "rejection_note": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "不接纳时必须选择或填写原因。")
 
     def test_create_task_uses_trusted_header_identity(self):
         model_id = self._configure_provider("trusted_header:100086")

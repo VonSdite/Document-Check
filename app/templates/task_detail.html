@@ -79,6 +79,11 @@
     <span><strong data-report-count="issue">{{ report_totals.issue }}</strong>问题</span>
     <span><strong data-report-count="suggestion">{{ report_totals.suggestion }}</strong>建议</span>
     <span><strong data-report-count="non_issue">{{ report_totals.non_issue }}</strong>非问题</span>
+    <span><strong data-report-count="accepted_issue">{{ report_totals.accepted_issue }}</strong>接纳问题</span>
+    <span><strong data-report-count="rejected_issue">{{ report_totals.rejected_issue }}</strong>不接纳问题</span>
+    <span><strong data-report-count="pending_issue_acceptance">{{ report_totals.pending_issue_acceptance }}</strong>待确认问题</span>
+    <span><strong data-report-count="issue_detection_rate">{{ report_totals.issue_detection_rate }}</strong>问题检出率</span>
+    <span><strong data-report-count="issue_acceptance_rate">{{ report_totals.issue_acceptance_rate }}</strong>问题接纳率</span>
     <span><strong data-report-count="total">{{ report_totals.total }}</strong>合计</span>
   </div>
 </section>
@@ -93,7 +98,9 @@
           共 <span data-report-result-count="total">{{ result.report_counts.total }}</span> 条：
           问题 <span data-report-result-count="issue">{{ result.report_counts.issue }}</span>，
           建议 <span data-report-result-count="suggestion">{{ result.report_counts.suggestion }}</span>，
-          非问题 <span data-report-result-count="non_issue">{{ result.report_counts.non_issue }}</span>
+          非问题 <span data-report-result-count="non_issue">{{ result.report_counts.non_issue }}</span>；
+          问题检出率 <span data-report-result-count="issue_detection_rate">{{ result.report_counts.issue_detection_rate }}</span>，
+          问题接纳率 <span data-report-result-count="issue_acceptance_rate">{{ result.report_counts.issue_acceptance_rate }}</span>
         </p>
       </div>
     </div>
@@ -107,6 +114,8 @@
           <tr>
             <th class="report-index-cell">条目</th>
             <th class="report-status-cell">状态</th>
+            <th class="report-acceptance-cell">是否接纳</th>
+            <th class="report-rejection-cell">不接纳原因</th>
             {% for field, label in REPORT_ITEM_FIELDS %}
             <th>{{ label }}</th>
             {% endfor %}
@@ -114,14 +123,33 @@
         </thead>
         <tbody>
           {% for item in result.report_items %}
-          <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}">
+          {% set controls_disabled = task.status in ["queued", "running"] %}
+          <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
             <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
             <td class="report-status-cell">
-              <select data-report-item-type data-saved-value="{{ item.type }}" aria-label="条目 {{ item.index }} 状态" {{ "disabled" if task.status in ["queued", "running"] else "" }}>
+              <select data-report-item-type data-saved-value="{{ item.type }}" aria-label="条目 {{ item.index }} 状态" {{ "disabled" if controls_disabled else "" }}>
                 {% for type, label in report_item_types.items() %}
                 <option value="{{ type }}" {{ "selected" if item.type == type else "" }}>{{ label }}</option>
                 {% endfor %}
               </select>
+            </td>
+            <td class="report-acceptance-cell">
+              <select data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="条目 {{ item.index }} 是否接纳" {{ "disabled" if controls_disabled else "" }}>
+                {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
+                <option value="{{ status }}" {{ "selected" if item.acceptance_status == status else "" }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="report-rejection-cell">
+              <div class="rejection-controls">
+                <select data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" aria-label="条目 {{ item.index }} 不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                  <option value="">选择原因</option>
+                  {% for reason, label in REPORT_REJECTION_REASONS.items() %}
+                  <option value="{{ reason }}" {{ "selected" if item.rejection_reason == reason else "" }}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+                <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="人工填写原因" aria-label="条目 {{ item.index }} 人工填写不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+              </div>
             </td>
             {% for field, label in REPORT_ITEM_FIELDS %}
             {% set field_value = item[field] %}
