@@ -134,6 +134,62 @@ document.addEventListener("submit", (event) => {
   }
 });
 
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || form.dataset.preventDoubleSubmit !== "true") {
+    return;
+  }
+  if (event.defaultPrevented) {
+    return;
+  }
+  if (form.dataset.submitting === "true") {
+    event.preventDefault();
+    return;
+  }
+
+  form.dataset.submitting = "true";
+  form.setAttribute("aria-busy", "true");
+
+  const progress = form.querySelector("[data-submit-progress]");
+  if (progress instanceof HTMLElement) {
+    progress.hidden = false;
+    progress.textContent = form.dataset.submittingMessage || progress.textContent;
+  }
+
+  form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach((button) => {
+    if (button instanceof HTMLButtonElement) {
+      button.dataset.originalText = button.textContent || "";
+      button.textContent = form.dataset.submittingLabel || "提交中...";
+    } else if (button instanceof HTMLInputElement) {
+      button.dataset.originalValue = button.value || "";
+      button.value = form.dataset.submittingLabel || "提交中...";
+    }
+    button.disabled = true;
+  });
+});
+
+function resetDoubleSubmitForm(form) {
+  if (!(form instanceof HTMLFormElement) || form.dataset.preventDoubleSubmit !== "true") {
+    return;
+  }
+  delete form.dataset.submitting;
+  form.removeAttribute("aria-busy");
+  const progress = form.querySelector("[data-submit-progress]");
+  if (progress instanceof HTMLElement) {
+    progress.hidden = true;
+  }
+  form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach((button) => {
+    button.disabled = false;
+    if (button instanceof HTMLButtonElement && "originalText" in button.dataset) {
+      button.textContent = button.dataset.originalText || "";
+      delete button.dataset.originalText;
+    } else if (button instanceof HTMLInputElement && "originalValue" in button.dataset) {
+      button.value = button.dataset.originalValue || "";
+      delete button.dataset.originalValue;
+    }
+  });
+}
+
 document.querySelectorAll(".flash").forEach((toast) => {
   window.setTimeout(() => hideToast(toast), 4200);
 });
@@ -1371,6 +1427,9 @@ document.querySelectorAll("form[data-default-unchecked-checks='true']").forEach(
 window.addEventListener("pageshow", () => {
   document.querySelectorAll("form[data-default-unchecked-checks='true']").forEach((form) => {
     resetDefaultUncheckedChecks(form);
+  });
+  document.querySelectorAll("form[data-prevent-double-submit='true']").forEach((form) => {
+    resetDoubleSubmitForm(form);
   });
 });
 

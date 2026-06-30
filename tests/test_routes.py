@@ -937,6 +937,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = _required_tag(soup.find("form", {"data-prevent-double-submit": "true"}))
+        self.assertEqual(form.get("data-submitting-label"), "提交中...")
+        self.assertIn("请勿重复提交", form.get("data-submitting-message", ""))
+        progress = _required_tag(form.select_one("[data-submit-progress]"))
+        self.assertTrue(progress.has_attr("hidden"))
+        self.assertIn("请勿重复提交", progress.get_text(strip=True))
         upload = _required_tag(soup.find("input", {"name": "document"}))
         self.assertTrue(upload.has_attr("multiple"))
         self.assertIsNone(upload.get("data-file-limit"))

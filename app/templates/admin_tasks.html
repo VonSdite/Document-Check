@@ -4,7 +4,10 @@
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
-<form method="post" enctype="multipart/form-data" class="panel create-panel">
+<form method="post" enctype="multipart/form-data" class="panel create-panel"
+  data-prevent-double-submit="true"
+  data-submitting-label="提交中..."
+  data-submitting-message="正在上传并读取文档，请勿重复提交。">
   <div class="panel-head compact-head">
     <h1>创建单文档检查</h1>
   </div>
@@ -42,6 +45,7 @@
     </label>
     <div class="submit-slot">
       <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
+      <span class="submit-progress" data-submit-progress hidden>正在上传并读取文档，请勿重复提交。</span>
     </div>
   </div>
 

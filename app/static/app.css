@@ -400,6 +400,14 @@ td {
   background: var(--primary-strong);
 }
 
+.primary-button:disabled,
+.secondary-button:disabled,
+.small-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+  pointer-events: none;
+}
+
 .secondary-button,
 .small-button {
   background: #fff;
@@ -1349,12 +1357,22 @@ td {
 .submit-slot {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .submit-slot .primary-button {
   min-height: 43px;
   padding-left: 18px;
   padding-right: 18px;
+}
+
+.submit-progress {
+  max-width: 220px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
 }
 
 .disabled-submit-tip {
