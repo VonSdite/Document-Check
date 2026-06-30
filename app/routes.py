@@ -3137,6 +3137,11 @@ def _normalize_structured_report_payload(value) -> dict | None:
         if isinstance(candidate, list):
             items = candidate
             break
+        if isinstance(candidate, str):
+            parsed_items = _parse_structured_report_json(candidate)
+            if isinstance(parsed_items, list):
+                items = parsed_items
+                break
     summary = _first_report_field(payload, REPORT_JSON_SUMMARY_KEYS)
     if items is None:
         if any(_first_report_field(payload, aliases) for aliases in REPORT_FIELD_ALIASES.values()):
@@ -3148,16 +3153,67 @@ def _normalize_structured_report_payload(value) -> dict | None:
     return {"summary": summary, "items": items}
 
 
-def _parse_structured_report_json(text: str):
+def _parse_structured_report_json(text: str, depth: int = 0):
     text = str(text or "").strip()
     if not text:
         return None
     for candidate in _structured_json_candidates(text):
+        parsed = _load_structured_json_candidate(candidate, depth)
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return None
+
+
+def _load_structured_json_candidate(candidate: str, depth: int):
+    if depth > 3:
+        return None
+    for variant in _json_candidate_variants(candidate):
         try:
-            return json.loads(candidate)
+            parsed = json.loads(variant)
         except (TypeError, json.JSONDecodeError):
             continue
+        if isinstance(parsed, str):
+            nested = _parse_structured_report_json(parsed, depth + 1)
+            if nested is not None:
+                return nested
+            continue
+        return parsed
     return None
+
+
+def _json_candidate_variants(candidate: str) -> list[str]:
+    raw = str(candidate or "").strip()
+    if not raw:
+        return []
+    variants = [raw]
+    repaired = _escape_json_string_control_chars(raw)
+    if repaired != raw:
+        variants.append(repaired)
+    return variants
+
+
+def _escape_json_string_control_chars(text: str) -> str:
+    result = []
+    in_string = False
+    escaped = False
+    for char in str(text or ""):
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            result.append(char)
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            continue
+        if in_string and char in {"\n", "\r", "\t"}:
+            result.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[char])
+            continue
+        result.append(char)
+    return "".join(result)
 
 
 def _structured_json_candidates(text: str) -> list[str]:
@@ -3211,6 +3267,9 @@ def _structured_report_items(result_code: str, structured_report: dict) -> list[
 def _normalize_structured_report_item(raw_item) -> dict:
     if isinstance(raw_item, str):
         text = raw_item.strip()
+        parsed = _parse_structured_report_json(text)
+        if isinstance(parsed, dict):
+            return _normalize_structured_report_item(parsed)
         return {
             "category": "",
             "location": "",

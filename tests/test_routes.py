@@ -1307,6 +1307,101 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
 
+    def test_task_detail_parses_double_encoded_structured_json_report(self):
+        with self.app.app_context():
+            now = "2026-05-23 13:00:00"
+            structured_report = {
+                "summary": "发现错别字和标点问题。",
+                "items": [
+                    {
+                        "status": "issue",
+                        "category": "标点误用",
+                        "location": "[第9页] 章节：1 安全注意事项",
+                        "excerpt": "或/和",
+                        "description": "“或/和”中斜杠前后存在多余空格。",
+                        "impact": "影响阅读体验和文档规范性。",
+                        "suggestion": "改为“或和”或按规范统一表达。",
+                    }
+                ],
+            }
+            result_json = [
+                {
+                    "code": "typo",
+                    "name": "错别字检查",
+                    "result": json.dumps(json.dumps(structured_report, ensure_ascii=False), ensure_ascii=False),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 1)
+        row_text = rows[0].get_text(" ", strip=True)
+        self.assertIn("标点误用", row_text)
+        self.assertIn("[第9页] 章节：1 安全注意事项", row_text)
+        self.assertIn("“或/和”中斜杠前后存在多余空格。", row_text)
+        self.assertNotIn('"items"', row_text)
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
+
+    def test_task_detail_parses_structured_json_with_raw_newline_in_string(self):
+        with self.app.app_context():
+            now = "2026-05-23 13:30:00"
+            raw_json = (
+                '{"summary":"发现 1 个问题","items":[{"status":"issue","category":"格式问题",'
+                '"location":"第1页","excerpt":"第一行\n第二行","description":"描述包含原文换行",'
+                '"impact":"影响阅读","suggestion":"删除多余换行"}]}'
+            )
+            result_json = [
+                {
+                    "code": "typo",
+                    "name": "错别字检查",
+                    "result": raw_json,
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        row = _required_tag(soup.select_one("tr[data-report-item]"))
+        row_text = row.get_text(" ", strip=True)
+        self.assertIn("格式问题", row_text)
+        self.assertIn("第一行", row_text)
+        self.assertIn("第二行", row_text)
+        self.assertNotIn('"items"', row_text)
+
     def test_task_detail_splits_bold_numbered_compliance_items(self):
         with self.app.app_context():
             now = "2026-05-24 09:00:00"
