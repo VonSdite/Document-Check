@@ -132,27 +132,18 @@
             <thead>
               <tr>
                 <th class="report-index-cell">条目</th>
-                <th class="report-status-cell">状态</th>
-                <th class="report-acceptance-cell">是否接纳</th>
-                <th class="report-rejection-cell">不接纳原因</th>
                 {% for field, label in REPORT_ITEM_FIELDS %}
                 <th>{{ label }}</th>
                 {% endfor %}
+                <th class="report-status-cell">状态</th>
+                <th class="report-acceptance-cell">是否接纳</th>
+                <th class="report-rejection-cell">不接纳原因</th>
               </tr>
             </thead>
             <tbody>
               {% for item in result.report_items %}
               <tr class="report-item" data-item-type="{{ item.type }}">
                 <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
-                <td class="report-status-cell"><span class="report-item-type-badge">{{ item.type_label }}</span></td>
-                <td class="report-acceptance-cell">{{ item.acceptance_label }}</td>
-                <td class="report-rejection-cell">
-                  {% if item.acceptance_status == "rejected" %}
-                  {{ item.rejection_reason_label or "-" }}{% if item.rejection_note %}：{{ item.rejection_note }}{% endif %}
-                  {% else %}
-                  -
-                  {% endif %}
-                </td>
                 {% for field, label in REPORT_ITEM_FIELDS %}
                 {% set field_value = item[field] %}
                 <td class="report-field report-field-{{ field }}">
@@ -163,6 +154,15 @@
                   {% endif %}
                 </td>
                 {% endfor %}
+                <td class="report-status-cell"><span class="report-item-type-badge">{{ item.type_label }}</span></td>
+                <td class="report-acceptance-cell">{{ item.acceptance_label }}</td>
+                <td class="report-rejection-cell">
+                  {% if item.acceptance_status == "rejected" %}
+                  {{ item.rejection_reason_label or "-" }}{% if item.rejection_note %}：{{ item.rejection_note }}{% endif %}
+                  {% else %}
+                  -
+                  {% endif %}
+                </td>
               </tr>
               {% endfor %}
             </tbody>

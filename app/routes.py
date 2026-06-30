@@ -3724,12 +3724,12 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
         "检查项编号",
         "检查项",
         "条目",
+        *[label for _, label in REPORT_ITEM_FIELDS],
+        "结果摘要",
         "状态",
         "是否接纳",
         "不接纳原因",
         "人工原因",
-        *[label for _, label in REPORT_ITEM_FIELDS],
-        "结果摘要",
     ]
     sheet.append(headers)
     context = _excel_task_context(task, document_groups)
@@ -3742,12 +3742,12 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
                     _excel_cell_text(result.get("code")),
                     _excel_cell_text(result.get("name")),
                     "",
+                    *["" for _ in REPORT_ITEM_FIELDS],
+                    _excel_cell_text(result.get("result_summary") or result.get("result")),
                     "未拆分",
                     "",
                     "",
                     "",
-                    *["" for _ in REPORT_ITEM_FIELDS],
-                    _excel_cell_text(result.get("result_summary") or result.get("result")),
                 ]
             )
             continue
@@ -3758,12 +3758,12 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
                     _excel_cell_text(result.get("code")),
                     _excel_cell_text(result.get("name")),
                     f"条目 {item.get('index')}",
+                    *[_excel_cell_text(item.get(field)) for field, _ in REPORT_ITEM_FIELDS],
+                    _excel_cell_text(result.get("result_summary")),
                     _excel_cell_text(item.get("type_label")),
                     _excel_cell_text(item.get("acceptance_label")),
                     _excel_cell_text(item.get("rejection_reason_label")) if item.get("acceptance_status") == "rejected" else "",
                     _excel_cell_text(item.get("rejection_note")) if item.get("acceptance_status") == "rejected" else "",
-                    *[_excel_cell_text(item.get(field)) for field, _ in REPORT_ITEM_FIELDS],
-                    _excel_cell_text(result.get("result_summary")),
                 ]
             )
     _style_excel_sheet(sheet)

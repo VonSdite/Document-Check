@@ -114,12 +114,12 @@
         <thead>
           <tr>
             <th class="report-index-cell">条目</th>
-            <th class="report-status-cell">状态</th>
-            <th class="report-acceptance-cell">是否接纳</th>
-            <th class="report-rejection-cell">不接纳原因</th>
             {% for field, label in REPORT_ITEM_FIELDS %}
             <th>{{ label }}</th>
             {% endfor %}
+            <th class="report-status-cell">状态</th>
+            <th class="report-acceptance-cell">是否接纳</th>
+            <th class="report-rejection-cell">不接纳原因</th>
           </tr>
         </thead>
         <tbody>
@@ -127,6 +127,16 @@
           {% set controls_disabled = task.status in ["queued", "running"] %}
           <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
             <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
+            {% for field, label in REPORT_ITEM_FIELDS %}
+            {% set field_value = item[field] %}
+            <td class="report-field report-field-{{ field }}">
+              {% if field_value %}
+              <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
+              {% else %}
+              <span class="report-empty-cell">-</span>
+              {% endif %}
+            </td>
+            {% endfor %}
             <td class="report-status-cell">
               <select data-report-item-type data-saved-value="{{ item.type }}" aria-label="条目 {{ item.index }} 状态" {{ "disabled" if controls_disabled else "" }}>
                 {% for type, label in report_item_types.items() %}
@@ -152,16 +162,6 @@
                 <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="人工填写原因" aria-label="条目 {{ item.index }} 人工填写不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
               </div>
             </td>
-            {% for field, label in REPORT_ITEM_FIELDS %}
-            {% set field_value = item[field] %}
-            <td class="report-field report-field-{{ field }}">
-              {% if field_value %}
-              <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
-              {% else %}
-              <span class="report-empty-cell">-</span>
-              {% endif %}
-            </td>
-            {% endfor %}
           </tr>
           {% endfor %}
         </tbody>

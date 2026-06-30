@@ -1321,10 +1321,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "检查项编号",
                     "检查项",
                     "条目",
-                    "状态",
-                    "是否接纳",
-                    "不接纳原因",
-                    "人工原因",
                     "问题类型",
                     "位置",
                     "原文/证据",
@@ -1332,6 +1328,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "影响",
                     "修改建议",
                     "结果摘要",
+                    "状态",
+                    "是否接纳",
+                    "不接纳原因",
+                    "人工原因",
                 ),
             )
             self.assertEqual(len(report_rows), 3)
@@ -1339,14 +1339,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(report_rows[1][2], "report.txt")
             self.assertEqual(report_rows[1][7], "全文一致性检查")
             self.assertEqual(report_rows[1][8], "条目 1")
-            self.assertEqual(report_rows[1][9], "问题")
-            self.assertEqual(report_rows[1][10], "不接纳")
-            self.assertEqual(report_rows[1][11], "模型误报")
-            self.assertEqual(report_rows[1][12], "上下文可解释")
-            self.assertEqual(report_rows[1][13], "参数不一致")
-            self.assertEqual(report_rows[1][19], "发现 1 个明确问题，1 个建议。")
-            self.assertEqual(report_rows[2][9], "建议")
-            self.assertEqual(report_rows[2][18], "补充适用范围。")
+            self.assertEqual(report_rows[1][9], "参数不一致")
+            self.assertEqual(report_rows[1][15], "发现 1 个明确问题，1 个建议。")
+            self.assertEqual(report_rows[1][16], "问题")
+            self.assertEqual(report_rows[1][17], "不接纳")
+            self.assertEqual(report_rows[1][18], "模型误报")
+            self.assertEqual(report_rows[1][19], "上下文可解释")
+            self.assertEqual(report_rows[2][14], "补充适用范围。")
+            self.assertEqual(report_rows[2][16], "建议")
             stats = dict(workbook["统计"].iter_rows(min_row=2, values_only=True))
             self.assertEqual(stats["问题"], 1)
             self.assertEqual(stats["建议"], 1)
@@ -1410,10 +1410,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
-        self.assertIn("状态", headers)
-        self.assertIn("是否接纳", headers)
-        self.assertIn("不接纳原因", headers)
-        self.assertIn("问题描述", headers)
+        self.assertEqual(
+            headers,
+            ["条目", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "状态", "是否接纳", "不接纳原因"],
+        )
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 2)
         self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
