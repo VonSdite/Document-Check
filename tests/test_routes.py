@@ -1322,7 +1322,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "问题描述",
                     "影响",
                     "修改建议",
-                    "状态",
+                    "条目判定",
                     "是否接纳",
                     "不接纳原因",
                     "人工原因",
@@ -1405,7 +1405,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
         self.assertEqual(
             headers,
-            ["条目", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "状态", "是否接纳", "不接纳原因"],
+            ["条目", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳", "不接纳原因"],
         )
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 2)

@@ -142,6 +142,7 @@ REPORT_TOTAL_EXPORT_ROWS = (
     ("问题接纳率", "issue_acceptance_rate"),
     ("合计", "total"),
 )
+REPORT_ITEM_TYPE_LABEL = "条目判定"
 REPORT_ITEM_START_RE = re.compile(
     r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
     r"(?:\d{1,3}[.、)]|\(\d{1,3}\)|（\d{1,3}）)\s*(?:[*_`~]{1,3}\s*)?\S)"
@@ -232,6 +233,7 @@ LANGUAGE_HEADING_RE = re.compile(
 def register_routes(app):
     app.add_template_global(STATUS_LABELS, "STATUS_LABELS")
     app.add_template_global(REPORT_ITEM_FIELDS, "REPORT_ITEM_FIELDS")
+    app.add_template_global(REPORT_ITEM_TYPE_LABEL, "REPORT_ITEM_TYPE_LABEL")
     app.add_template_global(REPORT_ACCEPTANCE_STATUSES, "REPORT_ACCEPTANCE_STATUSES")
     app.add_template_global(REPORT_REJECTION_REASONS, "REPORT_REJECTION_REASONS")
     app.add_template_global(lambda: app.config["ADMIN_URL"], "admin_url")
@@ -3578,7 +3580,7 @@ def _report_item_totals(results: list[dict]) -> dict:
 
 def _update_report_item_type(task):
     if task["status"] in {"queued", "running"}:
-        return {"ok": False, "error": "任务尚未完成，暂不能修改报告条目状态。"}, 409
+        return {"ok": False, "error": "任务尚未完成，暂不能修改报告条目判定。"}, 409
     data = request.get_json(silent=True) if request.is_json else None
     if not isinstance(data, dict):
         data = request.form
@@ -3586,7 +3588,7 @@ def _update_report_item_type(task):
     item_id = str(data.get("item_id") or "").strip()
     item_type = _normalize_report_item_type(data.get("item_type"))
     if not result_code or not item_id or not item_type:
-        return {"ok": False, "error": "报告条目状态数据无效。"}, 400
+        return {"ok": False, "error": "报告条目判定数据无效。"}, 400
     acceptance_supplied = "acceptance_status" in data
     acceptance_status = None
     rejection_reason = ""
@@ -3719,7 +3721,7 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
         "检查项",
         "条目",
         *[label for _, label in REPORT_ITEM_FIELDS],
-        "状态",
+        REPORT_ITEM_TYPE_LABEL,
         "是否接纳",
         "不接纳原因",
         "人工原因",

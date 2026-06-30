@@ -135,7 +135,7 @@
                 {% for field, label in REPORT_ITEM_FIELDS %}
                 <th>{{ label }}</th>
                 {% endfor %}
-                <th class="report-status-cell">状态</th>
+                <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
                 <th class="report-acceptance-cell">是否接纳</th>
                 <th class="report-rejection-cell">不接纳原因</th>
               </tr>
