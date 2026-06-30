@@ -1499,6 +1499,75 @@ class AdminSettingsRouteTest(unittest.TestCase):
         finally:
             workbook.close()
 
+    def test_video_task_report_exports_excel_with_compact_media_columns(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:20:00"
+            structured_report = {
+                "summary": "发现 1 条安装顺序问题。",
+                "items": [
+                    {
+                        "status": "issue",
+                        "category": "安装顺序",
+                        "location": "视频时间 00:01.000",
+                        "excerpt": "未确认接地线后直接上电",
+                        "description": "画面显示未确认接地线状态即执行上电步骤。",
+                        "impact": "存在安全风险",
+                        "suggestion": "补充接地线确认动作",
+                    }
+                ],
+            }
+            result_json = [
+                {
+                    "code": "video-installation-sequence",
+                    "name": "安装顺序检查",
+                    "result": json.dumps(structured_report, ensure_ascii=False),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'install.mp4', 'stored.mp4', 'mp4',
+                        2048, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (VIDEO_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+
+        self.assertEqual(response.status_code, 200)
+        workbook = load_workbook(io.BytesIO(response.data), read_only=True, data_only=True)
+        try:
+            rows = list(workbook["报告条目"].iter_rows(values_only=True))
+            self.assertEqual(
+                rows[0],
+                (
+                    "任务ID",
+                    "任务类型",
+                    "文件名称",
+                    "检查项",
+                    "条目",
+                    "AI检查结论",
+                    "条目判定",
+                    "是否接纳",
+                    "不接纳原因",
+                    "人工原因",
+                ),
+            )
+            self.assertEqual(len(rows[1]), 10)
+            self.assertIn("画面显示未确认接地线状态", rows[1][5])
+            self.assertIn("位置/画面：视频时间 00:01.000", rows[1][5])
+            self.assertIn("建议：补充接地线确认动作", rows[1][5])
+            self.assertEqual(rows[1][6], "问题")
+        finally:
+            workbook.close()
+
     def test_task_detail_renders_structured_json_report_table(self):
         with self.app.app_context():
             now = "2026-05-23 12:30:00"
@@ -1571,6 +1640,63 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("确认后补充适用范围", rows[1].get_text(" ", strip=True))
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
+
+    def test_media_task_detail_uses_compact_report_table(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:40:00"
+            structured_report = {
+                "summary": "发现 1 条图文界面问题。",
+                "items": [
+                    {
+                        "status": "issue",
+                        "category": "界面步骤一致性",
+                        "location": "第25页 / 图3-1",
+                        "excerpt": "系统配置表格与文字描述一致",
+                        "description": "图中配置项与步骤文字一致，但按钮标注需要人工复核。",
+                        "impact": "",
+                        "suggestion": "",
+                    }
+                ],
+            }
+            result_json = [
+                {
+                    "code": "image-ui-steps",
+                    "name": "图文与界面步骤一致性检查",
+                    "result": json.dumps(structured_report, ensure_ascii=False),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'guide.pdf', 'stored.pdf', 'pdf',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (IMAGE_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        exported = self.client.get(f"/admin/tasks/{task_id}/export")
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(exported.status_code, 200)
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
+        self.assertEqual(headers, ["条目", "AI检查结论", "条目判定", "是否接纳", "不接纳原因"])
+        table = _required_tag(soup.select_one(".report-table-media"))
+        self.assertIn("report-table-media", table.get("class", []))
+        row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(" ", strip=True)
+        self.assertIn("图中配置项与步骤文字一致", row_text)
+        self.assertIn("问题类型：界面步骤一致性", row_text)
+        self.assertIn("位置/画面：第25页 / 图3-1", row_text)
+        self.assertNotIn("原文/证据", detail.get_data(as_text=True))
+        self.assertNotIn("修改建议", exported.get_data(as_text=True))
 
     def test_language_consistency_no_action_items_are_non_issues(self):
         with self.app.app_context():

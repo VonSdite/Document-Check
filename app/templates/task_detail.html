@@ -112,11 +112,11 @@
     <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
     {% endif %}
     <div class="report-table-wrap">
-      <table class="report-table">
+      <table class="report-table{% if media_report %} report-table-media{% endif %}">
         <thead>
           <tr>
             <th class="report-index-cell">条目</th>
-            {% for field, label in REPORT_ITEM_FIELDS %}
+            {% for field, label in report_item_fields %}
             <th>{{ label }}</th>
             {% endfor %}
             <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
@@ -129,7 +129,7 @@
           {% set controls_disabled = task.status in ["queued", "running"] %}
           <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
             <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
-            {% for field, label in REPORT_ITEM_FIELDS %}
+            {% for field, label in report_item_fields %}
             {% set field_value = item[field] %}
             <td class="report-field report-field-{{ field }}">
               {% if field_value %}

@@ -132,6 +132,14 @@ REPORT_ITEM_FIELDS = (
     ("impact", "影响"),
     ("suggestion", "修改建议"),
 )
+MEDIA_REPORT_ITEM_FIELDS = (("media_summary", "AI检查结论"),)
+MEDIA_REPORT_ITEM_DETAIL_FIELDS = (
+    ("category", "问题类型"),
+    ("location", "位置/画面"),
+    ("excerpt", "依据/证据"),
+    ("impact", "影响"),
+    ("suggestion", "建议"),
+)
 REPORT_EXPORT_MIMETYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 REPORT_EXPORT_HEADER_FILL = PatternFill("solid", fgColor="EAF0F8")
 REPORT_EXPORT_HEADER_FONT = Font(bold=True)
@@ -618,6 +626,8 @@ def register_routes(app):
             results=results,
             report_totals=_report_item_totals(results),
             report_item_types=REPORT_ITEM_TYPES,
+            report_item_fields=_report_item_fields_for_task(task["task_type"]),
+            media_report=_is_media_report_task_type(task["task_type"]),
             report_classification_url=url_for("admin_update_report_item_type" if not _platform_enabled() else "user_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
@@ -814,6 +824,8 @@ def register_routes(app):
             results=results,
             report_totals=_report_item_totals(results),
             report_item_types=REPORT_ITEM_TYPES,
+            report_item_fields=_report_item_fields_for_task(task["task_type"]),
+            media_report=_is_media_report_task_type(task["task_type"]),
             report_classification_url=url_for("admin_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
@@ -3355,6 +3367,26 @@ def _limit_utf8_bytes(value: str, max_bytes: int) -> str:
     return value or "document"
 
 
+def _is_media_report_task_type(task_type: str | None) -> bool:
+    return (task_type or DOCUMENT_TASK_TYPE) in {IMAGE_TASK_TYPE, VIDEO_TASK_TYPE}
+
+
+def _report_item_fields_for_task(task_type: str | None) -> tuple[tuple[str, str], ...]:
+    if _is_media_report_task_type(task_type):
+        return MEDIA_REPORT_ITEM_FIELDS
+    return REPORT_ITEM_FIELDS
+
+
+def _media_report_item_text(item: dict) -> str:
+    description = str(item.get("description") or "").strip()
+    parts = [description] if description else []
+    for field, label in MEDIA_REPORT_ITEM_DETAIL_FIELDS:
+        value = str(item.get(field) or "").strip()
+        if value:
+            parts.append(f"{label}：{value}")
+    return "\n".join(parts).strip()
+
+
 def _task_results(task):
     return _prepare_task_results(_raw_task_results(task))
 
@@ -3393,6 +3425,7 @@ def _prepare_task_results(results: list[dict]) -> list[dict]:
             report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
             acceptance = _normalize_report_acceptance(acceptances.get(report_item["id"]))
             report_item.update(acceptance)
+            report_item["media_summary"] = _media_report_item_text(report_item)
         item["result_summary"] = _result_report_summary(item, structured_report)
         item["report_items"] = report_items
         item["report_counts"] = _count_report_items(report_items)
@@ -3992,6 +4025,8 @@ def _export_task_report(task):
         results=results,
         report_totals=_report_item_totals(results),
         report_item_types=REPORT_ITEM_TYPES,
+        report_item_fields=_report_item_fields_for_task(task["task_type"]),
+        media_report=_is_media_report_task_type(task["task_type"]),
         document_groups=_task_document_groups(task),
         app_css=app_css,
     )
@@ -4028,13 +4063,14 @@ def _export_task_report_excel(task):
 
 
 def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: list[dict]) -> None:
+    report_item_fields = _report_item_fields_for_task(task["task_type"])
     headers = [
         "任务ID",
         "任务类型",
         "文件名称",
         "检查项",
         "条目",
-        *[label for _, label in REPORT_ITEM_FIELDS],
+        *[label for _, label in report_item_fields],
         REPORT_ITEM_TYPE_LABEL,
         "是否接纳",
         "不接纳原因",
@@ -4050,7 +4086,7 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
                     *context,
                     _excel_cell_text(result.get("name")),
                     "",
-                    *["" for _ in REPORT_ITEM_FIELDS],
+                    *["" for _ in report_item_fields],
                     "未拆分",
                     "",
                     "",
@@ -4064,7 +4100,7 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
                     *context,
                     _excel_cell_text(result.get("name")),
                     f"条目 {item.get('index')}",
-                    *[_excel_cell_text(item.get(field)) for field, _ in REPORT_ITEM_FIELDS],
+                    *[_excel_cell_text(item.get(field)) for field, _ in report_item_fields],
                     _excel_cell_text(item.get("type_label")),
                     _excel_cell_text(item.get("acceptance_label")),
                     _excel_cell_text(item.get("rejection_reason_label")) if item.get("acceptance_status") == "rejected" else "",

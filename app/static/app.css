@@ -2038,6 +2038,10 @@ td {
   table-layout: fixed;
 }
 
+.report-table-media {
+  min-width: 1080px;
+}
+
 .report-table th,
 .report-table td {
   border-right: 1px solid var(--line);
@@ -2132,6 +2136,10 @@ td {
 
 .report-field-impact {
   width: 170px;
+}
+
+.report-field-media_summary {
+  width: 540px;
 }
 
 .report-cell-text {
