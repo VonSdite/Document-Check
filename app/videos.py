@@ -1,4 +1,5 @@
 import json
+import locale
 import math
 import subprocess
 from pathlib import Path
@@ -21,6 +22,26 @@ def allowed_video_file(filename: str) -> bool:
 
 def video_extension_of(filename: str) -> str:
     return filename.rsplit(".", 1)[1].lower()
+
+
+def _decode_process_output(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        encodings = ["utf-8", locale.getpreferredencoding(False), "gb18030"]
+        for encoding in dict.fromkeys(encodings):
+            try:
+                return value.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _process_message(completed) -> str:
+    return (_decode_process_output(completed.stderr) or _decode_process_output(completed.stdout)).strip()
 
 
 def extract_video_frames(
@@ -102,16 +123,16 @@ def _probe_video_duration(video_path: Path) -> float:
         str(video_path),
     ]
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+        completed = subprocess.run(command, capture_output=True, timeout=30, check=False)
     except FileNotFoundError as exc:
         raise VideoFrameExtractionError("视频抽帧依赖 ffmpeg/ffprobe，当前环境未安装或未加入 PATH。") from exc
     except subprocess.TimeoutExpired as exc:
         raise VideoFrameExtractionError("读取视频时长超时。") from exc
     if completed.returncode != 0:
-        message = (completed.stderr or completed.stdout or "").strip()
+        message = _process_message(completed)
         raise VideoFrameExtractionError(f"读取视频时长失败：{message or 'ffprobe 返回异常'}")
     try:
-        payload = json.loads(completed.stdout or "{}")
+        payload = json.loads(_decode_process_output(completed.stdout) or "{}")
         duration = float(payload.get("format", {}).get("duration") or 0)
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise VideoFrameExtractionError("无法识别视频时长。") from exc
@@ -157,13 +178,13 @@ def _extract_frame(video_path: Path, destination: Path, timestamp: float) -> Non
         str(destination),
     ]
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+        completed = subprocess.run(command, capture_output=True, timeout=60, check=False)
     except FileNotFoundError as exc:
         raise VideoFrameExtractionError("视频抽帧依赖 ffmpeg/ffprobe，当前环境未安装或未加入 PATH。") from exc
     except subprocess.TimeoutExpired as exc:
         raise VideoFrameExtractionError(f"抽取 {_format_timestamp(timestamp)} 视频帧超时。") from exc
     if completed.returncode != 0:
-        message = (completed.stderr or completed.stdout or "").strip()
+        message = _process_message(completed)
         raise VideoFrameExtractionError(f"抽取 {_format_timestamp(timestamp)} 视频帧失败：{message or 'ffmpeg 返回异常'}")
 
 

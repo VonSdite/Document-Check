@@ -13,7 +13,13 @@ from app.images import (
     image_items_from_meta,
     select_pdf_page_numbers,
 )
-from app.videos import allowed_video_file, format_video_document_text, video_extension_of, _sample_video_timestamps
+from app.videos import (
+    allowed_video_file,
+    format_video_document_text,
+    video_extension_of,
+    _decode_process_output,
+    _sample_video_timestamps,
+)
 
 
 _TINY_PNG = (
@@ -173,6 +179,11 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("视频时长：00:05.200", text)
         self.assertIn("抽取帧数：2", text)
         self.assertIn("时间点 00:02.000", text)
+
+    def test_video_process_output_decodes_utf8_bytes(self):
+        text = _decode_process_output(b"ffmpeg: \xe2\x80\x9cinput\xe2\x80\x9d")
+
+        self.assertIn("\u201cinput\u201d", text)
 
 
 def _write_docx_with_inline_image(path: Path):
