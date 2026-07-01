@@ -43,7 +43,7 @@ class TaskTypesTest(unittest.TestCase):
         self.assertEqual(task_type_label(CONSISTENCY_TASK_TYPE), "多文档对照检查")
 
     def test_task_type_label_for_language_consistency(self):
-        self.assertEqual(task_type_label(LANGUAGE_CONSISTENCY_TASK_TYPE), "跨语种文档一致性对比")
+        self.assertEqual(task_type_label(LANGUAGE_CONSISTENCY_TASK_TYPE), "跨语种文档一致性检查")
 
     def test_task_type_label_for_image_check(self):
         self.assertEqual(task_type_label(IMAGE_TASK_TYPE), "图片检查")

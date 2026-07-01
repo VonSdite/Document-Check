@@ -1091,11 +1091,11 @@ def register_routes(app):
                 },
                 {
                     "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
-                    "title": "跨语种文档一致性对比-提示词设置",
-                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。",
-                    "new_title": "新增跨语种对比项",
+                    "title": "跨语种文档一致性检查-提示词设置",
+                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。",
+                    "new_title": "新增跨语种检查项",
                     "name_placeholder": "例如：翻译缺失与事实差异检查",
-                    "description_placeholder": "用于说明该跨语种对比项的范围",
+                    "description_placeholder": "用于说明该跨语种检查项的范围",
                     "prompt_placeholder": "描述两份不同语种文档的比对规则、关注范围和中文输出要求",
                     "items": language_consistency_check_items,
                     "default_check_codes": default_check_item_codes(LANGUAGE_CONSISTENCY_TASK_TYPE),
@@ -2770,11 +2770,11 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
 
     check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
     if not check_ids:
-        flash("请至少选择一个跨语种对比项。", "error")
+        flash("请至少选择一个跨语种检查项。", "error")
         return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
     check_snapshots = _enabled_check_item_snapshots(db, check_ids, LANGUAGE_CONSISTENCY_TASK_TYPE)
     if len(check_snapshots) != len(set(check_ids)):
-        flash("请选择当前可用的跨语种对比项。", "error")
+        flash("请选择当前可用的跨语种检查项。", "error")
         return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
 
     model_id = request.form.get("model_id", "")
@@ -2815,7 +2815,7 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
         "static_precheck": _language_consistency_static_summary(file_a, file_b),
     }
     file_size = file_a["file_size"] + file_b["file_size"]
-    original_filename = f"跨语种对比：{file_a['original_filename']} / {file_b['original_filename']}"
+    original_filename = f"跨语种检查：{file_a['original_filename']} / {file_b['original_filename']}"
     owner_name = identity.display_name or None
 
     db.execute(

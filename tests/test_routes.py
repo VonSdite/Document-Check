@@ -440,7 +440,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(html, "html.parser")
         self.assertIn("单文档检查-提示词设置", html)
         self.assertIn("多文档对照检查-提示词设置", html)
-        self.assertIn("跨语种文档一致性对比-提示词设置", html)
+        self.assertIn("跨语种文档一致性检查-提示词设置", html)
         self.assertIn("图片检查-提示词设置", html)
         self.assertIn("视频检查-提示词设置", html)
         self.assertIn("consistency_check", html)
@@ -449,18 +449,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("video_check", html)
         document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查-提示词设置说明"}))
         consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"}))
-        language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种文档一致性对比-提示词设置说明"}))
+        language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种文档一致性检查-提示词设置说明"}))
         image_tip = _required_tag(soup.find("button", {"aria-label": "图片检查-提示词设置说明"}))
         video_tip = _required_tag(soup.find("button", {"aria-label": "视频检查-提示词设置说明"}))
         self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
         self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
-        self.assertEqual(language_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。")
+        self.assertEqual(language_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。")
         self.assertEqual(image_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。")
         self.assertEqual(video_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。")
         visible_descriptions = [item.get_text(strip=True) for item in soup.select(".settings-section-head p")]
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。", visible_descriptions)
-        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种对比任务时可多选。", visible_descriptions)
+        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。", visible_descriptions)
         self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。", visible_descriptions)
 
@@ -489,7 +489,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("<span>提交任务</span><strong>5</strong>", html)
         self.assertIn("<span>单文档检查任务</span><strong>2</strong>", html)
         self.assertIn("<span>多文档对照任务</span><strong>1</strong>", html)
-        self.assertIn("<span>跨语种对比任务</span><strong>1</strong>", html)
+        self.assertIn("<span>跨语种检查任务</span><strong>1</strong>", html)
         self.assertIn("<span>视频检查任务</span><strong>1</strong>", html)
         self.assertIn("<span>排队</span><strong>1</strong>", html)
         self.assertIn("<span>失败</span><strong>1</strong>", html)
@@ -1784,7 +1784,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             result_json = [
                 {
                     "code": "language-consistency-cross-lingual",
-                    "name": "跨语种内容一致性对比",
+                    "name": "跨语种内容一致性检查",
                     "result": json.dumps(structured_report, ensure_ascii=False),
                 }
             ]
@@ -2300,7 +2300,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         form = _required_tag(soup.find("form", {"data-require-checks": "true"}))
-        self.assertEqual(form.get("data-check-required-message"), "请至少选择一个跨语种对比项。")
+        self.assertEqual(form.get("data-check-required-message"), "请至少选择一个跨语种检查项。")
         self.assertIsNotNone(form.select_one('input[name="document_a"]'))
         self.assertIsNotNone(form.select_one('input[name="document_b"]'))
         checkboxes = form.select('input[name="checks"]')
@@ -2506,7 +2506,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual(task["task_type"], LANGUAGE_CONSISTENCY_TASK_TYPE)
         self.assertEqual(task["file_type"], "双文档")
-        self.assertIn("跨语种对比：zh.txt / en.txt", task["original_filename"])
+        self.assertIn("跨语种检查：zh.txt / en.txt", task["original_filename"])
         self.assertIn("# 静态预检摘要", task["document_text"])
         self.assertIn("文档A独有硬线索", task["document_text"])
         self.assertIn("文档B独有硬线索", task["document_text"])

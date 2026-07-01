@@ -217,7 +217,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
             (LANGUAGE_CONSISTENCY_TASK_TYPE, "language-consistency-cross-lingual"),
         ).fetchone()
         self.assertIsNotNone(language_consistency_item)
-        self.assertEqual(language_consistency_item["name"], "跨语种内容一致性对比")
+        self.assertEqual(language_consistency_item["name"], "跨语种内容一致性检查")
         self.assertIn("缺失、增补、翻译偏差", language_consistency_item["description"])
         self.assertIn("最终报告必须使用中文陈述", language_consistency_item["prompt"])
         self.assertIn("静态预检摘要只作为优先核对线索", language_consistency_item["prompt"])

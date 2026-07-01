@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}跨语种文档一致性对比 - 文档智能门禁{% endblock %}
+{% block title %}跨语种文档一致性检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
-<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-check-required-message="请至少选择一个跨语种对比项。">
+<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-check-required-message="请至少选择一个跨语种检查项。">
   <div class="panel-head compact-head">
-    <h1>创建跨语种文档一致性对比</h1>
+    <h1>创建跨语种文档一致性检查</h1>
   </div>
 
   <div class="consistency-form-grid">
@@ -60,13 +60,13 @@
     </label>
 
     <div class="submit-slot">
-      <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交对比</button>
+      <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
     </div>
   </div>
 
   <div class="check-row">
     <div class="check-row-title">
-      <span>跨语种对比项</span>
+      <span>跨语种检查项</span>
       <span class="help-tip" tabindex="0" data-tip="系统会先静态抽取数字、版本、链接、标题和长度线索，再按检查项调用模型生成中文报告。">?</span>
     </div>
     <div class="check-chip-grid">
@@ -78,7 +78,7 @@
       </label>
       {% else %}
       <div class="empty-state compact">
-        <h3>暂无可用跨语种对比项</h3>
+        <h3>暂无可用跨语种检查项</h3>
       </div>
       {% endfor %}
     </div>
@@ -94,7 +94,7 @@
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
-    <h2>跨语种对比任务</h2>
+    <h2>跨语种检查任务</h2>
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
       <span class="refresh-dot" aria-hidden="true"></span>
       <span data-refresh-label>刷新中</span>
