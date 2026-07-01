@@ -1698,6 +1698,63 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("原文/证据", detail.get_data(as_text=True))
         self.assertNotIn("修改建议", exported.get_data(as_text=True))
 
+    def test_image_report_items_exclude_page_level_summary_blocks(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:42:00"
+            result_text = (
+                "4. 第28页**：图3-3接线端子的实物图与内部信号示意图结合紧密，"
+                "表3-2和表3-3中的脚编号与信号名称匹配。\n"
+                "页面级检查结果（批次 8/27）\n"
+                "覆盖图片：\n"
+                "PDF第29页（page029-screenshot）：0029_page029-screenshot.png\n"
+                "PDF第30页（page030-screenshot）：0030_page030-screenshot.png\n"
+                "检查项：image-text-correspondence | 图文与界面步骤一致性检查\n"
+                "总体判断\n"
+                "未发现明确问题。本次提供的截图内容与对应文档文本描述保持一致。\n"
+                "明确问题\n"
+                "未发现明确问题\n"
+                "需人工确认\n"
+                "未发现需人工确认项\n\n"
+                "5. 第29页**：“图3-4 COM口引脚”展示的 RJ45 母头示意图与"
+                "“表3-5 COM引脚定义”的文字描述对应一致。"
+            )
+            result_json = [
+                {
+                    "code": "image-text-correspondence",
+                    "name": "图文与界面步骤一致性检查",
+                    "result": result_text,
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'guide.pdf', 'stored.pdf', 'pdf',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (IMAGE_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 2)
+        first_row_text = rows[0].get_text(" ", strip=True)
+        second_row_text = rows[1].get_text(" ", strip=True)
+        self.assertIn("第28页", first_row_text)
+        self.assertIn("第29页", second_row_text)
+        self.assertNotIn("页面级检查结果", first_row_text)
+        self.assertNotIn("覆盖图片", first_row_text)
+        self.assertNotIn("总体判断", first_row_text)
+
     def test_language_consistency_no_action_items_are_non_issues(self):
         with self.app.app_context():
             now = "2026-05-23 12:45:00"

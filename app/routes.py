@@ -3771,6 +3771,10 @@ def _extract_report_item_chunks(text: str) -> list[str]:
                 chunks.append("\n".join(current).strip())
             current = [line]
             continue
+        if current and _is_report_auxiliary_section_start(line):
+            chunks.append("\n".join(current).strip())
+            current = []
+            continue
         if current:
             current.append(line)
     if current:
@@ -3786,6 +3790,27 @@ def _is_report_item_start(line: str) -> bool:
         return False
     match_text = REPORT_ITEM_PREFIX_RE.sub("", stripped).strip()
     return bool(REPORT_ITEM_START_RE.match(match_text))
+
+
+def _is_report_auxiliary_section_start(line: str) -> bool:
+    stripped = REPORT_ITEM_PREFIX_RE.sub("", str(line or "").strip()).strip("*_`~ ")
+    if not stripped:
+        return False
+    if stripped in {"总体判断", "明确问题", "需人工确认"}:
+        return True
+    return stripped.startswith(
+        (
+            "页面级检查结果",
+            "图文联合检查结果",
+            "图片检查结果",
+            "视频帧检查结果",
+            "检查汇总",
+            "覆盖图片",
+            "覆盖视频帧",
+            "已跳过的图片",
+            "系统需人工确认",
+        )
+    )
 
 
 def _report_item_id(result_code: str, index: int, text: str) -> str:
