@@ -148,7 +148,7 @@ def run_check(
                 ),
             },
         ],
-        "temperature": 0.2,
+        "temperature": 0,
     }
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
@@ -246,7 +246,7 @@ def run_image_check(
                 ],
             },
         ],
-        "temperature": 0.2,
+        "temperature": 0,
     }
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
@@ -376,7 +376,7 @@ def run_multimodal_document_check(
                 "content": content,
             },
         ],
-        "temperature": 0.2,
+        "temperature": 0,
     }
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
