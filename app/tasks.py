@@ -23,6 +23,16 @@ from .images import (
 )
 from .llm import DEFAULT_ISSUE_OUTPUT_LIMIT, LLMError, run_check, run_multimodal_document_check
 from .network import outbound_network_config
+from .sensitive_terms import (
+    SENSITIVE_TERMS_CHECK_CODE,
+    build_sensitive_terms_invalid_report,
+    build_sensitive_terms_missing_report,
+    build_sensitive_terms_report,
+    find_sensitive_terms_file,
+    format_sensitive_terms_report,
+    load_sensitive_terms,
+    sensitive_terms_file_candidates,
+)
 from .task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -523,24 +533,29 @@ def _run_check_items_concurrently(
                     return
                 save_snapshot(db, summary, current_progress())
 
-            network = outbound_network_config()
-            content = run_check(
-                api_base=task["api_base"],
-                api_key=task["api_key"],
-                proxy_mode=network["proxy_mode"],
-                proxy=network["proxy"],
-                ssl_verify=network["ssl_verify"],
-                request_timeout=task["request_timeout"],
-                model_name=task["model_name"],
-                force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-                check_name=item["name"],
-                prompt=item["prompt"],
-                document_text=document_text,
-                issue_output_limit=issue_output_limit,
-                on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
-                task_id=task_id,
-                stream_trace_enabled=stream_trace_enabled,
-            )
+            structured_report = None
+            if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
+                structured_report = _run_sensitive_terms_check(app, document_text, issue_output_limit)
+                content = format_sensitive_terms_report(structured_report)
+            else:
+                network = outbound_network_config()
+                content = run_check(
+                    api_base=task["api_base"],
+                    api_key=task["api_key"],
+                    proxy_mode=network["proxy_mode"],
+                    proxy=network["proxy"],
+                    ssl_verify=network["ssl_verify"],
+                    request_timeout=task["request_timeout"],
+                    model_name=task["model_name"],
+                    force_disable_thinking=_task_flag(task, "force_disable_thinking"),
+                    check_name=item["name"],
+                    prompt=item["prompt"],
+                    document_text=document_text,
+                    issue_output_limit=issue_output_limit,
+                    on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
+                    task_id=task_id,
+                    stream_trace_enabled=stream_trace_enabled,
+                )
             progress = mark_unit_completed()
 
             if cancel_event.is_set() or _cancel_requested(db, task_id):
@@ -551,6 +566,8 @@ def _run_check_items_concurrently(
                 "name": item["name"],
                 "result": content,
             }
+            if structured_report is not None:
+                result["structured_report"] = structured_report
             with result_lock:
                 completed_by_code[item["code"]] = result
                 partial_by_code.pop(item["code"], None)
@@ -589,6 +606,40 @@ def _run_check_items_concurrently(
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
         executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _run_sensitive_terms_check(app, document_text: str, issue_output_limit: int) -> dict:
+    root_dir = Path(app.config.get("ROOT_DIR") or Path(app.instance_path).parent)
+    instance_dir = Path(app.instance_path)
+    configured_path = app.config.get("SENSITIVE_TERMS_PATH")
+    candidates = sensitive_terms_file_candidates(
+        root_dir=root_dir,
+        instance_dir=instance_dir,
+        configured_path=configured_path,
+    )
+    terms_path = find_sensitive_terms_file(
+        root_dir=root_dir,
+        instance_dir=instance_dir,
+        configured_path=configured_path,
+    )
+    if terms_path is None:
+        return build_sensitive_terms_missing_report(candidates=candidates)
+
+    try:
+        rules = load_sensitive_terms(terms_path)
+    except Exception as exc:
+        return build_sensitive_terms_invalid_report(source_path=terms_path, error=str(exc))
+    if not rules:
+        return build_sensitive_terms_invalid_report(
+            source_path=terms_path,
+            error="未读取到有效敏感词规则，请确认表头包含“不规范用语”和“规范用语”两列。",
+        )
+    return build_sensitive_terms_report(
+        document_text,
+        rules,
+        source_path=terms_path,
+        issue_limit=issue_output_limit,
+    )
 
 
 def _run_image_check_items_concurrently(

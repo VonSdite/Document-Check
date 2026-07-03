@@ -197,6 +197,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ]
 
         self.assertIn("typo", document_codes)
+        self.assertIn("sensitive-terms", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
         self.assertEqual(language_consistency_codes, ["language-consistency-cross-lingual"])
         self.assertEqual(
@@ -212,6 +213,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("consistency-cross-document", default_check_item_codes(CONSISTENCY_TASK_TYPE))
         self.assertIn("language-consistency-cross-lingual", default_check_item_codes(LANGUAGE_CONSISTENCY_TASK_TYPE))
         self.assertIn("video-installation-sequence", default_check_item_codes(VIDEO_TASK_TYPE))
+        self.assertIn("sensitive-terms", default_check_item_codes(DOCUMENT_TASK_TYPE))
         language_consistency_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
             (LANGUAGE_CONSISTENCY_TASK_TYPE, "language-consistency-cross-lingual"),
@@ -235,6 +237,14 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("页码：未提取", typo_item["prompt"])
         self.assertIn("章节：未识别", typo_item["prompt"])
         self.assertIn("位置（文件/页码/章节或工作表/附近线索）", typo_item["prompt"])
+        sensitive_terms_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            (DOCUMENT_TASK_TYPE, "sensitive-terms"),
+        ).fetchone()
+        self.assertIsNotNone(sensitive_terms_item)
+        self.assertEqual(sensitive_terms_item["name"], "敏感词检查")
+        self.assertIn("不规范用语", sensitive_terms_item["description"])
+        self.assertIn("规范用语", sensitive_terms_item["prompt"])
         self.assertNotIn("image-ui-step-consistency", default_check_item_codes(IMAGE_TASK_TYPE))
         self.assertNotIn("image-device-installation", default_check_item_codes(IMAGE_TASK_TYPE))
         image_text_item = db.execute(

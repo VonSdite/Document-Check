@@ -5,8 +5,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from flask import Flask
+from openpyxl import Workbook
 
 from app.db import get_db, init_db, now_text, set_setting
+from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
 from app.tasks import (
     TaskScheduler,
@@ -186,6 +188,61 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["issue_output_limit"], 45)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["result"], "最终结果")
+
+    def test_sensitive_terms_check_uses_local_dictionary_without_llm(self):
+        terms_path = Path(self.temp_dir.name) / "sensitive_terms.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        assert sheet is not None
+        sheet.append(["不规范用语", "规范用语"])
+        sheet.append(["旧称", "新称"])
+        sheet.append(["坏词", "好词"])
+        workbook.save(terms_path)
+        workbook.close()
+        self.app.config["SENSITIVE_TERMS_PATH"] = str(terms_path)
+
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                checks_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'doc.txt', 'doc.txt', 'txt', 1,
+                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (json.dumps([1]), created_at, created_at),
+        )
+        db.commit()
+        task = db.execute("SELECT * FROM tasks").fetchone()
+        check_items = [{"code": SENSITIVE_TERMS_CHECK_CODE, "name": "敏感词检查", "prompt": "本地检查"}]
+        document_text = "file: doc.txt\n\n[第2页]\n这里出现旧称，坏词也出现了。旧称需要统一。"
+
+        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+            results = _run_check_items_concurrently(
+                self.app,
+                task,
+                check_items,
+                document_text,
+                max_workers=1,
+                stream_trace_enabled=False,
+            )
+
+        self.assertEqual(len(results), 1)
+        result = results[0]
+        self.assertIn("structured_report", result)
+        self.assertIn("发现 2 类不规范用语", result["structured_report"]["summary"])
+        self.assertEqual(len(result["structured_report"]["items"]), 2)
+        first_item = result["structured_report"]["items"][0]
+        self.assertIn("旧称", first_item["description"])
+        self.assertIn("新称", first_item["suggestion"])
+        self.assertIn("文件：doc.txt", first_item["location"])
+        self.assertIn("页码：第2页", first_item["location"])
 
     def test_passes_force_disable_thinking_to_llm(self):
         db = get_db()

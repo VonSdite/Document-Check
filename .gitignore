@@ -11,6 +11,8 @@ instance/
 uploads/
 *.sqlite3
 *.db
+data/sensitive_terms.*
+data/sensitive_words.*
 
 .env
 config.yaml
