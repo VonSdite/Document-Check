@@ -3549,7 +3549,21 @@ def _json_candidate_variants(candidate: str) -> list[str]:
     repaired = _escape_json_string_control_chars(raw)
     if repaired != raw:
         variants.append(repaired)
+    for variant in tuple(variants):
+        repaired = _repair_common_json_model_errors(variant)
+        if repaired != variant and repaired not in variants:
+            variants.append(repaired)
     return variants
+
+
+def _repair_common_json_model_errors(text: str) -> str:
+    status_values = "|".join(re.escape(value) for value in REPORT_ITEM_TYPES)
+    status_keys = r"status|classification|item_type|type"
+    return re.sub(
+        rf'("(?:(?:{status_keys}))"\s*:\s*")({status_values})"\s*:\s*"({status_values})(")',
+        r"\1\3\4",
+        str(text or ""),
+    )
 
 
 def _escape_json_string_control_chars(text: str) -> str:

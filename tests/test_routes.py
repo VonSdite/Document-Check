@@ -1911,6 +1911,49 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("第二行", row_text)
         self.assertNotIn('"items"', row_text)
 
+    def test_task_detail_repairs_duplicate_status_json_value(self):
+        with self.app.app_context():
+            now = "2026-05-23 13:40:00"
+            raw_json = (
+                '{"summary":"发现 1 个建议","items":[{"status":"issue":"suggestion",'
+                '"category":"结构层级","location":"第4页","excerpt":"用户指南",'
+                '"description":"文档名称和前言称谓不一致。","impact":"影响客户认知",'
+                '"suggestion":"统一文档称谓。"}]}'
+            )
+            result_json = [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": raw_json,
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        row = _required_tag(soup.select_one("tr[data-report-item]"))
+        row_text = row.get_text(" ", strip=True)
+        self.assertIn("结构层级", row_text)
+        self.assertIn("文档名称和前言称谓不一致。", row_text)
+        self.assertNotIn('"items"', row_text)
+        self.assertEqual(_required_tag(row.select_one("[data-report-item-type]")).get("data-saved-value"), "suggestion")
+
     def test_task_detail_splits_bold_numbered_compliance_items(self):
         with self.app.app_context():
             now = "2026-05-24 09:00:00"
