@@ -117,6 +117,23 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertEqual(columns, {"ip", "username", "created_at", "updated_at"})
 
+    def test_report_suppression_tables_exist(self):
+        db = get_db()
+        rule_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(report_suppression_rules)").fetchall()
+        }
+        hit_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(report_suppression_hits)").fetchall()
+        }
+
+        self.assertIn("fingerprint", rule_columns)
+        self.assertIn("enabled", rule_columns)
+        self.assertIn("hit_count", rule_columns)
+        self.assertIn("rule_id", hit_columns)
+        self.assertIn("item_json", hit_columns)
+
     def test_ip_username_mapping_can_be_saved_and_cleared(self):
         set_ip_username("10.0.0.8", "张三")
 

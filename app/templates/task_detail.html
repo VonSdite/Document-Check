@@ -87,6 +87,7 @@
     <span><strong data-report-count="pending_issue_acceptance">{{ report_totals.pending_issue_acceptance }}</strong>待确认问题</span>
     <span><strong data-report-count="issue_detection_rate">{{ report_totals.issue_detection_rate }}</strong>问题检出率</span>
     <span><strong data-report-count="issue_acceptance_rate">{{ report_totals.issue_acceptance_rate }}</strong>问题接纳率</span>
+    <span><strong data-report-count="suppressed">{{ report_totals.suppressed or 0 }}</strong>已忽略误报</span>
     <span><strong data-report-count="total">{{ report_totals.total }}</strong>合计</span>
   </div>
 </section>
@@ -104,6 +105,7 @@
           非问题 <span data-report-result-count="non_issue">{{ result.report_counts.non_issue }}</span>；
           问题检出率 <span data-report-result-count="issue_detection_rate">{{ result.report_counts.issue_detection_rate }}</span>，
           问题接纳率 <span data-report-result-count="issue_acceptance_rate">{{ result.report_counts.issue_acceptance_rate }}</span>
+          {% if result.report_counts.suppressed %}，已忽略误报 <span data-report-result-count="suppressed">{{ result.report_counts.suppressed }}</span>{% endif %}
         </p>
       </div>
     </div>
@@ -173,8 +175,44 @@
       <summary>查看原始结果</summary>
       <div class="result-text markdown-body">{{ result.result|markdown }}</div>
     </details>
-    {% else %}
+    {% elif not result.suppressed_report_items %}
     <div class="result-text markdown-body">{{ (result.result_summary or result.result)|markdown }}</div>
+    {% endif %}
+    {% if result.suppressed_report_items %}
+    <details class="result-raw-details">
+      <summary>已忽略误报 {{ result.suppressed_report_items|length }} 条</summary>
+      <div class="report-table-wrap">
+        <table class="report-table{% if media_report %} report-table-media{% endif %}">
+          <thead>
+            <tr>
+              <th class="report-index-cell">条目</th>
+              {% for field, label in report_item_fields %}
+              <th>{{ label }}</th>
+              {% endfor %}
+              <th>忽略规则</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in result.suppressed_report_items %}
+            <tr class="report-item is-suppressed">
+              <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
+              {% for field, label in report_item_fields %}
+              {% set field_value = item[field] %}
+              <td class="report-field report-field-{{ field }}">
+                {% if field_value %}
+                <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
+                {% else %}
+                <span class="report-empty-cell">-</span>
+                {% endif %}
+              </td>
+              {% endfor %}
+              <td class="report-status-cell">规则 #{{ item.suppression_rule_id }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
     {% endif %}
   </article>
   {% endfor %}

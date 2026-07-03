@@ -118,10 +118,44 @@ def init_db():
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS report_suppression_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_type TEXT NOT NULL,
+            check_code TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            item_json TEXT NOT NULL,
+            reason TEXT,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            source_task_id INTEGER,
+            source_result_code TEXT,
+            source_item_id TEXT,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            last_hit_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(task_type, check_code, fingerprint)
+        );
+
+        CREATE TABLE IF NOT EXISTS report_suppression_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            task_id INTEGER NOT NULL,
+            result_code TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            item_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(rule_id) REFERENCES report_suppression_rules(id) ON DELETE CASCADE,
+            UNIQUE(rule_id, task_id, result_code, item_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_ip_created ON tasks(ip, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_user_model_providers_owner ON user_model_providers(owner_subject, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_user_model_configs_provider ON user_model_configs(provider_id, sort_order ASC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_report_suppression_rules_lookup
+            ON report_suppression_rules(task_type, check_code, fingerprint, enabled);
+        CREATE INDEX IF NOT EXISTS idx_report_suppression_hits_rule
+            ON report_suppression_hits(rule_id, created_at DESC);
         """
     )
     _ensure_column(db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")

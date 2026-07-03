@@ -124,6 +124,7 @@ REPORT_REJECTION_REASONS = {
     "not_applicable": "不适用",
     "other": "其他",
 }
+REPORT_SUPPRESSION_REJECTION_REASONS = {"model_hallucination", "false_positive", "not_applicable"}
 REPORT_ITEM_FIELDS = (
     ("category", "问题类型"),
     ("location", "位置"),
@@ -150,6 +151,7 @@ REPORT_TOTAL_EXPORT_ROWS = (
     ("接纳问题", "accepted_issue"),
     ("不接纳问题", "rejected_issue"),
     ("待确认问题", "pending_issue_acceptance"),
+    ("已忽略误报", "suppressed"),
     ("问题检出率", "issue_detection_rate"),
     ("问题接纳率", "issue_acceptance_rate"),
     ("合计", "total"),
@@ -957,6 +959,36 @@ def register_routes(app):
                 flash("IP 用户名已保存。" if username else "IP 用户名已清除。", "success")
                 return redirect(url_for("admin_settings", tab="ip_users"))
 
+            if action == "report_suppression_rule":
+                rule_id = request.form.get("rule_id", "")
+                operation = request.form.get("operation", "")
+                if not rule_id.isdigit():
+                    flash("误报忽略规则不存在。", "error")
+                    return redirect(url_for("admin_settings"))
+                if operation == "enable":
+                    db.execute(
+                        "UPDATE report_suppression_rules SET enabled = 1, updated_at = ? WHERE id = ?",
+                        (now_text(), int(rule_id)),
+                    )
+                    db.commit()
+                    flash("误报忽略规则已启用。", "success")
+                    return redirect(url_for("admin_settings"))
+                if operation == "disable":
+                    db.execute(
+                        "UPDATE report_suppression_rules SET enabled = 0, updated_at = ? WHERE id = ?",
+                        (now_text(), int(rule_id)),
+                    )
+                    db.commit()
+                    flash("误报忽略规则已停用。", "success")
+                    return redirect(url_for("admin_settings"))
+                if operation == "delete":
+                    db.execute("DELETE FROM report_suppression_rules WHERE id = ?", (int(rule_id),))
+                    db.commit()
+                    flash("误报忽略规则已删除。", "success")
+                    return redirect(url_for("admin_settings"))
+                flash("未知误报忽略规则操作。", "error")
+                return redirect(url_for("admin_settings"))
+
             if action == "create_check_item":
                 task_type = _check_item_task_type(request.form.get("task_type"))
                 name = request.form.get("name", "").strip()
@@ -1134,6 +1166,7 @@ def register_routes(app):
             settings_tab=settings_tab,
             ip_username_management_enabled=_ip_username_management_enabled(),
             ip_username_rows=_ip_username_rows() if _ip_username_management_enabled() else [],
+            report_suppression_rules=_report_suppression_rule_rows(),
         )
 
 
@@ -1145,6 +1178,48 @@ def _identity_label(identity: UserIdentity) -> str:
 
 def _wants_json_response() -> bool:
     return request.headers.get("X-Requested-With") == "fetch" or request.accept_mimetypes.best == "application/json"
+
+
+def _report_suppression_rule_rows() -> list[dict]:
+    rows = get_db().execute(
+        """
+        SELECT r.*, c.name AS check_name
+        FROM report_suppression_rules r
+        LEFT JOIN check_items c ON c.code = r.check_code
+        ORDER BY r.enabled ASC, r.updated_at DESC, r.id DESC
+        """
+    ).fetchall()
+    result = []
+    for row in rows:
+        snapshot = _parse_report_suppression_item_json(row["item_json"])
+        result.append(
+            {
+                "id": row["id"],
+                "enabled": bool(row["enabled"]),
+                "task_type": row["task_type"],
+                "task_type_label": task_type_label(row["task_type"]),
+                "check_code": row["check_code"],
+                "check_name": row["check_name"] or row["check_code"],
+                "reason": row["reason"] or "",
+                "hit_count": row["hit_count"],
+                "last_hit_at": row["last_hit_at"] or "",
+                "source_task_id": row["source_task_id"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "item": snapshot,
+            }
+        )
+    return result
+
+
+def _parse_report_suppression_item_json(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _form_bool(value) -> bool:
@@ -2238,11 +2313,12 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
             "accepted_issue": 0,
             "rejected_issue": 0,
             "pending_issue_acceptance": 0,
+            "suppressed": 0,
         }
     )
     rows = get_db().execute(
         f"""
-        SELECT result_json
+        SELECT id, task_type, result_json
         FROM tasks
         WHERE result_json IS NOT NULL
           AND TRIM(result_json) != ''
@@ -2251,8 +2327,19 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
         params,
     ).fetchall()
     for row in rows:
-        item_totals = _report_item_totals(_prepare_task_results(_parse_result_json(row["result_json"])))
-        for key in tuple(REPORT_ITEM_TYPE_ORDER) + ("accepted_issue", "rejected_issue", "pending_issue_acceptance"):
+        item_totals = _report_item_totals(
+            _prepare_task_results(
+                _parse_result_json(row["result_json"]),
+                task_type=row["task_type"] or DOCUMENT_TASK_TYPE,
+                task_id=row["id"],
+            )
+        )
+        for key in tuple(REPORT_ITEM_TYPE_ORDER) + (
+            "accepted_issue",
+            "rejected_issue",
+            "pending_issue_acceptance",
+            "suppressed",
+        ):
             totals[key] += item_totals[key]
     return _finalize_report_counts(totals)
 
@@ -3388,7 +3475,12 @@ def _media_report_item_text(item: dict) -> str:
 
 
 def _task_results(task):
-    return _prepare_task_results(_raw_task_results(task))
+    return _prepare_task_results(
+        _raw_task_results(task),
+        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
+        task_id=task["id"],
+        record_suppression_hits=True,
+    )
 
 
 def _raw_task_results(task) -> list[dict]:
@@ -3407,10 +3499,18 @@ def _parse_result_json(result_json) -> list[dict]:
     return [item for item in data if isinstance(item, dict)]
 
 
-def _prepare_task_results(results: list[dict]) -> list[dict]:
+def _prepare_task_results(
+    results: list[dict],
+    *,
+    task_type: str | None = None,
+    task_id: int | None = None,
+    record_suppression_hits: bool = False,
+) -> list[dict]:
     prepared = []
+    suppression_rules = _enabled_report_suppression_rules(task_type) if task_type else {}
     for result in results:
         item = dict(result)
+        result_code = str(item.get("code") or "")
         structured_report = _result_structured_report(item)
         report_items = _result_report_items(item, structured_report)
         classifications = item.get("item_classifications")
@@ -3426,11 +3526,195 @@ def _prepare_task_results(results: list[dict]) -> list[dict]:
             acceptance = _normalize_report_acceptance(acceptances.get(report_item["id"]))
             report_item.update(acceptance)
             report_item["media_summary"] = _media_report_item_text(report_item)
+        report_items, suppressed_items = _apply_report_suppression(
+            task_type=task_type,
+            task_id=task_id,
+            result_code=result_code,
+            report_items=report_items,
+            suppression_rules=suppression_rules,
+            record_hits=record_suppression_hits,
+        )
         item["result_summary"] = _result_report_summary(item, structured_report)
         item["report_items"] = report_items
-        item["report_counts"] = _count_report_items(report_items)
+        item["suppressed_report_items"] = suppressed_items
+        item["report_counts"] = _count_report_items(report_items, suppressed_count=len(suppressed_items))
         prepared.append(item)
     return prepared
+
+
+def _enabled_report_suppression_rules(task_type: str | None) -> dict[tuple[str, str], dict]:
+    if not task_type:
+        return {}
+    rows = get_db().execute(
+        """
+        SELECT id, check_code, fingerprint, reason
+        FROM report_suppression_rules
+        WHERE task_type = ? AND enabled = 1
+        """,
+        (task_type,),
+    ).fetchall()
+    return {
+        (row["check_code"], row["fingerprint"]): {
+            "id": row["id"],
+            "reason": row["reason"] or "",
+        }
+        for row in rows
+    }
+
+
+def _apply_report_suppression(
+    *,
+    task_type: str | None,
+    task_id: int | None,
+    result_code: str,
+    report_items: list[dict],
+    suppression_rules: dict[tuple[str, str], dict],
+    record_hits: bool,
+) -> tuple[list[dict], list[dict]]:
+    if not task_type or not suppression_rules:
+        return report_items, []
+
+    visible_items = []
+    suppressed_items = []
+    db = get_db() if record_hits and task_id is not None else None
+    for item in report_items:
+        fingerprint = _report_item_suppression_fingerprint(task_type, result_code, item)
+        rule = suppression_rules.get((result_code, fingerprint))
+        if rule is None:
+            visible_items.append(item)
+            continue
+        suppressed = dict(item)
+        suppressed["suppression_rule_id"] = rule["id"]
+        suppressed["suppression_reason"] = rule["reason"]
+        suppressed_items.append(suppressed)
+        if db is not None:
+            _record_report_suppression_hit(
+                db,
+                rule_id=int(rule["id"]),
+                task_id=int(task_id),
+                result_code=result_code,
+                item=suppressed,
+            )
+    return visible_items, suppressed_items
+
+
+def _record_report_suppression_hit(db, *, rule_id: int, task_id: int, result_code: str, item: dict):
+    now = now_text()
+    cursor = db.execute(
+        """
+        INSERT OR IGNORE INTO report_suppression_hits(rule_id, task_id, result_code, item_id, item_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            rule_id,
+            task_id,
+            result_code,
+            str(item.get("id") or ""),
+            json.dumps(_report_suppression_item_snapshot(item), ensure_ascii=False),
+            now,
+        ),
+    )
+    if cursor.rowcount:
+        db.execute(
+            """
+            UPDATE report_suppression_rules
+            SET hit_count = hit_count + 1, last_hit_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, rule_id),
+        )
+        db.commit()
+
+
+def _maybe_create_report_suppression_candidate(
+    db,
+    *,
+    task,
+    result_code: str,
+    result: dict,
+    item_id: str,
+    item_type: str,
+    acceptance_status: str | None,
+    rejection_reason: str,
+    rejection_note: str,
+) -> bool:
+    if (
+        item_type != "non_issue"
+        or acceptance_status != "rejected"
+        or rejection_reason not in REPORT_SUPPRESSION_REJECTION_REASONS
+    ):
+        return False
+
+    report_item = next((item for item in _result_report_items(result) if item.get("id") == item_id), None)
+    if report_item is None:
+        return False
+
+    task_type = task["task_type"] or DOCUMENT_TASK_TYPE
+    fingerprint = _report_item_suppression_fingerprint(task_type, result_code, report_item)
+    now = now_text()
+    reason = REPORT_REJECTION_REASONS.get(rejection_reason, "") or rejection_note
+    snapshot = _report_suppression_item_snapshot(report_item)
+    db.execute(
+        """
+        INSERT INTO report_suppression_rules(
+            task_type, check_code, fingerprint, item_json, reason, enabled,
+            source_task_id, source_result_code, source_item_id,
+            hit_count, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?)
+        ON CONFLICT(task_type, check_code, fingerprint) DO UPDATE SET
+            item_json = excluded.item_json,
+            reason = CASE
+                WHEN report_suppression_rules.reason IS NULL OR report_suppression_rules.reason = ''
+                THEN excluded.reason
+                ELSE report_suppression_rules.reason
+            END,
+            updated_at = excluded.updated_at
+        """,
+        (
+            task_type,
+            result_code,
+            fingerprint,
+            json.dumps(snapshot, ensure_ascii=False),
+            reason,
+            task["id"],
+            result_code,
+            item_id,
+            now,
+            now,
+        ),
+    )
+    return True
+
+
+def _report_item_suppression_fingerprint(task_type: str, result_code: str, item: dict) -> str:
+    source = {
+        "task_type": str(task_type or ""),
+        "check_code": str(result_code or ""),
+        "fields": _report_suppression_item_fields(item),
+    }
+    raw = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _report_suppression_item_snapshot(item: dict) -> dict:
+    fields = _report_suppression_item_fields(item)
+    return {
+        **fields,
+        "text": _normalize_suppression_text(item.get("text")),
+        "type": _normalize_report_item_type(item.get("type")) or "issue",
+    }
+
+
+def _report_suppression_item_fields(item: dict) -> dict:
+    return {
+        field: _normalize_suppression_text(item.get(field))
+        for field, _label in REPORT_ITEM_FIELDS
+    }
+
+
+def _normalize_suppression_text(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
 
 
 def _result_report_items(result: dict, structured_report: dict | None = None) -> list[dict]:
@@ -3925,13 +4209,14 @@ def _finalize_report_counts(counts: dict) -> dict:
     return counts
 
 
-def _count_report_items(items: list[dict]) -> dict:
+def _count_report_items(items: list[dict], *, suppressed_count: int = 0) -> dict:
     counts = {key: 0 for key in REPORT_ITEM_TYPE_ORDER}
     counts.update(
         {
             "accepted_issue": 0,
             "rejected_issue": 0,
             "pending_issue_acceptance": 0,
+            "suppressed": max(0, int(suppressed_count or 0)),
         }
     )
     for item in items:
@@ -3955,11 +4240,17 @@ def _report_item_totals(results: list[dict]) -> dict:
             "accepted_issue": 0,
             "rejected_issue": 0,
             "pending_issue_acceptance": 0,
+            "suppressed": 0,
         }
     )
     for result in results:
         counts = result.get("report_counts") or {}
-        for key in tuple(REPORT_ITEM_TYPE_ORDER) + ("accepted_issue", "rejected_issue", "pending_issue_acceptance"):
+        for key in tuple(REPORT_ITEM_TYPE_ORDER) + (
+            "accepted_issue",
+            "rejected_issue",
+            "pending_issue_acceptance",
+            "suppressed",
+        ):
             totals[key] += int(counts.get(key) or 0)
     return _finalize_report_counts(totals)
 
@@ -4023,13 +4314,28 @@ def _update_report_item_type(task):
         target["item_acceptances"] = acceptances
 
     db = get_db()
+    suppression_candidate_created = _maybe_create_report_suppression_candidate(
+        db,
+        task=task,
+        result_code=result_code,
+        result=target,
+        item_id=item_id,
+        item_type=item_type,
+        acceptance_status=acceptance_status,
+        rejection_reason=rejection_reason,
+        rejection_note=rejection_note,
+    )
     db.execute(
         "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
         (json.dumps(results, ensure_ascii=False), now_text(), task["id"]),
     )
     db.commit()
 
-    prepared = _prepare_task_results(results)
+    prepared = _prepare_task_results(
+        results,
+        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
+        task_id=task["id"],
+    )
     updated_result = next((item for item in prepared if str(item.get("code") or "") == result_code), None)
     updated_report_item = None
     if updated_result:
@@ -4049,6 +4355,7 @@ def _update_report_item_type(task):
         "rejection_note": (updated_report_item or {}).get("rejection_note", ""),
         "result_counts": (updated_result or {}).get("report_counts", {}),
         "totals": _report_item_totals(prepared),
+        "suppression_candidate_created": suppression_candidate_created,
     }
 
 

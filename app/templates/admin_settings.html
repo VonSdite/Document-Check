@@ -148,6 +148,77 @@
   </form>
 </section>
 
+<section class="panel settings-section">
+  <div class="settings-section-head">
+    <div>
+      <h2 class="title-with-help">误报忽略规则
+        <button class="help-tip" type="button" aria-label="误报忽略规则说明" data-tip="当报告条目被标记为非问题且不接纳原因为模型幻觉、模型误报或不适用时，系统会生成候选规则。启用后，后续完全相同的报告条目会自动折叠到已忽略误报中，不参与主统计。">?</button>
+      </h2>
+      <p>候选规则默认不生效，启用后才会过滤后续完全相同的报告条目。</p>
+    </div>
+  </div>
+  {% if report_suppression_rules %}
+  <div class="table-wrap">
+    <table class="settings-ip-table">
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>检查项</th>
+          <th>问题类型</th>
+          <th>位置</th>
+          <th>问题描述</th>
+          <th>原因</th>
+          <th>命中</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in report_suppression_rules %}
+        <tr>
+          <td><span class="status-pill {{ 'status-completed' if rule.enabled else 'status-queued' }}">{{ "已启用" if rule.enabled else "候选" }}</span></td>
+          <td>
+            {{ rule.check_name }}
+            <div class="subline">{{ rule.task_type_label }}</div>
+          </td>
+          <td>{{ rule.item.category or '-' }}</td>
+          <td>{{ rule.item.location or '-' }}</td>
+          <td>{{ rule.item.description or rule.item.text or '-' }}</td>
+          <td>{{ rule.reason or '-' }}</td>
+          <td>
+            {{ rule.hit_count }}
+            {% if rule.last_hit_at %}<div class="subline">{{ rule.last_hit_at }}</div>{% endif %}
+          </td>
+          <td class="right">
+            <div class="task-actions">
+              <form method="post">
+                <input type="hidden" name="action" value="report_suppression_rule">
+                <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                {% if rule.enabled %}
+                <button class="small-button" type="submit" name="operation" value="disable">停用</button>
+                {% else %}
+                <button class="small-button" type="submit" name="operation" value="enable">启用</button>
+                {% endif %}
+              </form>
+              <form method="post" data-confirm="确认删除该误报忽略规则？历史报告不会被删除。">
+                <input type="hidden" name="action" value="report_suppression_rule">
+                <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                <button class="small-button danger" type="submit" name="operation" value="delete">删除</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state compact">
+    <h3>暂无误报忽略规则</h3>
+    <p>在报告页把条目标记为“非问题”并选择“不接纳”后，系统会生成候选规则。</p>
+  </div>
+  {% endif %}
+</section>
+
 {% for group in check_item_groups %}
 <section class="panel settings-section">
   <div class="settings-section-head">

@@ -2177,6 +2177,115 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(accepted_payload["totals"]["issue_detection_rate"], "100.0%")
         self.assertEqual(accepted_payload["totals"]["issue_acceptance_rate"], "100.0%")
 
+    def test_report_suppression_candidate_can_be_enabled_and_hides_future_exact_item(self):
+        result_json = [
+            {
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "result": (
+                    "1. 问题类型：内部备注残留\n"
+                    "位置：第1章\n"
+                    "原文摘录：TODO：研发确认\n"
+                    "问题描述：面向客户资料中残留内部备注\n"
+                    "影响说明：影响客户信任\n"
+                    "修改建议：删除内部备注。"
+                ),
+            }
+        ]
+        with self.app.app_context():
+            now = "2026-05-24 12:20:00"
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'source.txt', 'source.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            source_task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{source_task_id}")
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        item_id = _required_tag(soup.select_one("[data-report-item]"))["data-item-id"]
+
+        response = self.client.post(
+            f"/admin/tasks/{source_task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "non_issue",
+                "acceptance_status": "rejected",
+                "rejection_reason": "false_positive",
+                "rejection_note": "公司规范允许该表述",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["suppression_candidate_created"])
+        with self.app.app_context():
+            rule = get_db().execute(
+                "SELECT * FROM report_suppression_rules WHERE check_code = 'compliance'"
+            ).fetchone()
+            self.assertIsNotNone(rule)
+            self.assertEqual(rule["enabled"], 0)
+            self.assertEqual(rule["reason"], "模型误报")
+            rule_id = rule["id"]
+
+        settings = self.client.get("/admin/settings")
+        settings_html = settings.get_data(as_text=True)
+        self.assertIn("误报忽略规则", settings_html)
+        self.assertIn("候选", settings_html)
+        self.assertIn("面向客户资料中残留内部备注", settings_html)
+
+        with self.app.app_context():
+            now = "2026-05-24 12:25:00"
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'future.txt', 'future.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            future_task_id = cursor.lastrowid
+
+        detail_before_enable = self.client.get(f"/admin/tasks/{future_task_id}")
+        self.assertEqual(len(BeautifulSoup(detail_before_enable.get_data(as_text=True), "html.parser").select("[data-report-item]")), 1)
+
+        enable_response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "report_suppression_rule",
+                "rule_id": str(rule_id),
+                "operation": "enable",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(enable_response.status_code, 200)
+        self.assertIn("已启用", enable_response.get_data(as_text=True))
+
+        detail_after_enable = self.client.get(f"/admin/tasks/{future_task_id}")
+        soup = BeautifulSoup(detail_after_enable.get_data(as_text=True), "html.parser")
+        self.assertEqual(len(soup.select("[data-report-item]")), 0)
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suppressed"]')).get_text(strip=True), "1")
+        self.assertIn("已忽略误报 1 条", detail_after_enable.get_data(as_text=True))
+        self.assertIn("面向客户资料中残留内部备注", detail_after_enable.get_data(as_text=True))
+        with self.app.app_context():
+            updated_rule = get_db().execute("SELECT hit_count FROM report_suppression_rules WHERE id = ?", (rule_id,)).fetchone()
+            self.assertEqual(updated_rule["hit_count"], 1)
+
     def test_report_item_reject_requires_reason(self):
         with self.app.app_context():
             now = "2026-05-24 12:30:00"
