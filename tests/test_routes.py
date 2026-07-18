@@ -1952,6 +1952,54 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("第二行", row_text)
         self.assertNotIn('"items"', row_text)
 
+    def test_task_detail_salvages_complete_items_from_truncated_structured_json(self):
+        with self.app.app_context():
+            now = "2026-05-23 13:35:00"
+            raw_json = (
+                '{"summary":"总体风险等级为中","items":['
+                '{"status":"issue","category":"参数不一致","location":"第10页","excerpt":"10A",'
+                '"description":"电流参数不一致。","impact":"可能误导实施","suggestion":"统一为10A"},'
+                '{"status":"suggestion","category":"术语一致性","location":"第20页","excerpt":"控制器",'
+                '"description":"名称表述不统一。","impact":"影响理解","suggestion":"统一名称"},'
+                '{"status":"issue","category":"未完成条目","description":"响应在这里被截断'
+            )
+            result_json = [
+                {
+                    "code": "consistency",
+                    "name": "全文一致性检查",
+                    "result": raw_json,
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 2)
+        page_text = soup.get_text(" ", strip=True)
+        rows_text = " ".join(row.get_text(" ", strip=True) for row in rows)
+        self.assertIn("总体风险等级为中", page_text)
+        self.assertIn("电流参数不一致", rows_text)
+        self.assertIn("名称表述不统一", rows_text)
+        self.assertNotIn("未完成条目", rows_text)
+        self.assertNotIn('"items"', rows_text)
+
     def test_task_detail_repairs_duplicate_status_json_value(self):
         with self.app.app_context():
             now = "2026-05-23 13:40:00"

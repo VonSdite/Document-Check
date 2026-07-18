@@ -3841,7 +3841,8 @@ def _parse_structured_report_json(text: str, depth: int = 0):
 def _load_structured_json_candidate(candidate: str, depth: int):
     if depth > 3:
         return None
-    for variant in _json_candidate_variants(candidate):
+    variants = _json_candidate_variants(candidate)
+    for variant in variants:
         try:
             parsed = json.loads(variant)
         except (TypeError, json.JSONDecodeError):
@@ -3852,7 +3853,56 @@ def _load_structured_json_candidate(candidate: str, depth: int):
                 return nested
             continue
         return parsed
+    for variant in variants:
+        parsed = _parse_truncated_structured_report_candidate(variant)
+        if parsed is not None:
+            return parsed
     return None
+
+
+def _parse_truncated_structured_report_candidate(candidate: str) -> dict | None:
+    text = str(candidate or "").strip()
+    object_start = text.find("{")
+    if object_start < 0:
+        return None
+    text = text[object_start:]
+
+    item_array_matches = []
+    for key in REPORT_JSON_ITEM_KEYS:
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*\[', text)
+        if match:
+            item_array_matches.append((match.start(), match.end() - 1, key))
+    if not item_array_matches:
+        return None
+
+    _, array_start, item_key = min(item_array_matches)
+    try:
+        payload = json.loads(f"{text[:array_start + 1]}]}}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    decoder = json.JSONDecoder()
+    items = []
+    position = array_start + 1
+    while position < len(text):
+        while position < len(text) and (text[position].isspace() or text[position] == ","):
+            position += 1
+        if position >= len(text) or text[position] == "]":
+            break
+        try:
+            item, end = decoder.raw_decode(text, position)
+        except json.JSONDecodeError:
+            break
+        if isinstance(item, (dict, str)):
+            items.append(item)
+        position = end
+
+    if not items:
+        return None
+    payload[item_key] = items
+    return payload
 
 
 def _json_candidate_variants(candidate: str) -> list[str]:
