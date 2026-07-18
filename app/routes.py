@@ -296,6 +296,7 @@ def register_routes(app):
     app.add_template_global(subject_label, "subject_label")
     app.add_template_global(_owner_display, "owner_display")
     app.add_template_global(_owner_meta, "owner_meta")
+    app.add_template_global(_consistency_task_title, "consistency_task_title")
 
     @app.context_processor
     def inject_globals():
@@ -1474,6 +1475,33 @@ def _row_value(row, key: str, default=None):
     if isinstance(row, dict):
         return row.get(key, default)
     return default
+
+
+def _consistency_task_title(task, include_all: bool = False) -> str:
+    groups = document_groups_from_meta(_row_value(task, "document_meta_json"))
+    title = _consistency_title_from_groups(groups, include_all=include_all)
+    if title:
+        return title
+    return str(_row_value(task, "original_filename", "多文档对照检查") or "多文档对照检查")
+
+
+def _consistency_title_from_groups(groups: list[dict], *, include_all: bool = False) -> str:
+    parts = []
+    for group in groups:
+        names = [
+            Path(str(file_info.get("original_filename") or "")).name.strip()
+            for file_info in group.get("files", [])
+        ]
+        names = [name for name in names if name]
+        if not names:
+            continue
+        label = str(group.get("label") or "文档").strip() or "文档"
+        if include_all or len(names) <= 2:
+            summary = "、".join(names)
+        else:
+            summary = f"{'、'.join(names[:2])} 等{len(names)}个"
+        parts.append(f"{label}：{summary}")
+    return " / ".join(parts)
 
 
 def _render_admin_tasks_page():
@@ -2802,7 +2830,7 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
     all_files = master_files + related_files
     first_file = all_files[0]
     file_size = sum(file_info["file_size"] for file_info in all_files)
-    original_filename = f"多文档对照检查：素材{len(master_files)}个 / 资料{len(related_files)}个"
+    original_filename = _consistency_title_from_groups(document_meta["groups"])
     owner_name = identity.display_name or None
 
     db.execute(

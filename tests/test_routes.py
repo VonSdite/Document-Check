@@ -15,7 +15,7 @@ from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
 from app.formatting import render_markdown
-from app.routes import _find_enabled_model, _upload_destination, get_enabled_models, register_routes
+from app.routes import _consistency_task_title, _find_enabled_model, _upload_destination, get_enabled_models, register_routes
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 
 
@@ -2611,8 +2611,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute("SELECT task_type, document_text, checks_snapshot_json FROM tasks").fetchone()
+            task = get_db().execute(
+                "SELECT task_type, original_filename, document_text, checks_snapshot_json FROM tasks"
+            ).fetchone()
         self.assertEqual(task["task_type"], "consistency_check")
+        self.assertEqual(task["original_filename"], "素材文档：master.xlsx / 资料：related.txt")
         self.assertIn("## 素材文档1：master.xlsx", task["document_text"])
         self.assertIn("# 工作表：素材参数表", task["document_text"])
         self.assertIn("素材参数 | 10A", task["document_text"])
@@ -2627,6 +2630,44 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "prompt": item["prompt"],
                 }
             ],
+        )
+        page = self.client.get("/consistency")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("素材文档：master.xlsx / 资料：related.txt", page.get_data(as_text=True))
+
+    def test_consistency_task_title_uses_document_metadata_for_legacy_task(self):
+        task = {
+            "original_filename": "多文档对照检查：素材3个 / 资料1个",
+            "document_meta_json": json.dumps(
+                {
+                    "groups": [
+                        {
+                            "role": "master",
+                            "label": "素材文档",
+                            "files": [
+                                {"original_filename": "需求说明.docx"},
+                                {"original_filename": "参数表.xlsx"},
+                                {"original_filename": "会议纪要.pdf"},
+                            ],
+                        },
+                        {
+                            "role": "related",
+                            "label": "资料",
+                            "files": [{"original_filename": "投标文件.docx"}],
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+        }
+
+        self.assertEqual(
+            _consistency_task_title(task),
+            "素材文档：需求说明.docx、参数表.xlsx 等3个 / 资料：投标文件.docx",
+        )
+        self.assertEqual(
+            _consistency_task_title(task, include_all=True),
+            "素材文档：需求说明.docx、参数表.xlsx、会议纪要.pdf / 资料：投标文件.docx",
         )
 
     def test_create_language_consistency_task_rejects_missing_checks_before_saving_file(self):
