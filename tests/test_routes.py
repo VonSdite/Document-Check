@@ -741,6 +741,27 @@ class AdminSettingsRouteTest(unittest.TestCase):
             row = get_db().execute("SELECT max_input_chars FROM user_model_providers").fetchone()
         self.assertEqual(row["max_input_chars"], 1000000)
 
+    def test_user_models_defaults_input_limit_to_five_hundred_thousand(self):
+        response = self.client.post(
+            "/models",
+            data={
+                "name": "默认上限提供商",
+                "api_base": "https://example.test/v1/chat/completions",
+                "api_key": "",
+                "request_timeout": "30",
+                "is_active": "on",
+                "model_configs": json.dumps(
+                    [{"model_name": "model-a", "force_disable_thinking": True}],
+                    ensure_ascii=False,
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            row = get_db().execute("SELECT max_input_chars FROM user_model_providers").fetchone()
+        self.assertEqual(row["max_input_chars"], 500000)
+
     def test_user_models_allows_same_name_for_distinct_thinking_modes(self):
         response = self.client.post(
             "/models",

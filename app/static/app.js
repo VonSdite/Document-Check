@@ -1123,7 +1123,7 @@ document.querySelectorAll(".provider-modal-form").forEach((form) => {
 });
 
 function addModelRow(form) {
-  renderModelRows(form, [...collectModelConfigs(form), { model_name: "", force_disable_thinking: false }]);
+  renderModelRows(form, [...collectModelConfigs(form), { model_name: "", force_disable_thinking: true }]);
   const inputs = form.querySelectorAll("[data-model-name]");
   const lastInput = inputs[inputs.length - 1];
   window.setTimeout(() => lastInput?.focus());
@@ -1320,7 +1320,7 @@ function renderFetchModelPicker() {
 function openFetchModelPicker(form, models) {
   const currentModels = collectModelConfigs(form);
   const currentDefaultNames = new Set(
-    currentModels.filter((item) => !item.force_disable_thinking).map((item) => item.model_name),
+    currentModels.filter((item) => item.force_disable_thinking).map((item) => item.model_name),
   );
   fetchedModelCandidates = normalizeModelConfigs(models).map((item) => item.model_name);
   fetchedModelExistingSelection = new Set(fetchedModelCandidates.filter((model) => currentDefaultNames.has(model)));
@@ -1340,7 +1340,7 @@ function applyFetchedModelsSelection() {
   }
   const currentModels = collectModelConfigs(activeFetchModelForm);
   const currentDefaultByName = new Map(
-    currentModels.filter((item) => !item.force_disable_thinking).map((item) => [item.model_name, item]),
+    currentModels.filter((item) => item.force_disable_thinking).map((item) => [item.model_name, item]),
   );
   const fetchedSet = new Set(fetchedModelCandidates);
   const nextModels = [];
@@ -1348,7 +1348,7 @@ function applyFetchedModelsSelection() {
 
   currentModels.forEach((model) => {
     if (
-      !model.force_disable_thinking &&
+      model.force_disable_thinking &&
       fetchedSet.has(model.model_name) &&
       !fetchedModelSelection.has(model.model_name)
     ) {
@@ -1359,12 +1359,12 @@ function applyFetchedModelsSelection() {
   });
 
   fetchedModelCandidates.forEach((modelName) => {
-    const key = modelConfigKey(modelName, false);
+    const key = modelConfigKey(modelName, true);
     if (!fetchedModelSelection.has(modelName) || seen.has(key)) {
       return;
     }
     seen.add(key);
-    nextModels.push(currentDefaultByName.get(modelName) || { model_name: modelName, force_disable_thinking: false });
+    nextModels.push(currentDefaultByName.get(modelName) || { model_name: modelName, force_disable_thinking: true });
   });
 
   renderModelRows(activeFetchModelForm, nextModels);

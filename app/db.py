@@ -93,7 +93,7 @@ def init_db():
             api_base TEXT NOT NULL,
             api_key TEXT,
             request_timeout INTEGER NOT NULL DEFAULT 3600,
-            max_input_chars INTEGER NOT NULL DEFAULT 80000,
+            max_input_chars INTEGER NOT NULL DEFAULT 500000,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL

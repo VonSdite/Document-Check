@@ -22,7 +22,7 @@
         </div>
         <label>API Key<input name="api_key" type="password" value="{{ provider.api_key if provider and provider.api_key else '' }}" autocomplete="new-password"></label>
         <label>超时(秒)<input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout if provider and provider.request_timeout else 3600 }}" required></label>
-        <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="1000000" step="1" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 80000 }}" required></label>
+        <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="1000000" step="1" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 500000 }}" required></label>
       </div>
       <div class="model-editor" data-model-editor>
         <div class="model-editor-head">
@@ -120,7 +120,7 @@
           </td>
           <td>
             {{ provider.request_timeout or 3600 }} 秒
-            <div class="subline">{{ provider.max_input_chars or 80000 }} 字</div>
+            <div class="subline">{{ provider.max_input_chars or 500000 }} 字</div>
           </td>
           <td><span class="status-pill {{ 'status-completed' if provider.is_active else 'status-canceled' }}">{{ "启用" if provider.is_active else "停用" }}</span></td>
           <td class="right">
