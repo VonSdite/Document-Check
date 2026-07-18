@@ -7,6 +7,9 @@ from flask import current_app, g
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 
 
+MODEL_THINKING_DEFAULT_MIGRATION_KEY = "model_force_disable_thinking_default_v1"
+
+
 def now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -103,7 +106,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             provider_id INTEGER NOT NULL,
             model_name TEXT NOT NULL,
-            force_disable_thinking INTEGER NOT NULL DEFAULT 0,
+            force_disable_thinking INTEGER NOT NULL DEFAULT 1,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -169,6 +172,7 @@ def init_db():
     _ensure_column(db, "tasks", "owner_source", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
     _migrate_task_owners(db)
+    _migrate_model_thinking_defaults(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
 
@@ -200,6 +204,42 @@ def _migrate_task_owners(db):
         SET owner_source = 'ip'
         WHERE owner_source IS NULL OR owner_source = ''
         """
+    )
+
+
+def _migrate_model_thinking_defaults(db):
+    migrated = db.execute(
+        "SELECT 1 FROM settings WHERE key = ?",
+        (MODEL_THINKING_DEFAULT_MIGRATION_KEY,),
+    ).fetchone()
+    if migrated is not None:
+        return
+
+    now = now_text()
+    db.execute(
+        """
+        DELETE FROM user_model_configs AS current
+        WHERE current.force_disable_thinking = 0
+          AND EXISTS (
+              SELECT 1
+              FROM user_model_configs AS disabled
+              WHERE disabled.provider_id = current.provider_id
+                AND disabled.model_name = current.model_name
+                AND disabled.force_disable_thinking = 1
+          )
+        """
+    )
+    db.execute(
+        """
+        UPDATE user_model_configs
+        SET force_disable_thinking = 1, updated_at = ?
+        WHERE force_disable_thinking = 0
+        """,
+        (now,),
+    )
+    db.execute(
+        "INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)",
+        (MODEL_THINKING_DEFAULT_MIGRATION_KEY, now),
     )
 
 

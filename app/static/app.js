@@ -964,7 +964,7 @@ function normalizeModelConfigs(value) {
   const seen = new Set();
   source.forEach((item) => {
     const modelName = modelConfigName(item);
-    const forceDisableThinking = Boolean(item?.force_disable_thinking);
+    const forceDisableThinking = item?.force_disable_thinking !== false;
     const key = modelConfigKey(modelName, forceDisableThinking);
     if (!modelName || seen.has(key)) {
       return;

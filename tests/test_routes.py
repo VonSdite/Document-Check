@@ -762,6 +762,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
             row = get_db().execute("SELECT max_input_chars FROM user_model_providers").fetchone()
         self.assertEqual(row["max_input_chars"], 500000)
 
+    def test_user_models_defaults_legacy_model_config_to_disable_thinking(self):
+        response = self.client.post(
+            "/models",
+            data={
+                "name": "旧格式提供商",
+                "api_base": "https://example.test/v1/chat/completions",
+                "api_key": "",
+                "request_timeout": "30",
+                "is_active": "on",
+                "model_configs": json.dumps([{"model_name": "legacy-model"}], ensure_ascii=False),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            row = get_db().execute(
+                "SELECT force_disable_thinking FROM user_model_configs WHERE model_name = 'legacy-model'"
+            ).fetchone()
+        self.assertEqual(row["force_disable_thinking"], 1)
+
     def test_user_models_allows_same_name_for_distinct_thinking_modes(self):
         response = self.client.post(
             "/models",

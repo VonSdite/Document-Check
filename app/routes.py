@@ -2025,10 +2025,10 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
         for item in value:
             if isinstance(item, dict):
                 model_name = str(item.get("model_name") or item.get("id") or "").strip()
-                force_disable_thinking = _form_bool(item.get("force_disable_thinking"))
+                force_disable_thinking = _form_bool(item.get("force_disable_thinking", True))
             else:
                 model_name = str(item or "").strip()
-                force_disable_thinking = False
+                force_disable_thinking = True
             configs.append(
                 {
                     "model_name": model_name,
@@ -2040,7 +2040,7 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
         configs = [
             {
                 "model_name": line.strip(),
-                "force_disable_thinking": False,
+                "force_disable_thinking": True,
             }
             for line in str(models_text or "").splitlines()
             if line.strip()
@@ -2083,7 +2083,9 @@ def _model_config_name(model_config) -> str:
 
 
 def _model_config_force_disable_thinking(model_config) -> bool:
-    return bool(isinstance(model_config, dict) and model_config.get("force_disable_thinking"))
+    if not isinstance(model_config, dict):
+        return True
+    return _form_bool(model_config.get("force_disable_thinking", True))
 
 
 def get_enabled_models(owner_subject: str | None = None):

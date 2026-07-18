@@ -5,6 +5,7 @@ from pathlib import Path
 from flask import Flask
 
 from app.db import (
+    MODEL_THINKING_DEFAULT_MIGRATION_KEY,
     DEFAULT_CHECK_ITEMS_BY_CODE,
     default_check_item_codes,
     get_bool_setting,
@@ -12,6 +13,7 @@ from app.db import (
     get_ip_username,
     get_setting,
     init_db,
+    now_text,
     reset_default_check_item_prompt,
     seed_defaults,
     set_ip_username,
@@ -96,7 +98,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
             for row in db.execute("PRAGMA table_info(user_model_providers)").fetchall()
         }
         model_columns = {
-            row["name"]
+            row["name"]: row
             for row in db.execute("PRAGMA table_info(user_model_configs)").fetchall()
         }
 
@@ -107,6 +109,61 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertNotIn("ssl_verify", provider_columns)
         self.assertIn("model_name", model_columns)
         self.assertIn("force_disable_thinking", model_columns)
+        self.assertEqual(model_columns["force_disable_thinking"]["dflt_value"], "1")
+
+    def test_init_db_migrates_existing_models_to_disable_thinking_once(self):
+        db = get_db()
+        db.execute("DELETE FROM settings WHERE key = ?", (MODEL_THINKING_DEFAULT_MIGRATION_KEY,))
+        now = now_text()
+        provider_id = db.execute(
+            """
+            INSERT INTO user_model_providers(
+                owner_subject, name, api_base, api_key, request_timeout,
+                max_input_chars, is_active, created_at, updated_at
+            )
+            VALUES ('ip:127.0.0.1', '测试提供商', 'https://example.test', '', 30, 500000, 1, ?, ?)
+            """,
+            (now, now),
+        ).lastrowid
+        db.executemany(
+            """
+            INSERT INTO user_model_configs(
+                provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (provider_id, "legacy-model", 0, 10, now, now),
+                (provider_id, "duplicate-model", 0, 20, now, now),
+                (provider_id, "duplicate-model", 1, 30, now, now),
+            ],
+        )
+        db.commit()
+
+        init_db()
+
+        rows = db.execute(
+            "SELECT model_name, force_disable_thinking FROM user_model_configs ORDER BY model_name"
+        ).fetchall()
+        self.assertEqual(
+            [(row["model_name"], row["force_disable_thinking"]) for row in rows],
+            [("duplicate-model", 1), ("legacy-model", 1)],
+        )
+        marker = db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (MODEL_THINKING_DEFAULT_MIGRATION_KEY,),
+        ).fetchone()
+        self.assertEqual(marker["value"], "true")
+
+        db.execute(
+            "UPDATE user_model_configs SET force_disable_thinking = 0 WHERE model_name = 'legacy-model'"
+        )
+        db.commit()
+        init_db()
+        preserved = db.execute(
+            "SELECT force_disable_thinking FROM user_model_configs WHERE model_name = 'legacy-model'"
+        ).fetchone()
+        self.assertEqual(preserved["force_disable_thinking"], 0)
 
     def test_ip_username_table_exists(self):
         db = get_db()
