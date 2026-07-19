@@ -2023,6 +2023,22 @@ td {
   background: #fbfdff;
 }
 
+.report-limit-notice {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #bfd5f2;
+  border-radius: 8px;
+  background: #f2f7fd;
+  color: #315477;
+  line-height: 1.6;
+}
+
+.report-limit-notice.is-warning {
+  border-color: #ead39a;
+  background: #fff9e8;
+  color: #76591b;
+}
+
 .report-table-wrap {
   width: 100%;
   overflow-x: auto;

@@ -126,6 +126,8 @@ REPORT_REJECTION_REASONS = {
 }
 REPORT_SUPPRESSION_REJECTION_REASONS = {"model_hallucination", "false_positive", "not_applicable"}
 REPORT_ITEM_FIELDS = (
+    ("severity_label", "严重程度"),
+    ("confidence_label", "证据可信度"),
     ("category", "问题类型"),
     ("location", "位置"),
     ("excerpt", "原文/证据"),
@@ -133,6 +135,20 @@ REPORT_ITEM_FIELDS = (
     ("impact", "影响"),
     ("suggestion", "修改建议"),
 )
+REPORT_SUPPRESSION_FIELDS = ("category", "location", "excerpt", "description", "impact", "suggestion")
+REPORT_SEVERITY_LABELS = {
+    "critical": "致命",
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+}
+REPORT_CONFIDENCE_LABELS = {
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+}
+REPORT_SEVERITY_ORDER = {value: index for index, value in enumerate(REPORT_SEVERITY_LABELS)}
+REPORT_CONFIDENCE_ORDER = {value: index for index, value in enumerate(REPORT_CONFIDENCE_LABELS)}
 MEDIA_REPORT_ITEM_FIELDS = (("media_summary", "AI检查结论"),)
 MEDIA_REPORT_ITEM_DETAIL_FIELDS = (
     ("category", "问题类型"),
@@ -168,6 +184,8 @@ REPORT_JSON_ITEM_KEYS = ("items", "issues", "report_items", "findings", "problem
 REPORT_JSON_SUMMARY_KEYS = ("summary", "overall", "conclusion", "总体结论", "总结")
 REPORT_STATUS_KEYS = ("status", "状态", "classification", "item_type", "结论类型", "问题状态", "type")
 REPORT_FIELD_ALIASES = {
+    "severity": ("severity", "priority", "risk_level", "严重程度", "风险等级", "优先级"),
+    "confidence": ("confidence", "certainty", "evidence_confidence", "可信度", "置信度", "证据可信度"),
     "category": ("category", "issue_type", "problem_type", "type", "问题类型", "类型", "检查类型"),
     "location": ("location", "position", "where", "位置", "位置线索", "页码", "章节", "图片位置"),
     "excerpt": (
@@ -3556,6 +3574,15 @@ def _prepare_task_results(
             acceptance = _normalize_report_acceptance(acceptances.get(report_item["id"]))
             report_item.update(acceptance)
             report_item["media_summary"] = _media_report_item_text(report_item)
+        original_report_item_count = len(report_items)
+        ranking_complete = bool(report_items) and all(
+            report_item.get("severity") and report_item.get("confidence")
+            for report_item in report_items
+        )
+        if ranking_complete:
+            report_items = _deduplicate_report_items(report_items)
+            report_items.sort(key=_report_item_priority_key)
+        duplicate_count = original_report_item_count - len(report_items)
         report_items, suppressed_items = _apply_report_suppression(
             task_type=task_type,
             task_id=task_id,
@@ -3564,8 +3591,18 @@ def _prepare_task_results(
             suppression_rules=suppression_rules,
             record_hits=record_suppression_hits,
         )
+        report_items, report_limit = _limit_ranked_report_items(
+            report_items,
+            issue_output_limit=item.get("issue_output_limit"),
+            ranking_complete=ranking_complete,
+            original_count=original_report_item_count,
+            duplicate_count=duplicate_count,
+        )
+        for display_index, report_item in enumerate(report_items, start=1):
+            report_item["index"] = display_index
         item["result_summary"] = _result_report_summary(item, structured_report)
         item["report_items"] = report_items
+        item["report_limit"] = report_limit
         item["suppressed_report_items"] = suppressed_items
         item["report_counts"] = _count_report_items(report_items, suppressed_count=len(suppressed_items))
         prepared.append(item)
@@ -3739,7 +3776,7 @@ def _report_suppression_item_snapshot(item: dict) -> dict:
 def _report_suppression_item_fields(item: dict) -> dict:
     return {
         field: _normalize_suppression_text(item.get(field))
-        for field, _label in REPORT_ITEM_FIELDS
+        for field in REPORT_SUPPRESSION_FIELDS
     }
 
 
@@ -4009,6 +4046,10 @@ def _normalize_structured_report_item(raw_item) -> dict:
         if isinstance(parsed, dict):
             return _normalize_structured_report_item(parsed)
         return {
+            "severity": "",
+            "severity_label": "",
+            "confidence": "",
+            "confidence_label": "",
             "category": "",
             "location": "",
             "excerpt": "",
@@ -4025,14 +4066,156 @@ def _normalize_structured_report_item(raw_item) -> dict:
         field: _first_report_field(raw_item, aliases)
         for field, aliases in REPORT_FIELD_ALIASES.items()
     }
+    fields["severity"] = _normalize_report_severity(fields.get("severity"))
+    fields["severity_label"] = REPORT_SEVERITY_LABELS.get(fields["severity"], "")
+    fields["confidence"] = _normalize_report_confidence(fields.get("confidence"))
+    fields["confidence_label"] = REPORT_CONFIDENCE_LABELS.get(fields["confidence"], "")
     if _looks_like_status_only(fields["category"]):
         status = status or _normalize_report_item_status(fields["category"])
         fields["category"] = ""
-    if not any(fields.values()):
+    if not any(fields.get(field) for field in REPORT_SUPPRESSION_FIELDS):
         fields["description"] = _report_field_text(raw_item)
     item_text = _structured_report_item_text(fields)
     fields["type"] = "non_issue" if _is_no_action_report_item(fields) else status or _infer_report_item_type(item_text)
     return fields
+
+
+def _normalize_report_severity(value) -> str:
+    compact = _compact_report_text(value)
+    aliases = {
+        "critical": "critical",
+        "fatal": "critical",
+        "blocker": "critical",
+        "致命": "critical",
+        "灾难性": "critical",
+        "极高": "critical",
+        "high": "high",
+        "严重": "high",
+        "重大": "high",
+        "高": "high",
+        "medium": "medium",
+        "middle": "medium",
+        "moderate": "medium",
+        "一般": "medium",
+        "中": "medium",
+        "low": "low",
+        "minor": "low",
+        "轻微": "low",
+        "低": "low",
+    }
+    return aliases.get(compact, "")
+
+
+def _normalize_report_confidence(value) -> str:
+    compact = _compact_report_text(value)
+    aliases = {
+        "high": "high",
+        "certain": "high",
+        "明确": "high",
+        "高": "high",
+        "medium": "medium",
+        "middle": "medium",
+        "moderate": "medium",
+        "较高": "medium",
+        "中": "medium",
+        "low": "low",
+        "uncertain": "low",
+        "较低": "low",
+        "低": "low",
+    }
+    return aliases.get(compact, "")
+
+
+def _deduplicate_report_items(report_items: list[dict]) -> list[dict]:
+    unique_items = []
+    items_by_key = {}
+    for report_item in report_items:
+        key = (
+            _normalize_suppression_text(report_item.get("type")),
+            _normalize_suppression_text(report_item.get("category")),
+            _normalize_suppression_text(report_item.get("excerpt")),
+            _normalize_suppression_text(report_item.get("description")),
+            _normalize_suppression_text(report_item.get("impact")),
+            _normalize_suppression_text(report_item.get("suggestion")),
+        )
+        if not any(key[1:]):
+            unique_items.append(report_item)
+            continue
+        existing = items_by_key.get(key)
+        if existing is None:
+            items_by_key[key] = report_item
+            unique_items.append(report_item)
+            continue
+        existing["location"] = _merge_report_field_values(existing.get("location"), report_item.get("location"))
+        if _report_item_priority_key(report_item) < _report_item_priority_key(existing):
+            existing["severity"] = report_item.get("severity", "")
+            existing["severity_label"] = report_item.get("severity_label", "")
+            existing["confidence"] = report_item.get("confidence", "")
+            existing["confidence_label"] = report_item.get("confidence_label", "")
+    return unique_items
+
+
+def _merge_report_field_values(left, right) -> str:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text:
+        return right_text
+    if not right_text or right_text in left_text:
+        return left_text
+    return f"{left_text}；{right_text}"
+
+
+def _report_item_priority_key(report_item: dict) -> tuple[int, int, int, int, int]:
+    item_type_order = {"issue": 0, "suggestion": 1, "non_issue": 2}
+    item_type = str(report_item.get("type") or "")
+    return (
+        1 if item_type == "non_issue" else 0,
+        REPORT_SEVERITY_ORDER.get(str(report_item.get("severity") or ""), len(REPORT_SEVERITY_ORDER)),
+        REPORT_CONFIDENCE_ORDER.get(str(report_item.get("confidence") or ""), len(REPORT_CONFIDENCE_ORDER)),
+        item_type_order.get(item_type, len(item_type_order)),
+        int(report_item.get("index") or 0),
+    )
+
+
+def _limit_ranked_report_items(
+    report_items: list[dict],
+    *,
+    issue_output_limit,
+    ranking_complete: bool,
+    original_count: int,
+    duplicate_count: int,
+) -> tuple[list[dict], dict | None]:
+    if issue_output_limit is None:
+        return report_items, None
+    try:
+        limit = max(0, int(issue_output_limit))
+    except (TypeError, ValueError):
+        return report_items, None
+
+    before_limit_count = len(report_items)
+    omitted_count = 0
+    limit_applied = False
+    missing_ranking = False
+    if limit > 0 and before_limit_count > limit:
+        if ranking_complete:
+            omitted_count = before_limit_count - limit
+            report_items = report_items[:limit]
+            limit_applied = True
+        else:
+            missing_ranking = True
+
+    if not duplicate_count and not omitted_count and not missing_ranking:
+        return report_items, None
+    return report_items, {
+        "limit": limit,
+        "original_count": original_count,
+        "duplicate_count": duplicate_count,
+        "deduplicated_count": original_count - duplicate_count,
+        "displayed_count": len(report_items),
+        "omitted_count": omitted_count,
+        "limit_applied": limit_applied,
+        "missing_ranking": missing_ranking,
+    }
 
 
 def _first_report_field(source: dict, aliases: tuple[str, ...]) -> str:

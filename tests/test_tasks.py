@@ -188,6 +188,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["issue_output_limit"], 45)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["result"], "最终结果")
+        self.assertEqual(results[0]["issue_output_limit"], 45)
 
     def test_sensitive_terms_check_uses_local_dictionary_without_llm(self):
         terms_path = Path(self.temp_dir.name) / "sensitive_terms.xlsx"

@@ -565,6 +565,7 @@ def _run_check_items_concurrently(
                 "code": item["code"],
                 "name": item["name"],
                 "result": content,
+                "issue_output_limit": issue_output_limit,
             }
             if structured_report is not None:
                 result["structured_report"] = structured_report

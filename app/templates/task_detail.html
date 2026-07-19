@@ -113,6 +113,18 @@
     {% if result.result_summary %}
     <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
     {% endif %}
+    {% if result.report_limit %}
+    <div class="report-limit-notice {{ 'is-warning' if result.report_limit.missing_ranking else '' }}">
+      {% if result.report_limit.duplicate_count %}
+      已合并 {{ result.report_limit.duplicate_count }} 条重复问题，去重后共 {{ result.report_limit.deduplicated_count }} 条。
+      {% endif %}
+      {% if result.report_limit.limit_applied %}
+      已按严重程度和证据可信度排序，依据系统上限展示前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条；原始结果仍可在下方查看。
+      {% elif result.report_limit.missing_ranking %}
+      模型返回 {{ result.report_limit.original_count }} 条，但部分条目缺少严重程度或证据可信度，为避免误过滤，本报告未执行 {{ result.report_limit.limit }} 条硬限制。
+      {% endif %}
+    </div>
+    {% endif %}
     <div class="report-table-wrap">
       <table class="report-table{% if media_report %} report-table-media{% endif %}">
         <thead>

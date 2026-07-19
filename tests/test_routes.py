@@ -1507,6 +1507,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "文件名称",
                     "检查项",
                     "条目",
+                    "严重程度",
+                    "证据可信度",
                     "问题类型",
                     "位置",
                     "原文/证据",
@@ -1524,13 +1526,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(report_rows[1][2], "report.txt")
             self.assertEqual(report_rows[1][3], "全文一致性检查")
             self.assertEqual(report_rows[1][4], "条目 1")
-            self.assertEqual(report_rows[1][5], "参数不一致")
-            self.assertEqual(report_rows[1][11], "问题")
-            self.assertEqual(report_rows[1][12], "不接纳")
-            self.assertEqual(report_rows[1][13], "模型误报")
-            self.assertEqual(report_rows[1][14], "上下文可解释")
-            self.assertEqual(report_rows[2][10], "补充适用范围。")
-            self.assertEqual(report_rows[2][11], "建议")
+            self.assertEqual(report_rows[1][7], "参数不一致")
+            self.assertEqual(report_rows[1][13], "问题")
+            self.assertEqual(report_rows[1][14], "不接纳")
+            self.assertEqual(report_rows[1][15], "模型误报")
+            self.assertEqual(report_rows[1][16], "上下文可解释")
+            self.assertEqual(report_rows[2][12], "补充适用范围。")
+            self.assertEqual(report_rows[2][13], "建议")
             stats = dict(workbook["统计"].iter_rows(min_row=2, values_only=True))
             self.assertEqual(stats["问题"], 1)
             self.assertEqual(stats["建议"], 1)
@@ -1640,6 +1642,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "code": "consistency",
                     "name": "全文一致性检查",
                     "result": json.dumps(structured_report, ensure_ascii=False),
+                    "issue_output_limit": 1,
                 }
             ]
             cursor = get_db().execute(
@@ -1665,7 +1668,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
         self.assertEqual(
             headers,
-            ["条目", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳", "不接纳原因"],
+            ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳", "不接纳原因"],
         )
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 2)
@@ -1679,6 +1682,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(note.has_attr("disabled"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
         self.assertIn("确认后补充适用范围", rows[1].get_text(" ", strip=True))
+        self.assertIn("为避免误过滤，本报告未执行 1 条硬限制", soup.get_text(" ", strip=True))
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
 
@@ -1999,6 +2003,112 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("名称表述不统一", rows_text)
         self.assertNotIn("未完成条目", rows_text)
         self.assertNotIn('"items"', rows_text)
+
+    def test_task_detail_deduplicates_ranks_and_limits_structured_items(self):
+        with self.app.app_context():
+            now = "2026-05-23 13:37:00"
+            structured_result = {
+                "summary": "发现多个不同优先级的问题",
+                "items": [
+                    {
+                        "status": "issue",
+                        "severity": "low",
+                        "confidence": "high",
+                        "category": "低优先级",
+                        "location": "第1页",
+                        "excerpt": "低风险原文",
+                        "description": "低风险问题",
+                        "impact": "影响较小",
+                        "suggestion": "后续修改",
+                    },
+                    {
+                        "status": "issue",
+                        "severity": "critical",
+                        "confidence": "medium",
+                        "category": "安全问题",
+                        "location": "第20页",
+                        "excerpt": "禁止带电操作",
+                        "description": "安全约束前后矛盾",
+                        "impact": "可能造成人身安全风险",
+                        "suggestion": "立即统一安全要求",
+                    },
+                    {
+                        "status": "issue",
+                        "severity": "high",
+                        "confidence": "high",
+                        "category": "参数问题",
+                        "location": "第10页",
+                        "excerpt": "额定电流10A",
+                        "description": "关键参数不一致",
+                        "impact": "可能导致配置错误",
+                        "suggestion": "统一关键参数",
+                    },
+                    {
+                        "status": "issue",
+                        "severity": "high",
+                        "confidence": "high",
+                        "category": "参数问题",
+                        "location": "第30页",
+                        "excerpt": "额定电流10A",
+                        "description": "关键参数不一致",
+                        "impact": "可能导致配置错误",
+                        "suggestion": "统一关键参数",
+                    },
+                    {
+                        "status": "non_issue",
+                        "severity": "critical",
+                        "confidence": "high",
+                        "category": "无需修改",
+                        "location": "第40页",
+                        "excerpt": "当前表述正确",
+                        "description": "该项不是问题",
+                        "impact": "无实质影响",
+                        "suggestion": "无需修改",
+                    },
+                ],
+            }
+            result_json = [
+                {
+                    "code": "consistency",
+                    "name": "全文一致性检查",
+                    "result": json.dumps(structured_result, ensure_ascii=False),
+                    "issue_output_limit": 2,
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'ranked.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 2)
+        first_row = rows[0].get_text(" ", strip=True)
+        second_row = rows[1].get_text(" ", strip=True)
+        self.assertIn("致命", first_row)
+        self.assertIn("安全约束前后矛盾", first_row)
+        self.assertIn("高", second_row)
+        self.assertIn("关键参数不一致", second_row)
+        self.assertIn("第10页；第30页", second_row)
+        page_text = soup.get_text(" ", strip=True)
+        self.assertIn("已合并 1 条重复问题", page_text)
+        self.assertIn("展示前 2 条，省略 2 条", page_text)
+        self.assertNotIn("低风险问题", " ".join(row.get_text(" ", strip=True) for row in rows))
+        self.assertNotIn("该项不是问题", " ".join(row.get_text(" ", strip=True) for row in rows))
 
     def test_task_detail_repairs_duplicate_status_json_value(self):
         with self.app.app_context():
