@@ -103,6 +103,14 @@ class DocumentFormattingTest(unittest.TestCase):
 
         self.assertEqual(selected, pymupdf_text)
 
+    def test_pdf_page_selection_uses_pymupdf_by_default_for_equivalent_text(self):
+        pypdf_text = "The DANGER , WARNING , CAUTION , and NOTICE  statements."
+        pymupdf_text = "The DANGER, WARNING, CAUTION, and NOTICE statements."
+
+        selected = _select_pdf_page_text(pypdf_text, pymupdf_text)
+
+        self.assertEqual(selected, pymupdf_text)
+
     def test_pdf_page_selection_prefers_more_complete_matching_text(self):
         pypdf_text = "Installation Guide\nInstall the power cable."
         pymupdf_text = (
@@ -117,6 +125,25 @@ class DocumentFormattingTest(unittest.TestCase):
     def test_pdf_page_selection_keeps_pypdf_for_unrelated_extra_text(self):
         pypdf_text = "Installation Guide\nInstall the power cable."
         pymupdf_text = "Completely unrelated hidden layer " * 10
+
+        selected = _select_pdf_page_text(pypdf_text, pymupdf_text)
+
+        self.assertEqual(selected, pypdf_text)
+
+    def test_pdf_page_selection_falls_back_when_pymupdf_is_corrupted(self):
+        pypdf_text = "标题 完整可读的正文内容"
+        pymupdf_text = "标题 \ufffd\ufffd\ufffd\ufffd\ufffd 正文"
+
+        selected = _select_pdf_page_text(pypdf_text, pymupdf_text)
+
+        self.assertEqual(selected, pypdf_text)
+
+    def test_pdf_page_selection_falls_back_when_pypdf_is_more_complete(self):
+        pymupdf_text = "Installation Guide\nInstall the power cable."
+        pypdf_text = (
+            "Installation Guide\nInstall the power cable.\n"
+            "Connect the protective earth cable before powering on the equipment."
+        )
 
         selected = _select_pdf_page_text(pypdf_text, pymupdf_text)
 

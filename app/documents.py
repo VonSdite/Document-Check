@@ -97,7 +97,7 @@ def _extract_pdf(path: Path) -> str:
 def _extract_pymupdf_page_text(page) -> tuple[str, dict]:
     try:
         text_page = page.get_textpage()
-        text = page.get_text("text", textpage=text_page, sort=True) or ""
+        text = page.get_text("text", textpage=text_page, sort=False) or ""
         raw_page = page.get_text("rawdict", textpage=text_page)
         return text, raw_page
     except Exception:
@@ -118,22 +118,37 @@ def _select_pdf_page_text(pypdf_text: str, pymupdf_text: str) -> str:
     pymupdf_useful = pymupdf_quality["useful_chars"]
 
     if (
-        pypdf_quality["bad_char_ratio"] >= 0.01
-        and pymupdf_quality["bad_char_ratio"] <= pypdf_quality["bad_char_ratio"] * 0.5
-        and pymupdf_useful >= pypdf_useful * 0.7
+        pymupdf_quality["bad_char_ratio"] >= 0.01
+        and pypdf_quality["bad_char_ratio"] <= pymupdf_quality["bad_char_ratio"] * 0.5
+        and pypdf_useful >= pymupdf_useful * 0.7
     ):
-        return pymupdf_text
-
-    if pymupdf_quality["bad_char_ratio"] > max(0.01, pypdf_quality["bad_char_ratio"] * 2):
         return pypdf_text
 
-    shared_token_ratio = _shared_pdf_token_ratio(pypdf_quality["tokens"], pymupdf_quality["tokens"])
-    extra_useful_chars = pymupdf_useful - pypdf_useful
-    relative_gain = pymupdf_useful / max(pypdf_useful, 1)
-    enough_extra_text = extra_useful_chars >= max(20, int(pypdf_useful * 0.15))
-    if enough_extra_text and relative_gain >= 1.15 and shared_token_ratio >= 0.8:
+    if pypdf_quality["bad_char_ratio"] > max(0.01, pymupdf_quality["bad_char_ratio"] * 2):
         return pymupdf_text
-    return pypdf_text
+
+    pymupdf_tokens = pymupdf_quality["tokens"]
+    pypdf_tokens = pypdf_quality["tokens"]
+    pymupdf_covered_by_pypdf = _shared_pdf_token_ratio(pymupdf_tokens, pypdf_tokens)
+    pypdf_covered_by_pymupdf = _shared_pdf_token_ratio(pypdf_tokens, pymupdf_tokens)
+    if (
+        pymupdf_tokens
+        and pypdf_tokens
+        and pymupdf_covered_by_pypdf < 0.3
+        and pypdf_covered_by_pymupdf < 0.3
+    ):
+        return pypdf_text
+
+    extra_pypdf_chars = pypdf_useful - pymupdf_useful
+    pypdf_relative_gain = pypdf_useful / max(pymupdf_useful, 1)
+    pypdf_is_materially_more_complete = extra_pypdf_chars >= max(20, int(pymupdf_useful * 0.15))
+    if (
+        pypdf_is_materially_more_complete
+        and pypdf_relative_gain >= 1.15
+        and pymupdf_covered_by_pypdf >= 0.8
+    ):
+        return pypdf_text
+    return pymupdf_text
 
 
 def _pdf_text_quality(text: str) -> dict:
