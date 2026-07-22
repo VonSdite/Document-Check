@@ -6,7 +6,12 @@ from pathlib import Path
 import fitz
 from openpyxl import Workbook
 
-from app.documents import allowed_file, extract_text, format_document_text
+from app.documents import (
+    _select_pdf_page_text,
+    allowed_file,
+    extract_text,
+    format_document_text,
+)
 from app.images import (
     candidate_pdf_pages_for_image_check,
     extract_images,
@@ -89,6 +94,33 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("DANGER", text)
         self.assertNotIn("D ANGER", text)
         self.assertIn("NORMAL SPACE", text)
+
+    def test_pdf_page_selection_prefers_pymupdf_when_pypdf_is_corrupted(self):
+        pypdf_text = "标题 \ufffd\ufffd\ufffd\ufffd\ufffd 正文"
+        pymupdf_text = "标题 完整可读的正文内容"
+
+        selected = _select_pdf_page_text(pypdf_text, pymupdf_text)
+
+        self.assertEqual(selected, pymupdf_text)
+
+    def test_pdf_page_selection_prefers_more_complete_matching_text(self):
+        pypdf_text = "Installation Guide\nInstall the power cable."
+        pymupdf_text = (
+            "Installation Guide\nInstall the power cable.\n"
+            "Connect the protective earth cable before powering on the equipment."
+        )
+
+        selected = _select_pdf_page_text(pypdf_text, pymupdf_text)
+
+        self.assertEqual(selected, pymupdf_text)
+
+    def test_pdf_page_selection_keeps_pypdf_for_unrelated_extra_text(self):
+        pypdf_text = "Installation Guide\nInstall the power cable."
+        pymupdf_text = "Completely unrelated hidden layer " * 10
+
+        selected = _select_pdf_page_text(pypdf_text, pymupdf_text)
+
+        self.assertEqual(selected, pypdf_text)
 
     def test_extracts_docx_images_with_position_based_names(self):
         with tempfile.TemporaryDirectory() as temp_dir:

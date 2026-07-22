@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -69,27 +71,98 @@ def _extract_docx(path: Path) -> str:
 
 def _extract_pdf(path: Path) -> str:
     reader = PdfReader(str(path))
-    layout_document = fitz.open(str(path))
+    try:
+        layout_document = fitz.open(str(path))
+    except Exception:
+        layout_document = None
     try:
         pages = []
         for index, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-            if index <= layout_document.page_count:
-                text = _normalize_pdf_overlapping_spaces(text, layout_document[index - 1])
+            pypdf_text = page.extract_text() or ""
+            if layout_document is not None and index <= layout_document.page_count:
+                pymupdf_text, raw_page = _extract_pymupdf_page_text(layout_document[index - 1])
+                pypdf_text = _normalize_pdf_overlapping_spaces(pypdf_text, raw_page)
+                pymupdf_text = _normalize_pdf_overlapping_spaces(pymupdf_text, raw_page)
+                text = _select_pdf_page_text(pypdf_text, pymupdf_text)
+            else:
+                text = pypdf_text
             if text.strip():
                 pages.append(f"[第{index}页]\n{text.strip()}")
         return "\n\n".join(pages)
     finally:
-        layout_document.close()
+        if layout_document is not None:
+            layout_document.close()
 
 
-def _normalize_pdf_overlapping_spaces(text: str, page) -> str:
-    """Remove encoded spaces that have no visible advance on the PDF page."""
-    if not text:
-        return text
+def _extract_pymupdf_page_text(page) -> tuple[str, dict]:
     try:
-        raw_page = page.get_text("rawdict")
+        text_page = page.get_textpage()
+        text = page.get_text("text", textpage=text_page, sort=True) or ""
+        raw_page = page.get_text("rawdict", textpage=text_page)
+        return text, raw_page
     except Exception:
+        return "", {}
+
+
+def _select_pdf_page_text(pypdf_text: str, pymupdf_text: str) -> str:
+    pypdf_text = str(pypdf_text or "")
+    pymupdf_text = str(pymupdf_text or "")
+    if not pymupdf_text.strip():
+        return pypdf_text
+    if not pypdf_text.strip():
+        return pymupdf_text
+
+    pypdf_quality = _pdf_text_quality(pypdf_text)
+    pymupdf_quality = _pdf_text_quality(pymupdf_text)
+    pypdf_useful = pypdf_quality["useful_chars"]
+    pymupdf_useful = pymupdf_quality["useful_chars"]
+
+    if (
+        pypdf_quality["bad_char_ratio"] >= 0.01
+        and pymupdf_quality["bad_char_ratio"] <= pypdf_quality["bad_char_ratio"] * 0.5
+        and pymupdf_useful >= pypdf_useful * 0.7
+    ):
+        return pymupdf_text
+
+    if pymupdf_quality["bad_char_ratio"] > max(0.01, pypdf_quality["bad_char_ratio"] * 2):
+        return pypdf_text
+
+    shared_token_ratio = _shared_pdf_token_ratio(pypdf_quality["tokens"], pymupdf_quality["tokens"])
+    extra_useful_chars = pymupdf_useful - pypdf_useful
+    relative_gain = pymupdf_useful / max(pypdf_useful, 1)
+    enough_extra_text = extra_useful_chars >= max(20, int(pypdf_useful * 0.15))
+    if enough_extra_text and relative_gain >= 1.15 and shared_token_ratio >= 0.8:
+        return pymupdf_text
+    return pypdf_text
+
+
+def _pdf_text_quality(text: str) -> dict:
+    visible_chars = [char for char in text if not char.isspace()]
+    bad_chars = [char for char in visible_chars if _is_bad_pdf_text_char(char)]
+    useful_chars = len(visible_chars) - len(bad_chars)
+    tokens = set(re.findall(r"\w+", text.casefold(), flags=re.UNICODE))
+    return {
+        "useful_chars": useful_chars,
+        "bad_char_ratio": len(bad_chars) / max(len(visible_chars), 1),
+        "tokens": tokens,
+    }
+
+
+def _is_bad_pdf_text_char(char: str) -> bool:
+    if char == "\ufffd":
+        return True
+    return unicodedata.category(char) in {"Cc", "Cs", "Co", "Cn"}
+
+
+def _shared_pdf_token_ratio(primary_tokens: set[str], candidate_tokens: set[str]) -> float:
+    if not primary_tokens:
+        return 1.0
+    return len(primary_tokens & candidate_tokens) / len(primary_tokens)
+
+
+def _normalize_pdf_overlapping_spaces(text: str, raw_page: dict) -> str:
+    """Remove encoded spaces that have no visible advance on the PDF page."""
+    if not text or not raw_page:
         return text
 
     source_counts = {}
