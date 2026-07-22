@@ -2376,7 +2376,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(accepted_payload["totals"]["issue_detection_rate"], "100.0%")
         self.assertEqual(accepted_payload["totals"]["issue_acceptance_rate"], "100.0%")
 
-    def test_report_suppression_candidate_can_be_enabled_and_hides_future_exact_item(self):
+    def test_report_suppression_candidate_can_hide_future_similar_description(self):
         result_json = [
             {
                 "code": "compliance",
@@ -2442,6 +2442,39 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("候选", settings_html)
         self.assertIn("面向客户资料中残留内部备注", settings_html)
 
+        future_result_json = [
+            {
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "result": json.dumps(
+                    {
+                        "summary": "发现一个相似误报和一个无关问题。",
+                        "items": [
+                            {
+                                "status": "issue",
+                                "category": "交付内容",
+                                "location": "第8章",
+                                "excerpt": "研发内部备注",
+                                "description": "客户交付文档仍保留研发内部备注",
+                                "impact": "可能影响交付观感",
+                                "suggestion": "清理备注",
+                            },
+                            {
+                                "status": "issue",
+                                "category": "安全信息",
+                                "location": "第9章",
+                                "excerpt": "操作前确认断电",
+                                "description": "文档中缺少安全警告",
+                                "impact": "可能影响安全操作",
+                                "suggestion": "补充安全警告",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+
         with self.app.app_context():
             now = "2026-05-24 12:25:00"
             cursor = get_db().execute(
@@ -2455,13 +2488,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (DOCUMENT_TASK_TYPE, json.dumps(future_result_json, ensure_ascii=False), now, now),
             )
             get_db().commit()
             future_task_id = cursor.lastrowid
 
         detail_before_enable = self.client.get(f"/admin/tasks/{future_task_id}")
-        self.assertEqual(len(BeautifulSoup(detail_before_enable.get_data(as_text=True), "html.parser").select("[data-report-item]")), 1)
+        self.assertEqual(len(BeautifulSoup(detail_before_enable.get_data(as_text=True), "html.parser").select("[data-report-item]")), 2)
 
         enable_response = self.client.post(
             "/admin/settings",
@@ -2477,10 +2510,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         detail_after_enable = self.client.get(f"/admin/tasks/{future_task_id}")
         soup = BeautifulSoup(detail_after_enable.get_data(as_text=True), "html.parser")
-        self.assertEqual(len(soup.select("[data-report-item]")), 0)
+        visible_items = soup.select("[data-report-item]")
+        self.assertEqual(len(visible_items), 1)
+        self.assertIn("文档中缺少安全警告", visible_items[0].get_text(" ", strip=True))
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="suppressed"]')).get_text(strip=True), "1")
         self.assertIn("已忽略误报 1 条", detail_after_enable.get_data(as_text=True))
-        self.assertIn("面向客户资料中残留内部备注", detail_after_enable.get_data(as_text=True))
+        self.assertIn("客户交付文档仍保留研发内部备注", detail_after_enable.get_data(as_text=True))
+        self.assertIn("描述相似度 71%", detail_after_enable.get_data(as_text=True))
         with self.app.app_context():
             updated_rule = get_db().execute("SELECT hit_count FROM report_suppression_rules WHERE id = ?", (rule_id,)).fetchone()
             self.assertEqual(updated_rule["hit_count"], 1)

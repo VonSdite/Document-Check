@@ -5,6 +5,7 @@ import json
 import os
 import re
 import uuid
+from difflib import SequenceMatcher
 import zipfile
 from datetime import date, datetime, timedelta
 from functools import wraps
@@ -125,6 +126,23 @@ REPORT_REJECTION_REASONS = {
     "other": "其他",
 }
 REPORT_SUPPRESSION_REJECTION_REASONS = {"model_hallucination", "false_positive", "not_applicable"}
+REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
+REPORT_SUPPRESSION_DESCRIPTION_REPLACEMENTS = (
+    ("不统一", "不一致"),
+    ("不相同", "不一致"),
+    ("存在差异", "不一致"),
+    ("矛盾", "冲突"),
+    ("有误", "错误"),
+    ("不正确", "错误"),
+    ("没有提供", "缺失"),
+    ("未提供", "缺失"),
+    ("没有说明", "缺失"),
+    ("未说明", "缺失"),
+    ("缺少", "缺失"),
+    ("遗留", "保留"),
+    ("残留", "保留"),
+    ("资料", "文档"),
+)
 REPORT_ITEM_FIELDS = (
     ("severity_label", "严重程度"),
     ("confidence_label", "证据可信度"),
@@ -3609,24 +3627,31 @@ def _prepare_task_results(
     return prepared
 
 
-def _enabled_report_suppression_rules(task_type: str | None) -> dict[tuple[str, str], dict]:
+def _enabled_report_suppression_rules(task_type: str | None) -> dict[str, list[dict]]:
     if not task_type:
         return {}
     rows = get_db().execute(
         """
-        SELECT id, check_code, fingerprint, reason
+        SELECT id, check_code, reason, item_json
         FROM report_suppression_rules
         WHERE task_type = ? AND enabled = 1
         """,
         (task_type,),
     ).fetchall()
-    return {
-        (row["check_code"], row["fingerprint"]): {
-            "id": row["id"],
-            "reason": row["reason"] or "",
-        }
-        for row in rows
-    }
+    rules = {}
+    for row in rows:
+        snapshot = _parse_report_suppression_item_json(row["item_json"])
+        description = _report_suppression_description(snapshot)
+        if not description:
+            continue
+        rules.setdefault(row["check_code"], []).append(
+            {
+                "id": row["id"],
+                "reason": row["reason"] or "",
+                "description": description,
+            }
+        )
+    return rules
 
 
 def _apply_report_suppression(
@@ -3635,7 +3660,7 @@ def _apply_report_suppression(
     task_id: int | None,
     result_code: str,
     report_items: list[dict],
-    suppression_rules: dict[tuple[str, str], dict],
+    suppression_rules: dict[str, list[dict]],
     record_hits: bool,
 ) -> tuple[list[dict], list[dict]]:
     if not task_type or not suppression_rules:
@@ -3645,14 +3670,17 @@ def _apply_report_suppression(
     suppressed_items = []
     db = get_db() if record_hits and task_id is not None else None
     for item in report_items:
-        fingerprint = _report_item_suppression_fingerprint(task_type, result_code, item)
-        rule = suppression_rules.get((result_code, fingerprint))
+        rule, similarity = _matching_report_suppression_rule(
+            item,
+            suppression_rules.get(result_code, []),
+        )
         if rule is None:
             visible_items.append(item)
             continue
         suppressed = dict(item)
         suppressed["suppression_rule_id"] = rule["id"]
         suppressed["suppression_reason"] = rule["reason"]
+        suppressed["suppression_similarity"] = similarity
         suppressed_items.append(suppressed)
         if db is not None:
             _record_report_suppression_hit(
@@ -3663,6 +3691,62 @@ def _apply_report_suppression(
                 item=suppressed,
             )
     return visible_items, suppressed_items
+
+
+def _matching_report_suppression_rule(item: dict, rules: list[dict]) -> tuple[dict | None, float]:
+    description = _report_suppression_description(item)
+    if not description:
+        return None, 0.0
+    best_rule = None
+    best_similarity = 0.0
+    for rule in rules:
+        similarity = _report_description_similarity(description, rule.get("description"))
+        if similarity > best_similarity:
+            best_rule = rule
+            best_similarity = similarity
+    if best_similarity < REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD:
+        return None, best_similarity
+    return best_rule, best_similarity
+
+
+def _report_description_similarity(left, right) -> float:
+    left_text = _normalize_report_description(left)
+    right_text = _normalize_report_description(right)
+    if not left_text or not right_text:
+        return 0.0
+    if left_text == right_text:
+        return 1.0
+    shorter, longer = sorted((left_text, right_text), key=len)
+    if len(shorter) >= 6 and shorter in longer:
+        return 0.95
+    if len(shorter) < 4:
+        return 0.0
+    sequence_score = SequenceMatcher(None, left_text, right_text).ratio()
+    character_score = _report_description_dice(set(left_text), set(right_text)) * 0.9
+    bigram_score = _report_description_dice(
+        _report_description_ngrams(left_text, 2),
+        _report_description_ngrams(right_text, 2),
+    )
+    return max(sequence_score, character_score, bigram_score)
+
+
+def _normalize_report_description(value) -> str:
+    text = str(value or "").strip().lower()
+    for source, replacement in REPORT_SUPPRESSION_DESCRIPTION_REPLACEMENTS:
+        text = text.replace(source, replacement)
+    return re.sub(r"[\W_]+", "", text)
+
+
+def _report_description_ngrams(text: str, size: int) -> set[str]:
+    if len(text) < size:
+        return {text} if text else set()
+    return {text[index : index + size] for index in range(len(text) - size + 1)}
+
+
+def _report_description_dice(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return 2 * len(left & right) / (len(left) + len(right))
 
 
 def _record_report_suppression_hit(db, *, rule_id: int, task_id: int, result_code: str, item: dict):
@@ -3758,10 +3842,14 @@ def _report_item_suppression_fingerprint(task_type: str, result_code: str, item:
     source = {
         "task_type": str(task_type or ""),
         "check_code": str(result_code or ""),
-        "fields": _report_suppression_item_fields(item),
+        "description": _report_suppression_description(item),
     }
     raw = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _report_suppression_description(item: dict) -> str:
+    return _normalize_suppression_text(item.get("description") or item.get("text"))
 
 
 def _report_suppression_item_snapshot(item: dict) -> dict:

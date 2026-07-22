@@ -218,7 +218,10 @@
                 {% endif %}
               </td>
               {% endfor %}
-              <td class="report-status-cell">规则 #{{ item.suppression_rule_id }}</td>
+              <td class="report-status-cell">
+                规则 #{{ item.suppression_rule_id }}
+                {% if item.suppression_similarity is defined %}<div class="subline">描述相似度 {{ (item.suppression_similarity * 100)|round(0)|int }}%</div>{% endif %}
+              </td>
             </tr>
             {% endfor %}
           </tbody>

@@ -152,9 +152,9 @@
   <div class="settings-section-head">
     <div>
       <h2 class="title-with-help">误报忽略规则
-        <button class="help-tip" type="button" aria-label="误报忽略规则说明" data-tip="当报告条目被标记为非问题且不接纳原因为模型幻觉、模型误报或不适用时，系统会生成候选规则。启用后，后续完全相同的报告条目会自动折叠到已忽略误报中，不参与主统计。">?</button>
+        <button class="help-tip" type="button" aria-label="误报忽略规则说明" data-tip="当报告条目被标记为非问题且不接纳原因为模型幻觉、模型误报或不适用时，系统会生成候选规则。启用后，同任务类型、同检查项下问题描述相似的条目会自动折叠到已忽略误报中，不参与主统计。">?</button>
       </h2>
-      <p>候选规则默认不生效，启用后才会过滤后续完全相同的报告条目。</p>
+      <p>候选规则默认不生效，启用后会过滤同任务类型、同检查项下问题描述相似度达到 56% 的报告条目。</p>
     </div>
   </div>
   {% if report_suppression_rules %}
