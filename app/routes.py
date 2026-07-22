@@ -2991,10 +2991,6 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
             {"label": "资料", "files": related_files},
         ]
     )
-    if len(validation_text) > model["max_input_chars"]:
-        _remove_uploaded_files(saved_paths)
-        flash(f"文档文本 {len(validation_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     document_meta = {
         "groups": [
@@ -3092,10 +3088,6 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
         return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
 
     validation_text = _compose_language_consistency_validation_text(file_a, file_b)
-    if len(validation_text) > model["max_input_chars"]:
-        _remove_uploaded_files(saved_paths)
-        flash(f"文档文本 {len(validation_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
 
     document_meta = {
         "groups": [
