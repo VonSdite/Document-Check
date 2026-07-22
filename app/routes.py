@@ -113,6 +113,12 @@ REPORT_ITEM_TYPES = {
     "non_issue": "非问题",
 }
 REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
+REPORT_COUNT_KEYS = REPORT_ITEM_TYPE_ORDER + (
+    "accepted_issue",
+    "rejected_issue",
+    "pending_issue_acceptance",
+    "suppressed",
+)
 REPORT_ACCEPTANCE_STATUSES = {
     "pending": "未确认",
     "accepted": "接纳",
@@ -816,6 +822,63 @@ def register_routes(app):
             return create_task_for_identity(_console_user_identity(), admin_created=True)
         return redirect(url_for("admin_tasks"))
 
+    @app.get(f"{admin_prefix}/task-statuses")
+    @admin_required
+    def admin_task_statuses():
+        task_type = str(request.args.get("task_type") or DOCUMENT_TASK_TYPE)
+        allowed_task_types = {
+            DOCUMENT_TASK_TYPE,
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+            IMAGE_TASK_TYPE,
+            VIDEO_TASK_TYPE,
+        }
+        if task_type not in allowed_task_types:
+            return {"error": "任务类型无效。"}, 400
+        task_ids = []
+        for value in str(request.args.get("ids") or "").split(","):
+            value = value.strip()
+            if value.isdigit():
+                task_ids.append(int(value))
+        task_ids = list(dict.fromkeys(task_ids))[:100]
+        mode_clause, mode_params = _mode_subject_filter("t")
+        rows = []
+        if task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            rows = get_db().execute(
+                f"""
+                SELECT t.id, t.status, t.progress
+                FROM tasks t
+                WHERE t.task_type = ? AND {mode_clause} AND t.id IN ({placeholders})
+                """,
+                (task_type, *mode_params, *task_ids),
+            ).fetchall()
+        counts = get_db().execute(
+            f"""
+            SELECT
+                COUNT(*) AS tasks,
+                COALESCE(SUM(CASE WHEN t.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
+                COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+                COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed
+            FROM tasks t
+            WHERE t.task_type = ? AND {mode_clause}
+            """,
+            (task_type, *mode_params),
+        ).fetchone()
+        return {
+            "active": bool(counts["queued"] or counts["running"]),
+            "counts": {key: int(counts[key] or 0) for key in ("tasks", "queued", "running", "completed")},
+            "tasks": [
+                {
+                    "id": row["id"],
+                    "status": row["status"],
+                    "status_label": STATUS_LABELS.get(row["status"], row["status"]),
+                    "progress": int(row["progress"] or 0),
+                }
+                for row in rows
+            ],
+        }
+
     @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
     @admin_required
     def admin_consistency():
@@ -1465,9 +1528,13 @@ def _owner_display(task) -> str:
     )
     subject = str(subject)
     if subject.startswith("ip:"):
-        current_ip_username = get_ip_username(ip or subject[3:])
+        current_ip_username = _row_value(task, "current_ip_username")
         if current_ip_username:
-            return current_ip_username
+            return str(current_ip_username)
+        if not _row_value(task, "ip_username_lookup_complete", False):
+            current_ip_username = get_ip_username(ip or subject[3:])
+            if current_ip_username:
+                return current_ip_username
     current_owner_name = _row_value(task, "current_owner_name")
     if current_owner_name:
         return str(current_owner_name)
@@ -1599,6 +1666,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         if join_ip_usernames
         else "COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
     )
+    current_ip_username_expr = "COALESCE(iu.username, '')" if join_ip_usernames else "''"
     mode_clause, mode_params = _mode_subject_filter("t")
     clauses.append(mode_clause)
     params.extend(mode_params)
@@ -1636,7 +1704,14 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     page = _bounded_page(page, total, TASKS_PER_PAGE)
     rows = get_db().execute(
         f"""
-        SELECT t.*,
+        SELECT
+               t.id, t.task_type, t.ip, t.username_snapshot,
+               t.owner_subject, t.owner_name_snapshot, t.owner_source,
+               t.original_filename, t.file_type, t.file_size,
+               t.provider_name, t.model_name, t.status, t.progress,
+               t.created_at, t.document_meta_json,
+               {current_ip_username_expr} AS current_ip_username,
+               {1 if join_ip_usernames else 0} AS ip_username_lookup_complete,
                {owner_name_expr} AS current_owner_name,
                {owner_name_expr} AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
@@ -1660,6 +1735,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         user_concurrency=get_setting("user_concurrency", 1),
         check_items=check_items,
         models=get_enabled_models(identity.subject),
+        refresh_url=url_for("admin_task_statuses", task_type=task_type),
         active_nav=task_type,
     )
 
@@ -2327,40 +2403,21 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
 def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
     db = get_db()
     mode_clause, mode_params = _mode_subject_filter("")
-    totals = {
-        "tasks": db.execute(
-            f"SELECT COUNT(*) AS total FROM tasks WHERE task_type = ? AND {mode_clause}",
-            (task_type, *mode_params),
-        ).fetchone()["total"],
-        "queued": db.execute(
-            f"SELECT COUNT(*) AS total FROM tasks WHERE status = 'queued' AND task_type = ? AND {mode_clause}",
-            (task_type, *mode_params),
-        ).fetchone()["total"],
-        "running": db.execute(
-            f"SELECT COUNT(*) AS total FROM tasks WHERE status = 'running' AND task_type = ? AND {mode_clause}",
-            (task_type, *mode_params),
-        ).fetchone()["total"],
-        "completed": db.execute(
-            f"SELECT COUNT(*) AS total FROM tasks WHERE status = 'completed' AND task_type = ? AND {mode_clause}",
-            (task_type, *mode_params),
-        ).fetchone()["total"],
-        "users": db.execute(
-            f"""
-            SELECT COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS total
-            FROM tasks
-            WHERE task_type = ? AND {mode_clause}
-            """,
-            (task_type, *mode_params),
-        ).fetchone()["total"],
-        "ips": db.execute(
-            f"""
-            SELECT COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS total
-            FROM tasks
-            WHERE task_type = ? AND {mode_clause}
-            """,
-            (task_type, *mode_params),
-        ).fetchone()["total"],
-    }
+    row = db.execute(
+        f"""
+        SELECT
+            COUNT(*) AS tasks,
+            COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
+            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+            COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users
+        FROM tasks
+        WHERE task_type = ? AND {mode_clause}
+        """,
+        (task_type, *mode_params),
+    ).fetchone()
+    totals = dict(row or {})
+    totals["ips"] = totals.get("users", 0)
     totals["report_items"] = _admin_report_item_totals(task_type, mode_clause, mode_params)
     return totals
 
@@ -2382,32 +2439,125 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
             "suppressed": 0,
         }
     )
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         f"""
-        SELECT id, task_type, result_json
-        FROM tasks
-        WHERE result_json IS NOT NULL
-          AND TRIM(result_json) != ''
+        SELECT
+            t.id,
+            t.task_type,
+            t.updated_at,
+            s.source_updated_at,
+            s.suppression_version,
+            s.issue_count AS issue,
+            s.suggestion_count AS suggestion,
+            s.non_issue_count AS non_issue,
+            s.accepted_issue_count AS accepted_issue,
+            s.rejected_issue_count AS rejected_issue,
+            s.pending_issue_acceptance_count AS pending_issue_acceptance,
+            s.suppressed_count AS suppressed
+        FROM tasks t
+        LEFT JOIN task_report_stats s ON s.task_id = t.id
+        WHERE t.result_json IS NOT NULL
+          AND t.result_json != ''
           AND {where_clause}
         """,
         params,
     ).fetchall()
+    task_types = {str(row["task_type"] or DOCUMENT_TASK_TYPE) for row in rows}
+    suppression_versions = _report_suppression_versions(task_types)
+    stale_ids = []
     for row in rows:
-        item_totals = _report_item_totals(
-            _prepare_task_results(
-                _parse_result_json(row["result_json"]),
-                task_type=row["task_type"] or DOCUMENT_TASK_TYPE,
-                task_id=row["id"],
-            )
-        )
-        for key in tuple(REPORT_ITEM_TYPE_ORDER) + (
-            "accepted_issue",
-            "rejected_issue",
-            "pending_issue_acceptance",
-            "suppressed",
+        task_type = str(row["task_type"] or DOCUMENT_TASK_TYPE)
+        if (
+            row["source_updated_at"] == row["updated_at"]
+            and row["suppression_version"] == suppression_versions.get(task_type, "0:0:")
         ):
-            totals[key] += item_totals[key]
+            _add_report_counts(totals, row)
+        else:
+            stale_ids.append(int(row["id"]))
+
+    if stale_ids:
+        rules_by_type = {
+            task_type: _enabled_report_suppression_rules(task_type)
+            for task_type in task_types
+        }
+        cache_rows = []
+        for chunk_start in range(0, len(stale_ids), 500):
+            chunk = stale_ids[chunk_start : chunk_start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            stale_rows = db.execute(
+                f"SELECT id, task_type, updated_at, result_json FROM tasks WHERE id IN ({placeholders})",
+                tuple(chunk),
+            ).fetchall()
+            for row in stale_rows:
+                task_type = str(row["task_type"] or DOCUMENT_TASK_TYPE)
+                item_totals = _report_item_totals(
+                    _prepare_task_results(
+                        _parse_result_json(row["result_json"]),
+                        task_type=task_type,
+                        task_id=row["id"],
+                        suppression_rules=rules_by_type.get(task_type, {}),
+                    )
+                )
+                _add_report_counts(totals, item_totals)
+                cache_rows.append(
+                    (
+                        row["id"],
+                        row["updated_at"] or "",
+                        suppression_versions.get(task_type, "0:0:"),
+                        *[int(item_totals.get(key) or 0) for key in REPORT_COUNT_KEYS],
+                        now_text(),
+                    )
+                )
+        db.executemany(
+            """
+            INSERT INTO task_report_stats(
+                task_id, source_updated_at, suppression_version,
+                issue_count, suggestion_count, non_issue_count,
+                accepted_issue_count, rejected_issue_count,
+                pending_issue_acceptance_count, suppressed_count, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                source_updated_at = excluded.source_updated_at,
+                suppression_version = excluded.suppression_version,
+                issue_count = excluded.issue_count,
+                suggestion_count = excluded.suggestion_count,
+                non_issue_count = excluded.non_issue_count,
+                accepted_issue_count = excluded.accepted_issue_count,
+                rejected_issue_count = excluded.rejected_issue_count,
+                pending_issue_acceptance_count = excluded.pending_issue_acceptance_count,
+                suppressed_count = excluded.suppressed_count,
+                updated_at = excluded.updated_at
+            """,
+            cache_rows,
+        )
+        db.commit()
     return _finalize_report_counts(totals)
+
+
+def _report_suppression_versions(task_types: set[str]) -> dict[str, str]:
+    versions = {task_type: "0:0:" for task_type in task_types}
+    if not task_types:
+        return versions
+    placeholders = ",".join("?" for _ in task_types)
+    rows = get_db().execute(
+        f"""
+        SELECT task_type, COUNT(*) AS total, COALESCE(SUM(id), 0) AS id_sum, MAX(updated_at) AS latest
+        FROM report_suppression_rules
+        WHERE enabled = 1 AND task_type IN ({placeholders})
+        GROUP BY task_type
+        """,
+        tuple(sorted(task_types)),
+    ).fetchall()
+    for row in rows:
+        versions[str(row["task_type"])] = f"{int(row['total'] or 0)}:{int(row['id_sum'] or 0)}:{row['latest'] or ''}"
+    return versions
+
+
+def _add_report_counts(target: dict, source) -> None:
+    for key in REPORT_COUNT_KEYS:
+        target[key] += int(_row_value(source, key, 0) or 0)
 
 
 def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
@@ -3571,9 +3721,11 @@ def _prepare_task_results(
     task_type: str | None = None,
     task_id: int | None = None,
     record_suppression_hits: bool = False,
+    suppression_rules: dict[str, list[dict]] | None = None,
 ) -> list[dict]:
     prepared = []
-    suppression_rules = _enabled_report_suppression_rules(task_type) if task_type else {}
+    if suppression_rules is None:
+        suppression_rules = _enabled_report_suppression_rules(task_type) if task_type else {}
     for result in results:
         item = dict(result)
         result_code = str(item.get("code") or "")

@@ -15,7 +15,14 @@ from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
 from app.formatting import render_markdown
-from app.routes import _consistency_task_title, _find_enabled_model, _upload_destination, get_enabled_models, register_routes
+from app.routes import (
+    _consistency_task_title,
+    _find_enabled_model,
+    _parse_result_json,
+    _upload_destination,
+    get_enabled_models,
+    register_routes,
+)
 from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 
 
@@ -179,7 +186,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         owner_source: str | None = None,
     ):
         with self.app.app_context():
-            get_db().execute(
+            cursor = get_db().execute(
                 """
                 INSERT INTO tasks(
                     task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
@@ -201,6 +208,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 ),
             )
             get_db().commit()
+            return cursor.lastrowid
 
     def test_admin_delete_task_reports_locked_file_without_removing_task(self):
         self._insert_task()
@@ -523,6 +531,154 @@ class AdminSettingsRouteTest(unittest.TestCase):
         owner_cell = _required_tag(soup.select_one(".task-owner-cell"))
         self.assertEqual(owner_cell.get_text(" ", strip=True), "127.0.0.1")
         self.assertNotIn("ip:127.0.0.1 · IP 127.0.0.1", html)
+
+    def test_admin_task_report_totals_are_cached_until_result_changes(self):
+        task_id = self._insert_task()
+        report = [
+            {
+                "code": "typo",
+                "name": "错别字检查",
+                "result": json.dumps(
+                    {
+                        "summary": "发现一项问题",
+                        "items": [
+                            {
+                                "status": "issue",
+                                "severity": "low",
+                                "confidence": "high",
+                                "category": "拼写错误",
+                                "location": "第1页",
+                                "excerpt": "示例",
+                                "description": "存在错字",
+                                "impact": "影响阅读",
+                                "suggestion": "修改",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json = ?, updated_at = '2026-05-01 10:01:00' WHERE id = ?",
+                (json.dumps(report, ensure_ascii=False), task_id),
+            )
+            get_db().commit()
+
+        with patch("app.routes._parse_result_json", wraps=_parse_result_json) as parser:
+            first = self.client.get("/admin/tasks")
+            second = self.client.get("/admin/tasks")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(parser.call_count, 1)
+        with self.app.app_context():
+            cached = get_db().execute(
+                "SELECT issue_count, source_updated_at FROM task_report_stats WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(cached["issue_count"], 1)
+        self.assertEqual(cached["source_updated_at"], "2026-05-01 10:01:00")
+
+    def test_task_result_update_invalidates_cached_report_totals(self):
+        task_id = self._insert_task()
+        with self.app.app_context():
+            get_db().execute(
+                """
+                INSERT INTO task_report_stats(task_id, source_updated_at, suppression_version, updated_at)
+                VALUES (?, '2026-05-01 10:00:00', '0:0:', '2026-05-01 10:00:00')
+                """,
+                (task_id,),
+            )
+            get_db().execute("UPDATE tasks SET result_json = '[]' WHERE id = ?", (task_id,))
+            get_db().commit()
+            cached = get_db().execute(
+                "SELECT task_id FROM task_report_stats WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        self.assertIsNone(cached)
+
+    def test_suppression_rule_change_refreshes_cached_report_totals(self):
+        task_id = self._insert_task()
+        report = [
+            {
+                "code": "typo",
+                "name": "错别字检查",
+                "result": json.dumps(
+                    {
+                        "summary": "发现一项问题",
+                        "items": [
+                            {
+                                "status": "issue",
+                                "severity": "low",
+                                "confidence": "high",
+                                "category": "拼写错误",
+                                "location": "第1页",
+                                "excerpt": "示例",
+                                "description": "存在错字",
+                                "impact": "影响阅读",
+                                "suggestion": "修改",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json = ?, updated_at = '2026-05-01 10:01:00' WHERE id = ?",
+                (json.dumps(report, ensure_ascii=False), task_id),
+            )
+            get_db().commit()
+        self.client.get("/admin/tasks")
+
+        with self.app.app_context():
+            get_db().execute(
+                """
+                INSERT INTO report_suppression_rules(
+                    task_type, check_code, fingerprint, item_json, reason,
+                    enabled, created_at, updated_at
+                )
+                VALUES (?, 'typo', 'fingerprint-1', ?, '模型误报', 1, ?, ?)
+                """,
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps({"description": "存在错字"}, ensure_ascii=False),
+                    "2026-05-01 10:02:00",
+                    "2026-05-01 10:02:00",
+                ),
+            )
+            get_db().commit()
+        self.client.get("/admin/tasks")
+
+        with self.app.app_context():
+            cached = get_db().execute(
+                "SELECT issue_count, suppressed_count FROM task_report_stats WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(cached["issue_count"], 0)
+        self.assertEqual(cached["suppressed_count"], 1)
+
+    def test_admin_task_status_endpoint_returns_lightweight_progress(self):
+        task_id = self._insert_task(status="running")
+        response = self.client.get(f"/admin/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["active"])
+        self.assertEqual(payload["tasks"], [{"id": task_id, "progress": 100, "status": "running", "status_label": "检查中"}])
+
+    def test_admin_task_page_exposes_lightweight_refresh_metadata(self):
+        task_id = self._insert_task(status="running")
+        response = self.client.get("/admin/tasks")
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+
+        stats = _required_tag(soup.select_one('[data-refresh-region="stats"]'))
+        task_row = _required_tag(soup.select_one(f'[data-task-id="{task_id}"]'))
+        self.assertIn("/admin/task-statuses?task_type=document_check", str(stats.get("data-refresh-url")))
+        self.assertEqual(task_row.get("data-task-status"), "running")
 
     def test_admin_overview_filters_tasks_by_auth_mode(self):
         self._insert_task(

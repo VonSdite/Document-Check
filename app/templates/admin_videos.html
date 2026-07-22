@@ -62,11 +62,11 @@
   </div>
 </form>
 
-<section class="metric-grid nine" data-refresh-region="stats" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}">
-  <div class="metric"><span>全部</span><strong>{{ totals.tasks }}</strong></div>
-  <div class="metric"><span>排队</span><strong>{{ totals.queued }}</strong></div>
-  <div class="metric"><span>检查中</span><strong>{{ totals.running }}</strong></div>
-  <div class="metric"><span>已完成</span><strong>{{ totals.completed }}</strong></div>
+<section class="metric-grid nine" data-refresh-region="stats" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}" data-refresh-url="{{ refresh_url }}">
+  <div class="metric"><span>全部</span><strong data-task-stat="tasks">{{ totals.tasks }}</strong></div>
+  <div class="metric"><span>排队</span><strong data-task-stat="queued">{{ totals.queued }}</strong></div>
+  <div class="metric"><span>检查中</span><strong data-task-stat="running">{{ totals.running }}</strong></div>
+  <div class="metric"><span>已完成</span><strong data-task-stat="completed">{{ totals.completed }}</strong></div>
   <div class="metric"><span>用户数</span><strong>{{ totals.users }}</strong></div>
   <div class="metric"><span>AI问题</span><strong data-admin-report-count="issue">{{ totals.report_items.issue }}</strong></div>
   <div class="metric"><span>AI建议</span><strong data-admin-report-count="suggestion">{{ totals.report_items.suggestion }}</strong></div>
@@ -117,7 +117,7 @@
       </thead>
       <tbody>
         {% for task in tasks %}
-        <tr>
+        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}">
           <td class="task-file-cell">
             <div class="task-file-line">
               <a class="strong-link task-report-link" href="{{ url_for('admin_task_detail', task_id=task.id) }}" title="查看报告">{{ task.original_filename }}</a>

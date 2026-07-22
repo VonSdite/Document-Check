@@ -151,6 +151,27 @@ def init_db():
             UNIQUE(rule_id, task_id, result_code, item_id)
         );
 
+        CREATE TABLE IF NOT EXISTS task_report_stats (
+            task_id INTEGER PRIMARY KEY,
+            source_updated_at TEXT NOT NULL,
+            suppression_version TEXT NOT NULL DEFAULT '',
+            issue_count INTEGER NOT NULL DEFAULT 0,
+            suggestion_count INTEGER NOT NULL DEFAULT 0,
+            non_issue_count INTEGER NOT NULL DEFAULT 0,
+            accepted_issue_count INTEGER NOT NULL DEFAULT 0,
+            rejected_issue_count INTEGER NOT NULL DEFAULT 0,
+            pending_issue_acceptance_count INTEGER NOT NULL DEFAULT 0,
+            suppressed_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE TRIGGER IF NOT EXISTS trg_tasks_report_stats_invalidate
+        AFTER UPDATE OF result_json ON tasks
+        BEGIN
+            DELETE FROM task_report_stats WHERE task_id = NEW.id;
+        END;
+
         CREATE INDEX IF NOT EXISTS idx_tasks_ip_created ON tasks(ip, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_user_model_providers_owner ON user_model_providers(owner_subject, updated_at DESC);
@@ -171,6 +192,12 @@ def init_db():
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")
     _ensure_column(db, "tasks", "owner_source", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_type_owner_created "
+        "ON tasks(task_type, owner_subject, created_at DESC, id DESC)"
+    )
     _migrate_task_owners(db)
     _migrate_model_thinking_defaults(db)
     current_app.teardown_appcontext(close_db)

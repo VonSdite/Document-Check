@@ -1938,6 +1938,67 @@ function replaceRefreshRegion(documentFragment, name) {
   }
 }
 
+async function refreshTaskPageRegions() {
+  const url = new URL(window.location.href);
+  url.searchParams.set("_refresh", Date.now().toString());
+  const response = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: { "X-Requested-With": "fetch" },
+  });
+  if (!response.ok) {
+    return;
+  }
+  const html = await response.text();
+  if (autoRefreshSuspended()) {
+    return;
+  }
+  const nextDocument = new DOMParser().parseFromString(html, "text/html");
+  replaceRefreshRegion(nextDocument, "stats");
+  replaceRefreshRegion(nextDocument, "task-list");
+}
+
+async function refreshTaskStatuses(refreshUrl) {
+  const taskRows = Array.from(document.querySelectorAll("[data-task-id][data-task-status]"));
+  const url = new URL(refreshUrl, window.location.origin);
+  url.searchParams.set("ids", taskRows.map((row) => row.dataset.taskId).filter(Boolean).join(","));
+  url.searchParams.set("_refresh", Date.now().toString());
+  const response = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: { Accept: "application/json", "X-Requested-With": "fetch" },
+  });
+  if (!response.ok) {
+    return;
+  }
+  const data = await response.json();
+  const stats = document.querySelector('[data-refresh-region="stats"]');
+  const wasActive = stats?.dataset.refreshActive === "1";
+  if (stats) {
+    stats.dataset.refreshActive = data.active ? "1" : "0";
+    for (const [key, value] of Object.entries(data.counts || {})) {
+      const target = stats.querySelector(`[data-task-stat="${key}"]`);
+      if (target) {
+        target.textContent = String(value);
+      }
+    }
+  }
+  const returnedById = new Map((data.tasks || []).map((task) => [String(task.id), task]));
+  const statusChanged =
+    wasActive !== Boolean(data.active)
+    || returnedById.size !== taskRows.length
+    || taskRows.some((row) => returnedById.get(row.dataset.taskId)?.status !== row.dataset.taskStatus);
+  if (statusChanged) {
+    await refreshTaskPageRegions();
+    return;
+  }
+  for (const row of taskRows) {
+    const task = returnedById.get(row.dataset.taskId);
+    const progress = row.querySelector(".progress.mini span");
+    if (task && progress) {
+      progress.style.width = `${task.progress}%`;
+    }
+  }
+}
+
 async function refreshTaskRegions() {
   if (autoRefreshPending || document.hidden || autoRefreshSuspended() || !hasActiveRefreshTasks()) {
     if (!hasActiveRefreshTasks()) {
@@ -1948,22 +2009,13 @@ async function refreshTaskRegions() {
   }
   autoRefreshPending = true;
   try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("_refresh", Date.now().toString());
-    const response = await fetch(url.toString(), {
-      cache: "no-store",
-      headers: { "X-Requested-With": "fetch" },
-    });
-    if (!response.ok) {
-      return;
+    const stats = document.querySelector('[data-refresh-region="stats"]');
+    const refreshUrl = stats?.dataset.refreshUrl;
+    if (refreshUrl) {
+      await refreshTaskStatuses(refreshUrl);
+    } else {
+      await refreshTaskPageRegions();
     }
-    const html = await response.text();
-    if (autoRefreshSuspended()) {
-      return;
-    }
-    const nextDocument = new DOMParser().parseFromString(html, "text/html");
-    replaceRefreshRegion(nextDocument, "stats");
-    replaceRefreshRegion(nextDocument, "task-list");
     if (!hasActiveRefreshTasks()) {
       stopAutoRefresh();
     }
