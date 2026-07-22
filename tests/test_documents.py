@@ -3,6 +3,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import fitz
 from openpyxl import Workbook
 
 from app.documents import allowed_file, extract_text, format_document_text
@@ -65,6 +66,29 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("额定电流 | 10 | A", text)
         self.assertIn("空列示例 |  | 保留位置", text)
         self.assertIn(" |  |  | =SUM(1,2)", text)
+
+    def test_pdf_extraction_removes_overlapping_space_but_keeps_visible_space(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "warning.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            font_size = 12
+            start_x = 72
+            page.insert_text((start_x, 72), "D ", fontsize=font_size)
+            page.insert_text(
+                (start_x + fitz.get_text_length("D", fontname="helv", fontsize=font_size), 72),
+                "ANGER",
+                fontsize=font_size,
+            )
+            page.insert_text((start_x, 100), "NORMAL SPACE", fontsize=font_size)
+            document.save(path)
+            document.close()
+
+            text = extract_text(path, "pdf")
+
+        self.assertIn("DANGER", text)
+        self.assertNotIn("D ANGER", text)
+        self.assertIn("NORMAL SPACE", text)
 
     def test_extracts_docx_images_with_position_based_names(self):
         with tempfile.TemporaryDirectory() as temp_dir:

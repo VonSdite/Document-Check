@@ -2,6 +2,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 from docx import Document
+import fitz
 from openpyxl import load_workbook
 from pypdf import PdfReader
 import xlrd
@@ -68,12 +69,104 @@ def _extract_docx(path: Path) -> str:
 
 def _extract_pdf(path: Path) -> str:
     reader = PdfReader(str(path))
-    pages = []
-    for index, page in enumerate(reader.pages, start=1):
-        text = page.extract_text() or ""
-        if text.strip():
-            pages.append(f"[第{index}页]\n{text.strip()}")
-    return "\n\n".join(pages)
+    layout_document = fitz.open(str(path))
+    try:
+        pages = []
+        for index, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            if index <= layout_document.page_count:
+                text = _normalize_pdf_overlapping_spaces(text, layout_document[index - 1])
+            if text.strip():
+                pages.append(f"[第{index}页]\n{text.strip()}")
+        return "\n\n".join(pages)
+    finally:
+        layout_document.close()
+
+
+def _normalize_pdf_overlapping_spaces(text: str, page) -> str:
+    """Remove encoded spaces that have no visible advance on the PDF page."""
+    if not text:
+        return text
+    try:
+        raw_page = page.get_text("rawdict")
+    except Exception:
+        return text
+
+    source_counts = {}
+    replacements = {}
+    for block in raw_page.get("blocks", []):
+        for line in block.get("lines", []):
+            source, normalized = _pdf_line_text_variants(line)
+            if not source:
+                continue
+            occurrence = source_counts.get(source, 0) + 1
+            source_counts[source] = occurrence
+            if normalized != source:
+                replacements[(source, occurrence)] = normalized
+
+    if not replacements:
+        return text
+
+    text_counts = {}
+    normalized_lines = []
+    for line in text.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        line_ending = line[len(content) :]
+        occurrence = text_counts.get(content, 0) + 1
+        text_counts[content] = occurrence
+        normalized_lines.append(replacements.get((content, occurrence), content) + line_ending)
+    return "".join(normalized_lines)
+
+
+def _pdf_line_text_variants(line: dict) -> tuple[str, str]:
+    chars = []
+    for span in line.get("spans", []):
+        size = float(span.get("size") or 0)
+        for char in span.get("chars", []):
+            value = str(char.get("c") or "")
+            if value:
+                chars.append({"value": value, "origin": char.get("origin"), "size": size})
+
+    source = "".join(char["value"] for char in chars)
+    if " " not in source or len(chars) < 3:
+        return source, source
+
+    direction = line.get("dir") or (1.0, 0.0)
+    try:
+        direction_x = float(direction[0])
+        direction_y = float(direction[1])
+        direction_length = (direction_x**2 + direction_y**2) ** 0.5
+    except (TypeError, ValueError, IndexError):
+        return source, source
+    if direction_length <= 0:
+        return source, source
+    direction_x /= direction_length
+    direction_y /= direction_length
+
+    remove_indexes = set()
+    for index, char in enumerate(chars):
+        if char["value"] != " " or not any(item["value"].strip() for item in chars[:index]):
+            continue
+        next_char = next((item for item in chars[index + 1 :] if item["value"].strip()), None)
+        if next_char is None:
+            continue
+        origin = char.get("origin")
+        next_origin = next_char.get("origin")
+        if not origin or not next_origin:
+            continue
+        try:
+            advance = (
+                (float(next_origin[0]) - float(origin[0])) * direction_x
+                + (float(next_origin[1]) - float(origin[1])) * direction_y
+            )
+        except (TypeError, ValueError, IndexError):
+            continue
+        tolerance = max(0.25, float(char.get("size") or 0) * 0.03)
+        if abs(advance) <= tolerance:
+            remove_indexes.add(index)
+
+    normalized = "".join(char["value"] for index, char in enumerate(chars) if index not in remove_indexes)
+    return source, normalized
 
 
 def _read_text(path: Path) -> str:
