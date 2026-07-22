@@ -2657,11 +2657,6 @@ def _prepare_document_task_row(
     if not document_text:
         raise RuntimeError(f"“{original_filename}”未能提取到可检查文本。")
     prepared_document_text = format_document_text(original_filename, document_text)
-    if len(prepared_document_text) > model["max_input_chars"]:
-        raise RuntimeError(
-            f"“{original_filename}”文档文本 {len(prepared_document_text)} 字，"
-            f"超过当前模型文本上限 {model['max_input_chars']} 字。"
-        )
     owner_name = identity.display_name or None
     return (
         DOCUMENT_TASK_TYPE,

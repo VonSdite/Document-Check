@@ -1216,6 +1216,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ],
         )
 
+    def test_create_task_accepts_long_document_for_chunked_execution(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+        long_text = "长文档内容。" * 20_000
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO(long_text.encode("utf-8")), "long.txt"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT status, length(document_text) AS text_len FROM tasks").fetchone()
+        self.assertEqual(task["status"], "queued")
+        self.assertGreater(task["text_len"], 80_000)
+
     def test_create_task_creates_one_task_per_uploaded_document(self):
         model_id = self._configure_provider()
         with self.app.app_context():
