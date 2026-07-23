@@ -339,6 +339,7 @@ def register_routes(app):
     app.add_template_global(_owner_display, "owner_display")
     app.add_template_global(_owner_meta, "owner_meta")
     app.add_template_global(_consistency_task_title, "consistency_task_title")
+    app.add_template_global(_current_relative_url, "current_relative_url")
 
     @app.context_processor
     def inject_globals():
@@ -664,6 +665,7 @@ def register_routes(app):
     def user_task_detail(task_id):
         task = _get_user_task_or_local_admin(task_id)
         results = _task_results(task)
+        back_endpoint = _task_list_endpoint(not _platform_enabled(), task["task_type"])
         return render_template(
             "task_detail.html",
             mode="admin" if not _platform_enabled() else "user",
@@ -676,7 +678,7 @@ def register_routes(app):
             report_classification_url=url_for("admin_update_report_item_type" if not _platform_enabled() else "user_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
-            back_endpoint=_task_list_endpoint(not _platform_enabled(), task["task_type"]),
+            back_url=_safe_next_path(request.args.get("next"), url_for(back_endpoint)),
         )
 
     @app.post("/tasks/<int:task_id>/report-items")
@@ -919,6 +921,7 @@ def register_routes(app):
     def admin_task_detail(task_id):
         task = _get_task_or_404(task_id)
         results = _task_results(task)
+        back_endpoint = _task_list_endpoint(True, task["task_type"])
         return render_template(
             "task_detail.html",
             mode="admin",
@@ -931,7 +934,7 @@ def register_routes(app):
             report_classification_url=url_for("admin_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
-            back_endpoint=_task_list_endpoint(True, task["task_type"]),
+            back_url=_safe_next_path(request.args.get("next"), url_for(back_endpoint)),
         )
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/report-items")
@@ -1465,16 +1468,21 @@ def _has_saml_user_session() -> bool:
 
 def _current_relative_url() -> str:
     path = request.full_path if request.query_string else request.path
-    return path.rstrip("?") or url_for("user_tasks")
+    script_root = request.script_root.rstrip("/")
+    return f"{script_root}{path}".rstrip("?") or url_for("user_tasks")
 
 
-def _safe_next_path(value) -> str:
+def _safe_next_path(value, fallback: str | None = None) -> str:
+    fallback = fallback or url_for("user_tasks")
     value = str(value or "").strip()
     if not value:
-        return url_for("user_tasks")
+        return fallback
     parsed = urlsplit(value)
     if parsed.scheme or parsed.netloc or not value.startswith("/") or value.startswith("//"):
-        return url_for("user_tasks")
+        return fallback
+    script_root = request.script_root.rstrip("/")
+    if script_root and value != script_root and not value.startswith(f"{script_root}/"):
+        return fallback
     return value
 
 
@@ -3457,10 +3465,7 @@ def _delete_task(task):
 
 
 def _task_action_redirect(default_endpoint: str):
-    next_url = request.form.get("next", "").strip()
-    if next_url.startswith("/") and not next_url.startswith("//"):
-        return next_url
-    return url_for(default_endpoint)
+    return _safe_next_path(request.form.get("next"), url_for(default_endpoint))
 
 
 def _download_task_document(task, fallback_endpoint: str):

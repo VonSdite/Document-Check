@@ -2444,6 +2444,50 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(page_input.get("value"), "2")
         self.assertIsNotNone(form.select_one('button[type="submit"]'))
 
+    def test_user_cancel_preserves_proxy_prefix_and_page(self):
+        oldest_task_id = None
+        for index in range(21):
+            task_id = self._insert_task(status="running", created_at=f"2026-05-01 10:{index:02d}:00")
+            if index == 0:
+                oldest_task_id = task_id
+
+        response = self.client.get(
+            "/?page=2",
+            environ_overrides={"SCRIPT_NAME": "/infoCheck"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        form = _required_tag(soup.select_one('form[action$="/cancel"]'))
+        next_input = _required_tag(form.select_one('input[name="next"]'))
+        self.assertEqual(form.get("action"), f"/infoCheck/tasks/{oldest_task_id}/cancel")
+        self.assertEqual(next_input.get("value"), "/infoCheck/?page=2")
+
+        cancel_response = self.client.post(
+            f"/tasks/{oldest_task_id}/cancel",
+            data={"next": next_input.get("value")},
+            environ_overrides={"SCRIPT_NAME": "/infoCheck"},
+        )
+
+        self.assertEqual(cancel_response.status_code, 302)
+        self.assertEqual(cancel_response.headers["Location"], "/infoCheck/?page=2")
+
+    def test_user_task_detail_returns_to_original_page(self):
+        for index in range(21):
+            self._insert_task(created_at=f"2026-05-01 10:{index:02d}:00")
+
+        response = self.client.get("/?page=2")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        detail_link = _required_tag(soup.select_one("a.task-report-link"))
+        detail_response = self.client.get(str(detail_link.get("href")))
+
+        self.assertEqual(detail_response.status_code, 200)
+        detail_soup = BeautifulSoup(detail_response.get_data(as_text=True), "html.parser")
+        back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
+        self.assertEqual(back_link.get("href"), "/?page=2")
+
     def test_admin_task_list_page_jump_preserves_filters(self):
         for index in range(21):
             self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
@@ -2462,6 +2506,23 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(page_input.get("max"), "2")
         self.assertEqual(status_input.get("value"), "completed")
         self.assertEqual(owner_input.get("value"), "127.0.0.1")
+
+    def test_admin_task_detail_returns_to_filtered_page(self):
+        for index in range(21):
+            self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
+
+        list_url = "/admin/tasks?status=completed&owner=127.0.0.1&page=2"
+        response = self.client.get(list_url)
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        detail_link = _required_tag(soup.select_one("a.task-report-link"))
+        detail_response = self.client.get(str(detail_link.get("href")))
+
+        self.assertEqual(detail_response.status_code, 200)
+        detail_soup = BeautifulSoup(detail_response.get_data(as_text=True), "html.parser")
+        back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
+        self.assertEqual(back_link.get("href"), list_url)
 
     def test_report_item_type_update_persists_classification(self):
         with self.app.app_context():
