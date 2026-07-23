@@ -89,7 +89,9 @@ def _configure_logging(app):
                 )
                 file_handler.setLevel(logging.INFO)
                 file_handler.setFormatter(
-                    logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+                    logging.Formatter(
+                        "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+                    )
                 )
             target_logger.addHandler(file_handler)
         _ensure_console_handler(target_logger)
@@ -100,7 +102,8 @@ def _configure_logging(app):
 
 def _has_log_file_handler(target_logger, log_file: Path) -> bool:
     return any(
-        isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == log_file
+        isinstance(handler, RotatingFileHandler)
+        and Path(handler.baseFilename) == log_file
         for handler in target_logger.handlers
     )
 
@@ -108,7 +111,9 @@ def _has_log_file_handler(target_logger, log_file: Path) -> bool:
 def _ensure_console_handler(target_logger):
     formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
     for handler in target_logger.handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, RotatingFileHandler):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, RotatingFileHandler
+        ):
             handler.setLevel(logging.INFO)
             handler.setFormatter(formatter)
             return
