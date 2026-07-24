@@ -24,3 +24,6 @@ build/
 
 .DS_Store
 Thumbs.db
+
+ai_document_gate_report
+.ppt
