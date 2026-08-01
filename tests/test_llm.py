@@ -142,6 +142,67 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("单次回复不限制问题条数", user_content)
         self.assertNotIn("最多列出 20 条问题", user_content)
 
+    def test_deepseek_run_check_requests_json_object_response_format(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"{\\"summary\\":\\"完成\\",\\"items\\":[]}"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_check(
+                api_base="https://llm.example.test/v1/chat/completions",
+                api_key="key",
+                model_name="deepseekv4flash",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, '{"summary":"完成","items":[]}')
+        payload = fake_session.calls[0][1]["json"]
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
+    def test_json_object_response_format_falls_back_when_provider_rejects_it(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    status_code=400,
+                    text='{"error":{"message":"response_format json_object is not supported"}}',
+                ),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"{\\"summary\\":\\"降级完成\\",\\"items\\":[]}"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep") as sleep,
+        ):
+            result = llm.run_check(
+                api_base="https://llm.example.test/v1/chat/completions",
+                api_key="key",
+                model_name="deepseek-v4-flash",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, '{"summary":"降级完成","items":[]}')
+        self.assertEqual(len(fake_session.calls), 2)
+        self.assertEqual(fake_session.calls[0][1]["json"]["response_format"], {"type": "json_object"})
+        self.assertNotIn("response_format", fake_session.calls[1][1]["json"])
+        sleep.assert_not_called()
+
     def test_reads_stream_chat_completion_content(self):
         response = FakeResponse(
             lines=[
@@ -467,6 +528,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("图文对应检查", content[0]["text"])
         self.assertIn("当前图片批次：1/2", content[0]["text"])
         self.assertIn("单次回复最多列出 33 条问题", content[0]["text"])
+        self.assertIn("只输出一个 JSON 对象", content[0]["text"])
         self.assertIn("正文提到图 1 是电源接线图", content[0]["text"])
         self.assertIn("0001_page001-image001.png", content[1]["text"])
         self.assertEqual(content[2]["image_url"]["url"], "data:image/png;base64,AAAA")

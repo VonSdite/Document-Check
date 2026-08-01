@@ -14,6 +14,7 @@ _REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "rea
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
 DEFAULT_ISSUE_OUTPUT_LIMIT = 20
+_JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
 _STRUCTURED_REPORT_OUTPUT_CONTRACT = """结构化输出要求：
 1. 只输出一个 JSON 对象，不要使用 Markdown、代码块、表格或解释性前后缀。
 2. JSON 对象格式必须为：{"summary":"...", "items":[{"status":"issue|suggestion|non_issue","severity":"critical|high|medium|low","confidence":"high|medium|low","category":"...","location":"...","excerpt":"...","description":"...","impact":"...","suggestion":"..."}]}。
@@ -52,7 +53,9 @@ _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 6. 判断图文不对应时，必须同时给出明确文档线索和图片可见证据。
 7. 不要仅凭文件名、页码、图片顺序或未提供的上下文断言图片插入错位；证据不足时写“需人工确认”。
 8. 输出明确问题或建议时，请使用可拆分的编号条目，每条只描述一个问题或建议。
-9. {issue_output_limit_instruction}"""
+9. {issue_output_limit_instruction}
+
+{structured_report_output_contract}"""
 
 
 def _normalized_issue_output_limit(value) -> int:
@@ -87,7 +90,8 @@ def _image_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> 
 
 def _multimodal_document_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE.format(
-        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复")
+        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复"),
+        structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
 
@@ -154,6 +158,7 @@ def run_check(
         ],
         "temperature": 0,
     }
+    _apply_json_object_response_format(payload, api_base=api_base, model_name=model_name)
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
@@ -252,6 +257,7 @@ def run_image_check(
         ],
         "temperature": 0,
     }
+    _apply_json_object_response_format(payload, api_base=api_base, model_name=model_name)
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
@@ -382,6 +388,7 @@ def run_multimodal_document_check(
         ],
         "temperature": 0,
     }
+    _apply_json_object_response_format(payload, api_base=api_base, model_name=model_name)
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
@@ -465,7 +472,10 @@ def _run_payload_with_retries(
     stream_trace_enabled: bool,
 ) -> str:
     last_error = None
-    for attempt in range(1, _MAX_RETRIES + 2):
+    active_payload = dict(payload)
+    response_format_fallback_used = False
+    attempt = 1
+    while attempt <= _MAX_RETRIES + 1:
         attempt_parts = []
         last_content_callback = 0.0
         last_content_snapshot = ""
@@ -492,7 +502,7 @@ def _run_payload_with_retries(
             content = _run_check_attempt(
                 endpoint=endpoint,
                 headers=headers,
-                payload=payload,
+                payload=active_payload,
                 proxy_mode=proxy_mode,
                 proxy=proxy,
                 ssl_verify=ssl_verify,
@@ -515,6 +525,22 @@ def _run_payload_with_retries(
             last_error = exc
             if on_content and attempt_parts:
                 on_content("")
+            if (
+                not response_format_fallback_used
+                and "response_format" in active_payload
+                and _is_json_response_format_unsupported_error(exc)
+            ):
+                active_payload = dict(active_payload)
+                active_payload.pop("response_format", None)
+                response_format_fallback_used = True
+                logger.warning(
+                    "LLM JSON 输出模式不被模型服务支持，已降级为提示词约束 JSON request_id=%s task_id=%s attempt=%s error=%s",
+                    request_id,
+                    task_id or "-",
+                    attempt,
+                    exc,
+                )
+                continue
             if attempt > _MAX_RETRIES:
                 raise
             delay_seconds = attempt
@@ -528,6 +554,7 @@ def _run_payload_with_retries(
                 exc,
             )
             time.sleep(delay_seconds)
+            attempt += 1
     raise last_error or LLMError("模型服务请求失败")
 
 
@@ -695,6 +722,46 @@ def _disable_thinking_in_payload(payload: dict, *, api_base: str = "", model_nam
     payload["chat_template_kwargs"] = {"enable_thinking": False}
     if _uses_deepseek_thinking_toggle(api_base, model_name):
         payload["thinking"] = {"type": "disabled"}
+
+
+def _apply_json_object_response_format(payload: dict, *, api_base: str = "", model_name: str = ""):
+    if _uses_deepseek_json_object_response_format(api_base, model_name):
+        payload["response_format"] = dict(_JSON_OBJECT_RESPONSE_FORMAT)
+
+
+def _uses_deepseek_json_object_response_format(api_base: str, model_name: str) -> bool:
+    model = str(model_name or "").strip().lower()
+    model_id = model.rsplit("/", 1)[-1]
+    compact_model_id = model_id.replace("-", "").replace("_", "").replace(".", "").replace(" ", "")
+    if compact_model_id.startswith("deepseek"):
+        return True
+
+    endpoint = str(api_base or "").strip().lower()
+    return "api.deepseek.com/" in endpoint
+
+
+def _is_json_response_format_unsupported_error(error: Exception) -> bool:
+    text = str(error or "").lower()
+    if not any(marker in text for marker in ("response_format", "response format", "json_object", "json mode")):
+        return False
+    unsupported_markers = (
+        "not support",
+        "not supported",
+        "unsupported",
+        "invalid",
+        "unrecognized",
+        "unknown",
+        "not permitted",
+        "not allowed",
+        "extra inputs are not permitted",
+        "不支持",
+        "无效",
+        "非法",
+        "不允许",
+        "未识别",
+        "未知",
+    )
+    return any(marker in text for marker in unsupported_markers)
 
 
 def _uses_deepseek_thinking_toggle(api_base: str, model_name: str) -> bool:
