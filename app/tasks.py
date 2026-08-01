@@ -22,16 +22,6 @@ from .images import (
     page_sections_from_document_text,
 )
 from .llm import DEFAULT_ISSUE_OUTPUT_LIMIT, LLMError, run_check, run_multimodal_document_check
-from .long_documents import (
-    LONG_DOCUMENT_FACT_LIMIT_PER_CHUNK,
-    build_consistency_candidates,
-    build_document_outline,
-    consistency_candidate_batches,
-    extract_consistency_facts,
-    long_document_limits,
-    merge_chunk_reports,
-    split_long_document,
-)
 from .network import outbound_network_config
 from .sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
@@ -85,22 +75,6 @@ IMAGE_CHECK_TARGET_LABELS = {
     "page": "页面级检查",
     "resource": "图片资源检查",
 }
-LONG_DOCUMENT_CONSISTENCY_CODE = "consistency"
-LONG_DOCUMENT_COMPLIANCE_CODE = "compliance"
-LONG_DOCUMENT_FACT_EXTRACTION_PROMPT = """你正在为超长技术文档建立全文一致性事实索引，不要在本次请求中判断是否存在问题。
-请从当前分段提取适合跨章节比较的明确事实，包括但不限于：产品和部件属性、型号版本、技术参数、数值单位、范围阈值、操作要求、禁止事项、前置条件、安全等级、步骤顺序、术语定义和引用关系。
-
-输出映射要求：
-1. 每个事实输出为一个 items 元素，status 固定为 non_issue，severity 固定为 low。
-2. category 填规范化后的对象或实体名称，例如“设备输入电压”。同一对象在不同分段必须尽量使用相同名称。
-3. description 填属性或要求类型，例如“额定值”“允许范围”“强制要求”。
-4. impact 填规范化值，必须保留数字、单位、否定词和强制程度，例如“220 V”“禁止带电插拔”“必须接地”。
-5. suggestion 填适用条件、场景或例外；没有则填空字符串。
-6. location 和 excerpt 必须引用当前分段中的明确位置和原文。
-7. 不提取纯叙述、版权声明或无法跨位置比较的内容；单个分段最多提取最重要的 120 条事实。"""
-LONG_DOCUMENT_CONSISTENCY_VERIFY_PROMPT = """下面内容不是完整文档，而是从全文事实索引中筛选出的潜在冲突证据对。
-请逐个候选核对两处原文、适用条件、单位和强制程度：只有在同一对象、同一属性、适用条件相同或重叠且表述确实不兼容时才报告为 issue；不同型号、不同场景、不同阶段或单位可等价换算时不要误报。
-每条确认的问题必须同时引用证据A和证据B的位置及原文。证据不足时填 suggestion，并明确需要确认的条件。不要报告候选列表之外的问题。"""
 
 
 class TaskScheduler:
@@ -301,7 +275,7 @@ class TaskScheduler:
 
                     if not document_text:
                         raise RuntimeError("未能从文档中提取到可检查文本")
-                    if task_type != DOCUMENT_TASK_TYPE and len(document_text) > task["max_input_chars"]:
+                    if len(document_text) > task["max_input_chars"]:
                         raise RuntimeError(
                             f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
                         )
@@ -465,243 +439,6 @@ def _document_meta(raw: str | None) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _long_document_execution_plan(document_text: str, max_input_chars: int) -> tuple[list, str, int]:
-    direct_limit, chunk_limit = long_document_limits(max_input_chars)
-    if len(document_text) <= direct_limit:
-        return [], "", chunk_limit
-    chunks = split_long_document(document_text, max_chars=chunk_limit)
-    outline_limit = max(800, min(8_000, chunk_limit // 5))
-    return chunks, build_document_outline(document_text, max_chars=outline_limit), chunk_limit
-
-
-def _long_document_chunk_input(chunk, outline: str) -> str:
-    if not outline:
-        return chunk.text
-    return (
-        "# 全文结构线索\n"
-        f"{outline}\n\n"
-        "说明：全文结构线索只用于定位和理解章节关系，具体问题必须以当前分段原文为证据。\n\n"
-        f"# 当前检查分段\n{chunk.text}"
-    )
-
-
-def _long_document_chunk_issue_limit(issue_output_limit: int) -> int:
-    limit = max(0, int(issue_output_limit or 0))
-    if limit <= 0:
-        return 10
-    return max(3, min(10, limit))
-
-
-def _run_long_document_chunk_check(
-    *,
-    task,
-    item: dict,
-    chunks: list,
-    outline: str,
-    issue_output_limit: int,
-    save_partial,
-    ensure_active,
-    stream_trace_enabled: bool,
-) -> str:
-    reports = []
-    network = outbound_network_config()
-    chunk_limit = _long_document_chunk_issue_limit(issue_output_limit)
-    for chunk in chunks:
-        ensure_active()
-        content = run_check(
-            api_base=task["api_base"],
-            api_key=task["api_key"],
-            proxy_mode=network["proxy_mode"],
-            proxy=network["proxy"],
-            ssl_verify=network["ssl_verify"],
-            request_timeout=task["request_timeout"],
-            model_name=task["model_name"],
-            force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-            check_name=f"{item['name']}（长文档分段 {chunk.index}/{chunk.total}）",
-            prompt=(
-                f"{item['prompt']}\n\n"
-                "长文档分段规则：只报告当前分段内有明确证据的问题；不要因为缺少其他分段内容而断言全文缺失。"
-            ),
-            document_text=_long_document_chunk_input(chunk, outline),
-            issue_output_limit=chunk_limit,
-            task_id=task["id"],
-            stream_trace_enabled=stream_trace_enabled,
-        )
-        reports.append((chunk.label, content))
-        merged = merge_chunk_reports(
-            reports,
-            issue_output_limit=issue_output_limit,
-            summary_prefix=f"{item['name']}长文档分段检查进行中",
-        )
-        save_partial(merged, f"正在检查长文档：{item['name']}，分段 {chunk.index}/{chunk.total}", force=True)
-
-    if item["code"] == LONG_DOCUMENT_COMPLIANCE_CODE and outline:
-        ensure_active()
-        outline_content = run_check(
-            api_base=task["api_base"],
-            api_key=task["api_key"],
-            proxy_mode=network["proxy_mode"],
-            proxy=network["proxy"],
-            ssl_verify=network["ssl_verify"],
-            request_timeout=task["request_timeout"],
-            model_name=task["model_name"],
-            force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-            check_name=f"{item['name']}（全文结构检查）",
-            prompt=(
-                f"{item['prompt']}\n\n"
-                "本次只检查全文结构线索中可直接确认的章节编号、层级、重复标题和明显引用规范问题；"
-                "不要根据结构线索推测正文内容缺失。"
-            ),
-            document_text=f"file: 长文档\n\n# 全文结构线索\n{outline}",
-            issue_output_limit=chunk_limit,
-            task_id=task["id"],
-            stream_trace_enabled=stream_trace_enabled,
-        )
-        reports.append(("全文结构线索", outline_content))
-
-    return merge_chunk_reports(
-        reports,
-        issue_output_limit=issue_output_limit,
-        summary_prefix=f"{item['name']}长文档分段检查完成",
-    )
-
-
-def _run_long_document_consistency_check(
-    *,
-    task,
-    item: dict,
-    chunks: list,
-    outline: str,
-    chunk_chars: int,
-    issue_output_limit: int,
-    save_partial,
-    ensure_active,
-    stream_trace_enabled: bool,
-) -> str:
-    reports = []
-    facts = []
-    fact_failures = []
-    network = outbound_network_config()
-    chunk_limit = _long_document_chunk_issue_limit(issue_output_limit)
-    for chunk in chunks:
-        ensure_active()
-        chunk_text = _long_document_chunk_input(chunk, outline)
-        local_content = run_check(
-            api_base=task["api_base"],
-            api_key=task["api_key"],
-            proxy_mode=network["proxy_mode"],
-            proxy=network["proxy"],
-            ssl_verify=network["ssl_verify"],
-            request_timeout=task["request_timeout"],
-            model_name=task["model_name"],
-            force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-            check_name=f"{item['name']}（分段内部检查 {chunk.index}/{chunk.total}）",
-            prompt=(
-                f"{item['prompt']}\n\n"
-                "本次先检查当前分段内部可直接对照的矛盾；不要因为其他分段未提供而判断全文缺失。"
-            ),
-            document_text=chunk_text,
-            issue_output_limit=chunk_limit,
-            task_id=task["id"],
-            stream_trace_enabled=stream_trace_enabled,
-        )
-        reports.append((f"{chunk.label}内部检查", local_content))
-        save_partial(
-            merge_chunk_reports(
-                reports,
-                issue_output_limit=issue_output_limit,
-                summary_prefix="全文一致性分段内部检查进行中",
-            ),
-            f"正在检查全文一致性：分段 {chunk.index}/{chunk.total}",
-            force=True,
-        )
-
-        ensure_active()
-        fact_content = run_check(
-            api_base=task["api_base"],
-            api_key=task["api_key"],
-            proxy_mode=network["proxy_mode"],
-            proxy=network["proxy"],
-            ssl_verify=network["ssl_verify"],
-            request_timeout=task["request_timeout"],
-            model_name=task["model_name"],
-            force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-            check_name=f"全文一致性事实提取（{chunk.index}/{chunk.total}）",
-            prompt=LONG_DOCUMENT_FACT_EXTRACTION_PROMPT,
-            document_text=chunk_text,
-            issue_output_limit=LONG_DOCUMENT_FACT_LIMIT_PER_CHUNK,
-            task_id=task["id"],
-            stream_trace_enabled=stream_trace_enabled,
-        )
-        chunk_facts = extract_consistency_facts(fact_content, chunk.label)
-        if chunk_facts:
-            facts.extend(chunk_facts)
-        else:
-            fact_failures.append(chunk.label)
-
-    candidates = build_consistency_candidates(facts)
-    candidate_batches = consistency_candidate_batches(candidates, max_chars=chunk_chars)
-    for batch_index, candidate_text in enumerate(candidate_batches, start=1):
-        ensure_active()
-        verified = run_check(
-            api_base=task["api_base"],
-            api_key=task["api_key"],
-            proxy_mode=network["proxy_mode"],
-            proxy=network["proxy"],
-            ssl_verify=network["ssl_verify"],
-            request_timeout=task["request_timeout"],
-            model_name=task["model_name"],
-            force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-            check_name=f"全文一致性跨分段证据复核（{batch_index}/{len(candidate_batches)}）",
-            prompt=f"{item['prompt']}\n\n{LONG_DOCUMENT_CONSISTENCY_VERIFY_PROMPT}",
-            document_text=candidate_text,
-            issue_output_limit=chunk_limit,
-            task_id=task["id"],
-            stream_trace_enabled=stream_trace_enabled,
-        )
-        reports.append((f"跨分段证据复核 {batch_index}/{len(candidate_batches)}", verified))
-        save_partial(
-            merge_chunk_reports(
-                reports,
-                issue_output_limit=issue_output_limit,
-                summary_prefix="全文一致性跨分段复核进行中",
-            ),
-            f"正在复核全文一致性候选：{batch_index}/{len(candidate_batches)}",
-            force=True,
-        )
-
-    if fact_failures:
-        warning = json.dumps(
-            {
-                "summary": "部分事实提取批次未形成可解析结果。",
-                "items": [
-                    {
-                        "status": "suggestion",
-                        "severity": "low",
-                        "confidence": "high",
-                        "category": "全文一致性检查完整性",
-                        "location": "、".join(fact_failures[:12]),
-                        "excerpt": "",
-                        "description": "部分分段未能建立事实索引，跨分段冲突覆盖可能不完整。",
-                        "impact": "这些分段与其他章节之间的远距离矛盾可能被遗漏。",
-                        "suggestion": "建议重试任务或人工复核所列分段。",
-                    }
-                ],
-            },
-            ensure_ascii=False,
-        )
-        reports.append(("事实索引完整性", warning))
-
-    return merge_chunk_reports(
-        reports,
-        issue_output_limit=issue_output_limit,
-        summary_prefix=(
-            f"全文一致性长文档检查完成：提取 {len(facts)} 条事实，"
-            f"复核 {len(candidates)} 组潜在冲突"
-        ),
-    )
-
-
 def _run_check_items_concurrently(
     app,
     task,
@@ -738,22 +475,6 @@ def _run_check_items_concurrently(
         db = get_db()
         _update_progress(db, task_id, 5)
     heartbeat.start()
-    if any(item.get("code") != SENSITIVE_TERMS_CHECK_CODE for item in check_items):
-        long_chunks, document_outline, long_chunk_chars = _long_document_execution_plan(
-            document_text,
-            task["max_input_chars"],
-        )
-    else:
-        long_chunks, document_outline, long_chunk_chars = [], "", 0
-    if long_chunks:
-        app.logger.info(
-            "单文档长文档模式 task_id=%s document_chars=%s chunks=%s chunk_chars=%s outline_chars=%s",
-            task_id,
-            len(document_text),
-            len(long_chunks),
-            long_chunk_chars,
-            len(document_outline),
-        )
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
@@ -777,12 +498,8 @@ def _run_check_items_concurrently(
     def run_item(index: int, item: dict) -> dict:
         with app.app_context():
             db = get_db()
-
-            def ensure_active():
-                if cancel_event.is_set() or _cancel_requested(db, task_id):
-                    raise TaskCanceled
-
-            ensure_active()
+            if cancel_event.is_set() or _cancel_requested(db, task_id):
+                raise TaskCanceled
 
             app.logger.info(
                 "任务检查项开始 task_id=%s item=%s index=%s/%s",
@@ -820,30 +537,6 @@ def _run_check_items_concurrently(
             if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                 structured_report = _run_sensitive_terms_check(app, document_text, issue_output_limit)
                 content = format_sensitive_terms_report(structured_report)
-            elif long_chunks:
-                if item["code"] == LONG_DOCUMENT_CONSISTENCY_CODE:
-                    content = _run_long_document_consistency_check(
-                        task=task,
-                        item=item,
-                        chunks=long_chunks,
-                        outline=document_outline,
-                        chunk_chars=long_chunk_chars,
-                        issue_output_limit=issue_output_limit,
-                        save_partial=save_partial,
-                        ensure_active=ensure_active,
-                        stream_trace_enabled=stream_trace_enabled,
-                    )
-                else:
-                    content = _run_long_document_chunk_check(
-                        task=task,
-                        item=item,
-                        chunks=long_chunks,
-                        outline=document_outline,
-                        issue_output_limit=issue_output_limit,
-                        save_partial=save_partial,
-                        ensure_active=ensure_active,
-                        stream_trace_enabled=stream_trace_enabled,
-                    )
             else:
                 network = outbound_network_config()
                 content = run_check(
