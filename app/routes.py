@@ -2615,6 +2615,11 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
         _remove_uploaded_files(saved_paths)
         flash(str(exc), "error")
         return _back_to_task_form(admin_created)
+    except Exception:
+        _remove_uploaded_files(saved_paths)
+        current_app.logger.exception("准备单文档检查任务失败")
+        flash("文档上传或读取失败，请稍后重试；如持续出现请联系管理员查看日志。", "error")
+        return _back_to_task_form(admin_created)
 
     try:
         db.executemany(

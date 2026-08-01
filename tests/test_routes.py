@@ -1282,6 +1282,31 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(uploaded_files, [])
 
+    def test_create_task_handles_unexpected_upload_preparation_error(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+
+        with patch("app.routes.extract_text", side_effect=ValueError("company parser failed")):
+            response = self.client.post(
+                "/",
+                data={
+                    "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                },
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("文档上传或读取失败", response.get_data(as_text=True))
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
+        self.assertEqual(total, 0)
+        self.assertEqual(uploaded_files, [])
+
     def test_create_image_task_saves_extracted_image_metadata(self):
         model_id = self._configure_provider()
         with self.app.app_context():
