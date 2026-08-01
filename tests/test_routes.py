@@ -1,5 +1,6 @@
 import io
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
 from app.formatting import render_markdown
 from app.routes import (
+    UPLOAD_PATH_SAFE_CHARS,
     _consistency_task_title,
     _find_enabled_model,
     _parse_result_json,
@@ -1215,6 +1217,40 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_task_saves_long_filename_when_upload_folder_is_missing(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+
+        upload_folder = Path(self.app.config["ROOT_DIR"]) / ("deep-" + "x" * 50) / "uploads"
+        self.app.config["UPLOAD_FOLDER"] = str(upload_folder)
+        if upload_folder.exists():
+            shutil.rmtree(upload_folder)
+        filename = (
+            "PowerCube 1000 V300R008C10 Installation Guide(Site Construction,"
+            "ICC330-HA1-C11,ICC330-HD1-C6,ICC360-HA1-C2,ICC800-A1-C2)_运营商专用.pdf"
+        )
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (_pdf_with_image_bytes(), filename),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT original_filename, stored_filename, document_text FROM tasks").fetchone()
+        stored_path = upload_folder / task["stored_filename"]
+        self.assertTrue(stored_path.is_file())
+        self.assertLessEqual(len(str(stored_path.resolve())), UPLOAD_PATH_SAFE_CHARS)
+        self.assertEqual(task["original_filename"], filename)
+        self.assertTrue(task["document_text"].startswith(f"file: {filename}\n\n"))
+        self.assertIn("[第1页]", task["document_text"])
 
     def test_create_task_creates_one_task_per_uploaded_document(self):
         model_id = self._configure_provider()

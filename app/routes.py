@@ -91,6 +91,8 @@ TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 REPORT_RETENTION_DAYS_DEFAULT = 0
 ISSUE_OUTPUT_LIMIT_DEFAULT = DEFAULT_ISSUE_OUTPUT_LIMIT
+UPLOAD_PATH_SAFE_CHARS = 240
+UPLOAD_FILENAME_SAFE_CHARS = 180
 PROVIDER_TIMEOUT_DEFAULT = 3600
 PROVIDER_TIMEOUT_MIN = 30
 PROVIDER_TIMEOUT_MAX = 7200
@@ -3707,27 +3709,69 @@ def _clean_upload_filename(filename: str, file_type: str) -> str:
 
 def _upload_destination(original_filename: str, ip: str, created_at: str, file_type: str) -> tuple[str, Path]:
     upload_dir = Path(current_app.config["UPLOAD_FOLDER"])
+    upload_dir.mkdir(parents=True, exist_ok=True)
     timestamp = re.sub(r"\D", "", created_at) or now_text().replace("-", "").replace(":", "").replace(" ", "")
-    stem = _limit_utf8_bytes(_safe_filename_part(Path(original_filename).stem, "document"), 140)
-    ip_part = _limit_utf8_bytes(_safe_filename_part(ip, "0.0.0.0"), 80)
+    raw_stem = _limit_utf8_bytes(_safe_filename_part(Path(original_filename).stem, "document"), 140)
+    raw_ip_part = _limit_utf8_bytes(_safe_filename_part(ip, "0.0.0.0"), 80)
     token = uuid.uuid4().hex[:12]
-    stored_filename = f"{stem}_{ip_part}_{timestamp}_{token}.{file_type}"
+    stored_filename = _stored_upload_filename(raw_stem, raw_ip_part, timestamp, token, file_type, upload_dir)
     destination = upload_dir / stored_filename
     if not destination.exists():
         return stored_filename, destination
 
     for index in range(2, 1000):
-        candidate = f"{stem}_{ip_part}_{timestamp}_{token}-{index}.{file_type}"
+        candidate = _stored_upload_filename(raw_stem, raw_ip_part, timestamp, token, file_type, upload_dir, index=index)
         destination = upload_dir / candidate
         if not destination.exists():
             return candidate, destination
     raise RuntimeError("无法保存上传文档，请稍后再试")
 
 
+def _stored_upload_filename(
+    stem: str,
+    ip_part: str,
+    timestamp: str,
+    token: str,
+    file_type: str,
+    upload_dir: Path,
+    *,
+    index: int | None = None,
+) -> str:
+    budget = _upload_filename_char_budget(upload_dir)
+    index_suffix = f"-{index}" if index else ""
+    fixed_suffix = f"__{timestamp}_{token}{index_suffix}.{file_type}"
+    if budget < len(fixed_suffix) + 2:
+        raise RuntimeError("上传目录路径过长，无法生成可保存文件名，请将项目目录移动到更短路径后重试。")
+    max_ip_chars = max(1, budget - len(fixed_suffix) - 1)
+    ip_part = _limit_chars(ip_part, max_ip_chars)
+    suffix = f"_{ip_part}_{timestamp}_{token}{index_suffix}.{file_type}"
+    max_stem_chars = max(1, budget - len(suffix))
+    return f"{_limit_chars(stem, max_stem_chars)}{suffix}"
+
+
+def _upload_filename_char_budget(upload_dir: Path) -> int:
+    try:
+        upload_dir_text = str(upload_dir.resolve())
+    except OSError:
+        upload_dir_text = str(upload_dir.absolute())
+    path_budget = UPLOAD_PATH_SAFE_CHARS - len(upload_dir_text) - 1
+    return min(UPLOAD_FILENAME_SAFE_CHARS, path_budget)
+
+
 def _safe_filename_part(value: str, fallback: str) -> str:
     value = INVALID_FILENAME_CHARS.sub("_", value).strip(" ._")
     value = re.sub(r"_+", "_", value)
     return value or fallback
+
+
+def _limit_chars(value: str, max_chars: int) -> str:
+    value = str(value or "").strip(" ._")
+    if max_chars <= 0:
+        return "d"
+    value = value[:max_chars].strip(" ._")
+    if value:
+        return value
+    return "document"[:max_chars] or "d"
 
 
 def _limit_utf8_bytes(value: str, max_bytes: int) -> str:
