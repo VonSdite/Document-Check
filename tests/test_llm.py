@@ -168,6 +168,58 @@ class LLMResponseParsingTest(unittest.TestCase):
         payload = fake_session.calls[0][1]["json"]
         self.assertEqual(payload["response_format"], {"type": "json_object"})
 
+    def test_glm_run_check_requests_json_object_response_format(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"{\\"summary\\":\\"完成\\",\\"items\\":[]}"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_check(
+                api_base="https://llm.example.test/v1/chat/completions",
+                api_key="key",
+                model_name="GLM-4-Flash",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, '{"summary":"完成","items":[]}')
+        payload = fake_session.calls[0][1]["json"]
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
+    def test_bigmodel_endpoint_requests_json_object_response_format(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"{\\"summary\\":\\"完成\\",\\"items\\":[]}"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_check(
+                api_base="https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                api_key="key",
+                model_name="company-default-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, '{"summary":"完成","items":[]}')
+        payload = fake_session.calls[0][1]["json"]
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
     def test_json_object_response_format_falls_back_when_provider_rejects_it(self):
         fake_session = FakeSession(
             [

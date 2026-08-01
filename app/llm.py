@@ -725,8 +725,14 @@ def _disable_thinking_in_payload(payload: dict, *, api_base: str = "", model_nam
 
 
 def _apply_json_object_response_format(payload: dict, *, api_base: str = "", model_name: str = ""):
-    if _uses_deepseek_json_object_response_format(api_base, model_name):
+    if _uses_json_object_response_format(api_base, model_name):
         payload["response_format"] = dict(_JSON_OBJECT_RESPONSE_FORMAT)
+
+
+def _uses_json_object_response_format(api_base: str, model_name: str) -> bool:
+    return _uses_deepseek_json_object_response_format(api_base, model_name) or _uses_glm_json_object_response_format(
+        api_base, model_name
+    )
 
 
 def _uses_deepseek_json_object_response_format(api_base: str, model_name: str) -> bool:
@@ -738,6 +744,17 @@ def _uses_deepseek_json_object_response_format(api_base: str, model_name: str) -
 
     endpoint = str(api_base or "").strip().lower()
     return "api.deepseek.com/" in endpoint
+
+
+def _uses_glm_json_object_response_format(api_base: str, model_name: str) -> bool:
+    model = str(model_name or "").strip().lower()
+    model_id = model.rsplit("/", 1)[-1]
+    compact_model_id = model_id.replace("-", "").replace("_", "").replace(".", "").replace(" ", "")
+    if compact_model_id.startswith(("glm", "chatglm")):
+        return True
+
+    endpoint = str(api_base or "").strip().lower()
+    return "bigmodel.cn/" in endpoint or "zhipuai.cn/" in endpoint
 
 
 def _is_json_response_format_unsupported_error(error: Exception) -> bool:
