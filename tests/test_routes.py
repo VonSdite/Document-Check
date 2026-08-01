@@ -1301,6 +1301,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("文档上传或读取失败", response.get_data(as_text=True))
+        self.assertIn("company parser failed", response.get_data(as_text=True))
         with self.app.app_context():
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())

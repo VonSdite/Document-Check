@@ -2615,10 +2615,10 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
         _remove_uploaded_files(saved_paths)
         flash(str(exc), "error")
         return _back_to_task_form(admin_created)
-    except Exception:
+    except Exception as exc:
         _remove_uploaded_files(saved_paths)
         current_app.logger.exception("准备单文档检查任务失败")
-        flash("文档上传或读取失败，请稍后重试；如持续出现请联系管理员查看日志。", "error")
+        flash(_unexpected_upload_preparation_message(exc), "error")
         return _back_to_task_form(admin_created)
 
     try:
@@ -2704,6 +2704,23 @@ def _prepare_document_task_row(
         created_at,
         created_at,
     )
+
+
+def _unexpected_upload_preparation_message(error: Exception) -> str:
+    detail = _compact_user_error(error)
+    if detail:
+        return f"文档上传或读取失败：{detail}。如持续出现请联系管理员查看日志。"
+    return "文档上传或读取失败，请稍后重试；如持续出现请联系管理员查看日志。"
+
+
+def _compact_user_error(error: Exception, limit: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(error or "").strip())
+    if not text:
+        return ""
+    text = re.sub(r"[A-Za-z]:[\\/][^，。；;]*", "[本地路径]", text)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
 
 
 def create_image_task_for_identity(identity: UserIdentity, *, admin_created: bool):
