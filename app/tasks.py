@@ -24,21 +24,12 @@ from .images import (
 from .llm import DEFAULT_ISSUE_OUTPUT_LIMIT, LLMError, run_check, run_multimodal_document_check
 from .long_documents import (
     LONG_DOCUMENT_FACT_LIMIT_PER_CHUNK,
-    align_language_chunks,
     build_consistency_candidates,
-    build_chunk_search_index,
     build_document_outline,
-    build_evidence_comparison_input,
-    build_language_alignment_input,
     consistency_candidate_batches,
     extract_consistency_facts,
-    grouped_document_limits,
     long_document_limits,
     merge_chunk_reports,
-    parse_consistency_documents,
-    parse_language_consistency_documents,
-    rank_relevant_chunks,
-    split_grouped_document,
     split_long_document,
 )
 from .network import outbound_network_config
@@ -110,16 +101,6 @@ LONG_DOCUMENT_FACT_EXTRACTION_PROMPT = """你正在为超长技术文档建立�
 LONG_DOCUMENT_CONSISTENCY_VERIFY_PROMPT = """下面内容不是完整文档，而是从全文事实索引中筛选出的潜在冲突证据对。
 请逐个候选核对两处原文、适用条件、单位和强制程度：只有在同一对象、同一属性、适用条件相同或重叠且表述确实不兼容时才报告为 issue；不同型号、不同场景、不同阶段或单位可等价换算时不要误报。
 每条确认的问题必须同时引用证据A和证据B的位置及原文。证据不足时填 suggestion，并明确需要确认的条件。不要报告候选列表之外的问题。"""
-LONG_MULTI_DOCUMENT_FORWARD_PROMPT = """本次是超长多文档对照中的“资料分段 -> 素材证据”批次。
-当前资料分段是主要检查对象，后面只提供系统检索到的最相关素材分段。请检查资料表述是否与这些素材证据冲突、偏离或缺少依据；只报告当前批次有明确双边证据的问题。
-不要因为本批次没有展示全部素材就断言素材中不存在依据，也不要在这个方向判断素材要求是否被资料全文遗漏。每条结果必须同时引用资料位置和素材证据位置。"""
-LONG_MULTI_DOCUMENT_REVERSE_PROMPT = """本次是超长多文档对照中的“素材分段 -> 资料覆盖”反向批次，用于发现资料全文可能遗漏的关键素材要求。
-请核对当前素材分段中的关键事实、约束、步骤或风险提示，是否在检索到的资料证据中得到实质覆盖。只有当前素材内容明确重要且候选资料确实未覆盖时才报告；检索候选有限，证据不足时必须标为 suggestion/需人工确认，不能武断认定全文遗漏。
-每条结果必须引用素材位置，并说明已核对的资料证据位置。"""
-LONG_LANGUAGE_PAIRED_PROMPT = """本次是超长跨语种文档的一组对齐分段。系统按章节编号、数字/型号/单位等硬线索和相对顺序完成对齐。
-请只比较当前文档A、文档B分段中的实质内容，识别缺失、增补、误译、约束强弱变化和关键事实差异。每条结果必须同时引用两侧位置和原文；不要根据未提供的其他分段推测全文差异。"""
-LONG_LANGUAGE_COVERAGE_PROMPT = """本次是超长跨语种文档的未匹配分段覆盖复核。unmatched_side 指出系统未找到可靠对齐的一侧，另一侧内容只是检索到的邻近或相关候选。
-请判断未匹配分段是否确实在另一文档中缺失，还是仅因章节调整、合并拆分或合理本地化而未直接对齐。只有证据充分时才报告 issue；证据不足时标为 suggestion/需人工确认。"""
 
 
 class TaskScheduler:
@@ -320,6 +301,11 @@ class TaskScheduler:
 
                     if not document_text:
                         raise RuntimeError("未能从文档中提取到可检查文本")
+                    if task_type != DOCUMENT_TASK_TYPE and len(document_text) > task["max_input_chars"]:
+                        raise RuntimeError(
+                            f"文档文本 {len(document_text)} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
+                        )
+
                     if not check_items:
                         raise RuntimeError("没有可执行的检查项")
 
@@ -716,207 +702,6 @@ def _run_long_document_consistency_check(
     )
 
 
-def _run_long_multi_document_check(
-    *,
-    task,
-    item: dict,
-    document_text: str,
-    issue_output_limit: int,
-    save_partial,
-    ensure_active,
-    stream_trace_enabled: bool,
-) -> str:
-    grouped = parse_consistency_documents(document_text)
-    if not grouped["master"] or not grouped["related"]:
-        raise RuntimeError("超长多文档对照无法识别素材文档或资料边界")
-
-    request_chars, chunk_chars = grouped_document_limits(task["max_input_chars"])
-    master_chunks = [
-        chunk
-        for document in grouped["master"]
-        for chunk in split_grouped_document(document, max_chars=chunk_chars)
-    ]
-    related_chunks = [
-        chunk
-        for document in grouped["related"]
-        for chunk in split_grouped_document(document, max_chars=chunk_chars)
-    ]
-    master_index = build_chunk_search_index(master_chunks)
-    related_index = build_chunk_search_index(related_chunks)
-    reports = []
-    network = outbound_network_config()
-    batch_issue_limit = _long_document_chunk_issue_limit(issue_output_limit)
-    total_batches = len(related_chunks) + len(master_chunks)
-    completed_batches = 0
-
-    def run_batch(*, query, evidence, direction: str, prompt: str, check_label: str):
-        nonlocal completed_batches
-        ensure_active()
-        content = run_check(
-            api_base=task["api_base"],
-            api_key=task["api_key"],
-            proxy_mode=network["proxy_mode"],
-            proxy=network["proxy"],
-            ssl_verify=network["ssl_verify"],
-            request_timeout=task["request_timeout"],
-            model_name=task["model_name"],
-            force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-            check_name=f"{item['name']}（{check_label}）",
-            prompt=f"{item['prompt']}\n\n{prompt}",
-            document_text=build_evidence_comparison_input(
-                query,
-                evidence,
-                direction=direction,
-                max_chars=request_chars,
-            ),
-            issue_output_limit=batch_issue_limit,
-            task_id=task["id"],
-            stream_trace_enabled=stream_trace_enabled,
-        )
-        completed_batches += 1
-        reports.append((check_label, content))
-        save_partial(
-            merge_chunk_reports(
-                reports,
-                issue_output_limit=issue_output_limit,
-                summary_prefix="多文档长文档对照进行中",
-            ),
-            f"正在执行多文档长文档对照：{completed_batches}/{total_batches}",
-            force=True,
-        )
-
-    for index, query in enumerate(related_chunks, start=1):
-        run_batch(
-            query=query,
-            evidence=rank_relevant_chunks(query, master_index),
-            direction="related_to_master",
-            prompt=LONG_MULTI_DOCUMENT_FORWARD_PROMPT,
-            check_label=f"资料对照素材 {index}/{len(related_chunks)}：{query.label}",
-        )
-
-    for index, query in enumerate(master_chunks, start=1):
-        run_batch(
-            query=query,
-            evidence=rank_relevant_chunks(query, related_index),
-            direction="master_to_related",
-            prompt=LONG_MULTI_DOCUMENT_REVERSE_PROMPT,
-            check_label=f"素材反向覆盖 {index}/{len(master_chunks)}：{query.label}",
-        )
-
-    return merge_chunk_reports(
-        reports,
-        issue_output_limit=issue_output_limit,
-        summary_prefix=(
-            f"多文档长文档对照完成：资料检查 {len(related_chunks)} 个分段，"
-            f"素材反向覆盖 {len(master_chunks)} 个分段"
-        ),
-    )
-
-
-def _run_long_language_consistency_check(
-    *,
-    task,
-    item: dict,
-    document_text: str,
-    issue_output_limit: int,
-    save_partial,
-    ensure_active,
-    stream_trace_enabled: bool,
-) -> str:
-    static_precheck, document_a, document_b = parse_language_consistency_documents(document_text)
-    if document_a is None or document_b is None:
-        raise RuntimeError("超长跨语种检查无法识别文档A或文档B边界")
-
-    request_chars, chunk_chars = grouped_document_limits(task["max_input_chars"])
-    left_chunks = split_grouped_document(document_a, max_chars=chunk_chars)
-    right_chunks = split_grouped_document(document_b, max_chars=chunk_chars)
-    alignments, unmatched_left, unmatched_right = align_language_chunks(left_chunks, right_chunks)
-    left_index = build_chunk_search_index(left_chunks)
-    right_index = build_chunk_search_index(right_chunks)
-    reports = []
-    network = outbound_network_config()
-    batch_issue_limit = _long_document_chunk_issue_limit(issue_output_limit)
-    total_batches = len(alignments) + len(unmatched_left) + len(unmatched_right)
-    completed_batches = 0
-
-    def run_batch(*, left, right, coverage_side: str, check_label: str):
-        nonlocal completed_batches
-        ensure_active()
-        content = run_check(
-            api_base=task["api_base"],
-            api_key=task["api_key"],
-            proxy_mode=network["proxy_mode"],
-            proxy=network["proxy"],
-            ssl_verify=network["ssl_verify"],
-            request_timeout=task["request_timeout"],
-            model_name=task["model_name"],
-            force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-            check_name=f"{item['name']}（{check_label}）",
-            prompt=(
-                f"{item['prompt']}\n\n"
-                f"{LONG_LANGUAGE_COVERAGE_PROMPT if coverage_side else LONG_LANGUAGE_PAIRED_PROMPT}"
-            ),
-            document_text=build_language_alignment_input(
-                left,
-                right,
-                static_precheck=static_precheck,
-                max_chars=request_chars,
-                coverage_side=coverage_side,
-            ),
-            issue_output_limit=batch_issue_limit,
-            task_id=task["id"],
-            stream_trace_enabled=stream_trace_enabled,
-        )
-        completed_batches += 1
-        reports.append((check_label, content))
-        save_partial(
-            merge_chunk_reports(
-                reports,
-                issue_output_limit=issue_output_limit,
-                summary_prefix="跨语种长文档检查进行中",
-            ),
-            f"正在执行跨语种长文档检查：{completed_batches}/{total_batches}",
-            force=True,
-        )
-
-    for index, alignment in enumerate(alignments, start=1):
-        run_batch(
-            left=alignment.left,
-            right=alignment.right,
-            coverage_side="",
-            check_label=f"对齐分段 {index}/{len(alignments)}：{alignment.left.label} ↔ {alignment.right.label}",
-        )
-
-    for index, chunk in enumerate(unmatched_left, start=1):
-        evidence = rank_relevant_chunks(chunk, right_index, top_k=1)
-        run_batch(
-            left=chunk,
-            right=evidence[0] if evidence else None,
-            coverage_side="document_a",
-            check_label=f"文档A未匹配覆盖 {index}/{len(unmatched_left)}：{chunk.label}",
-        )
-
-    for index, chunk in enumerate(unmatched_right, start=1):
-        evidence = rank_relevant_chunks(chunk, left_index, top_k=1)
-        if not evidence:
-            continue
-        run_batch(
-            left=evidence[0],
-            right=chunk,
-            coverage_side="document_b",
-            check_label=f"文档B未匹配覆盖 {index}/{len(unmatched_right)}：{chunk.label}",
-        )
-
-    return merge_chunk_reports(
-        reports,
-        issue_output_limit=issue_output_limit,
-        summary_prefix=(
-            f"跨语种长文档检查完成：对齐 {len(alignments)} 组分段，"
-            f"复核 {len(unmatched_left) + len(unmatched_right)} 个未匹配分段"
-        ),
-    )
-
-
 def _run_check_items_concurrently(
     app,
     task,
@@ -953,30 +738,14 @@ def _run_check_items_concurrently(
         db = get_db()
         _update_progress(db, task_id, 5)
     heartbeat.start()
-    task_type = _task_value(task, "task_type") or DOCUMENT_TASK_TYPE
-    direct_limit, _ = long_document_limits(task["max_input_chars"])
-    grouped_long_mode = (
-        task_type in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}
-        and len(document_text) > direct_limit
-    )
     if any(item.get("code") != SENSITIVE_TERMS_CHECK_CODE for item in check_items):
-        if grouped_long_mode:
-            long_chunks, document_outline, long_chunk_chars = [], "", 0
-        else:
-            long_chunks, document_outline, long_chunk_chars = _long_document_execution_plan(
-                document_text,
-                task["max_input_chars"],
-            )
+        long_chunks, document_outline, long_chunk_chars = _long_document_execution_plan(
+            document_text,
+            task["max_input_chars"],
+        )
     else:
         long_chunks, document_outline, long_chunk_chars = [], "", 0
-    if grouped_long_mode:
-        app.logger.info(
-            "分组长文档模式 task_id=%s task_type=%s document_chars=%s",
-            task_id,
-            task_type,
-            len(document_text),
-        )
-    elif long_chunks:
+    if long_chunks:
         app.logger.info(
             "单文档长文档模式 task_id=%s document_chars=%s chunks=%s chunk_chars=%s outline_chars=%s",
             task_id,
@@ -1051,26 +820,6 @@ def _run_check_items_concurrently(
             if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                 structured_report = _run_sensitive_terms_check(app, document_text, issue_output_limit)
                 content = format_sensitive_terms_report(structured_report)
-            elif grouped_long_mode and task_type == CONSISTENCY_TASK_TYPE:
-                content = _run_long_multi_document_check(
-                    task=task,
-                    item=item,
-                    document_text=document_text,
-                    issue_output_limit=issue_output_limit,
-                    save_partial=save_partial,
-                    ensure_active=ensure_active,
-                    stream_trace_enabled=stream_trace_enabled,
-                )
-            elif grouped_long_mode and task_type == LANGUAGE_CONSISTENCY_TASK_TYPE:
-                content = _run_long_language_consistency_check(
-                    task=task,
-                    item=item,
-                    document_text=document_text,
-                    issue_output_limit=issue_output_limit,
-                    save_partial=save_partial,
-                    ensure_active=ensure_active,
-                    stream_trace_enabled=stream_trace_enabled,
-                )
             elif long_chunks:
                 if item["code"] == LONG_DOCUMENT_CONSISTENCY_CODE:
                     content = _run_long_document_consistency_check(

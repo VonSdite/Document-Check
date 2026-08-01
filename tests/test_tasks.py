@@ -9,7 +9,7 @@ from openpyxl import Workbook
 
 from app.db import get_db, init_db, now_text, set_setting
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
-from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
+from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
 from app.tasks import (
     TaskScheduler,
     cleanup_expired_task_reports,
@@ -345,113 +345,6 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("110 V", verified_inputs[0])
         merged = json.loads(results[0]["result"])
         self.assertEqual(merged["items"][0]["category"], "参数冲突")
-
-    def test_long_multi_document_check_retrieves_evidence_and_runs_reverse_coverage(self):
-        db = get_db()
-        created_at = now_text()
-        db.execute(
-            """
-            INSERT INTO tasks(
-                task_type, ip, original_filename, stored_filename, file_type, file_size,
-                checks_json, model_name, api_base, request_timeout, max_input_chars,
-                status, progress, created_at, updated_at
-            )
-            VALUES (
-                ?, '127.0.0.1', '多文档长文档', 'master.txt', '多文档', 1,
-                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
-                'running', 0, ?, ?
-            )
-            """,
-            (CONSISTENCY_TASK_TYPE, json.dumps([1]), created_at, created_at),
-        )
-        db.commit()
-        task = db.execute("SELECT * FROM tasks").fetchone()
-        document_text = (
-            "# 素材文档\n\n## 素材文档1：master.txt\n"
-            f"[第1页]\n{'通用安装说明。' * 220}\n\n"
-            f"[第2页]\n型号 ZX-900 的额定电流为 32A。{'技术参数。' * 220}\n\n"
-            "# 资料\n\n## 资料1：related.txt\n"
-            f"[第1页]\nZX-900 额定电流标注为 30A。{'产品说明。' * 220}"
-        )
-        calls = []
-
-        def fake_run_check(**kwargs):
-            calls.append(kwargs)
-            return json.dumps({"summary": "完成", "items": []}, ensure_ascii=False)
-
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
-            _run_check_items_concurrently(
-                self.app,
-                task,
-                [{"code": "consistency-cross-document", "name": "多文档对照检查", "prompt": "检查差异"}],
-                document_text,
-                max_workers=1,
-                stream_trace_enabled=False,
-            )
-
-        forward_calls = [call for call in calls if "资料对照素材" in call["check_name"]]
-        reverse_calls = [call for call in calls if "素材反向覆盖" in call["check_name"]]
-        self.assertTrue(forward_calls)
-        self.assertTrue(reverse_calls)
-        self.assertIn("comparison_direction: related_to_master", forward_calls[0]["document_text"])
-        self.assertIn("ZX-900", forward_calls[0]["document_text"])
-        self.assertIn("32A", forward_calls[0]["document_text"])
-        self.assertTrue(all("comparison_direction: master_to_related" in call["document_text"] for call in reverse_calls))
-        self.assertTrue(all(len(call["document_text"]) <= 4_000 for call in calls))
-
-    def test_long_language_consistency_checks_aligned_and_unmatched_sections(self):
-        db = get_db()
-        created_at = now_text()
-        db.execute(
-            """
-            INSERT INTO tasks(
-                task_type, ip, original_filename, stored_filename, file_type, file_size,
-                checks_json, model_name, api_base, request_timeout, max_input_chars,
-                status, progress, created_at, updated_at
-            )
-            VALUES (
-                ?, '127.0.0.1', '跨语种长文档', 'zh.txt', '双文档', 1,
-                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
-                'running', 0, ?, ?
-            )
-            """,
-            (LANGUAGE_CONSISTENCY_TASK_TYPE, json.dumps([1]), created_at, created_at),
-        )
-        db.commit()
-        task = db.execute("SELECT * FROM tasks").fetchone()
-        document_text = (
-            "# 静态预检摘要\n数字和章节线索\n\n"
-            "# 文档A：zh.txt\n"
-            f"[第1页]\n1. 安装\n{'安装说明。' * 180}\n\n"
-            f"[第2页]\n2. 接线\n{'接线说明。' * 180}\n\n"
-            f"[第3页]\n3. 启动\n{'启动说明。' * 180}\n\n"
-            "# 文档B：en.txt\n"
-            f"[第1页]\n1. Installation\n{'Installation details. ' * 50}\n\n"
-            f"[第2页]\n3. Startup\n{'Startup details. ' * 50}"
-        )
-        calls = []
-
-        def fake_run_check(**kwargs):
-            calls.append(kwargs)
-            return json.dumps({"summary": "完成", "items": []}, ensure_ascii=False)
-
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
-            _run_check_items_concurrently(
-                self.app,
-                task,
-                [{"code": "language-consistency-cross-lingual", "name": "跨语种检查", "prompt": "检查翻译差异"}],
-                document_text,
-                max_workers=1,
-                stream_trace_enabled=False,
-            )
-
-        paired_calls = [call for call in calls if "language_alignment_mode: paired" in call["document_text"]]
-        coverage_calls = [call for call in calls if "language_alignment_mode: unmatched_coverage" in call["document_text"]]
-        self.assertTrue(paired_calls)
-        self.assertTrue(any("1. 安装" in call["document_text"] and "1. Installation" in call["document_text"] for call in paired_calls))
-        self.assertTrue(coverage_calls)
-        self.assertTrue(any("2. 接线" in call["document_text"] for call in coverage_calls))
-        self.assertTrue(all(len(call["document_text"]) <= 4_000 for call in calls))
 
     def test_sensitive_terms_check_uses_local_dictionary_without_llm(self):
         terms_path = Path(self.temp_dir.name) / "sensitive_terms.xlsx"

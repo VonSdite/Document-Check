@@ -3095,30 +3095,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn("素材文档：master.xlsx / 资料：related.txt", page.get_data(as_text=True))
 
-    def test_create_consistency_task_accepts_text_over_provider_limit(self):
-        model_id = self._configure_provider()
-        with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'consistency-cross-document'"
-            ).fetchone()
-
-        response = self.client.post(
-            "/consistency",
-            data={
-                "master_documents": (io.BytesIO(("素材长文档。" * 8_000).encode("utf-8")), "master.txt"),
-                "related_documents": (io.BytesIO(("资料长文档。" * 8_000).encode("utf-8")), "related.txt"),
-                "checks": [str(item["id"])],
-                "model_id": model_id,
-            },
-            content_type="multipart/form-data",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        with self.app.app_context():
-            task = get_db().execute("SELECT status, length(document_text) AS text_len FROM tasks").fetchone()
-        self.assertEqual(task["status"], "queued")
-        self.assertGreater(task["text_len"], 80_000)
-
     def test_consistency_task_title_uses_document_metadata_for_legacy_task(self):
         task = {
             "original_filename": "多文档对照检查：素材3个 / 资料1个",
@@ -3261,30 +3237,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["submission_token"], submission_token)
         self.assertEqual(len(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())), 2)
-
-    def test_create_language_consistency_task_accepts_text_over_provider_limit(self):
-        model_id = self._configure_provider()
-        with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'language-consistency-cross-lingual'"
-            ).fetchone()
-
-        response = self.client.post(
-            "/language-consistency",
-            data={
-                "document_a": (io.BytesIO(("中文长文档内容。" * 6_000).encode("utf-8")), "zh.txt"),
-                "document_b": (io.BytesIO(("English long document content. " * 2_000).encode("utf-8")), "en.txt"),
-                "checks": [str(item["id"])],
-                "model_id": model_id,
-            },
-            content_type="multipart/form-data",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        with self.app.app_context():
-            task = get_db().execute("SELECT status, length(document_text) AS text_len FROM tasks").fetchone()
-        self.assertEqual(task["status"], "queued")
-        self.assertGreater(task["text_len"], 80_000)
 
 if __name__ == "__main__":
     unittest.main()
