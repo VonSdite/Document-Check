@@ -2927,6 +2927,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         form = _required_tag(soup.find("form", {"data-require-checks": "true"}))
         self.assertEqual(form.get("data-check-required-message"), "请至少选择一个跨语种检查项。")
+        self.assertEqual(form.get("data-prevent-double-submit"), "true")
+        self.assertEqual(form.get("data-submitting-label"), "提交中...")
+        self.assertIn("请勿重复提交", form.get("data-submitting-message", ""))
+        submission_token = _required_tag(form.select_one('input[name="submission_token"]'))
+        self.assertRegex(submission_token.get("value", ""), r"^[0-9a-f]{32}$")
+        progress = _required_tag(form.select_one("[data-submit-progress]"))
+        self.assertTrue(progress.has_attr("hidden"))
         self.assertIsNotNone(form.select_one('input[name="document_a"]'))
         self.assertIsNotNone(form.select_one('input[name="document_b"]'))
         checkboxes = form.select('input[name="checks"]')
@@ -3219,6 +3226,41 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_duplicate_language_consistency_submission_creates_one_task(self):
+        model_id = self._configure_provider()
+        submission_token = "a" * 32
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+            ).fetchone()
+
+        def submit():
+            return self.client.post(
+                "/language-consistency",
+                data={
+                    "document_a": (io.BytesIO("中文参数 10A".encode("utf-8")), "zh.txt"),
+                    "document_b": (io.BytesIO("English parameter 10A".encode("utf-8")), "en.txt"),
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                    "submission_token": submission_token,
+                },
+                content_type="multipart/form-data",
+            )
+
+        first_response = submit()
+        second_response = submit()
+
+        self.assertEqual(first_response.status_code, 302)
+        self.assertEqual(second_response.status_code, 302)
+        with self.app.app_context():
+            tasks = get_db().execute(
+                "SELECT submission_token FROM tasks WHERE task_type = ?",
+                (LANGUAGE_CONSISTENCY_TASK_TYPE,),
+            ).fetchall()
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["submission_token"], submission_token)
+        self.assertEqual(len(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())), 2)
 
     def test_create_language_consistency_task_accepts_text_over_provider_limit(self):
         model_id = self._configure_provider()

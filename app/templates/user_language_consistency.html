@@ -4,7 +4,8 @@
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
-<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-check-required-message="请至少选择一个跨语种检查项。">
+<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-check-required-message="请至少选择一个跨语种检查项。" data-prevent-double-submit="true" data-submitting-label="提交中..." data-submitting-message="正在上传并读取两份文档，请勿重复提交。">
+  <input type="hidden" name="submission_token" value="{{ submission_token }}">
   <div class="panel-head compact-head">
     <h1>创建跨语种文档一致性检查</h1>
   </div>
@@ -61,6 +62,7 @@
 
     <div class="submit-slot">
       <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
+      <span class="submit-progress" data-submit-progress hidden>正在上传并读取两份文档，请勿重复提交。</span>
     </div>
   </div>
 

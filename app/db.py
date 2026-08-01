@@ -62,6 +62,7 @@ def init_db():
             owner_subject TEXT,
             owner_name_snapshot TEXT,
             owner_source TEXT,
+            submission_token TEXT,
             original_filename TEXT NOT NULL,
             stored_filename TEXT NOT NULL,
             file_type TEXT NOT NULL,
@@ -191,12 +192,18 @@ def init_db():
     _ensure_column(db, "tasks", "owner_subject", "TEXT")
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")
     _ensure_column(db, "tasks", "owner_source", "TEXT")
+    _ensure_column(db, "tasks", "submission_token", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)")
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_type_owner_created "
         "ON tasks(task_type, owner_subject, created_at DESC, id DESC)"
+    )
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_submission_token "
+        "ON tasks(task_type, owner_subject, submission_token) "
+        "WHERE submission_token IS NOT NULL"
     )
     _migrate_task_owners(db)
     _migrate_model_thinking_defaults(db)

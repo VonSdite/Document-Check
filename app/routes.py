@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 import uuid
 from difflib import SequenceMatcher
 import zipfile
@@ -107,6 +108,7 @@ CONSOLE_USER_ENDPOINTS = {
     "admin_models",
 }
 INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
+SUBMISSION_TOKEN_RE = re.compile(r"[0-9a-f]{32}")
 REPORT_ITEM_TYPES = {
     "issue": "问题",
     "suggestion": "建议",
@@ -572,6 +574,7 @@ def register_routes(app):
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(identity.subject),
+            submission_token=uuid.uuid4().hex,
             active_nav=LANGUAGE_CONSISTENCY_TASK_TYPE,
         )
 
@@ -1743,6 +1746,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         user_concurrency=get_setting("user_concurrency", 1),
         check_items=check_items,
         models=get_enabled_models(identity.subject),
+        submission_token=uuid.uuid4().hex,
         refresh_url=url_for("admin_task_statuses", task_type=task_type),
         active_nav=task_type,
     )
@@ -3063,6 +3067,11 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
 
 def create_language_consistency_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     db = get_db()
+    submission_token = _request_submission_token()
+    if _language_consistency_submission_exists(db, identity.subject, submission_token):
+        flash("该跨语种检查任务已提交，无需重复提交。", "success")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+
     document_a = request.files.get("document_a")
     document_b = request.files.get("document_b")
     if not _validate_language_consistency_upload(document_a, "文档A"):
@@ -3116,45 +3125,75 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
     original_filename = f"跨语种检查：{file_a['original_filename']} / {file_b['original_filename']}"
     owner_name = identity.display_name or None
 
-    db.execute(
-        """
-        INSERT INTO tasks(
-            task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-            original_filename, stored_filename, file_type, file_size,
-            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-            request_timeout, max_input_chars, force_disable_thinking,
-            status, progress, created_at, updated_at
+    try:
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source, submission_token,
+                original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+                request_timeout, max_input_chars, force_disable_thinking,
+                status, progress, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            """,
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                identity.ip,
+                owner_name,
+                identity.subject,
+                owner_name,
+                identity.source,
+                submission_token,
+                original_filename,
+                file_a["stored_filename"],
+                "双文档",
+                file_size,
+                validation_text,
+                json.dumps(document_meta, ensure_ascii=False),
+                json.dumps(check_ids, ensure_ascii=False),
+                json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_name"],
+                model["model_name"],
+                model["api_base"],
+                model["api_key"],
+                model["request_timeout"],
+                model["max_input_chars"],
+                1 if model["force_disable_thinking"] else 0,
+                created_at,
+                created_at,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-        """,
-        (
-            LANGUAGE_CONSISTENCY_TASK_TYPE,
-            identity.ip,
-            owner_name,
-            identity.subject,
-            owner_name,
-            identity.source,
-            original_filename,
-            file_a["stored_filename"],
-            "双文档",
-            file_size,
-            validation_text,
-            json.dumps(document_meta, ensure_ascii=False),
-            json.dumps(check_ids, ensure_ascii=False),
-            json.dumps(check_snapshots, ensure_ascii=False),
-            model["provider_name"],
-            model["model_name"],
-            model["api_base"],
-            model["api_key"],
-            model["request_timeout"],
-            model["max_input_chars"],
-            1 if model["force_disable_thinking"] else 0,
-            created_at,
-            created_at,
-        ),
-    )
+    except sqlite3.IntegrityError:
+        db.rollback()
+        duplicate = _language_consistency_submission_exists(db, identity.subject, submission_token)
+        _remove_uploaded_files(saved_paths)
+        if duplicate:
+            flash("该跨语种检查任务已提交，无需重复提交。", "success")
+            return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+        raise
     db.commit()
     return redirect(url_for(_task_list_endpoint(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)))
+
+
+def _request_submission_token() -> str:
+    value = str(request.form.get("submission_token") or "").strip().lower()
+    return value if SUBMISSION_TOKEN_RE.fullmatch(value) else uuid.uuid4().hex
+
+
+def _language_consistency_submission_exists(db, owner_subject: str, submission_token: str) -> bool:
+    return (
+        db.execute(
+            """
+            SELECT 1
+            FROM tasks
+            WHERE task_type = ? AND owner_subject = ? AND submission_token = ?
+            LIMIT 1
+            """,
+            (LANGUAGE_CONSISTENCY_TASK_TYPE, owner_subject, submission_token),
+        ).fetchone()
+        is not None
+    )
 
 
 def _back_to_task_form(admin_created: bool, task_type: str = DOCUMENT_TASK_TYPE):
