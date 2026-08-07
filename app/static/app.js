@@ -1878,6 +1878,47 @@ let autoRefreshSuspendedUntil = 0;
 let taskListPointerInside = false;
 let taskListFocusInside = false;
 
+function updateBulkFailedTaskControls() {
+  const checkboxes = Array.from(document.querySelectorAll("[data-bulk-failed-task]"));
+  const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+  const toggle = document.querySelector("[data-bulk-failed-toggle]");
+  const form = document.querySelector("[data-bulk-delete-failed-form]");
+  const button = document.querySelector("[data-bulk-delete-failed-button]");
+  const count = document.querySelector("[data-bulk-delete-failed-count]");
+
+  if (toggle instanceof HTMLInputElement) {
+    toggle.disabled = checkboxes.length === 0;
+    toggle.checked = checkboxes.length > 0 && selectedCount === checkboxes.length;
+    toggle.indeterminate = selectedCount > 0 && selectedCount < checkboxes.length;
+  }
+  if (button instanceof HTMLButtonElement) {
+    button.disabled = selectedCount === 0;
+  }
+  if (count) {
+    count.textContent = selectedCount ? ` (${selectedCount})` : "";
+  }
+  if (form instanceof HTMLFormElement) {
+    form.dataset.confirm = `确认删除选中的 ${selectedCount} 个失败任务？删除后不可恢复。`;
+  }
+}
+
+document.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+  if (target.matches("[data-bulk-failed-toggle]")) {
+    document.querySelectorAll("[data-bulk-failed-task]").forEach((checkbox) => {
+      checkbox.checked = target.checked;
+    });
+    updateBulkFailedTaskControls();
+    return;
+  }
+  if (target.matches("[data-bulk-failed-task]")) {
+    updateBulkFailedTaskControls();
+  }
+});
+
 function autoRefreshEnabled() {
   const saved = window.localStorage.getItem(AUTO_REFRESH_KEY);
   return saved === null || saved === "1";
@@ -1901,7 +1942,7 @@ function taskListInteractiveTarget(target) {
     return null;
   }
   return target.closest(
-    '[data-refresh-region="task-list"] a, [data-refresh-region="task-list"] button, [data-refresh-region="task-list"] form',
+    '[data-refresh-region="task-list"] a, [data-refresh-region="task-list"] button, [data-refresh-region="task-list"] form, [data-refresh-region="task-list"] input',
   );
 }
 
@@ -1935,6 +1976,9 @@ function replaceRefreshRegion(documentFragment, name) {
   const next = documentFragment.querySelector(`[data-refresh-region="${name}"]`);
   if (current && next) {
     current.innerHTML = next.innerHTML;
+    if (name === "task-list") {
+      updateBulkFailedTaskControls();
+    }
   }
 }
 
@@ -2097,4 +2141,5 @@ document.addEventListener("focusout", () => {
   });
 });
 
+updateBulkFailedTaskControls();
 applyAutoRefreshState();

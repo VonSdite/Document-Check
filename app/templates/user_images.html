@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_task_bulk_actions.html" as task_bulk %}
 
 {% block title %}图片检查 - 文档智能门禁{% endblock %}
 
@@ -71,10 +72,13 @@
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
     <h2>我的图片检查任务</h2>
+    <div class="task-panel-actions">
+      {{ task_bulk.failed_delete_form(tasks, 'user') }}
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
       <span class="refresh-dot" aria-hidden="true"></span>
       <span data-refresh-label>刷新中</span>
     </button>
+    </div>
   </div>
   <div data-refresh-region="task-list">
   {% if tasks %}
@@ -82,6 +86,7 @@
     <table class="task-table">
       <thead>
         <tr>
+          {{ task_bulk.failed_select_header(tasks) }}
           <th>文档</th>
           <th>模型</th>
           <th>状态</th>
@@ -92,6 +97,7 @@
       <tbody>
         {% for task in tasks %}
         <tr>
+          {{ task_bulk.failed_select_cell(task) }}
           <td class="task-file-cell">
             <div class="task-file-line">
               <a class="strong-link task-report-link" href="{{ url_for('user_task_detail', task_id=task.id) }}" target="_blank" rel="noopener" title="查看报告">{{ task.original_filename }}</a>

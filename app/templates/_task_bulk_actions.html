@@ -1,0 +1,44 @@
+{% macro failed_delete_form(tasks, mode) -%}
+<form
+  id="bulk-delete-failed-tasks"
+  class="bulk-task-form"
+  method="post"
+  action="{{ url_for('admin_bulk_delete_failed_tasks' if mode == 'admin' else 'user_bulk_delete_failed_tasks') }}"
+  data-bulk-delete-failed-form
+  data-confirm="确认删除选中的失败任务？删除后不可恢复。"
+>
+  <input type="hidden" name="next" value="{{ current_relative_url() }}">
+  <button class="small-button danger" type="submit" data-bulk-delete-failed-button disabled>
+    批量删除失败任务<span data-bulk-delete-failed-count></span>
+  </button>
+</form>
+{%- endmacro %}
+
+{% macro failed_select_header(tasks) -%}
+{% set failed_count = tasks|selectattr('status', 'equalto', 'failed')|list|length %}
+<th class="task-select-cell">
+  <input
+    class="task-select-checkbox"
+    type="checkbox"
+    data-bulk-failed-toggle
+    aria-label="选择本页全部失败任务"
+    {{ 'disabled' if not failed_count else '' }}
+  >
+</th>
+{%- endmacro %}
+
+{% macro failed_select_cell(task) -%}
+<td class="task-select-cell">
+  {% if task.status == 'failed' %}
+  <input
+    class="task-select-checkbox"
+    type="checkbox"
+    name="task_ids"
+    value="{{ task.id }}"
+    form="bulk-delete-failed-tasks"
+    data-bulk-failed-task
+    aria-label="选择失败任务：{{ task.original_filename }}"
+  >
+  {% endif %}
+</td>
+{%- endmacro %}

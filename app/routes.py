@@ -720,6 +720,10 @@ def register_routes(app):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(False, task["task_type"])))
 
+    @app.post("/tasks/bulk-delete-failed")
+    def user_bulk_delete_failed_tasks():
+        return _bulk_delete_failed_tasks(_get_user_task_or_local_admin, admin_created=False)
+
     @app.route("/models", methods=["GET", "POST"])
     def user_models():
         return _model_management_response(_model_page_identity(), "user_models")
@@ -981,6 +985,11 @@ def register_routes(app):
         if _delete_task(task):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(True, task["task_type"])))
+
+    @app.post(f"{admin_prefix}/tasks/bulk-delete-failed")
+    @admin_required
+    def admin_bulk_delete_failed_tasks():
+        return _bulk_delete_failed_tasks(_get_task_or_404, admin_created=True)
 
     @app.route(f"{admin_prefix}/prompts", methods=["GET", "POST"])
     @admin_required
@@ -3540,6 +3549,39 @@ def _delete_task(task):
     db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
     db.commit()
     return True
+
+
+def _bulk_delete_failed_tasks(task_loader, *, admin_created: bool):
+    raw_task_ids = request.form.getlist("task_ids")
+    if len(raw_task_ids) > TASKS_PER_PAGE:
+        flash(f"每次最多批量删除 {TASKS_PER_PAGE} 个失败任务。", "error")
+        return redirect(_task_action_redirect("admin_tasks" if admin_created else "user_tasks"))
+
+    task_ids = []
+    for raw_task_id in raw_task_ids:
+        try:
+            task_id = int(raw_task_id)
+        except (TypeError, ValueError):
+            continue
+        if task_id > 0 and task_id not in task_ids:
+            task_ids.append(task_id)
+
+    if not task_ids:
+        flash("请先选择需要删除的失败任务。", "error")
+        return redirect(_task_action_redirect("admin_tasks" if admin_created else "user_tasks"))
+
+    tasks = [task_loader(task_id) for task_id in task_ids]
+    fallback_endpoint = _task_list_endpoint(admin_created, tasks[0]["task_type"])
+    redirect_url = _task_action_redirect(fallback_endpoint)
+    failed_tasks = [task for task in tasks if task["status"] == "failed"]
+    skipped_count = len(tasks) - len(failed_tasks)
+    deleted_count = sum(1 for task in failed_tasks if _delete_task(task))
+
+    if deleted_count:
+        flash(f"已批量删除 {deleted_count} 个失败任务。", "success")
+    if skipped_count:
+        flash(f"已跳过 {skipped_count} 个非失败任务。", "error")
+    return redirect(redirect_url)
 
 
 def _task_action_redirect(default_endpoint: str):
