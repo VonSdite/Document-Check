@@ -332,6 +332,49 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         self.assertEqual(result, "正文")
 
+    def test_disabled_thinking_uses_strict_reasoning_budget(self):
+        consumed = []
+
+        def lines():
+            for line in (
+                'data: {"choices":[{"delta":{"reasoning":"第一段"}}]}',
+                'data: {"choices":[{"delta":{"reasoning":"第二段"}}]}',
+                'data: {"choices":[{"delta":{"content":"不应读取"}}]}',
+            ):
+                consumed.append(line)
+                yield line
+
+        response = FakeResponse(lines=lines())
+        with (
+            patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT", 2),
+            patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT", 10_000),
+            self.assertLogs("app.llm", level="WARNING") as logs,
+            self.assertRaisesRegex(llm.LLMError, "忽略了关闭思考设置"),
+        ):
+            llm._read_stream_response(response, None, thinking_disabled=True)
+
+        self.assertEqual(len(consumed), 2)
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("thinking_disabled=True", joined_logs)
+        self.assertIn("limit_chunks=2", joined_logs)
+
+    def test_disabled_thinking_budget_does_not_stop_stream_after_content_begins(self):
+        response = FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"content":"正文"}}]}',
+                'data: {"choices":[{"delta":{"reasoning":"后续分析"}}]}',
+                "data: [DONE]",
+            ]
+        )
+
+        with (
+            patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT", 1),
+            patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT", 1),
+        ):
+            result = llm._read_stream_response(response, None, thinking_disabled=True)
+
+        self.assertEqual(result, "正文")
+
     def test_raises_service_error_from_200_json(self):
         response = FakeResponse(
             lines=[
@@ -464,6 +507,52 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(second_payload["chat_template_kwargs"], {"enable_thinking": False})
         self.assertEqual(second_payload["thinking"], {"type": "disabled"})
         self.assertIn("下一次重试自动关闭思考", "\n".join(logs.output))
+        sleep.assert_called_once_with(1)
+
+    def test_force_disabled_thinking_stops_reasoning_quickly_and_retries(self):
+        consumed = []
+
+        def first_lines():
+            for line in (
+                'data: {"choices":[{"delta":{"reasoning":"第一段"}}]}',
+                'data: {"choices":[{"delta":{"reasoning":"第二段"}}]}',
+                'data: {"choices":[{"delta":{"content":"不应读取"}}]}',
+            ):
+                consumed.append(line)
+                yield line
+
+        first_response = FakeResponse(lines=first_lines())
+        second_response = FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"content":"重试成功"}}]}',
+                "data: [DONE]",
+            ]
+        )
+        fake_session = FakeSession([first_response, second_response])
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT", 2),
+            patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT", 10_000),
+            patch.object(llm.time, "sleep") as sleep,
+        ):
+            result = llm.run_check(
+                api_base="https://llm.example.test/v1/chat/completions",
+                api_key="key",
+                model_name="DeepSeek-V4-Flash-H200",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                force_disable_thinking=True,
+            )
+
+        self.assertEqual(result, "重试成功")
+        self.assertEqual(len(consumed), 2)
+        self.assertTrue(first_response.closed)
+        self.assertTrue(second_response.closed)
+        self.assertEqual(len(fake_session.calls), 2)
+        self.assertIs(fake_session.calls[0][1]["json"]["enable_thinking"], False)
+        self.assertIs(fake_session.calls[1][1]["json"]["enable_thinking"], False)
         sleep.assert_called_once_with(1)
 
     def test_generic_reasoning_only_retry_does_not_add_deepseek_thinking_flags(self):

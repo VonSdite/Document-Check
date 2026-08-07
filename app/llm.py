@@ -13,6 +13,8 @@ logger.addHandler(logging.NullHandler())
 _REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
 _REASONING_ONLY_CHUNK_LIMIT = 8_000
 _REASONING_ONLY_CHAR_LIMIT = 32_000
+_DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT = 64
+_DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT = 256
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
 DEFAULT_ISSUE_OUTPUT_LIMIT = 20
@@ -706,6 +708,7 @@ def _run_check_attempt(
                     task_id=task_id,
                     attempt=attempt,
                     stream_trace_enabled=stream_trace_enabled,
+                    thinking_disabled=_thinking_disabled_in_payload(stream_payload),
                 )
                 logger.info(
                     "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=stream output_chars=%s",
@@ -835,6 +838,7 @@ def _read_stream_response(
     task_id: Optional[int] = None,
     attempt: Optional[int] = None,
     stream_trace_enabled: bool = False,
+    thinking_disabled: bool = False,
 ) -> str:
     _force_utf8_response(response)
     _raise_for_http_error(response, request_id=request_id, task_id=task_id)
@@ -853,6 +857,7 @@ def _read_stream_response(
         task_id=task_id,
         attempt=attempt,
         stream_trace_enabled=stream_trace_enabled,
+        thinking_disabled=thinking_disabled,
     )
 
 
@@ -864,9 +869,11 @@ def _read_stream_lines(
     task_id: Optional[int] = None,
     attempt: Optional[int] = None,
     stream_trace_enabled: bool = False,
+    thinking_disabled: bool = False,
 ) -> str:
     parts = []
     diagnostics = _OpenAIChatDiagnostics()
+    reasoning_chunk_limit, reasoning_char_limit = _reasoning_only_limits(thinking_disabled)
     for raw_line in lines:
         if not raw_line:
             continue
@@ -912,17 +919,24 @@ def _read_stream_lines(
             raise LLMError(f"模型服务返回错误：{service_error}")
 
         diagnostics.observe(data, raw=line)
-        if _reasoning_only_limit_reached(diagnostics):
+        if _reasoning_only_limit_reached(
+            diagnostics,
+            chunk_limit=reasoning_chunk_limit,
+            char_limit=reasoning_char_limit,
+        ):
             logger.warning(
-                "LLM 流式响应纯 reasoning 超限，提前中止 request_id=%s task_id=%s limit_chunks=%s "
-                "limit_chars=%s %s",
+                "LLM 流式响应纯 reasoning 超限，提前中止 request_id=%s task_id=%s thinking_disabled=%s "
+                "limit_chunks=%s limit_chars=%s %s",
                 request_id,
                 task_id or "-",
-                _REASONING_ONLY_CHUNK_LIMIT,
-                _REASONING_ONLY_CHAR_LIMIT,
+                thinking_disabled,
+                reasoning_chunk_limit,
+                reasoning_char_limit,
                 diagnostics.log_summary(),
             )
-            raise _ReasoningOnlyResponseError(_reasoning_only_limit_message(diagnostics))
+            raise _ReasoningOnlyResponseError(
+                _reasoning_only_limit_message(diagnostics, thinking_disabled=thinking_disabled)
+            )
         if stream_trace_enabled:
             logger.info(
                 "LLM 流式定位收到响应chunk request_id=%s task_id=%s attempt=%s frame=%s %s raw=%s",
@@ -959,17 +973,31 @@ def _read_stream_lines(
     return content
 
 
-def _reasoning_only_limit_reached(diagnostics) -> bool:
+def _reasoning_only_limits(thinking_disabled: bool) -> tuple[int, int]:
+    if thinking_disabled:
+        return (
+            _DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT,
+            _DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT,
+        )
+    return _REASONING_ONLY_CHUNK_LIMIT, _REASONING_ONLY_CHAR_LIMIT
+
+
+def _reasoning_only_limit_reached(diagnostics, *, chunk_limit: int, char_limit: int) -> bool:
     return diagnostics.content_chunks == 0 and (
-        diagnostics.reasoning_chunks >= _REASONING_ONLY_CHUNK_LIMIT
-        or diagnostics.reasoning_chars >= _REASONING_ONLY_CHAR_LIMIT
+        diagnostics.reasoning_chunks >= chunk_limit
+        or diagnostics.reasoning_chars >= char_limit
     )
 
 
-def _reasoning_only_limit_message(diagnostics) -> str:
+def _reasoning_only_limit_message(diagnostics, *, thinking_disabled: bool = False) -> str:
     fields = ",".join(sorted(diagnostics.reasoning_fields)) or "reasoning"
+    prefix = (
+        "模型服务忽略了关闭思考设置，持续返回思考过程但没有正文"
+        if thinking_disabled
+        else "模型服务持续返回思考过程但没有正文"
+    )
     return (
-        "模型服务持续返回思考过程但没有正文，已提前终止本次流式响应："
+        f"{prefix}，已提前终止本次流式响应："
         f"{fields} 字段 {diagnostics.reasoning_chunks} 段/{diagnostics.reasoning_chars} 字。"
     )
 
