@@ -22,7 +22,8 @@ from .images import (
     page_numbers_from_image_item,
     page_sections_from_document_text,
 )
-from .llm import DEFAULT_ISSUE_OUTPUT_LIMIT, LLMError, run_check, run_multimodal_document_check
+from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
+from .llm import LLMError, run_check, run_multimodal_document_check
 from .network import outbound_network_config
 from .sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
@@ -1935,7 +1936,7 @@ def _report_retention_days() -> int:
 
 
 def _issue_output_limit() -> int:
-    return max(0, _int_setting("issue_output_limit", DEFAULT_ISSUE_OUTPUT_LIMIT))
+    return normalize_issue_output_limit(_int_setting("issue_output_limit", DEFAULT_ISSUE_OUTPUT_LIMIT))
 
 
 def _int_setting(key: str, default: int) -> int:

@@ -217,7 +217,14 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(get_setting("image_page_check_max_pages"), 120)
 
     def test_default_issue_output_limit_is_seeded(self):
-        self.assertEqual(get_setting("issue_output_limit"), 20)
+        self.assertEqual(get_setting("issue_output_limit"), 30)
+
+    def test_seed_defaults_migrates_issue_output_limit_above_hard_max(self):
+        set_setting("issue_output_limit", 100)
+
+        seed_defaults()
+
+        self.assertEqual(get_setting("issue_output_limit"), 30)
 
     def test_default_report_retention_is_disabled(self):
         self.assertEqual(get_setting("report_retention_days"), 0)

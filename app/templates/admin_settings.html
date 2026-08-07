@@ -120,8 +120,8 @@
       <input name="image_page_check_max_pages" type="number" min="1" step="1" value="{{ image_page_check_max_pages }}" required>
     </label>
     <label>
-      每次模型回复最多问题条数（0 表示不限制）
-      <input name="issue_output_limit" type="number" min="0" step="1" value="{{ issue_output_limit }}" required>
+      每次模型回复最多问题条数（系统硬上限 {{ max_issue_output_limit }}）
+      <input name="issue_output_limit" type="number" min="1" max="{{ max_issue_output_limit }}" step="1" value="{{ issue_output_limit }}" required>
     </label>
     <label>
       检查报告最多保留天数（0 表示不自动清理）

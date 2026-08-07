@@ -319,10 +319,10 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["check_name"], "错别字检查")
         self.assertEqual(calls[0]["prompt"], "检查错别字")
         self.assertEqual(calls[0]["document_text"], document_text)
-        self.assertEqual(calls[0]["issue_output_limit"], 45)
+        self.assertEqual(calls[0]["issue_output_limit"], 30)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["result"], "最终结果")
-        self.assertEqual(results[0]["issue_output_limit"], 45)
+        self.assertEqual(results[0]["issue_output_limit"], 30)
 
     def test_sensitive_terms_check_uses_local_dictionary_without_llm(self):
         terms_path = Path(self.temp_dir.name) / "sensitive_terms.xlsx"
@@ -744,7 +744,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("图 1 是电源接线图", calls[0]["document_text"])
         self.assertEqual(calls[0]["batch_index"], 1)
         self.assertEqual(calls[0]["batch_count"], 1)
-        self.assertEqual(calls[0]["issue_output_limit"], 0)
+        self.assertEqual(calls[0]["issue_output_limit"], 30)
         self.assertEqual(calls[0]["image_items"][0]["index"], 2)
         self.assertEqual(calls[0]["image_items"][0]["name"], "0001_page001-image001.png")
         self.assertEqual(calls[0]["image_items"][0]["position"], "PDF第1页（page001-image001）")

@@ -6,6 +6,8 @@ from typing import Callable, Optional
 
 import requests
 
+from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
+
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -17,7 +19,6 @@ _DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT = 64
 _DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT = 256
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
-DEFAULT_ISSUE_OUTPUT_LIMIT = 20
 _JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
 _STRUCTURED_REPORT_OUTPUT_CONTRACT = """结构化输出要求：
 1. 只输出一个 JSON 对象，不要使用 Markdown、代码块、表格或解释性前后缀。
@@ -25,7 +26,7 @@ _STRUCTURED_REPORT_OUTPUT_CONTRACT = """结构化输出要求：
 3. status 规则：能从证据明确判定的问题填 "issue"；证据不足、需人工确认、疑似、建议补充或不确定项填 "suggestion"；明确不是问题或无需修改填 "non_issue"。
 4. severity 规则：critical 表示可能导致安全、合规、重大业务或系统失效；high 表示明显影响正确性、交付或关键操作；medium 表示局部错误或一致性问题；low 表示轻微规范、表达或低影响问题。
 5. confidence 规则：high 表示文档中存在可直接对照的明确证据；medium 表示证据较充分但仍需少量人工确认；low 表示证据有限、疑似或需要业务判断。
-6. items 必须先按 severity 从 critical、high、medium、low 排序，同等级再按 confidence 从 high、medium、low 排序，仍相同时优先影响范围更大的问题。
+6. items 必须先按 status 从 issue、suggestion、non_issue 排序，同类条目再按 confidence 从 high、medium、low 排序，同置信度按 severity 从 critical、high、medium、low 排序。
 7. 输出前合并重复问题；同一问题在多个位置重复出现时合并为一条，并在 location 中汇总位置，不要按每个出现位置重复生成。
 8. 每个 items 元素只描述一个问题、建议或非问题；没有发现问题时 items 为空数组，summary 写简短结论。
 9. 所有字段使用中文字符串；未知或不适用字段填空字符串；不要输出 null。"""
@@ -63,19 +64,16 @@ _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 
 
 def _normalized_issue_output_limit(value) -> int:
-    if value is None:
-        return DEFAULT_ISSUE_OUTPUT_LIMIT
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return DEFAULT_ISSUE_OUTPUT_LIMIT
+    return normalize_issue_output_limit(value)
 
 
 def _issue_output_limit_instruction(value, subject: str) -> str:
     limit = _normalized_issue_output_limit(value)
-    if limit <= 0:
-        return f"{subject}不限制问题条数；请完整列出可确认的问题，并按严重程度和证据明确程度排序。"
-    return f"{subject}最多列出 {limit} 条问题；如果超过 {limit} 条，优先列出影响最大、证据最明确的问题。"
+    return (
+        f"{subject}最多列出 {limit} 条问题；如果超过 {limit} 条，"
+        "只保留最有可能成立的问题，优先选择明确判定为问题且证据可信度高的条目，"
+        "再按严重程度排序。"
+    )
 
 
 def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:

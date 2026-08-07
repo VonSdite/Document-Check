@@ -21,6 +21,7 @@ from app.routes import (
     _consistency_task_title,
     _find_enabled_model,
     _parse_result_json,
+    _prepare_task_results,
     _upload_destination,
     get_enabled_models,
     register_routes,
@@ -440,7 +441,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "user_concurrency": "2",
                 "check_item_concurrency": "3",
                 "image_page_check_max_pages": "36",
-                "issue_output_limit": "0",
+                "issue_output_limit": "100",
                 "report_retention_days": "14",
             },
         )
@@ -451,7 +452,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(get_setting("user_concurrency"), 2)
             self.assertEqual(get_setting("check_item_concurrency"), 3)
             self.assertEqual(get_setting("image_page_check_max_pages"), 36)
-            self.assertEqual(get_setting("issue_output_limit"), 0)
+            self.assertEqual(get_setting("issue_output_limit"), 30)
             self.assertEqual(get_setting("report_retention_days"), 14)
 
     def test_admin_settings_saves_network_to_yaml_config(self):
@@ -1996,9 +1997,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳", "不接纳原因"],
         )
         rows = soup.select("tr[data-report-item]")
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 1)
         self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
-        self.assertEqual(_required_tag(rows[1].select_one("[data-report-item-type]")).get("data-saved-value"), "suggestion")
         acceptance = _required_tag(rows[0].select_one("[data-report-acceptance-status]"))
         reason = _required_tag(rows[0].select_one("[data-report-rejection-reason]"))
         note = _required_tag(rows[0].select_one("[data-report-rejection-note]"))
@@ -2006,10 +2006,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(reason.has_attr("disabled"))
         self.assertTrue(note.has_attr("disabled"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
-        self.assertIn("确认后补充适用范围", rows[1].get_text(" ", strip=True))
-        self.assertIn("为避免误过滤，本报告未执行 1 条硬限制", soup.get_text(" ", strip=True))
+        self.assertIn("报告硬限制保留前 1 条，省略 1 条", soup.get_text(" ", strip=True))
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "0")
 
     def test_media_task_detail_uses_compact_report_table(self):
         with self.app.app_context():
@@ -2180,8 +2179,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 2)
-        self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "non_issue")
-        self.assertEqual(_required_tag(rows[1].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
+        self.assertIn("额定功率不一致", rows[0].get_text(" ", strip=True))
+        self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
+        self.assertIn("无需修改", rows[1].get_text(" ", strip=True))
+        self.assertEqual(_required_tag(rows[1].select_one("[data-report-item-type]")).get("data-saved-value"), "non_issue")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "50.0%")
@@ -2424,16 +2425,60 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         first_row = rows[0].get_text(" ", strip=True)
         second_row = rows[1].get_text(" ", strip=True)
-        self.assertIn("致命", first_row)
-        self.assertIn("安全约束前后矛盾", first_row)
+        self.assertIn("高", first_row)
+        self.assertIn("关键参数不一致", first_row)
+        self.assertIn("第10页；第30页", first_row)
         self.assertIn("高", second_row)
-        self.assertIn("关键参数不一致", second_row)
-        self.assertIn("第10页；第30页", second_row)
+        self.assertIn("低风险问题", second_row)
         page_text = soup.get_text(" ", strip=True)
         self.assertIn("已合并 1 条重复问题", page_text)
-        self.assertIn("展示前 2 条，省略 2 条", page_text)
-        self.assertNotIn("低风险问题", " ".join(row.get_text(" ", strip=True) for row in rows))
+        self.assertIn("硬限制保留前 2 条，省略 2 条", page_text)
+        self.assertNotIn("安全约束前后矛盾", " ".join(row.get_text(" ", strip=True) for row in rows))
         self.assertNotIn("该项不是问题", " ".join(row.get_text(" ", strip=True) for row in rows))
+
+    def test_report_hard_limit_keeps_top_thirty_likely_issues(self):
+        raw_items = [
+            {
+                "status": "issue",
+                "category": "明确问题",
+                "description": f"明确问题 {index}",
+            }
+            for index in range(1, 32)
+        ]
+        raw_items.extend(
+            [
+                {
+                    "status": "suggestion",
+                    "severity": "critical",
+                    "confidence": "high",
+                    "category": "建议",
+                    "description": "高置信度建议",
+                },
+                {
+                    "status": "non_issue",
+                    "severity": "critical",
+                    "confidence": "high",
+                    "category": "非问题",
+                    "description": "明确非问题",
+                },
+            ]
+        )
+        prepared = _prepare_task_results(
+            [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": json.dumps({"summary": "检查完成", "items": raw_items}, ensure_ascii=False),
+                    "issue_output_limit": 100,
+                }
+            ]
+        )
+
+        report_items = prepared[0]["report_items"]
+        self.assertEqual(len(report_items), 30)
+        self.assertTrue(all(item["type"] == "issue" for item in report_items))
+        self.assertEqual(prepared[0]["report_limit"]["limit"], 30)
+        self.assertEqual(prepared[0]["report_limit"]["omitted_count"], 3)
 
     def test_task_detail_repairs_duplicate_status_json_value(self):
         with self.app.app_context():

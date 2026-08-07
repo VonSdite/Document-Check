@@ -82,7 +82,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("解析换行/分页造成的空白", user_content)
         self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", user_content)
 
-    def test_document_check_prompt_uses_configured_issue_output_limit(self):
+    def test_document_check_prompt_clamps_issue_output_limit_to_hard_max(self):
         fake_session = FakeSession(
             [
                 FakeResponse(
@@ -106,16 +106,18 @@ class LLMResponseParsingTest(unittest.TestCase):
             )
 
         user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
-        self.assertIn("单次回复最多列出 50 条问题", user_content)
-        self.assertIn("如果超过 50 条", user_content)
+        self.assertIn("单次回复最多列出 30 条问题", user_content)
+        self.assertIn("如果超过 30 条", user_content)
+        self.assertIn("只保留最有可能成立的问题", user_content)
         self.assertIn("只输出一个 JSON 对象", user_content)
         self.assertIn('"status":"issue|suggestion|non_issue"', user_content)
         self.assertIn('"severity":"critical|high|medium|low"', user_content)
         self.assertIn('"confidence":"high|medium|low"', user_content)
-        self.assertIn("先按 severity", user_content)
+        self.assertIn("先按 status", user_content)
+        self.assertIn("再按 confidence", user_content)
         self.assertIn("输出前合并重复问题", user_content)
 
-    def test_document_check_prompt_can_disable_issue_output_limit(self):
+    def test_document_check_prompt_restores_hard_limit_for_zero_value(self):
         fake_session = FakeSession(
             [
                 FakeResponse(
@@ -139,8 +141,8 @@ class LLMResponseParsingTest(unittest.TestCase):
             )
 
         user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
-        self.assertIn("单次回复不限制问题条数", user_content)
-        self.assertNotIn("最多列出 20 条问题", user_content)
+        self.assertIn("单次回复最多列出 30 条问题", user_content)
+        self.assertNotIn("不限制问题条数", user_content)
 
     def test_deepseek_run_check_requests_json_object_response_format(self):
         fake_session = FakeSession(
@@ -782,7 +784,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual([item["type"] for item in content], ["text", "text", "image_url", "text", "image_url"])
         self.assertIn("图文对应检查", content[0]["text"])
         self.assertIn("当前图片批次：1/2", content[0]["text"])
-        self.assertIn("单次回复最多列出 33 条问题", content[0]["text"])
+        self.assertIn("单次回复最多列出 30 条问题", content[0]["text"])
         self.assertIn("只输出一个 JSON 对象", content[0]["text"])
         self.assertIn("正文提到图 1 是电源接线图", content[0]["text"])
         self.assertIn("0001_page001-image001.png", content[1]["text"])

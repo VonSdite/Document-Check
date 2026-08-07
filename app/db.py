@@ -4,6 +4,7 @@ from datetime import datetime
 
 from flask import current_app, g
 
+from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 
 
@@ -801,7 +802,7 @@ def seed_defaults():
         "check_item_concurrency": 1,
         "image_check_batch_size": 4,
         "image_page_check_max_pages": 120,
-        "issue_output_limit": 20,
+        "issue_output_limit": DEFAULT_ISSUE_OUTPUT_LIMIT,
         "report_retention_days": 0,
         "llm_stream_trace_enabled": False,
     }
@@ -811,6 +812,19 @@ def seed_defaults():
             db.execute(
                 "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)",
                 (key, json.dumps(value, ensure_ascii=False), now),
+            )
+
+    issue_limit_row = db.execute("SELECT value FROM settings WHERE key = 'issue_output_limit'").fetchone()
+    if issue_limit_row is not None:
+        try:
+            stored_issue_limit = json.loads(issue_limit_row["value"])
+        except (TypeError, json.JSONDecodeError):
+            stored_issue_limit = None
+        normalized_issue_limit = normalize_issue_output_limit(stored_issue_limit)
+        if stored_issue_limit != normalized_issue_limit:
+            db.execute(
+                "UPDATE settings SET value = ?, updated_at = ? WHERE key = 'issue_output_limit'",
+                (json.dumps(normalized_issue_limit), now),
             )
 
     for item in DEFAULT_CHECK_ITEMS:
