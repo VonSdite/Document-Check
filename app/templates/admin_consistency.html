@@ -106,7 +106,7 @@
   <div class="panel-head compact-head task-panel-head">
     <h2>多文档对照检查任务</h2>
     <div class="task-panel-actions">
-      {{ task_bulk.failed_delete_form(tasks, 'admin') }}
+      {{ task_bulk.delete_form(tasks, 'admin') }}
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
       <span class="refresh-dot" aria-hidden="true"></span>
       <span data-refresh-label>刷新中</span>
@@ -136,7 +136,7 @@
     <table class="admin-task-table">
       <thead>
         <tr>
-          {{ task_bulk.failed_select_header(tasks) }}
+          {{ task_bulk.select_header(tasks) }}
           <th>文档</th>
           <th>归属</th>
           <th>模型</th>
@@ -148,7 +148,7 @@
       <tbody>
         {% for task in tasks %}
         <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}">
-          {{ task_bulk.failed_select_cell(task) }}
+          {{ task_bulk.select_cell(task) }}
           <td class="task-file-cell">
             <div class="task-file-line">
               <a class="strong-link task-report-link" href="{{ url_for('admin_task_detail', task_id=task.id) }}" target="_blank" rel="noopener" title="查看报告：{{ consistency_task_title(task, true) }}">{{ consistency_task_title(task) }}</a>

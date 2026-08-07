@@ -1878,13 +1878,13 @@ let autoRefreshSuspendedUntil = 0;
 let taskListPointerInside = false;
 let taskListFocusInside = false;
 
-function updateBulkFailedTaskControls() {
-  const checkboxes = Array.from(document.querySelectorAll("[data-bulk-failed-task]"));
+function updateBulkTaskControls() {
+  const checkboxes = Array.from(document.querySelectorAll("[data-bulk-task]"));
   const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
-  const toggle = document.querySelector("[data-bulk-failed-toggle]");
-  const form = document.querySelector("[data-bulk-delete-failed-form]");
-  const button = document.querySelector("[data-bulk-delete-failed-button]");
-  const count = document.querySelector("[data-bulk-delete-failed-count]");
+  const toggle = document.querySelector("[data-bulk-task-toggle]");
+  const form = document.querySelector("[data-bulk-delete-form]");
+  const button = document.querySelector("[data-bulk-delete-button]");
+  const count = document.querySelector("[data-bulk-delete-count]");
 
   if (toggle instanceof HTMLInputElement) {
     toggle.disabled = checkboxes.length === 0;
@@ -1898,7 +1898,7 @@ function updateBulkFailedTaskControls() {
     count.textContent = selectedCount ? ` (${selectedCount})` : "";
   }
   if (form instanceof HTMLFormElement) {
-    form.dataset.confirm = `确认删除选中的 ${selectedCount} 个失败任务？删除后不可恢复。`;
+    form.dataset.confirm = `确认删除选中的 ${selectedCount} 个任务？删除后不可恢复。`;
   }
 }
 
@@ -1907,15 +1907,15 @@ document.addEventListener("change", (event) => {
   if (!(target instanceof HTMLInputElement)) {
     return;
   }
-  if (target.matches("[data-bulk-failed-toggle]")) {
-    document.querySelectorAll("[data-bulk-failed-task]").forEach((checkbox) => {
+  if (target.matches("[data-bulk-task-toggle]")) {
+    document.querySelectorAll("[data-bulk-task]").forEach((checkbox) => {
       checkbox.checked = target.checked;
     });
-    updateBulkFailedTaskControls();
+    updateBulkTaskControls();
     return;
   }
-  if (target.matches("[data-bulk-failed-task]")) {
-    updateBulkFailedTaskControls();
+  if (target.matches("[data-bulk-task]")) {
+    updateBulkTaskControls();
   }
 });
 
@@ -1977,7 +1977,7 @@ function replaceRefreshRegion(documentFragment, name) {
   if (current && next) {
     current.innerHTML = next.innerHTML;
     if (name === "task-list") {
-      updateBulkFailedTaskControls();
+      updateBulkTaskControls();
     }
   }
 }
@@ -2141,5 +2141,5 @@ document.addEventListener("focusout", () => {
   });
 });
 
-updateBulkFailedTaskControls();
+updateBulkTaskControls();
 applyAutoRefreshState();

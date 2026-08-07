@@ -87,6 +87,7 @@ STATUS_LABELS = {
     "failed": "失败",
     "canceled": "已取消",
 }
+DELETABLE_TASK_STATUSES = {"completed", "failed", "canceled"}
 TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 REPORT_RETENTION_DAYS_DEFAULT = 0
@@ -720,9 +721,9 @@ def register_routes(app):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(False, task["task_type"])))
 
-    @app.post("/tasks/bulk-delete-failed")
-    def user_bulk_delete_failed_tasks():
-        return _bulk_delete_failed_tasks(_get_user_task_or_local_admin, admin_created=False)
+    @app.post("/tasks/bulk-delete")
+    def user_bulk_delete_tasks():
+        return _bulk_delete_tasks(_get_user_task_or_local_admin, admin_created=False)
 
     @app.route("/models", methods=["GET", "POST"])
     def user_models():
@@ -986,10 +987,10 @@ def register_routes(app):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(True, task["task_type"])))
 
-    @app.post(f"{admin_prefix}/tasks/bulk-delete-failed")
+    @app.post(f"{admin_prefix}/tasks/bulk-delete")
     @admin_required
-    def admin_bulk_delete_failed_tasks():
-        return _bulk_delete_failed_tasks(_get_task_or_404, admin_created=True)
+    def admin_bulk_delete_tasks():
+        return _bulk_delete_tasks(_get_task_or_404, admin_created=True)
 
     @app.route(f"{admin_prefix}/prompts", methods=["GET", "POST"])
     @admin_required
@@ -3525,8 +3526,8 @@ def _cancel_task(task):
 
 
 def _delete_task(task):
-    if task["status"] == "running":
-        flash("运行中的任务不能直接删除，请先取消后再删除。", "error")
+    if task["status"] not in DELETABLE_TASK_STATUSES:
+        flash("排队中或运行中的任务不能直接删除，请先取消后再删除。", "error")
         return False
     db = get_db()
     paths = _task_upload_paths(task)
@@ -3551,10 +3552,10 @@ def _delete_task(task):
     return True
 
 
-def _bulk_delete_failed_tasks(task_loader, *, admin_created: bool):
+def _bulk_delete_tasks(task_loader, *, admin_created: bool):
     raw_task_ids = request.form.getlist("task_ids")
     if len(raw_task_ids) > TASKS_PER_PAGE:
-        flash(f"每次最多批量删除 {TASKS_PER_PAGE} 个失败任务。", "error")
+        flash(f"每次最多批量删除 {TASKS_PER_PAGE} 个任务。", "error")
         return redirect(_task_action_redirect("admin_tasks" if admin_created else "user_tasks"))
 
     task_ids = []
@@ -3567,20 +3568,20 @@ def _bulk_delete_failed_tasks(task_loader, *, admin_created: bool):
             task_ids.append(task_id)
 
     if not task_ids:
-        flash("请先选择需要删除的失败任务。", "error")
+        flash("请先选择需要删除的任务。", "error")
         return redirect(_task_action_redirect("admin_tasks" if admin_created else "user_tasks"))
 
     tasks = [task_loader(task_id) for task_id in task_ids]
     fallback_endpoint = _task_list_endpoint(admin_created, tasks[0]["task_type"])
     redirect_url = _task_action_redirect(fallback_endpoint)
-    failed_tasks = [task for task in tasks if task["status"] == "failed"]
-    skipped_count = len(tasks) - len(failed_tasks)
-    deleted_count = sum(1 for task in failed_tasks if _delete_task(task))
+    deletable_tasks = [task for task in tasks if task["status"] in DELETABLE_TASK_STATUSES]
+    skipped_count = len(tasks) - len(deletable_tasks)
+    deleted_count = sum(1 for task in deletable_tasks if _delete_task(task))
 
     if deleted_count:
-        flash(f"已批量删除 {deleted_count} 个失败任务。", "success")
+        flash(f"已批量删除 {deleted_count} 个任务。", "success")
     if skipped_count:
-        flash(f"已跳过 {skipped_count} 个非失败任务。", "error")
+        flash(f"已跳过 {skipped_count} 个排队中或运行中的任务。", "error")
     return redirect(redirect_url)
 
 

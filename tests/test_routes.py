@@ -229,20 +229,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIsNotNone(task)
         self.assertTrue(upload_path.exists())
 
-    def test_user_bulk_delete_removes_only_selected_failed_tasks(self):
-        failed_task_ids = [
+    def test_user_bulk_delete_removes_selected_history_tasks(self):
+        deletable_task_ids = [
             self._insert_task(task_type=IMAGE_TASK_TYPE, status="failed"),
-            self._insert_task(task_type=IMAGE_TASK_TYPE, status="failed", created_at="2026-05-01 10:01:00"),
+            self._insert_task(task_type=IMAGE_TASK_TYPE, status="canceled", created_at="2026-05-01 10:01:00"),
+            self._insert_task(task_type=IMAGE_TASK_TYPE, status="completed", created_at="2026-05-01 10:02:00"),
         ]
-        completed_task_id = self._insert_task(
+        queued_task_id = self._insert_task(
             task_type=IMAGE_TASK_TYPE,
-            status="completed",
-            created_at="2026-05-01 10:02:00",
+            status="queued",
+            created_at="2026-05-01 10:03:00",
         )
 
         response = self.client.post(
-            "/tasks/bulk-delete-failed",
-            data={"task_ids": [*failed_task_ids, completed_task_id], "next": "/images?page=2"},
+            "/tasks/bulk-delete",
+            data={"task_ids": [*deletable_task_ids, queued_task_id], "next": "/images?page=2"},
         )
 
         self.assertEqual(response.status_code, 302)
@@ -251,26 +252,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
             remaining_ids = {
                 row["id"]
                 for row in get_db().execute(
-                    "SELECT id FROM tasks WHERE id IN (?, ?, ?)",
-                    (*failed_task_ids, completed_task_id),
+                    "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?)",
+                    (*deletable_task_ids, queued_task_id),
                 ).fetchall()
             }
-        self.assertEqual(remaining_ids, {completed_task_id})
+        self.assertEqual(remaining_ids, {queued_task_id})
         with self.client.session_transaction() as session:
             messages = [message for _, message in session.get("_flashes", [])]
-        self.assertIn("已批量删除 2 个失败任务。", messages)
-        self.assertIn("已跳过 1 个非失败任务。", messages)
+        self.assertIn("已批量删除 3 个任务。", messages)
+        self.assertIn("已跳过 1 个排队中或运行中的任务。", messages)
 
     def test_user_bulk_delete_rejects_another_users_task(self):
         task_id = self._insert_task(
-            status="failed",
+            status="completed",
             ip="10.0.0.8",
             owner_subject="ip:10.0.0.8",
             owner_source="ip",
         )
 
         response = self.client.post(
-            "/tasks/bulk-delete-failed",
+            "/tasks/bulk-delete",
             data={"task_ids": [task_id], "next": "/"},
         )
 
@@ -279,27 +280,27 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task = get_db().execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
         self.assertIsNotNone(task)
 
-    def test_admin_bulk_delete_removes_selected_failed_task(self):
-        failed_task_id = self._insert_task(
+    def test_admin_bulk_delete_removes_selected_canceled_task(self):
+        canceled_task_id = self._insert_task(
             task_type=VIDEO_TASK_TYPE,
-            status="failed",
+            status="canceled",
             ip="10.0.0.8",
             owner_subject="ip:10.0.0.8",
             owner_source="ip",
         )
 
         response = self.client.post(
-            "/admin/tasks/bulk-delete-failed",
-            data={"task_ids": [failed_task_id], "next": "/admin/videos?status=failed"},
+            "/admin/tasks/bulk-delete",
+            data={"task_ids": [canceled_task_id], "next": "/admin/videos?status=canceled"},
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/admin/videos?status=failed")
+        self.assertEqual(response.headers["Location"], "/admin/videos?status=canceled")
         with self.app.app_context():
-            task = get_db().execute("SELECT id FROM tasks WHERE id = ?", (failed_task_id,)).fetchone()
+            task = get_db().execute("SELECT id FROM tasks WHERE id = ?", (canceled_task_id,)).fetchone()
         self.assertIsNone(task)
 
-    def test_all_task_lists_expose_failed_task_bulk_selection(self):
+    def test_all_task_lists_expose_bulk_selection_for_history_tasks(self):
         task_routes = (
             (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
             (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
@@ -309,26 +310,31 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         for task_type, user_list_url, admin_list_url in task_routes:
-            failed_task_id = self._insert_task(task_type=task_type, status="failed")
-            self._insert_task(task_type=task_type, status="completed", created_at="2026-05-01 10:01:00")
+            deletable_task_ids = {
+                self._insert_task(task_type=task_type, status="failed"),
+                self._insert_task(task_type=task_type, status="completed", created_at="2026-05-01 10:01:00"),
+                self._insert_task(task_type=task_type, status="canceled", created_at="2026-05-01 10:02:00"),
+            }
+            self._insert_task(task_type=task_type, status="queued", created_at="2026-05-01 10:03:00")
+            self._insert_task(task_type=task_type, status="running", created_at="2026-05-01 10:04:00")
             for list_url, action in (
-                (user_list_url, "/tasks/bulk-delete-failed"),
-                (admin_list_url, "/admin/tasks/bulk-delete-failed"),
+                (user_list_url, "/tasks/bulk-delete"),
+                (admin_list_url, "/admin/tasks/bulk-delete"),
             ):
                 with self.subTest(task_type=task_type, list_url=list_url):
                     response = self.client.get(list_url)
                     self.assertEqual(response.status_code, 200)
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                    form = _required_tag(soup.select_one("[data-bulk-delete-failed-form]"))
-                    checkboxes = soup.select("[data-bulk-failed-task]")
-                    toggle = _required_tag(soup.select_one("[data-bulk-failed-toggle]"))
-                    button = _required_tag(soup.select_one("[data-bulk-delete-failed-button]"))
+                    form = _required_tag(soup.select_one("[data-bulk-delete-form]"))
+                    checkboxes = soup.select("[data-bulk-task]")
+                    toggle = _required_tag(soup.select_one("[data-bulk-task-toggle]"))
+                    button = _required_tag(soup.select_one("[data-bulk-delete-button]"))
                     self.assertEqual(form.get("action"), action)
-                    self.assertEqual(len(checkboxes), 1)
-                    self.assertEqual(checkboxes[0].get("value"), str(failed_task_id))
-                    self.assertEqual(checkboxes[0].get("form"), "bulk-delete-failed-tasks")
+                    self.assertEqual({int(checkbox.get("value")) for checkbox in checkboxes}, deletable_task_ids)
+                    self.assertTrue(all(checkbox.get("form") == "bulk-delete-tasks" for checkbox in checkboxes))
                     self.assertIsNone(toggle.get("disabled"))
                     self.assertIsNotNone(button.get("disabled"))
+                    self.assertEqual(button.get_text(" ", strip=True), "批量删除")
 
     def test_diagnostics_fetch_returns_saved_state(self):
         response = self.client.post(
