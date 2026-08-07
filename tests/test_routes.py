@@ -2528,6 +2528,31 @@ class AdminSettingsRouteTest(unittest.TestCase):
         back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
         self.assertEqual(back_link.get("href"), "/?page=2")
 
+    def test_all_task_report_links_open_in_new_tabs(self):
+        task_routes = (
+            (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
+            (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
+            (LANGUAGE_CONSISTENCY_TASK_TYPE, "/language-consistency", "/admin/language-consistency"),
+            (IMAGE_TASK_TYPE, "/images", "/admin/images"),
+            (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
+        )
+
+        for task_type, user_list_url, admin_list_url in task_routes:
+            task_id = self._insert_task(task_type=task_type)
+            for list_url, report_path in (
+                (user_list_url, f"/tasks/{task_id}"),
+                (admin_list_url, f"/admin/tasks/{task_id}"),
+            ):
+                with self.subTest(task_type=task_type, list_url=list_url):
+                    response = self.client.get(list_url)
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    report_links = soup.select(f'a[href^="{report_path}?"]')
+                    self.assertEqual(len(report_links), 2)
+                    for report_link in report_links:
+                        self.assertEqual(report_link.get("target"), "_blank")
+                        self.assertIn("noopener", report_link.get("rel", []))
+
     def test_admin_task_list_page_jump_preserves_filters(self):
         for index in range(21):
             self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
