@@ -2512,7 +2512,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(cancel_response.status_code, 302)
         self.assertEqual(cancel_response.headers["Location"], "/infoCheck/?page=2")
 
-    def test_user_task_detail_returns_to_original_page(self):
+    def test_user_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):
             self._insert_task(created_at=f"2026-05-01 10:{index:02d}:00")
 
@@ -2521,12 +2521,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         detail_link = _required_tag(soup.select_one("a.task-report-link"))
+        self.assertRegex(str(detail_link.get("href")), r"^/tasks/\d+$")
         detail_response = self.client.get(str(detail_link.get("href")))
 
         self.assertEqual(detail_response.status_code, 200)
         detail_soup = BeautifulSoup(detail_response.get_data(as_text=True), "html.parser")
         back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
-        self.assertEqual(back_link.get("href"), "/?page=2")
+        self.assertEqual(back_link.get("href"), "/")
 
     def test_all_task_report_links_open_in_new_tabs(self):
         task_routes = (
@@ -2547,7 +2548,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     response = self.client.get(list_url)
                     self.assertEqual(response.status_code, 200)
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                    report_links = soup.select(f'a[href^="{report_path}?"]')
+                    report_links = soup.select(f'a[href="{report_path}"]')
                     self.assertEqual(len(report_links), 2)
                     for report_link in report_links:
                         self.assertEqual(report_link.get("target"), "_blank")
@@ -2572,7 +2573,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(status_input.get("value"), "completed")
         self.assertEqual(owner_input.get("value"), "127.0.0.1")
 
-    def test_admin_task_detail_returns_to_filtered_page(self):
+    def test_admin_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):
             self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
 
@@ -2582,12 +2583,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         detail_link = _required_tag(soup.select_one("a.task-report-link"))
+        self.assertRegex(str(detail_link.get("href")), r"^/admin/tasks/\d+$")
         detail_response = self.client.get(str(detail_link.get("href")))
 
         self.assertEqual(detail_response.status_code, 200)
         detail_soup = BeautifulSoup(detail_response.get_data(as_text=True), "html.parser")
         back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
-        self.assertEqual(back_link.get("href"), list_url)
+        self.assertEqual(back_link.get("href"), "/admin/tasks")
 
     def test_report_item_type_update_persists_classification(self):
         with self.app.app_context():
