@@ -3504,6 +3504,8 @@ def _cancel_task(task):
         SET cancel_requested = 1,
             status = 'canceled',
             progress = 0,
+            claim_token = NULL,
+            lease_expires_at = NULL,
             updated_at = ?,
             finished_at = ?
         WHERE id = ? AND status NOT IN ('completed', 'failed', 'canceled')

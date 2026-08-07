@@ -2,6 +2,7 @@ import json
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -59,6 +60,8 @@ IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
 DEFAULT_REPORT_RETENTION_DAYS = 0
 REPORT_CLEANUP_INTERVAL_SECONDS = 3600
 REPORT_CLEANUP_BATCH_SIZE = 100
+TASK_LEASE_SECONDS = 90
+TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
 IMAGE_PAGE_CHECK_CODES = {
     "image-text-correspondence",
     "image-ui-step-consistency",
@@ -92,24 +95,6 @@ class TaskScheduler:
         self._launcher.join(timeout=3)
 
     def _loop(self):
-        with self.app.app_context():
-            db = get_db()
-            db.execute(
-                """
-                UPDATE tasks
-                SET status = 'queued',
-                    progress = 0,
-                    result_json = NULL,
-                    summary = NULL,
-                    error = NULL,
-                    updated_at = ?,
-                    started_at = NULL
-                WHERE status = 'running'
-                """,
-                (now_text(),),
-            )
-            db.commit()
-
         while not self._stop_event.is_set():
             try:
                 with self.app.app_context():
@@ -127,67 +112,115 @@ class TaskScheduler:
         cleanup_expired_task_reports(self.app)
 
     def _launch_available_tasks(self):
-        db = get_db()
-        global_limit = max(1, _int_setting("global_concurrency", 3))
-        user_limit = max(1, _int_setting("user_concurrency", 1))
-
-        running_total = db.execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'"
-        ).fetchone()["total"]
-        slots = global_limit - running_total
-        if slots <= 0:
-            return
-
-        queued = db.execute(
-            """
-            SELECT id, ip, COALESCE(owner_subject, 'ip:' || ip) AS owner_subject
-            FROM tasks
-            WHERE status = 'queued'
-            ORDER BY created_at ASC, id ASC
-            LIMIT 50
-            """
-        ).fetchall()
-
-        launched = 0
-        for task in queued:
-            if launched >= slots:
-                break
-            running_for_user = db.execute(
-                """
-                SELECT COUNT(*) AS total
-                FROM tasks
-                WHERE status = 'running' AND COALESCE(owner_subject, 'ip:' || ip) = ?
-                """,
-                (task["owner_subject"],),
-            ).fetchone()["total"]
-            if running_for_user >= user_limit:
-                continue
-
-            db.execute(
-                """
-                UPDATE tasks
-                SET status = 'running', progress = 1, started_at = ?, updated_at = ?
-                WHERE id = ? AND status = 'queued'
-                """,
-                (now_text(), now_text(), task["id"]),
-            )
-            db.commit()
+        claimed_tasks = self._claim_available_tasks()
+        for task_id, claim_token in claimed_tasks:
             worker = threading.Thread(
                 target=self._run_task,
-                args=(task["id"],),
+                args=(task_id, claim_token),
                 daemon=True,
-                name=f"task-worker-{task['id']}",
+                name=f"task-worker-{task_id}",
             )
             worker.start()
-            launched += 1
 
-    def _run_task(self, task_id: int):
+    def _claim_available_tasks(self) -> list[tuple[int, str]]:
+        db = get_db()
+        claimed_tasks: list[tuple[int, str]] = []
+        recovered_count = 0
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            now = now_text()
+            recovered = db.execute(
+                """
+                UPDATE tasks
+                SET status = 'queued',
+                    progress = 0,
+                    cancel_requested = 0,
+                    claim_token = NULL,
+                    lease_expires_at = NULL,
+                    result_json = NULL,
+                    summary = NULL,
+                    error = NULL,
+                    updated_at = ?,
+                    started_at = NULL,
+                    finished_at = NULL
+                WHERE status = 'running'
+                  AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                """,
+                (now, now),
+            )
+            recovered_count = max(0, recovered.rowcount)
+
+            global_limit = max(1, _int_setting("global_concurrency", 3))
+            user_limit = max(1, _int_setting("user_concurrency", 1))
+            running_total = db.execute(
+                "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'"
+            ).fetchone()["total"]
+            slots = global_limit - running_total
+            if slots > 0:
+                queued = db.execute(
+                    """
+                    SELECT id, ip, COALESCE(owner_subject, 'ip:' || ip) AS owner_subject
+                    FROM tasks
+                    WHERE status = 'queued'
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 50
+                    """
+                ).fetchall()
+                for task in queued:
+                    if len(claimed_tasks) >= slots:
+                        break
+                    running_for_user = db.execute(
+                        """
+                        SELECT COUNT(*) AS total
+                        FROM tasks
+                        WHERE status = 'running' AND COALESCE(owner_subject, 'ip:' || ip) = ?
+                        """,
+                        (task["owner_subject"],),
+                    ).fetchone()["total"]
+                    if running_for_user >= user_limit:
+                        continue
+
+                    claim_token = uuid.uuid4().hex
+                    claimed = db.execute(
+                        """
+                        UPDATE tasks
+                        SET status = 'running',
+                            progress = 1,
+                            claim_token = ?,
+                            lease_expires_at = ?,
+                            started_at = ?,
+                            updated_at = ?
+                        WHERE id = ? AND status = 'queued'
+                        """,
+                        (claim_token, _task_lease_deadline_text(), now, now, task["id"]),
+                    )
+                    if claimed.rowcount == 1:
+                        claimed_tasks.append((task["id"], claim_token))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        if recovered_count:
+            self.app.logger.warning("已回收租约过期的运行任务 count=%s", recovered_count)
+        return claimed_tasks
+
+    def _run_task(self, task_id: int, claim_token: str | None = None):
         with self.app.app_context():
             db = get_db()
-            task = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = db.execute(
+                """
+                SELECT *
+                FROM tasks
+                WHERE id = ?
+                  AND (? IS NULL OR (status = 'running' AND claim_token = ?))
+                """,
+                (task_id, claim_token, claim_token),
+            ).fetchone()
             if task is None:
                 return
 
+            lease_stop, lease_thread = _start_task_lease_heartbeat(self.app, task_id, claim_token)
             results = []
             try:
                 self.app.logger.info(
@@ -200,7 +233,7 @@ class TaskScheduler:
                     task["model_name"],
                 )
                 if task["cancel_requested"]:
-                    _mark_canceled(db, task_id)
+                    _mark_canceled(db, task_id, claim_token)
                     return
 
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
@@ -291,11 +324,11 @@ class TaskScheduler:
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                     )
-                if _cancel_requested(db, task_id):
+                if _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
 
                 summary = _build_summary(results)
-                db.execute(
+                completed = db.execute(
                     """
                     UPDATE tasks
                     SET status = 'completed',
@@ -303,23 +336,42 @@ class TaskScheduler:
                         result_json = ?,
                         summary = ?,
                         error = NULL,
+                        claim_token = NULL,
+                        lease_expires_at = NULL,
                         updated_at = ?,
                         finished_at = ?
                     WHERE id = ? AND status = 'running' AND cancel_requested = 0
+                      AND (? IS NULL OR claim_token = ?)
                     """,
-                    (json.dumps(results, ensure_ascii=False), summary, now_text(), now_text(), task_id),
+                    (
+                        json.dumps(results, ensure_ascii=False),
+                        summary,
+                        now_text(),
+                        now_text(),
+                        task_id,
+                        claim_token,
+                        claim_token,
+                    ),
                 )
                 db.commit()
-                self.app.logger.info("任务完成 task_id=%s checks=%s", task_id, len(results))
+                if completed.rowcount == 1:
+                    self.app.logger.info("任务完成 task_id=%s checks=%s", task_id, len(results))
+                else:
+                    self.app.logger.warning("任务执行权已失效，忽略完成结果 task_id=%s", task_id)
             except TaskCanceled:
                 self.app.logger.info("任务取消 task_id=%s", task_id)
-                _mark_canceled(db, task_id)
+                _mark_canceled(db, task_id, claim_token)
             except (DocumentReadError, LLMError, RuntimeError) as exc:
                 self.app.logger.warning("任务失败 task_id=%s error=%s", task_id, exc)
-                _mark_failed(db, task_id, str(exc), results)
+                _mark_failed(db, task_id, str(exc), results, claim_token)
             except Exception as exc:
                 self.app.logger.exception("任务执行异常：%s", task_id)
-                _mark_failed(db, task_id, f"任务执行异常：{exc}", results)
+                _mark_failed(db, task_id, f"任务执行异常：{exc}", results, claim_token)
+            finally:
+                if lease_stop is not None:
+                    lease_stop.set()
+                if lease_thread is not None:
+                    lease_thread.join(timeout=2)
 
 
 def _extract_consistency_document_text(app, task) -> str:
@@ -449,6 +501,7 @@ def _run_check_items_concurrently(
     stream_trace_enabled: bool,
 ) -> list[dict]:
     task_id = task["id"]
+    claim_token = _task_claim_token(task)
     total = len(check_items)
     total_units = max(1, total)
     completed_units = 0
@@ -467,20 +520,21 @@ def _run_check_items_concurrently(
             5,
             89,
             task["request_timeout"],
+            claim_token,
         ),
         daemon=True,
         name=f"task-heartbeat-{task_id}",
     )
     with save_lock:
         db = get_db()
-        _update_progress(db, task_id, 5)
+        _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
             snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
         with save_lock:
-            _save_intermediate_results(db, task_id, snapshot, summary, progress)
+            _save_intermediate_results(db, task_id, snapshot, summary, progress, claim_token)
 
     def current_progress() -> int:
         with result_lock:
@@ -498,7 +552,7 @@ def _run_check_items_concurrently(
     def run_item(index: int, item: dict) -> dict:
         with app.app_context():
             db = get_db()
-            if cancel_event.is_set() or _cancel_requested(db, task_id):
+            if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                 raise TaskCanceled
 
             app.logger.info(
@@ -515,7 +569,7 @@ def _run_check_items_concurrently(
                 now = time.monotonic()
                 if not force and content and now - last_stream_write < 1.2:
                     return
-                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
                 with result_lock:
                     had_partial = item["code"] in partial_by_code
@@ -558,7 +612,7 @@ def _run_check_items_concurrently(
                 )
             progress = mark_unit_completed()
 
-            if cancel_event.is_set() or _cancel_requested(db, task_id):
+            if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                 raise TaskCanceled
 
             result = {
@@ -656,6 +710,7 @@ def _run_image_check_items_concurrently(
     stream_trace_enabled: bool,
 ) -> list[dict]:
     task_id = task["id"]
+    claim_token = _task_claim_token(task)
     total = len(check_items)
     groups = _image_check_groups(check_items, image_items, page_image_items, document_meta or {})
     if not groups:
@@ -677,20 +732,21 @@ def _run_image_check_items_concurrently(
             5,
             89,
             task["request_timeout"],
+            claim_token,
         ),
         daemon=True,
         name=f"task-image-heartbeat-{task_id}",
     )
     with save_lock:
         db = get_db()
-        _update_progress(db, task_id, 5)
+        _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
             snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
         with save_lock:
-            _save_intermediate_results(db, task_id, snapshot, summary, progress)
+            _save_intermediate_results(db, task_id, snapshot, summary, progress, claim_token)
 
     def current_progress() -> int:
         with result_lock:
@@ -708,7 +764,7 @@ def _run_image_check_items_concurrently(
     def run_group(group_index: int, group: dict):
         with app.app_context():
             db = get_db()
-            if cancel_event.is_set() or _cancel_requested(db, task_id):
+            if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                 raise TaskCanceled
 
             items = group["items"]
@@ -738,7 +794,7 @@ def _run_image_check_items_concurrently(
                 now = time.monotonic()
                 if not force and content and now - last_stream_write < 1.2:
                     return
-                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
 
                 with result_lock:
@@ -795,7 +851,7 @@ def _run_image_check_items_concurrently(
                 return
 
             for batch_index, batch in enumerate(batches, start=1):
-                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
                 multimodal_images = _multimodal_image_inputs(image_folder, batch)
                 batch_document_text = _document_text_for_image_batch(document_text, batch)
@@ -919,6 +975,7 @@ def _run_video_check_items_concurrently(
     stream_trace_enabled: bool,
 ) -> list[dict]:
     task_id = task["id"]
+    claim_token = _task_claim_token(task)
     total = len(check_items)
     checkable_frames, skipped_frames = _split_checkable_image_items(frame_items)
     if not checkable_frames and not skipped_frames:
@@ -942,20 +999,21 @@ def _run_video_check_items_concurrently(
             5,
             89,
             task["request_timeout"],
+            claim_token,
         ),
         daemon=True,
         name=f"task-video-heartbeat-{task_id}",
     )
     with save_lock:
         db = get_db()
-        _update_progress(db, task_id, 5)
+        _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
             snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
         with save_lock:
-            _save_intermediate_results(db, task_id, snapshot, summary, progress)
+            _save_intermediate_results(db, task_id, snapshot, summary, progress, claim_token)
 
     def current_progress() -> int:
         with result_lock:
@@ -973,7 +1031,7 @@ def _run_video_check_items_concurrently(
     def run_checks():
         with app.app_context():
             db = get_db()
-            if cancel_event.is_set() or _cancel_requested(db, task_id):
+            if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                 raise TaskCanceled
 
             app.logger.info(
@@ -994,7 +1052,7 @@ def _run_video_check_items_concurrently(
                 now = time.monotonic()
                 if not force and content and now - last_stream_write < 1.2:
                     return
-                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
 
                 with result_lock:
@@ -1043,7 +1101,7 @@ def _run_video_check_items_concurrently(
                 return
 
             for batch_index, batch in enumerate(batches, start=1):
-                if cancel_event.is_set() or _cancel_requested(db, task_id):
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
                 multimodal_images = _multimodal_image_inputs(image_folder, batch)
                 current_batch = {
@@ -1984,23 +2042,83 @@ def _task_flag(task, key: str) -> bool:
     return False
 
 
-def _cancel_requested(db, task_id: int) -> bool:
+def _task_claim_token(task) -> str | None:
+    value = _task_value(task, "claim_token")
+    return str(value).strip() if value else None
+
+
+def _task_lease_deadline_text() -> str:
+    deadline = datetime.now() + timedelta(seconds=TASK_LEASE_SECONDS)
+    return deadline.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _start_task_lease_heartbeat(app, task_id: int, claim_token: str | None):
+    if not claim_token:
+        return None, None
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_task_lease_heartbeat,
+        args=(app, task_id, claim_token, stop_event),
+        daemon=True,
+        name=f"task-lease-{task_id}",
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _task_lease_heartbeat(app, task_id: int, claim_token: str, stop_event: threading.Event):
+    while not stop_event.wait(TASK_LEASE_RENEW_INTERVAL_SECONDS):
+        try:
+            with app.app_context():
+                db = get_db()
+                renewed = db.execute(
+                    """
+                    UPDATE tasks
+                    SET lease_expires_at = ?
+                    WHERE id = ? AND status = 'running' AND claim_token = ?
+                    """,
+                    (_task_lease_deadline_text(), task_id, claim_token),
+                )
+                db.commit()
+                if renewed.rowcount != 1:
+                    return
+        except Exception:
+            app.logger.exception("任务租约续期失败 task_id=%s", task_id)
+
+
+def _cancel_requested(db, task_id: int, claim_token: str | None = None) -> bool:
     row = db.execute(
-        "SELECT cancel_requested FROM tasks WHERE id = ?",
+        "SELECT status, cancel_requested, claim_token FROM tasks WHERE id = ?",
         (task_id,),
     ).fetchone()
-    return bool(row and row["cancel_requested"])
+    if row is None:
+        return True
+    if claim_token is not None and (row["status"] != "running" or row["claim_token"] != claim_token):
+        return True
+    return bool(row["cancel_requested"])
 
 
-def _update_progress(db, task_id: int, progress: int):
+def _update_progress(db, task_id: int, progress: int, claim_token: str | None = None):
     db.execute(
-        "UPDATE tasks SET progress = ?, updated_at = ? WHERE id = ? AND status = 'running'",
-        (progress, now_text(), task_id),
+        """
+        UPDATE tasks
+        SET progress = ?, updated_at = ?
+        WHERE id = ? AND status = 'running'
+          AND (? IS NULL OR claim_token = ?)
+        """,
+        (progress, now_text(), task_id, claim_token, claim_token),
     )
     db.commit()
 
 
-def _save_intermediate_results(db, task_id: int, results: list[dict], summary: str, progress: int):
+def _save_intermediate_results(
+    db,
+    task_id: int,
+    results: list[dict],
+    summary: str,
+    progress: int,
+    claim_token: str | None = None,
+):
     db.execute(
         """
         UPDATE tasks
@@ -2009,8 +2127,17 @@ def _save_intermediate_results(db, task_id: int, results: list[dict], summary: s
             progress = MAX(progress, ?),
             updated_at = ?
         WHERE id = ? AND status = 'running'
+          AND (? IS NULL OR claim_token = ?)
         """,
-        (json.dumps(results, ensure_ascii=False), summary, progress, now_text(), task_id),
+        (
+            json.dumps(results, ensure_ascii=False),
+            summary,
+            progress,
+            now_text(),
+            task_id,
+            claim_token,
+            claim_token,
+        ),
     )
     db.commit()
 
@@ -2022,6 +2149,7 @@ def _progress_heartbeat(
     start: int,
     end: int,
     timeout_seconds: int,
+    claim_token: str | None = None,
 ):
     if end <= start:
         return
@@ -2036,30 +2164,51 @@ def _progress_heartbeat(
         with app.app_context():
             db = get_db()
             row = db.execute(
-                "SELECT status, progress FROM tasks WHERE id = ?",
+                "SELECT status, progress, claim_token FROM tasks WHERE id = ?",
                 (task_id,),
             ).fetchone()
             if row is None or row["status"] != "running":
                 return
+            if claim_token is not None and row["claim_token"] != claim_token:
+                return
             if row["progress"] >= progress:
                 continue
-            _update_progress(db, task_id, progress)
+            _update_progress(db, task_id, progress, claim_token)
 
 
-def _mark_canceled(db, task_id: int):
+def _mark_canceled(db, task_id: int, claim_token: str | None = None):
     db.execute(
         """
         UPDATE tasks
-        SET status = 'canceled', progress = 0, updated_at = ?, finished_at = ?
-        WHERE id = ?
+        SET status = 'canceled',
+            progress = 0,
+            claim_token = NULL,
+            lease_expires_at = NULL,
+            updated_at = ?,
+            finished_at = ?
+        WHERE id = ? AND status = 'running'
+          AND (? IS NULL OR claim_token = ?)
         """,
-        (now_text(), now_text(), task_id),
+        (now_text(), now_text(), task_id, claim_token, claim_token),
     )
     db.commit()
 
 
-def _mark_failed(db, task_id: int, error: str, results: list[dict] | None = None):
-    existing = db.execute("SELECT result_json, summary FROM tasks WHERE id = ?", (task_id,)).fetchone()
+def _mark_failed(
+    db,
+    task_id: int,
+    error: str,
+    results: list[dict] | None = None,
+    claim_token: str | None = None,
+):
+    existing = db.execute(
+        """
+        SELECT result_json, summary
+        FROM tasks
+        WHERE id = ? AND (? IS NULL OR claim_token = ?)
+        """,
+        (task_id, claim_token, claim_token),
+    ).fetchone()
     result_json = existing["result_json"] if existing else None
     summary = existing["summary"] if existing else None
     if not result_json and results:
@@ -2072,11 +2221,23 @@ def _mark_failed(db, task_id: int, error: str, results: list[dict] | None = None
             error = ?,
             result_json = ?,
             summary = ?,
+            claim_token = NULL,
+            lease_expires_at = NULL,
             updated_at = ?,
             finished_at = ?
         WHERE id = ? AND status = 'running'
+          AND (? IS NULL OR claim_token = ?)
         """,
-        (error, result_json, summary, now_text(), now_text(), task_id),
+        (
+            error,
+            result_json,
+            summary,
+            now_text(),
+            now_text(),
+            task_id,
+            claim_token,
+            claim_token,
+        ),
     )
     db.commit()
 

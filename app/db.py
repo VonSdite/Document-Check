@@ -81,6 +81,8 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'queued',
             progress INTEGER NOT NULL DEFAULT 0,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
+            claim_token TEXT,
+            lease_expires_at TEXT,
             result_json TEXT,
             summary TEXT,
             error TEXT,
@@ -193,9 +195,12 @@ def init_db():
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")
     _ensure_column(db, "tasks", "owner_source", "TEXT")
     _ensure_column(db, "tasks", "submission_token", "TEXT")
+    _ensure_column(db, "tasks", "claim_token", "TEXT")
+    _ensure_column(db, "tasks", "lease_expires_at", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_lease ON tasks(status, lease_expires_at)")
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_type_owner_created "
         "ON tasks(task_type, owner_subject, created_at DESC, id DESC)"

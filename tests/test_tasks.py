@@ -1,7 +1,9 @@
 import json
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import patch
 
 from flask import Flask
@@ -38,6 +40,138 @@ class TaskExecutionTest(unittest.TestCase):
     def tearDown(self):
         self.context.pop()
         self.temp_dir.cleanup()
+
+    def _insert_scheduler_task(
+        self,
+        *,
+        status: str = "queued",
+        owner_subject: str = "ip:127.0.0.1",
+        claim_token: str | None = None,
+        lease_expires_at: str | None = None,
+    ) -> int:
+        now = now_text()
+        cursor = get_db().execute(
+            """
+            INSERT INTO tasks(
+                ip, owner_subject, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, model_name, api_base, request_timeout,
+                max_input_chars, status, progress, claim_token, lease_expires_at,
+                created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', ?, 'scheduler.txt', 'scheduler.txt', 'txt', 1,
+                'file: scheduler.txt\n\n测试', '[]', 'test-model',
+                'http://example.test/v1/chat/completions', 30, 5000,
+                ?, 0, ?, ?, ?, ?
+            )
+            """,
+            (owner_subject, status, claim_token, lease_expires_at, now, now),
+        )
+        get_db().commit()
+        return int(cursor.lastrowid)
+
+    def test_multiple_schedulers_atomically_claim_task_once(self):
+        task_id = self._insert_scheduler_task()
+        barrier = Barrier(2)
+
+        def claim_task():
+            with self.app.app_context():
+                barrier.wait()
+                return TaskScheduler(self.app)._claim_available_tasks()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            claims = list(executor.map(lambda _: claim_task(), range(2)))
+
+        claimed = [claim for scheduler_claims in claims for claim in scheduler_claims]
+        self.assertEqual([claim[0] for claim in claimed], [task_id])
+        self.assertEqual(len(claimed[0][1]), 32)
+        task = get_db().execute(
+            "SELECT status, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["claim_token"], claimed[0][1])
+        self.assertGreater(task["lease_expires_at"], now_text())
+
+    def test_multiple_schedulers_keep_global_limit_while_claiming(self):
+        first_task_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
+        second_task_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
+        set_setting("global_concurrency", 1)
+        barrier = Barrier(2)
+
+        def claim_tasks():
+            with self.app.app_context():
+                barrier.wait()
+                return TaskScheduler(self.app)._claim_available_tasks()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            claims = list(executor.map(lambda _: claim_tasks(), range(2)))
+
+        claimed_ids = [claim[0] for scheduler_claims in claims for claim in scheduler_claims]
+        self.assertEqual(claimed_ids, [first_task_id])
+        tasks = get_db().execute(
+            "SELECT id, status FROM tasks ORDER BY id"
+        ).fetchall()
+        self.assertEqual(
+            [(task["id"], task["status"]) for task in tasks],
+            [(first_task_id, "running"), (second_task_id, "queued")],
+        )
+
+    def test_scheduler_does_not_recover_active_lease(self):
+        task_id = self._insert_scheduler_task(
+            status="running",
+            claim_token="active-claim",
+            lease_expires_at="2999-01-01 00:00:00",
+        )
+
+        claimed = TaskScheduler(self.app)._claim_available_tasks()
+
+        self.assertEqual(claimed, [])
+        task = get_db().execute(
+            "SELECT status, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["claim_token"], "active-claim")
+        self.assertEqual(task["lease_expires_at"], "2999-01-01 00:00:00")
+
+    def test_scheduler_recovers_expired_lease_with_new_claim(self):
+        task_id = self._insert_scheduler_task(
+            status="running",
+            claim_token="expired-claim",
+            lease_expires_at="2000-01-01 00:00:00",
+        )
+
+        claimed = TaskScheduler(self.app)._claim_available_tasks()
+
+        self.assertEqual([claim[0] for claim in claimed], [task_id])
+        self.assertNotEqual(claimed[0][1], "expired-claim")
+        task = get_db().execute(
+            "SELECT status, progress, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["progress"], 1)
+        self.assertEqual(task["claim_token"], claimed[0][1])
+        self.assertGreater(task["lease_expires_at"], now_text())
+
+    def test_worker_with_stale_claim_does_not_run_task(self):
+        task_id = self._insert_scheduler_task(
+            status="running",
+            claim_token="current-claim",
+            lease_expires_at="2999-01-01 00:00:00",
+        )
+
+        with patch("app.tasks.run_check") as mocked_run_check:
+            TaskScheduler(self.app)._run_task(task_id, "stale-claim")
+
+        mocked_run_check.assert_not_called()
+        task = get_db().execute(
+            "SELECT status, claim_token FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["claim_token"], "current-claim")
 
     def test_cleanup_expired_task_reports_removes_old_terminal_tasks_and_files(self):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
@@ -386,12 +520,12 @@ class TaskExecutionTest(unittest.TestCase):
             INSERT INTO tasks(
                 ip, original_filename, stored_filename, file_type, file_size,
                 document_text, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
-                status, progress, created_at, updated_at
+                status, progress, claim_token, lease_expires_at, created_at, updated_at
             )
             VALUES (
                 '127.0.0.1', 'missing.txt', 'missing.txt', 'txt', 1,
                 'file: missing.txt\n\n缓存文本', ?, ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
-                'running', 0, ?, ?
+                'running', 0, 'test-claim', '2999-01-01 00:00:00', ?, ?
             )
             """,
             (
@@ -420,10 +554,15 @@ class TaskExecutionTest(unittest.TestCase):
             return "完成"
 
         with patch("app.tasks.run_check", side_effect=fake_run_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskScheduler(self.app)._run_task(task_id, "test-claim")
 
-        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        updated = db.execute(
+            "SELECT status, result_json, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
         self.assertEqual(updated["status"], "completed")
+        self.assertIsNone(updated["claim_token"])
+        self.assertIsNone(updated["lease_expires_at"])
         self.assertEqual(calls[0]["document_text"], "file: missing.txt\n\n缓存文本")
 
     def test_consistency_task_uses_selected_check_snapshot(self):

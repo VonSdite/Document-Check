@@ -91,12 +91,15 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("owner_name_snapshot", columns)
         self.assertIn("owner_source", columns)
         self.assertIn("submission_token", columns)
+        self.assertIn("claim_token", columns)
+        self.assertIn("lease_expires_at", columns)
 
         indexes = {
             row["name"]: row
             for row in db.execute("PRAGMA index_list(tasks)").fetchall()
         }
         self.assertEqual(indexes["idx_tasks_submission_token"]["unique"], 1)
+        self.assertIn("idx_tasks_status_lease", indexes)
 
     def test_user_model_tables_exist(self):
         db = get_db()
