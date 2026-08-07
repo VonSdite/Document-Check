@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 _REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
+_REASONING_ONLY_CHUNK_LIMIT = 8_000
+_REASONING_ONLY_CHAR_LIMIT = 32_000
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
 DEFAULT_ISSUE_OUTPUT_LIMIT = 20
@@ -105,6 +107,10 @@ class LLMError(Exception):
 
 
 class _EmptyContentError(LLMError):
+    pass
+
+
+class _ReasoningOnlyResponseError(_EmptyContentError):
     pass
 
 
@@ -543,6 +549,24 @@ def _run_payload_with_retries(
                 continue
             if attempt > _MAX_RETRIES:
                 raise
+            if (
+                isinstance(exc, _ReasoningOnlyResponseError)
+                and not _thinking_disabled_in_payload(active_payload)
+                and _uses_deepseek_thinking_toggle(endpoint, str(active_payload.get("model") or ""))
+            ):
+                active_payload = dict(active_payload)
+                _disable_thinking_in_payload(
+                    active_payload,
+                    api_base=endpoint,
+                    model_name=str(active_payload.get("model") or ""),
+                )
+                logger.warning(
+                    "LLM 响应只有 reasoning、没有 assistant content，下一次重试自动关闭思考 "
+                    "request_id=%s task_id=%s attempt=%s",
+                    request_id,
+                    task_id or "-",
+                    attempt,
+                )
             delay_seconds = attempt
             logger.warning(
                 "LLM 请求出错，准备重试 request_id=%s task_id=%s attempt=%s/%s delay=%ss error=%s",
@@ -724,6 +748,16 @@ def _disable_thinking_in_payload(payload: dict, *, api_base: str = "", model_nam
         payload["thinking"] = {"type": "disabled"}
 
 
+def _thinking_disabled_in_payload(payload: dict) -> bool:
+    if payload.get("enable_thinking") is False:
+        return True
+    chat_template_kwargs = payload.get("chat_template_kwargs")
+    if isinstance(chat_template_kwargs, dict) and chat_template_kwargs.get("enable_thinking") is False:
+        return True
+    thinking = payload.get("thinking")
+    return isinstance(thinking, dict) and thinking.get("type") == "disabled"
+
+
 def _apply_json_object_response_format(payload: dict, *, api_base: str = "", model_name: str = ""):
     if _uses_json_object_response_format(api_base, model_name):
         payload["response_format"] = dict(_JSON_OBJECT_RESPONSE_FORMAT)
@@ -878,6 +912,17 @@ def _read_stream_lines(
             raise LLMError(f"模型服务返回错误：{service_error}")
 
         diagnostics.observe(data, raw=line)
+        if _reasoning_only_limit_reached(diagnostics):
+            logger.warning(
+                "LLM 流式响应纯 reasoning 超限，提前中止 request_id=%s task_id=%s limit_chunks=%s "
+                "limit_chars=%s %s",
+                request_id,
+                task_id or "-",
+                _REASONING_ONLY_CHUNK_LIMIT,
+                _REASONING_ONLY_CHAR_LIMIT,
+                diagnostics.log_summary(),
+            )
+            raise _ReasoningOnlyResponseError(_reasoning_only_limit_message(diagnostics))
         if stream_trace_enabled:
             logger.info(
                 "LLM 流式定位收到响应chunk request_id=%s task_id=%s attempt=%s frame=%s %s raw=%s",
@@ -909,8 +954,24 @@ def _read_stream_lines(
             task_id or "-",
             diagnostics.samples,
         )
-        raise _EmptyContentError(_empty_content_message(diagnostics))
+        error_type = _ReasoningOnlyResponseError if diagnostics.reasoning_chunks else _EmptyContentError
+        raise error_type(_empty_content_message(diagnostics))
     return content
+
+
+def _reasoning_only_limit_reached(diagnostics) -> bool:
+    return diagnostics.content_chunks == 0 and (
+        diagnostics.reasoning_chunks >= _REASONING_ONLY_CHUNK_LIMIT
+        or diagnostics.reasoning_chars >= _REASONING_ONLY_CHAR_LIMIT
+    )
+
+
+def _reasoning_only_limit_message(diagnostics) -> str:
+    fields = ",".join(sorted(diagnostics.reasoning_fields)) or "reasoning"
+    return (
+        "模型服务持续返回思考过程但没有正文，已提前终止本次流式响应："
+        f"{fields} 字段 {diagnostics.reasoning_chunks} 段/{diagnostics.reasoning_chars} 字。"
+    )
 
 
 def _raise_for_http_error(response, *, request_id: str = "-", task_id: Optional[int] = None):

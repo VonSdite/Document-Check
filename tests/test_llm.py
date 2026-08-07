@@ -293,6 +293,45 @@ class LLMResponseParsingTest(unittest.TestCase):
         with self.assertRaisesRegex(llm.LLMError, "reasoning_content"):
             llm._read_stream_response(response, None)
 
+    def test_stops_reasoning_only_stream_when_budget_is_exceeded(self):
+        consumed = []
+
+        def lines():
+            for line in (
+                'data: {"choices":[{"delta":{"reasoning":"第一段"}}]}',
+                'data: {"choices":[{"delta":{"reasoning":"第二段"}}]}',
+                'data: {"choices":[{"delta":{"content":"不应读取"}}]}',
+            ):
+                consumed.append(line)
+                yield line
+
+        response = FakeResponse(lines=lines())
+        with (
+            patch.object(llm, "_REASONING_ONLY_CHUNK_LIMIT", 2),
+            patch.object(llm, "_REASONING_ONLY_CHAR_LIMIT", 10_000),
+            self.assertRaisesRegex(llm.LLMError, "已提前终止本次流式响应"),
+        ):
+            llm._read_stream_response(response, None)
+
+        self.assertEqual(len(consumed), 2)
+
+    def test_reasoning_budget_does_not_stop_stream_after_content_begins(self):
+        response = FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"content":"正文"}}]}',
+                'data: {"choices":[{"delta":{"reasoning":"后续分析"}}]}',
+                "data: [DONE]",
+            ]
+        )
+
+        with (
+            patch.object(llm, "_REASONING_ONLY_CHUNK_LIMIT", 1),
+            patch.object(llm, "_REASONING_ONLY_CHAR_LIMIT", 1),
+        ):
+            result = llm._read_stream_response(response, None)
+
+        self.assertEqual(result, "正文")
+
     def test_raises_service_error_from_200_json(self):
         response = FakeResponse(
             lines=[
@@ -381,6 +420,81 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertFalse(fake_session.calls[0][1]["verify"])
         self.assertFalse(fake_session.calls[1][1]["verify"])
         sleep.assert_called_once_with(1)
+
+    def test_deepseek_reasoning_only_retry_automatically_disables_thinking(self):
+        first_response = FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}',
+                'data: {"choices":[{"delta":{"reasoning":"持续分析"}}]}',
+            ]
+        )
+        fake_session = FakeSession(
+            [
+                first_response,
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"降级重试成功"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep") as sleep,
+            self.assertLogs("app.llm", level="WARNING") as logs,
+        ):
+            result = llm.run_check(
+                api_base="https://llm.example.test/v1/chat/completions",
+                api_key="key",
+                model_name="DeepSeek-V4-Flash-H200",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, "降级重试成功")
+        self.assertTrue(first_response.closed)
+        self.assertEqual(len(fake_session.calls), 2)
+        first_payload = fake_session.calls[0][1]["json"]
+        second_payload = fake_session.calls[1][1]["json"]
+        self.assertNotIn("enable_thinking", first_payload)
+        self.assertIs(second_payload["enable_thinking"], False)
+        self.assertEqual(second_payload["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(second_payload["thinking"], {"type": "disabled"})
+        self.assertIn("下一次重试自动关闭思考", "\n".join(logs.output))
+        sleep.assert_called_once_with(1)
+
+    def test_generic_reasoning_only_retry_does_not_add_deepseek_thinking_flags(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(lines=['data: {"choices":[{"delta":{"reasoning":"分析"}}]}']),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"重试成功"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep"),
+        ):
+            result = llm.run_check(
+                api_base="https://llm.example.test/v1/chat/completions",
+                api_key="key",
+                model_name="generic-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, "重试成功")
+        self.assertNotIn("enable_thinking", fake_session.calls[0][1]["json"])
+        self.assertNotIn("enable_thinking", fake_session.calls[1][1]["json"])
 
     def test_retries_stream_when_stream_frame_is_malformed(self):
         fake_session = FakeSession(
