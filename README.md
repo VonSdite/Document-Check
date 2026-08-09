@@ -34,24 +34,6 @@ http://127.0.0.1:31945/
 
 上线或给他人使用前，请修改 `config.yaml` 中的管理员密码、`secret_key` 和 `admin_url`。
 
-## Windows 打包
-
-在 Windows 打包机上运行：
-
-```bat
-scripts\build_windows.bat
-```
-
-脚本会使用 uv 同步 build 依赖并调用 PyInstaller，生成单文件可执行程序：
-
-```text
-dist\windows\DocumentCheck.exe
-```
-
-把 `DocumentCheck.exe` 发给其他 Windows 用户即可运行，对方不需要安装 Python 或项目依赖。双击后会启动本地服务并自动打开浏览器进入本机管理视图。首次启动会在 exe 同目录生成非平台模式的 `config.yaml` 和 `instance/`；上传文件、SQLite 数据库和日志也会保存在同目录的 `instance/` 中。
-
-注意：PyInstaller 不能从 Linux/macOS 交叉打包 Windows exe，以上脚本需要在 Windows 上运行。交付前建议先在打包机运行一次，修改 exe 同目录的 `config.yaml` 中的管理员密码、`secret_key`、管理入口和端口；模型提供商由用户进入系统后在“模型管理”中自行配置。
-
 ## 本地配置
 
 `config.yaml` 支持配置运行模式、管理入口、监听地址和端口。仓库中提供两份示例：

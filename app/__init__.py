@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -66,8 +65,6 @@ def create_app():
 
 
 def _runtime_root_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
 
 

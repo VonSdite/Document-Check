@@ -1,4 +1,3 @@
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -378,17 +377,6 @@ class ProviderConfigTest(unittest.TestCase):
             config = load_local_config(Path(temp_dir))
 
         self.assertNotIn("providers", config)
-
-    def test_frozen_runtime_root_uses_executable_directory(self):
-        executable = Path(tempfile.gettempdir()) / "DocumentCheck" / "DocumentCheck.exe"
-        with (
-            patch.object(sys, "frozen", True, create=True),
-            patch.object(sys, "executable", str(executable)),
-        ):
-            root_dir = _runtime_root_dir()
-
-        self.assertEqual(root_dir, executable.parent)
-
 
 if __name__ == "__main__":
     unittest.main()
