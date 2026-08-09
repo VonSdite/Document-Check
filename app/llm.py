@@ -3,16 +3,22 @@ import logging
 import time
 import uuid
 from typing import Callable, Optional
+from urllib.parse import urlsplit
 
 import requests
 
 from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
 
-
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_REASONING_FIELDS = ("reasoning", "reasoning_content", "reasoning_details", "reasoning_text", "reasoning_opaque")
+_REASONING_FIELDS = (
+    "reasoning",
+    "reasoning_content",
+    "reasoning_details",
+    "reasoning_text",
+    "reasoning_opaque",
+)
 _REASONING_ONLY_CHUNK_LIMIT = 8_000
 _REASONING_ONLY_CHAR_LIMIT = 32_000
 _DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT = 64
@@ -20,6 +26,27 @@ _DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT = 256
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
 _JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
+_DINGPAN_THINKING_HOST = "dingpan.digitalpower.huawei.com"
+_CODEAGENT_THINKING_HOSTS = frozenset(
+    {
+        "snapengine.cida.cce.pro-szv-g.dragon.tools.huawei.com",
+        "snapengine.cida.cce.pro-szv-y.dragon.tools.huawei.com",
+        "snapengine.codemate.cce.prod-kwe-g.dragon.tools.huawei.com",
+        "snapengine.codemate.cce.prod-kwe-y.dragon.tools.huawei.com",
+    }
+)
+_THINKING_DISABLE_ADAPTERS = frozenset(
+    {
+        "dingpan",
+        "codeagent",
+        "deepseek",
+        "qwen",
+        "glm",
+        "kimi",
+        "minimax",
+        "openai",
+    }
+)
 _STRUCTURED_REPORT_OUTPUT_CONTRACT = """结构化输出要求：
 1. 只输出一个 JSON 对象，不要使用 Markdown、代码块、表格或解释性前后缀。
 2. JSON 对象格式必须为：{"summary":"...", "items":[{"status":"issue|suggestion|non_issue","severity":"critical|high|medium|low","confidence":"high|medium|low","category":"...","location":"...","excerpt":"...","description":"...","impact":"...","suggestion":"..."}]}。
@@ -78,21 +105,29 @@ def _issue_output_limit_instruction(value, subject: str) -> str:
 
 def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _EXECUTION_BOUNDARY_TEMPLATE.format(
-        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复"),
+        issue_output_limit_instruction=_issue_output_limit_instruction(
+            issue_output_limit, "单次回复"
+        ),
         structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
 
 def _image_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _IMAGE_EXECUTION_BOUNDARY_TEMPLATE.format(
-        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单张图片回复"),
+        issue_output_limit_instruction=_issue_output_limit_instruction(
+            issue_output_limit, "单张图片回复"
+        ),
         structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
 
-def _multimodal_document_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
+def _multimodal_document_execution_boundary(
+    issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT,
+) -> str:
     return _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE.format(
-        issue_output_limit_instruction=_issue_output_limit_instruction(issue_output_limit, "单次回复"),
+        issue_output_limit_instruction=_issue_output_limit_instruction(
+            issue_output_limit, "单次回复"
+        ),
         structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
@@ -164,7 +199,9 @@ def run_check(
         ],
         "temperature": 0,
     }
-    _apply_json_object_response_format(payload, api_base=api_base, model_name=model_name)
+    _apply_json_object_response_format(
+        payload, api_base=api_base, model_name=model_name
+    )
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
@@ -263,7 +300,9 @@ def run_image_check(
         ],
         "temperature": 0,
     }
-    _apply_json_object_response_format(payload, api_base=api_base, model_name=model_name)
+    _apply_json_object_response_format(
+        payload, api_base=api_base, model_name=model_name
+    )
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
@@ -339,7 +378,9 @@ def run_multimodal_document_check(
         normalized_images.append(
             {
                 "index": int(image.get("index") or index),
-                "name": str(image.get("name") or image.get("filename") or f"image-{index:04d}"),
+                "name": str(
+                    image.get("name") or image.get("filename") or f"image-{index:04d}"
+                ),
                 "position": str(image.get("position") or "未标注"),
                 "mime_type": str(image.get("mime_type") or ""),
                 "data_url": image_data_url,
@@ -394,7 +435,9 @@ def run_multimodal_document_check(
         ],
         "temperature": 0,
     }
-    _apply_json_object_response_format(payload, api_base=api_base, model_name=model_name)
+    _apply_json_object_response_format(
+        payload, api_base=api_base, model_name=model_name
+    )
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
@@ -552,7 +595,10 @@ def _run_payload_with_retries(
             if (
                 isinstance(exc, _ReasoningOnlyResponseError)
                 and not _thinking_disabled_in_payload(active_payload)
-                and _uses_deepseek_thinking_toggle(endpoint, str(active_payload.get("model") or ""))
+                and _thinking_payload_adapter(
+                    endpoint, str(active_payload.get("model") or "")
+                )
+                in _THINKING_DISABLE_ADAPTERS
             ):
                 active_payload = dict(active_payload)
                 _disable_thinking_in_payload(
@@ -687,7 +733,9 @@ def _run_check_attempt(
                         ssl_verify,
                     )
                 started_at = time.monotonic()
-                response = session.post(endpoint, json=stream_payload, stream=True, **request_kwargs)
+                response = session.post(
+                    endpoint, json=stream_payload, stream=True, **request_kwargs
+                )
                 if stream_trace_enabled:
                     headers = getattr(response, "headers", {}) or {}
                     logger.info(
@@ -696,7 +744,9 @@ def _run_check_attempt(
                         task_id or "-",
                         attempt,
                         getattr(response, "status_code", "-"),
-                        headers.get("content-type") or headers.get("Content-Type") or "-",
+                        headers.get("content-type")
+                        or headers.get("Content-Type")
+                        or "-",
                         int((time.monotonic() - started_at) * 1000),
                     )
                 content = _read_stream_response(
@@ -726,15 +776,25 @@ def _run_check_attempt(
             attempt,
             request_timeout,
         )
-        raise LLMError(f"模型服务处理超时：已连接到服务，但 {request_timeout} 秒内没有返回结果") from exc
+        raise LLMError(
+            f"模型服务处理超时：已连接到服务，但 {request_timeout} 秒内没有返回结果"
+        ) from exc
     except requests.RequestException as exc:
-        logger.warning("LLM 请求失败 request_id=%s task_id=%s attempt=%s error=%s", request_id, task_id or "-", attempt, exc)
+        logger.warning(
+            "LLM 请求失败 request_id=%s task_id=%s attempt=%s error=%s",
+            request_id,
+            task_id or "-",
+            attempt,
+            exc,
+        )
         raise LLMError(f"模型服务请求失败：{exc}") from exc
 
 
 def _chat_completions_endpoint(api_base: str) -> str:
     endpoint = str(api_base or "").strip().rstrip("/")
-    if not endpoint.startswith(("http://", "https://")) or not endpoint.endswith("/chat/completions"):
+    if not endpoint.startswith(("http://", "https://")) or not endpoint.endswith(
+        "/chat/completions"
+    ):
         raise LLMError(
             "模型提供商 API 地址必须填写完整的 OpenAI Chat Completions 请求地址，"
             "例如 https://api.example.com/v1/chat/completions"
@@ -742,38 +802,71 @@ def _chat_completions_endpoint(api_base: str) -> str:
     return endpoint
 
 
-def _disable_thinking_in_payload(payload: dict, *, api_base: str = "", model_name: str = ""):
-    payload["enable_thinking"] = False
-    payload["chat_template_kwargs"] = {"enable_thinking": False}
-    if _uses_deepseek_thinking_toggle(api_base, model_name):
+def _disable_thinking_in_payload(
+    payload: dict, *, api_base: str = "", model_name: str = ""
+):
+    adapter = _thinking_payload_adapter(api_base, model_name)
+    if adapter == "dingpan":
+        chat_template_kwargs = payload.get("chat_template_kwargs")
+        if not isinstance(chat_template_kwargs, dict):
+            chat_template_kwargs = {}
+            payload["chat_template_kwargs"] = chat_template_kwargs
+        chat_template_kwargs["thinking"] = False
+        chat_template_kwargs["enable_thinking"] = False
+        return
+    if adapter == "codeagent":
         payload["thinking"] = {"type": "disabled"}
+        return
+    if adapter in {"deepseek", "glm", "kimi", "minimax"}:
+        payload["thinking"] = {"type": "disabled"}
+        return
+    if adapter == "qwen":
+        payload["enable_thinking"] = False
+        return
+    if adapter == "openai":
+        payload["reasoning_effort"] = "none"
+        return
+
+    payload["enable_thinking"] = False
+    payload["thinking"] = {"type": "disabled"}
+    payload["reasoning_effort"] = "none"
+    payload["chat_template_kwargs"] = {"enable_thinking": False, "thinking": False}
 
 
 def _thinking_disabled_in_payload(payload: dict) -> bool:
     if payload.get("enable_thinking") is False:
         return True
+    if payload.get("reasoning_effort") == "none":
+        return True
     chat_template_kwargs = payload.get("chat_template_kwargs")
-    if isinstance(chat_template_kwargs, dict) and chat_template_kwargs.get("enable_thinking") is False:
+    if isinstance(chat_template_kwargs, dict) and (
+        chat_template_kwargs.get("enable_thinking") is False
+        or chat_template_kwargs.get("thinking") is False
+    ):
         return True
     thinking = payload.get("thinking")
     return isinstance(thinking, dict) and thinking.get("type") == "disabled"
 
 
-def _apply_json_object_response_format(payload: dict, *, api_base: str = "", model_name: str = ""):
+def _apply_json_object_response_format(
+    payload: dict, *, api_base: str = "", model_name: str = ""
+):
     if _uses_json_object_response_format(api_base, model_name):
         payload["response_format"] = dict(_JSON_OBJECT_RESPONSE_FORMAT)
 
 
 def _uses_json_object_response_format(api_base: str, model_name: str) -> bool:
-    return _uses_deepseek_json_object_response_format(api_base, model_name) or _uses_glm_json_object_response_format(
+    return _uses_deepseek_json_object_response_format(
         api_base, model_name
-    )
+    ) or _uses_glm_json_object_response_format(api_base, model_name)
 
 
 def _uses_deepseek_json_object_response_format(api_base: str, model_name: str) -> bool:
     model = str(model_name or "").strip().lower()
     model_id = model.rsplit("/", 1)[-1]
-    compact_model_id = model_id.replace("-", "").replace("_", "").replace(".", "").replace(" ", "")
+    compact_model_id = (
+        model_id.replace("-", "").replace("_", "").replace(".", "").replace(" ", "")
+    )
     if compact_model_id.startswith("deepseek"):
         return True
 
@@ -784,7 +877,9 @@ def _uses_deepseek_json_object_response_format(api_base: str, model_name: str) -
 def _uses_glm_json_object_response_format(api_base: str, model_name: str) -> bool:
     model = str(model_name or "").strip().lower()
     model_id = model.rsplit("/", 1)[-1]
-    compact_model_id = model_id.replace("-", "").replace("_", "").replace(".", "").replace(" ", "")
+    compact_model_id = (
+        model_id.replace("-", "").replace("_", "").replace(".", "").replace(" ", "")
+    )
     if compact_model_id.startswith(("glm", "chatglm")):
         return True
 
@@ -794,7 +889,10 @@ def _uses_glm_json_object_response_format(api_base: str, model_name: str) -> boo
 
 def _is_json_response_format_unsupported_error(error: Exception) -> bool:
     text = str(error or "").lower()
-    if not any(marker in text for marker in ("response_format", "response format", "json_object", "json mode")):
+    if not any(
+        marker in text
+        for marker in ("response_format", "response format", "json_object", "json mode")
+    ):
         return False
     unsupported_markers = (
         "not support",
@@ -816,16 +914,148 @@ def _is_json_response_format_unsupported_error(error: Exception) -> bool:
     return any(marker in text for marker in unsupported_markers)
 
 
-def _uses_deepseek_thinking_toggle(api_base: str, model_name: str) -> bool:
-    model = str(model_name or "").strip().lower().replace("_", "-")
-    model_id = model.rsplit("/", 1)[-1]
-    if model_id in {"deepseek-v4-flash", "deepseek-v4-pro"}:
-        return True
-    if model_id.startswith("deepseek-v4-"):
-        return True
+def _thinking_payload_adapter(api_base: str, model_name: str) -> str | None:
+    hostname = _endpoint_hostname(api_base)
+    if hostname == _DINGPAN_THINKING_HOST:
+        return "dingpan"
+    if hostname in _CODEAGENT_THINKING_HOSTS:
+        return "codeagent"
 
-    endpoint = str(api_base or "").strip().lower()
-    return "api.deepseek.com/" in endpoint and model_id.startswith("deepseek-")
+    model_id = _thinking_model_id(model_name)
+    compact_model_id = _compact_thinking_model_id(model_id)
+    provider = _thinking_provider_from_hostname(hostname)
+    if provider is None:
+        provider = _thinking_provider_from_model(model_id, compact_model_id)
+    if provider == "deepseek":
+        if compact_model_id.startswith(("deepseekreasoner", "deepseekr1")):
+            return "unsupported"
+        if compact_model_id.startswith("deepseekv4"):
+            return "deepseek"
+        return "noop"
+    if provider == "qwen":
+        if (
+            model_id.startswith(
+                ("qwq", "qvq", "qwen3.7-max-preview", "qwen3.7-max-2026-05-17")
+            )
+            or "thinking" in model_id
+        ):
+            return "unsupported"
+        if model_id.startswith("qwen3") and "instruct" in model_id:
+            return "noop"
+        if compact_model_id.startswith("qwen3") or model_id.startswith(
+            ("qwen-max", "qwen-plus", "qwen-flash", "qwen-turbo")
+        ):
+            return "qwen"
+        return "noop"
+    if provider == "glm":
+        if "thinking" in model_id or model_id.startswith("glm-z1"):
+            return "unsupported"
+        if any(
+            model_id == prefix or model_id.startswith((f"{prefix}-", f"{prefix}v"))
+            for prefix in (
+                "glm-4.5",
+                "glm-4.6",
+                "glm-4.7",
+                "glm-5",
+                "glm-5.1",
+                "glm-5.2",
+            )
+        ):
+            return "glm"
+        return "noop"
+    if provider == "kimi":
+        if model_id.startswith(("kimi-k3", "kimi-k2.7-code")) or "thinking" in model_id:
+            return "unsupported"
+        if model_id.startswith(("kimi-k2.5", "kimi-k2.6")):
+            return "kimi"
+        return "noop"
+    if provider == "minimax":
+        if compact_model_id.startswith("minimaxm2"):
+            return "unsupported"
+        if compact_model_id.startswith("minimaxm3"):
+            return "minimax"
+        return "noop"
+    if provider == "openai":
+        if compact_model_id.startswith("gpt56"):
+            return "openai"
+        if _is_openai_o_series_model(model_id) or compact_model_id.startswith(
+            ("gptoss", "gpt5")
+        ):
+            return "unsupported"
+        return "noop"
+    return None
+
+
+def _thinking_model_id(model_name: str) -> str:
+    model = str(model_name or "").strip().lower().replace("_", "-")
+    return model.rsplit("/", 1)[-1]
+
+
+def _compact_thinking_model_id(model_id: str) -> str:
+    return (
+        str(model_id or "")
+        .replace("-", "")
+        .replace("_", "")
+        .replace(".", "")
+        .replace(" ", "")
+    )
+
+
+def _thinking_provider_from_hostname(hostname: str) -> str | None:
+    if hostname == "api.deepseek.com":
+        return "deepseek"
+    if hostname in {
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+    } or hostname.endswith(".maas.aliyuncs.com"):
+        return "qwen"
+    if hostname == "api.moonshot.cn":
+        return "kimi"
+    if (
+        hostname == "bigmodel.cn"
+        or hostname.endswith((".bigmodel.cn", ".zhipuai.cn"))
+        or hostname == "api.z.ai"
+        or hostname == "zhipuai.cn"
+    ):
+        return "glm"
+    if hostname == "api.minimaxi.com":
+        return "minimax"
+    if hostname == "api.openai.com":
+        return "openai"
+    return None
+
+
+def _thinking_provider_from_model(model_id: str, compact_model_id: str) -> str | None:
+    if compact_model_id.startswith("deepseek"):
+        return "deepseek"
+    if model_id.startswith(("qwen", "qwq", "qvq")):
+        return "qwen"
+    if model_id.startswith(("glm", "chatglm")):
+        return "glm"
+    if model_id.startswith(("kimi", "moonshot")):
+        return "kimi"
+    if compact_model_id.startswith("minimax"):
+        return "minimax"
+    if (
+        model_id.startswith(("gpt-", "chatgpt-"))
+        or compact_model_id.startswith("gptoss")
+        or _is_openai_o_series_model(model_id)
+    ):
+        return "openai"
+    return None
+
+
+def _is_openai_o_series_model(model_id: str) -> bool:
+    return len(model_id) > 1 and model_id[0] == "o" and model_id[1].isdigit()
+
+
+def _endpoint_hostname(api_base: str) -> str:
+    try:
+        return (
+            (urlsplit(str(api_base or "").strip()).hostname or "").lower().rstrip(".")
+        )
+    except ValueError:
+        return ""
 
 
 def _read_stream_response(
@@ -871,14 +1101,16 @@ def _read_stream_lines(
 ) -> str:
     parts = []
     diagnostics = _OpenAIChatDiagnostics()
-    reasoning_chunk_limit, reasoning_char_limit = _reasoning_only_limits(thinking_disabled)
+    reasoning_chunk_limit, reasoning_char_limit = _reasoning_only_limits(
+        thinking_disabled
+    )
     for raw_line in lines:
         if not raw_line:
             continue
         if isinstance(raw_line, bytes):
             raw_line = raw_line.decode("utf-8", errors="replace")
         line = raw_line.strip()
-        if not line or line.startswith(":") or line.startswith("event:"):
+        if not line or line.startswith((":", "event:")):
             continue
         if line.startswith("data:"):
             line = line[5:].strip()
@@ -903,7 +1135,9 @@ def _read_stream_lines(
                 task_id or "-",
                 _short_text(line, 1000),
             )
-            raise _StreamParseError(f"模型服务返回了非 JSON 流式分片：{_short_text(line)}") from exc
+            raise _StreamParseError(
+                f"模型服务返回了非 JSON 流式分片：{_short_text(line)}"
+            ) from exc
 
         service_error = _extract_service_error(data)
         if service_error:
@@ -933,7 +1167,9 @@ def _read_stream_lines(
                 diagnostics.log_summary(),
             )
             raise _ReasoningOnlyResponseError(
-                _reasoning_only_limit_message(diagnostics, thinking_disabled=thinking_disabled)
+                _reasoning_only_limit_message(
+                    diagnostics, thinking_disabled=thinking_disabled
+                )
             )
         if stream_trace_enabled:
             logger.info(
@@ -966,7 +1202,11 @@ def _read_stream_lines(
             task_id or "-",
             diagnostics.samples,
         )
-        error_type = _ReasoningOnlyResponseError if diagnostics.reasoning_chunks else _EmptyContentError
+        error_type = (
+            _ReasoningOnlyResponseError
+            if diagnostics.reasoning_chunks
+            else _EmptyContentError
+        )
         raise error_type(_empty_content_message(diagnostics))
     return content
 
@@ -980,14 +1220,18 @@ def _reasoning_only_limits(thinking_disabled: bool) -> tuple[int, int]:
     return _REASONING_ONLY_CHUNK_LIMIT, _REASONING_ONLY_CHAR_LIMIT
 
 
-def _reasoning_only_limit_reached(diagnostics, *, chunk_limit: int, char_limit: int) -> bool:
+def _reasoning_only_limit_reached(
+    diagnostics, *, chunk_limit: int, char_limit: int
+) -> bool:
     return diagnostics.content_chunks == 0 and (
         diagnostics.reasoning_chunks >= chunk_limit
         or diagnostics.reasoning_chars >= char_limit
     )
 
 
-def _reasoning_only_limit_message(diagnostics, *, thinking_disabled: bool = False) -> str:
+def _reasoning_only_limit_message(
+    diagnostics, *, thinking_disabled: bool = False
+) -> str:
     fields = ",".join(sorted(diagnostics.reasoning_fields)) or "reasoning"
     prefix = (
         "模型服务忽略了关闭思考设置，持续返回思考过程但没有正文"
@@ -1000,7 +1244,9 @@ def _reasoning_only_limit_message(diagnostics, *, thinking_disabled: bool = Fals
     )
 
 
-def _raise_for_http_error(response, *, request_id: str = "-", task_id: Optional[int] = None):
+def _raise_for_http_error(
+    response, *, request_id: str = "-", task_id: Optional[int] = None
+):
     if response.status_code >= 400:
         body = _short_text(response.text, 1500)
         logger.warning(
@@ -1097,7 +1343,9 @@ class _OpenAIChatDiagnostics:
         if data.get("model"):
             self.response_model = str(data["model"])
         if isinstance(data.get("usage"), dict):
-            self.usage = _short_text(json.dumps(data["usage"], ensure_ascii=False), 1000)
+            self.usage = _short_text(
+                json.dumps(data["usage"], ensure_ascii=False), 1000
+            )
 
         choices = data.get("choices")
         if not isinstance(choices, list):
@@ -1183,11 +1431,19 @@ def _extract_service_error(data: dict) -> str:
         if isinstance(error, str):
             return _short_text(error)
         if isinstance(error, dict):
-            message = error.get("message") or error.get("msg") or error.get("code") or error
+            message = (
+                error.get("message") or error.get("msg") or error.get("code") or error
+            )
             return _short_text(message)
         return _short_text(error)
     if data.get("success") is False:
-        message = data.get("message") or data.get("msg") or data.get("errorCode") or data.get("code") or data
+        message = (
+            data.get("message")
+            or data.get("msg")
+            or data.get("errorCode")
+            or data.get("code")
+            or data
+        )
         return _short_text(message)
     return ""
 
@@ -1251,10 +1507,14 @@ def _chat_frame_trace(data: dict) -> str:
 
 
 def _empty_content_message(diagnostics: _OpenAIChatDiagnostics) -> str:
-    details = ["按 OpenAI Chat Completions 结构解析后没有得到 choices[0].delta.content 或 choices[0].message.content"]
+    details = [
+        "按 OpenAI Chat Completions 结构解析后没有得到 choices[0].delta.content 或 choices[0].message.content"
+    ]
     if diagnostics.reasoning_chunks:
         fields = ",".join(sorted(diagnostics.reasoning_fields)) or "reasoning"
-        details.append(f"服务返回了 {fields} 字段 {diagnostics.reasoning_chunks} 段/{diagnostics.reasoning_chars} 字")
+        details.append(
+            f"服务返回了 {fields} 字段 {diagnostics.reasoning_chunks} 段/{diagnostics.reasoning_chars} 字"
+        )
     if diagnostics.tool_call_chunks:
         details.append("服务返回了 tool_calls 而不是文本")
     if diagnostics.finish_reasons:
