@@ -551,6 +551,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIsNotNone(proxy_field)
         self.assertIsNone(proxy_input.get("required"))
 
+    def test_admin_settings_puts_network_and_diagnostics_last(self):
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        panels = soup.select("main.page > section.panel.settings-section")
+        panel_titles = [
+            _required_tag(panel.find("h2")).get_text(" ", strip=True).removesuffix(" ?")
+            for panel in panels
+        ]
+        self.assertEqual(panel_titles[-2:], ["系统出站网络", "模型流式定位日志"])
+
     def test_admin_settings_saves_task_limits(self):
         response = self.client.post(
             "/admin/settings",
