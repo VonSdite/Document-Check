@@ -5,9 +5,16 @@
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
+<section class="page-title">
+  <div>
+    <h1>图片检查</h1>
+    <p>结合 PDF 页面、图片资源与文档内容进行多模态检查。</p>
+  </div>
+</section>
+
 <form method="post" enctype="multipart/form-data" class="panel create-panel">
   <div class="panel-head compact-head">
-    <h1>创建图片检查</h1>
+    <h2>新建任务</h2>
   </div>
 
   <div class="quick-form-grid">
@@ -71,7 +78,7 @@
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
-    <h2>我的图片检查任务</h2>
+    <h2>任务记录</h2>
     <div class="task-panel-actions">
       {{ task_bulk.delete_form(tasks, 'user') }}
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">

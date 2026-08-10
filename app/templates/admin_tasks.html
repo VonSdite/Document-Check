@@ -5,12 +5,19 @@
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
+<section class="page-title">
+  <div>
+    <h1>单文档检查</h1>
+    <p>上传文档，选择模型与检查项后创建检查任务。</p>
+  </div>
+</section>
+
 <form method="post" enctype="multipart/form-data" class="panel create-panel"
   data-prevent-double-submit="true"
   data-submitting-label="提交中..."
   data-submitting-message="正在上传并读取文档，请勿重复提交。">
   <div class="panel-head compact-head">
-    <h1>创建单文档检查</h1>
+    <h2>新建任务</h2>
   </div>
 
   <div class="quick-form-grid">
@@ -83,7 +90,7 @@
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
-    <h2>单文档检查任务</h2>
+    <h2>任务记录</h2>
     <div class="task-panel-actions">
       {{ task_bulk.delete_form(tasks, 'admin') }}
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">

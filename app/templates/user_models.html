@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}我的模型 - 文档智能门禁{% endblock %}
+{% block title %}模型管理 - 文档智能门禁{% endblock %}
 
 {% macro provider_modal(dialog_id, title, provider=None, models=[]) %}
 <dialog class="modal provider-modal" id="{{ dialog_id }}">
@@ -74,7 +74,8 @@
 {% block content %}
 <section class="page-title">
   <div>
-    <h1>我的模型</h1>
+    <h1>模型管理</h1>
+    <p>配置用于各类检查任务的模型提供商与模型 ID。</p>
   </div>
   <button class="primary-button" type="button" data-modal-open="provider-modal-new">添加提供商</button>
 </section>

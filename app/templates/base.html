@@ -19,44 +19,44 @@
         </span>
       </a>
       {% if is_admin %}
-      <nav class="nav">
+      <nav class="nav" aria-label="主导航">
         {% if platform_mode %}
-        <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active' if active_nav|default('') == 'overview' or request.endpoint == 'admin_dashboard' else '' }}">统计概览</a>
+        <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active' if active_nav|default('') == 'overview' or request.endpoint == 'admin_dashboard' else '' }}" title="统计概览">概览</a>
         {% endif %}
-        <a href="{{ url_for('admin_tasks') if platform_mode else url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks'] else '' }}">单文档检查</a>
-        <a href="{{ url_for('admin_consistency') if platform_mode else url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}">多文档对照检查</a>
-        <a href="{{ url_for('admin_language_consistency') if platform_mode else url_for('user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_language_consistency'] else '' }}">跨语种检查</a>
-        <a href="{{ url_for('admin_images') if platform_mode else url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}">图片检查</a>
-        <a href="{{ url_for('admin_videos') if platform_mode else url_for('user_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_videos'] else '' }}">视频检查</a>
-        <a href="{{ url_for('admin_models') if platform_mode else url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}">模型管理</a>
+        <a href="{{ url_for('admin_tasks') if platform_mode else url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks'] else '' }}" title="单文档检查">单文档</a>
+        <a href="{{ url_for('admin_consistency') if platform_mode else url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档对照</a>
+        <a href="{{ url_for('admin_language_consistency') if platform_mode else url_for('user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_language_consistency'] else '' }}" title="跨语种文档一致性检查">跨语种</a>
+        <a href="{{ url_for('admin_images') if platform_mode else url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}" title="图片检查">图片</a>
+        <a href="{{ url_for('admin_videos') if platform_mode else url_for('user_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_videos'] else '' }}" title="视频检查">视频</a>
+        <a href="{{ url_for('admin_models') if platform_mode else url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}" title="模型管理">模型</a>
         {% if auth_mode == 'ip' %}
-        <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if is_ip_users_page else '' }}">IP 用户标记</a>
+        <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if is_ip_users_page else '' }}" title="IP 用户标记">IP 用户</a>
         {% endif %}
-        <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] and not is_ip_users_page else '' }}">系统设置</a>
+        <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] and not is_ip_users_page else '' }}" title="系统设置">设置</a>
       </nav>
-      <div class="nav-identity">{{ nav_identity }}</div>
-      {% if platform_mode %}
-      <div class="admin-tag">管理员</div>
-      <form class="logout-form" method="post" action="{{ url_for('admin_logout') }}">
-        <button class="logout-button" type="submit">退出</button>
-      </form>
-      {% endif %}
       {% else %}
-      <nav class="nav">
-        <a href="{{ url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['user_tasks', 'user_new_task'] else '' }}">单文档检查</a>
-        <a href="{{ url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint == 'user_consistency' else '' }}">多文档对照检查</a>
-        <a href="{{ url_for('user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint == 'user_language_consistency' else '' }}">跨语种检查</a>
-        <a href="{{ url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint == 'user_images' else '' }}">图片检查</a>
-        <a href="{{ url_for('user_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint == 'user_videos' else '' }}">视频检查</a>
-        <a href="{{ url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint == 'user_models' else '' }}">模型管理</a>
+      <nav class="nav" aria-label="主导航">
+        <a href="{{ url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['user_tasks', 'user_new_task'] else '' }}" title="单文档检查">单文档</a>
+        <a href="{{ url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint == 'user_consistency' else '' }}" title="多文档对照检查">多文档对照</a>
+        <a href="{{ url_for('user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint == 'user_language_consistency' else '' }}" title="跨语种文档一致性检查">跨语种</a>
+        <a href="{{ url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint == 'user_images' else '' }}" title="图片检查">图片</a>
+        <a href="{{ url_for('user_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint == 'user_videos' else '' }}" title="视频检查">视频</a>
+        <a href="{{ url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint == 'user_models' else '' }}" title="模型管理">模型</a>
       </nav>
-      <div class="nav-identity">{{ nav_identity }}</div>
-      {% if platform_mode and auth_mode == 'saml' %}
-      <form class="logout-form" method="post" action="{{ url_for('saml_logout') }}">
-        <button class="logout-button" type="submit">退出</button>
-      </form>
       {% endif %}
-      {% endif %}
+      <div class="topbar-account">
+        <div class="nav-identity" title="{{ nav_identity }}">{{ nav_identity }}</div>
+        {% if is_admin and platform_mode %}
+        <div class="admin-tag">管理员</div>
+        <form class="logout-form" method="post" action="{{ url_for('admin_logout') }}">
+          <button class="logout-button" type="submit">退出</button>
+        </form>
+        {% elif not is_admin and platform_mode and auth_mode == 'saml' %}
+        <form class="logout-form" method="post" action="{{ url_for('saml_logout') }}">
+          <button class="logout-button" type="submit">退出</button>
+        </form>
+        {% endif %}
+      </div>
     </div>
   </header>
 

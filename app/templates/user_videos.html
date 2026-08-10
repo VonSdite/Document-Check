@@ -5,9 +5,16 @@
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
+<section class="page-title">
+  <div>
+    <h1>视频检查</h1>
+    <p>提取视频关键帧，检查安装调测过程与画面内容。</p>
+  </div>
+</section>
+
 <form method="post" enctype="multipart/form-data" class="panel create-panel" data-require-checks="true" data-check-required-message="请至少选择一个视频检查项。" data-prevent-double-submit="true" data-submitting-label="正在创建..." data-submitting-message="正在上传并抽取视频关键帧，请勿重复提交。">
   <div class="panel-head compact-head">
-    <h1>创建视频检查</h1>
+    <h2>新建任务</h2>
   </div>
 
   <div class="quick-form-grid">
@@ -72,7 +79,7 @@
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
-    <h2>我的视频检查任务</h2>
+    <h2>任务记录</h2>
     <div class="task-panel-actions">
       {{ task_bulk.delete_form(tasks, 'user') }}
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">

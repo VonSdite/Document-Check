@@ -1223,7 +1223,7 @@ def register_routes(app):
             check_item_groups=[
                 {
                     "task_type": DOCUMENT_TASK_TYPE,
-                    "title": "单文档检查-提示词设置",
+                    "title": "单文档检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除。",
                     "new_title": "新增单文档检查项",
                     "name_placeholder": "例如：术语一致性检查",
@@ -1234,7 +1234,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": CONSISTENCY_TASK_TYPE,
-                    "title": "多文档对照检查-提示词设置",
+                    "title": "多文档对照提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。",
                     "new_title": "新增多文档对照项",
                     "name_placeholder": "例如：关键参数一致性检查",
@@ -1245,7 +1245,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
-                    "title": "跨语种文档一致性检查-提示词设置",
+                    "title": "跨语种检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。",
                     "new_title": "新增跨语种检查项",
                     "name_placeholder": "例如：翻译缺失与事实差异检查",
@@ -1256,7 +1256,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": IMAGE_TASK_TYPE,
-                    "title": "图片检查-提示词设置",
+                    "title": "图片检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。",
                     "new_title": "新增图片检查项",
                     "name_placeholder": "例如：端子标识完整性检查",
@@ -1267,7 +1267,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": VIDEO_TASK_TYPE,
-                    "title": "视频检查-提示词设置",
+                    "title": "视频检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。",
                     "new_title": "新增视频检查项",
                     "name_placeholder": "例如：安装力矩与工具使用检查",

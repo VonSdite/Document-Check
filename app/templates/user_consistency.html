@@ -5,9 +5,16 @@
 
 {% block content %}
 {% set submit_disabled = not models or not check_items %}
+<section class="page-title">
+  <div>
+    <h1>多文档对照</h1>
+    <p>以素材文档为依据，核对资料中的偏差、遗漏与冲突。</p>
+  </div>
+</section>
+
 <form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-default-unchecked-checks="true">
   <div class="panel-head compact-head">
-    <h1>创建多文档对照检查</h1>
+    <h2>新建任务</h2>
   </div>
 
   <div class="consistency-form-grid">
@@ -97,7 +104,7 @@
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
-    <h2>多文档对照检查任务</h2>
+    <h2>任务记录</h2>
     <div class="task-panel-actions">
       {{ task_bulk.delete_form(tasks, 'user') }}
     <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">

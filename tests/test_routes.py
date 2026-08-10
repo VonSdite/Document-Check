@@ -388,6 +388,46 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     self.assertIsNotNone(button.get("disabled"))
                     self.assertEqual(button.get_text(" ", strip=True), "批量删除")
 
+    def test_task_pages_use_consistent_navigation_and_heading_hierarchy(self):
+        task_pages = (
+            ("/", "单文档检查", "单文档", "单文档检查"),
+            ("/consistency", "多文档对照", "多文档对照", "多文档对照检查"),
+            ("/language-consistency", "跨语种检查", "跨语种", "跨语种文档一致性检查"),
+            ("/images", "图片检查", "图片", "图片检查"),
+            ("/videos", "视频检查", "视频", "视频检查"),
+        )
+
+        for route, page_title, nav_label, nav_title in task_pages:
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                navigation = _required_tag(soup.find("nav", {"aria-label": "主导航"}))
+                active_link = _required_tag(navigation.select_one("a.active"))
+                create_panel = _required_tag(soup.select_one(".create-panel"))
+                task_panels = [
+                    panel
+                    for panel in soup.select("section.panel")
+                    if panel.select_one("[data-refresh-region='task-list']")
+                ]
+
+                self.assertEqual(_required_tag(soup.select_one(".page-title h1")).get_text(strip=True), page_title)
+                self.assertEqual(active_link.get_text(strip=True), nav_label)
+                self.assertEqual(active_link.get("title"), nav_title)
+                self.assertEqual(_required_tag(create_panel.find("h2")).get_text(strip=True), "新建任务")
+                self.assertEqual(len(task_panels), 1)
+                self.assertEqual(_required_tag(task_panels[0].find("h2")).get_text(strip=True), "任务记录")
+
+    def test_model_page_uses_consistent_navigation_and_title(self):
+        response = self.client.get("/models")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        active_link = _required_tag(soup.select_one("nav[aria-label='主导航'] a.active"))
+        self.assertEqual(_required_tag(soup.select_one(".page-title h1")).get_text(strip=True), "模型管理")
+        self.assertEqual(active_link.get_text(strip=True), "模型")
+        self.assertEqual(active_link.get("title"), "模型管理")
+
     def test_diagnostics_fetch_returns_saved_state(self):
         response = self.client.post(
             "/admin/settings",
@@ -607,20 +647,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         soup = BeautifulSoup(html, "html.parser")
-        self.assertIn("单文档检查-提示词设置", html)
-        self.assertIn("多文档对照检查-提示词设置", html)
-        self.assertIn("跨语种文档一致性检查-提示词设置", html)
-        self.assertIn("图片检查-提示词设置", html)
-        self.assertIn("视频检查-提示词设置", html)
+        self.assertIn("单文档检查提示词", html)
+        self.assertIn("多文档对照提示词", html)
+        self.assertIn("跨语种检查提示词", html)
+        self.assertIn("图片检查提示词", html)
+        self.assertIn("视频检查提示词", html)
         self.assertIn("consistency_check", html)
         self.assertIn("language_consistency_check", html)
         self.assertIn("image_check", html)
         self.assertIn("video_check", html)
-        document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查-提示词设置说明"}))
-        consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照检查-提示词设置说明"}))
-        language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种文档一致性检查-提示词设置说明"}))
-        image_tip = _required_tag(soup.find("button", {"aria-label": "图片检查-提示词设置说明"}))
-        video_tip = _required_tag(soup.find("button", {"aria-label": "视频检查-提示词设置说明"}))
+        document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查提示词说明"}))
+        consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照提示词说明"}))
+        language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种检查提示词说明"}))
+        image_tip = _required_tag(soup.find("button", {"aria-label": "图片检查提示词说明"}))
+        video_tip = _required_tag(soup.find("button", {"aria-label": "视频检查提示词说明"}))
         self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
         self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
         self.assertEqual(language_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。")
@@ -972,7 +1012,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("单文档检查任务", html)
+        self.assertIn("单文档检查", html)
+        self.assertIn("任务记录", html)
         self.assertIn("模型管理", html)
         self.assertNotIn("用户管理", html)
         self.assertNotIn("退出", html)
@@ -984,7 +1025,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         response = self.client.get("/models")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("我的模型", response.get_data(as_text=True))
+        self.assertIn("模型管理", response.get_data(as_text=True))
 
     def test_user_management_route_is_not_registered(self):
         platform_response = self.client.get("/admin/users")
@@ -1820,7 +1861,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn("上传文件过大，当前上传上限为 1MB", html)
-        self.assertIn("创建视频检查", html)
+        self.assertIn("视频检查", html)
+        self.assertIn("新建任务", html)
 
     def test_image_task_detail_hides_extracted_image_list(self):
         with self.app.app_context():
