@@ -418,6 +418,34 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertEqual(len(task_panels), 1)
                 self.assertEqual(_required_tag(task_panels[0].find("h2")).get_text(strip=True), "任务记录")
 
+    def test_admin_metric_groups_are_categorized_and_limited_to_five_items(self):
+        task_groups = (("任务概况", 5), ("AI 结果统计", 4), ("AI 质量指标", 2))
+        pages = (
+            (
+                "/admin",
+                (("使用概况", 2), ("任务类型", 5), ("任务状态", 5), ("AI 结果统计", 4), ("AI 质量指标", 2)),
+            ),
+            ("/admin/tasks", task_groups),
+            ("/admin/consistency", task_groups),
+            ("/admin/language-consistency", task_groups),
+            ("/admin/images", task_groups),
+            ("/admin/videos", task_groups),
+        )
+
+        for route, expected_groups in pages:
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                groups = soup.select(".admin-metric-groups > .admin-metric-group")
+                actual_groups = []
+                for group in groups:
+                    title = _required_tag(group.select_one(".admin-metric-group-title"))
+                    metrics = group.select(".admin-metric-grid > .metric")
+                    self.assertLessEqual(len(metrics), 5)
+                    actual_groups.append((title.get_text(strip=True), len(metrics)))
+                self.assertEqual(tuple(actual_groups), expected_groups)
+
     def test_model_page_uses_consistent_navigation_and_title(self):
         response = self.client.get("/models")
 

@@ -69,19 +69,36 @@
   </div>
 </form>
 
-<section class="metric-grid nine" data-refresh-region="stats" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}" data-refresh-url="{{ refresh_url }}">
-  <div class="metric"><span>全部</span><strong data-task-stat="tasks">{{ totals.tasks }}</strong></div>
-  <div class="metric"><span>排队</span><strong data-task-stat="queued">{{ totals.queued }}</strong></div>
-  <div class="metric"><span>检查中</span><strong data-task-stat="running">{{ totals.running }}</strong></div>
-  <div class="metric"><span>已完成</span><strong data-task-stat="completed">{{ totals.completed }}</strong></div>
-  <div class="metric"><span>用户数</span><strong>{{ totals.users }}</strong></div>
-  <div class="metric"><span>AI问题</span><strong data-admin-report-count="issue">{{ totals.report_items.issue }}</strong></div>
-  <div class="metric"><span>AI建议</span><strong data-admin-report-count="suggestion">{{ totals.report_items.suggestion }}</strong></div>
-  <div class="metric"><span>AI非问题</span><strong data-admin-report-count="non_issue">{{ totals.report_items.non_issue }}</strong></div>
-  <div class="metric"><span>AI合计</span><strong data-admin-report-count="total">{{ totals.report_items.total }}</strong></div>
-  <div class="metric"><span>AI检出率</span><strong data-admin-report-count="issue_detection_rate">{{ totals.report_items.issue_detection_rate }}</strong></div>
-  <div class="metric"><span>AI接纳率</span><strong data-admin-report-count="issue_acceptance_rate">{{ totals.report_items.issue_acceptance_rate }}</strong></div>
-</section>
+<div class="admin-metric-groups" data-refresh-region="stats" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}" data-refresh-url="{{ refresh_url }}">
+  <section class="admin-metric-group">
+    <h2 class="admin-metric-group-title">任务概况</h2>
+    <div class="admin-metric-grid">
+      <div class="metric"><span>全部</span><strong data-task-stat="tasks">{{ totals.tasks }}</strong></div>
+      <div class="metric"><span>排队</span><strong data-task-stat="queued">{{ totals.queued }}</strong></div>
+      <div class="metric"><span>检查中</span><strong data-task-stat="running">{{ totals.running }}</strong></div>
+      <div class="metric"><span>已完成</span><strong data-task-stat="completed">{{ totals.completed }}</strong></div>
+      <div class="metric"><span>用户数</span><strong>{{ totals.users }}</strong></div>
+    </div>
+  </section>
+
+  <section class="admin-metric-group">
+    <h2 class="admin-metric-group-title">AI 结果统计</h2>
+    <div class="admin-metric-grid">
+      <div class="metric"><span>AI问题</span><strong data-admin-report-count="issue">{{ totals.report_items.issue }}</strong></div>
+      <div class="metric"><span>AI建议</span><strong data-admin-report-count="suggestion">{{ totals.report_items.suggestion }}</strong></div>
+      <div class="metric"><span>AI非问题</span><strong data-admin-report-count="non_issue">{{ totals.report_items.non_issue }}</strong></div>
+      <div class="metric"><span>AI合计</span><strong data-admin-report-count="total">{{ totals.report_items.total }}</strong></div>
+    </div>
+  </section>
+
+  <section class="admin-metric-group">
+    <h2 class="admin-metric-group-title">AI 质量指标</h2>
+    <div class="admin-metric-grid">
+      <div class="metric"><span>AI检出率</span><strong data-admin-report-count="issue_detection_rate">{{ totals.report_items.issue_detection_rate }}</strong></div>
+      <div class="metric"><span>AI接纳率</span><strong data-admin-report-count="issue_acceptance_rate">{{ totals.report_items.issue_acceptance_rate }}</strong></div>
+    </div>
+  </section>
+</div>
 
 <section class="panel">
   <div class="panel-head compact-head task-panel-head">
