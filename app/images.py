@@ -181,7 +181,7 @@ def image_items_from_meta(raw: str | None, key: str = "images") -> list[dict]:
                 "mime_type": str(image.get("mime_type") or "application/octet-stream"),
                 "position": str(image.get("position") or ""),
                 "source": str(image.get("source") or ""),
-                "size_bytes": int(image.get("size_bytes") or 0),
+                "size_bytes": _safe_int(image.get("size_bytes")),
                 "kind": str(image.get("kind") or key.rstrip("s") or "image"),
                 "page_number": _safe_int(image.get("page_number")),
             }
@@ -211,7 +211,7 @@ def format_image_document_text(
         lines.extend(["", "document_text: 未提取到可检查文本"])
     lines.extend(["", f"extracted_images: {len(images)}"])
     for image in images:
-        size_kb = (int(image.get("size_bytes") or 0) / 1024)
+        size_kb = _safe_int(image.get("size_bytes")) / 1024
         lines.append(
             f"- {image.get('filename')}: {image.get('position') or '-'} "
             f"({image.get('mime_type') or '-'}, {size_kb:.1f} KB)"
@@ -227,7 +227,7 @@ def format_image_document_text(
                 f"策略：{page_selection.get('strategy', 'full')}"
             )
         for image in page_images:
-            size_kb = (int(image.get("size_bytes") or 0) / 1024)
+            size_kb = _safe_int(image.get("size_bytes")) / 1024
             lines.append(
                 f"- {image.get('filename')}: {image.get('position') or '-'} "
                 f"({image.get('mime_type') or '-'}, {size_kb:.1f} KB)"
@@ -235,10 +235,20 @@ def format_image_document_text(
     return "\n".join(lines).strip()
 
 
-def image_path_from_item(image_folder: Path, item: dict) -> Path:
-    relative_path = Path(str(item.get("relative_path") or item.get("stored_filename") or ""))
-    safe_parts = [part for part in relative_path.parts if part not in {"", ".", ".."}]
-    return image_folder.joinpath(*safe_parts)
+def image_path_from_item(image_folder: Path, item: dict) -> Path | None:
+    raw_path = str(item.get("relative_path") or item.get("stored_filename") or "").strip()
+    if not raw_path:
+        return None
+    relative_path = Path(raw_path)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        return None
+    root = Path(image_folder).resolve()
+    candidate = (root / relative_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
 
 
 def image_to_data_url(path: Path, mime_type: str) -> str:

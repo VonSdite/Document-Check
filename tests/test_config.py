@@ -103,6 +103,72 @@ class ProviderConfigTest(unittest.TestCase):
 
         self.assertEqual(config["server"]["real_ip_header"], "")
 
+    def test_invalid_section_types_fall_back_to_safe_defaults(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "platform": True,
+                    "secret_key": None,
+                    "admin": "invalid",
+                    "server": ["invalid"],
+                    "auth": {
+                        "mode": "trusted_header",
+                        "trusted_header": {
+                            "user_id": "X Invalid Header",
+                            "username": ["invalid"],
+                        },
+                    },
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertTrue(config["secret_key"])
+        self.assertEqual(config["admin"], {"username": "admin", "password": "admin123"})
+        self.assertEqual(config["server"]["host"], "0.0.0.0")
+        self.assertEqual(config["server"]["port"], 31945)
+        self.assertEqual(config["auth"]["mode"], "trusted_header")
+        self.assertEqual(config["auth"]["trusted_header"], {"user_id": "", "username": ""})
+
+    def test_explicit_empty_admin_password_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {"username": "admin", "password": ""},
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["admin"]["password"], "")
+
+    def test_normalization_preserves_unknown_admin_and_server_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "secret_key": "test",
+                    "admin": {
+                        "username": "admin",
+                        "password": "secret",
+                        "note": "保留",
+                    },
+                    "server": {
+                        "host": "127.0.0.1",
+                        "port": 31945,
+                        "extension": {"enabled": True},
+                    },
+                },
+            )
+
+            config = load_local_config(Path(temp_dir))
+
+        self.assertEqual(config["admin"]["note"], "保留")
+        self.assertEqual(config["server"]["extension"], {"enabled": True})
+
     def test_auth_trusted_header_config_is_normalized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             _write_config(

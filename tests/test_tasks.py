@@ -216,8 +216,9 @@ class TaskExecutionTest(unittest.TestCase):
             ("recent.pdf", "recent.pdf", IMAGE_TASK_TYPE, "{}", "completed", now_text()),
             ("running.pdf", "running.pdf", IMAGE_TASK_TYPE, "{}", "running", "2000-01-01 00:00:00"),
         ]
+        task_ids = {}
         for original, stored, task_type, meta, status, finished_at in rows:
-            db.execute(
+            cursor = db.execute(
                 """
                 INSERT INTO tasks(
                     task_type, ip, original_filename, stored_filename, file_type, file_size,
@@ -230,6 +231,28 @@ class TaskExecutionTest(unittest.TestCase):
                 """,
                 (task_type, original, stored, meta, status, finished_at, finished_at, finished_at),
             )
+            task_ids[stored] = int(cursor.lastrowid)
+        rule_id = db.execute(
+            """
+            INSERT INTO report_suppression_rules(
+                task_type, check_code, fingerprint, item_json, created_at, updated_at
+            )
+            VALUES (?, 'image-test', 'fingerprint', '{}', ?, ?)
+            """,
+            (IMAGE_TASK_TYPE, now_text(), now_text()),
+        ).lastrowid
+        db.executemany(
+            """
+            INSERT INTO report_suppression_hits(
+                rule_id, task_id, result_code, item_id, item_json, created_at
+            )
+            VALUES (?, ?, 'image-test', ?, '{}', ?)
+            """,
+            [
+                (rule_id, task_ids["old.pdf"], "old-item", now_text()),
+                (rule_id, task_ids["recent.pdf"], "recent-item", now_text()),
+            ],
+        )
         db.commit()
 
         self.assertEqual(cleanup_expired_task_reports(self.app), 1)
@@ -246,6 +269,11 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertFalse(old_frame_dir.exists())
         self.assertTrue(recent_upload.exists())
         self.assertTrue(running_upload.exists())
+        remaining_hit_task_ids = {
+            row["task_id"]
+            for row in db.execute("SELECT task_id FROM report_suppression_hits").fetchall()
+        }
+        self.assertEqual(remaining_hit_task_ids, {task_ids["recent.pdf"]})
 
     def test_cleanup_expired_task_reports_skips_locked_files(self):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])

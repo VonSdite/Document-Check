@@ -107,22 +107,32 @@ def _dump_config(config: dict) -> str:
 
 def _normalize_config(config: dict) -> dict:
     config["platform"] = _normalize_bool(config.get("platform"), DEFAULT_PLATFORM)
-    config.setdefault("secret_key", secrets.token_urlsafe(32))
-    config.setdefault("admin", {})
-    config["admin"].setdefault("username", "admin")
-    config["admin"].setdefault("password", "admin123")
+    secret_key = config.get("secret_key")
+    if not isinstance(secret_key, str) or not secret_key:
+        config["secret_key"] = secrets.token_urlsafe(32)
+
+    admin = config.get("admin")
+    if not isinstance(admin, dict):
+        admin = {}
+    config["admin"] = admin
+    admin_username = admin.get("username")
+    admin_password = admin.get("password")
+    admin["username"] = "admin" if admin_username is None else str(admin_username)
+    admin["password"] = "admin123" if admin_password is None else str(admin_password)
     config["admin_url"] = _normalize_admin_url(config.get("admin_url", DEFAULT_ADMIN_URL))
-    config.setdefault("server", {})
+
+    server = config.get("server")
+    if not isinstance(server, dict):
+        server = {}
+    config["server"] = server
     default_host = DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
-    config["server"].setdefault("host", default_host)
-    config["server"]["port"] = _normalize_port(config["server"].get("port", DEFAULT_LISTEN_PORT))
-    config["server"]["url_prefix"] = _normalize_url_prefix(config["server"].get("url_prefix", DEFAULT_URL_PREFIX))
-    config["server"]["real_ip_header"] = _normalize_header_name(
-        config["server"].get("real_ip_header", DEFAULT_REAL_IP_HEADER)
-    )
-    config["server"]["proxy_fix"] = _normalize_bool(config["server"].get("proxy_fix"), DEFAULT_PROXY_FIX)
-    config["server"]["max_upload_mb"] = _normalize_positive_int(
-        config["server"].get("max_upload_mb", DEFAULT_MAX_UPLOAD_MB),
+    server["host"] = str(server.get("host") or default_host).strip() or default_host
+    server["port"] = _normalize_port(server.get("port", DEFAULT_LISTEN_PORT))
+    server["url_prefix"] = _normalize_url_prefix(server.get("url_prefix", DEFAULT_URL_PREFIX))
+    server["real_ip_header"] = _normalize_header_name(server.get("real_ip_header", DEFAULT_REAL_IP_HEADER))
+    server["proxy_fix"] = _normalize_bool(server.get("proxy_fix"), DEFAULT_PROXY_FIX)
+    server["max_upload_mb"] = _normalize_positive_int(
+        server.get("max_upload_mb", DEFAULT_MAX_UPLOAD_MB),
         DEFAULT_MAX_UPLOAD_MB,
     )
     config["network"] = normalize_network_config(config.get("network", {}))
@@ -164,8 +174,8 @@ def _normalize_auth(value) -> dict:
     return {
         "mode": mode,
         "trusted_header": {
-            "user_id": str(trusted_header.get("user_id") or "").strip(),
-            "username": str(trusted_header.get("username") or "").strip(),
+            "user_id": _normalize_header_name(trusted_header.get("user_id")),
+            "username": _normalize_header_name(trusted_header.get("username")),
         },
         "saml": {
             "sp_entity_id": str(saml.get("sp_entity_id") or "").strip(),

@@ -200,6 +200,44 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("hit_count", rule_columns)
         self.assertIn("rule_id", hit_columns)
         self.assertIn("item_json", hit_columns)
+        foreign_keys = {
+            (row["table"], row["from"], row["to"], row["on_delete"])
+            for row in db.execute("PRAGMA foreign_key_list(report_suppression_hits)").fetchall()
+        }
+        self.assertIn(("tasks", "task_id", "id", "CASCADE"), foreign_keys)
+
+    def test_init_db_removes_historical_orphaned_report_suppression_hits(self):
+        db = get_db()
+        now = now_text()
+        rule_id = db.execute(
+            """
+            INSERT INTO report_suppression_rules(
+                task_type, check_code, fingerprint, item_json, created_at, updated_at
+            )
+            VALUES (?, 'typo', 'orphan-test', '{}', ?, ?)
+            """,
+            (DOCUMENT_TASK_TYPE, now, now),
+        ).lastrowid
+        db.commit()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute(
+            """
+            INSERT INTO report_suppression_hits(
+                rule_id, task_id, result_code, item_id, item_json, created_at
+            )
+            VALUES (?, 999999, 'typo', 'orphan-item', '{}', ?)
+            """,
+            (rule_id, now),
+        )
+        db.commit()
+        db.execute("PRAGMA foreign_keys = ON")
+
+        init_db()
+
+        orphan = db.execute(
+            "SELECT id FROM report_suppression_hits WHERE task_id = 999999"
+        ).fetchone()
+        self.assertIsNone(orphan)
 
     def test_ip_username_mapping_can_be_saved_and_cleared(self):
         set_ip_username("10.0.0.8", "张三")

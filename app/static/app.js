@@ -1170,22 +1170,21 @@ async function fetchModelsForForm(form, button) {
     return;
   }
 
-  const params = new URLSearchParams({
-    api_base: apiBase,
-    request_timeout: requestTimeout,
-  });
-  if (apiKey) {
-    params.set("api_key", apiKey);
-  }
-
   setFetchButtonLoading(button, true);
   try {
-    const response = await fetch(`${form.dataset.fetchModelsUrl}?${params.toString()}`, {
+    const response = await fetch(form.dataset.fetchModelsUrl, {
+      method: "POST",
       credentials: "same-origin",
       headers: {
         "Accept": "application/json",
+        "Content-Type": "application/json",
         "X-Requested-With": "fetch",
       },
+      body: JSON.stringify({
+        api_base: apiBase,
+        api_key: apiKey,
+        request_timeout: requestTimeout,
+      }),
     });
     const result = await response.json();
     if (!response.ok) {
@@ -1920,12 +1919,20 @@ document.addEventListener("change", (event) => {
 });
 
 function autoRefreshEnabled() {
-  const saved = window.localStorage.getItem(AUTO_REFRESH_KEY);
-  return saved === null || saved === "1";
+  try {
+    const saved = window.localStorage.getItem(AUTO_REFRESH_KEY);
+    return saved === null || saved === "1";
+  } catch {
+    return true;
+  }
 }
 
 function setAutoRefreshEnabled(enabled) {
-  window.localStorage.setItem(AUTO_REFRESH_KEY, enabled ? "1" : "0");
+  try {
+    window.localStorage.setItem(AUTO_REFRESH_KEY, enabled ? "1" : "0");
+  } catch {
+    // Ignore storage errors; auto-refresh still works for the current page.
+  }
 }
 
 function hasActiveRefreshTasks() {

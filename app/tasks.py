@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .db import get_bool_setting, get_db, get_setting, now_text
+from .db import delete_task_record, get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
 from .file_cleanup import (
     describe_failures,
@@ -1522,7 +1522,7 @@ def _multimodal_image_inputs(image_folder: Path, image_items: list[dict]) -> lis
     for fallback_index, image in enumerate(image_items, start=1):
         image_index = int(image.get("_image_index") or fallback_index)
         image_path = image_path_from_item(image_folder, image)
-        if not image_path.is_file():
+        if image_path is None or not image_path.is_file():
             raise RuntimeError(f"提取图片“{image.get('filename') or image_index}”已删除，无法检查")
         mime_type = str(image.get("mime_type") or "")
         if not mime_type.startswith("image/"):
@@ -1919,7 +1919,7 @@ def cleanup_expired_task_reports(app) -> int:
     for task in tasks:
         try:
             _remove_task_artifacts(app, task)
-            db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
+            delete_task_record(db, task["id"])
             deleted += 1
         except TaskArtifactCleanupError as exc:
             app.logger.warning("定期清理检查报告跳过 task_id=%s error=%s", task["id"], exc)
@@ -1994,11 +1994,17 @@ def _task_artifact_paths(app, task) -> list[Path]:
             paths.append(upload_root / stored_filename)
 
     for image in image_items_from_meta(raw_meta):
-        paths.append(image_path_from_item(image_root, image))
+        image_path = image_path_from_item(image_root, image)
+        if image_path is not None:
+            paths.append(image_path)
     for image in image_items_from_meta(raw_meta, "page_images"):
-        paths.append(image_path_from_item(image_root, image))
+        image_path = image_path_from_item(image_root, image)
+        if image_path is not None:
+            paths.append(image_path)
     for image in image_items_from_meta(raw_meta, "frames"):
-        paths.append(image_path_from_item(image_root, image))
+        image_path = image_path_from_item(image_root, image)
+        if image_path is not None:
+            paths.append(image_path)
     return _dedupe_paths(paths)
 
 

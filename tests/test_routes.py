@@ -11,10 +11,12 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from flask import Flask
 from openpyxl import Workbook, load_workbook
+from werkzeug.datastructures import FileStorage
 
 from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
 from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
+from app.documents import DocumentReadError
 from app.formatting import render_markdown
 from app.routes import (
     UPLOAD_PATH_SAFE_CHARS,
@@ -176,6 +178,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
             get_db().commit()
         return f"{provider_id}:0:model-a"
 
+    def _reject_task_inserts(self):
+        with self.app.app_context():
+            db = get_db()
+            db.execute(
+                """
+                CREATE TRIGGER reject_task_insert
+                BEFORE INSERT ON tasks
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced task insert failure');
+                END
+                """
+            )
+            db.commit()
+
     def _insert_task(
         self,
         *,
@@ -229,6 +245,41 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task = get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         self.assertIsNotNone(task)
         self.assertTrue(upload_path.exists())
+
+    def test_admin_delete_task_removes_report_suppression_hits(self):
+        task_id = self._insert_task()
+        with self.app.app_context():
+            db = get_db()
+            now = "2026-05-01 10:05:00"
+            rule_id = db.execute(
+                """
+                INSERT INTO report_suppression_rules(
+                    task_type, check_code, fingerprint, item_json, created_at, updated_at
+                )
+                VALUES (?, 'typo', 'fingerprint', '{}', ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, now, now),
+            ).lastrowid
+            db.execute(
+                """
+                INSERT INTO report_suppression_hits(
+                    rule_id, task_id, result_code, item_id, item_json, created_at
+                )
+                VALUES (?, ?, 'typo', 'item-1', '{}', ?)
+                """,
+                (rule_id, task_id, now),
+            )
+            db.commit()
+
+        response = self.client.post(f"/admin/tasks/{task_id}/delete")
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            hit = get_db().execute(
+                "SELECT id FROM report_suppression_hits WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        self.assertIsNone(hit)
 
     def test_user_bulk_delete_removes_selected_history_tasks(self):
         deletable_task_ids = [
@@ -1136,9 +1187,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "ssl_verify": True,
         }
         with patch("app.routes.fetch_models", return_value=["model-a"]) as mocked_fetch:
-            response = self.client.get(
+            response = self.client.post(
                 "/models/fetch",
-                query_string={
+                json={
                     "api_base": "https://example.test/v1/chat/completions",
                     "api_key": "sk-test",
                     "request_timeout": "30",
@@ -1155,6 +1206,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ssl_verify=True,
             request_timeout=30,
         )
+
+    def test_user_fetch_models_rejects_get_query_parameters(self):
+        response = self.client.get(
+            "/models/fetch",
+            query_string={"api_base": "https://example.test/v1/chat/completions", "api_key": "secret"},
+        )
+
+        self.assertEqual(response.status_code, 405)
 
     def test_admin_settings_creates_consistency_check_item(self):
         response = self.client.post(
@@ -1452,6 +1511,34 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(uploaded_files, [])
 
+    def test_create_task_removes_partial_file_when_upload_save_fails(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+
+        def fail_after_partial_write(_upload, destination, buffer_size=16384):
+            Path(destination).write_bytes(b"partial")
+            raise OSError("disk write failed")
+
+        with patch.object(FileStorage, "save", autospec=True, side_effect=fail_after_partial_write):
+            response = self.client.post(
+                "/",
+                data={
+                    "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                },
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("文档上传或读取失败", response.get_data(as_text=True))
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
     def test_create_image_task_saves_extracted_image_metadata(self):
         model_id = self._configure_provider()
         with self.app.app_context():
@@ -1494,6 +1581,67 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_image_task_removes_files_when_database_insert_fails(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
+            ).fetchone()
+        self._reject_task_inserts()
+
+        response = self.client.post(
+            "/images",
+            data={
+                "document": (_pdf_with_image_bytes(), "diagram.pdf"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("创建图片检查任务失败", response.get_data(as_text=True))
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+        self.assertFalse(image_root.exists() and any(image_root.rglob("*")))
+
+    def test_create_image_task_removes_partial_embedded_images_before_page_fallback(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
+            ).fetchone()
+
+        def fail_after_partial_image(_document_path, _file_type, output_dir, *, source_filename=""):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "partial-embedded.png").write_bytes(_TINY_PNG)
+            raise DocumentReadError("embedded image stream is damaged")
+
+        with patch("app.routes.extract_images", side_effect=fail_after_partial_image):
+            response = self.client.post(
+                "/images",
+                data={
+                    "document": (_pdf_with_image_bytes(), "diagram.pdf"),
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT document_meta_json FROM tasks").fetchone()
+        image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+        meta = json.loads(task["document_meta_json"])
+        generated_files = [path for path in image_root.rglob("*") if path.is_file()]
+        self.assertEqual(meta["images"], [])
+        self.assertEqual(len(meta["page_images"]), 1)
+        self.assertEqual([path.name for path in generated_files], [meta["page_images"][0]["filename"]])
 
     def test_create_image_task_rejects_non_pdf_document(self):
         model_id = self._configure_provider()
@@ -1590,6 +1738,51 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_video_task_removes_files_when_database_insert_fails(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+            ).fetchone()
+        self._reject_task_inserts()
+
+        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            frame_path = output_dir / "0001_t000001000.jpg"
+            frame_path.write_bytes(_TINY_PNG)
+            return (
+                [
+                    {
+                        "filename": frame_path.name,
+                        "mime_type": "image/jpeg",
+                        "position": "00:01.000",
+                        "size_bytes": frame_path.stat().st_size,
+                    }
+                ],
+                {"frame_count": 1, "max_frames": max_frames},
+            )
+
+        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+            response = self.client.post(
+                "/videos",
+                data={
+                    "video": (io.BytesIO(b"video-bytes"), "install.mp4"),
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                },
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("创建视频检查任务失败", response.get_data(as_text=True))
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+        self.assertFalse(image_root.exists() and any(image_root.rglob("*")))
 
     def test_create_video_task_rejects_unsupported_file(self):
         model_id = self._configure_provider()
@@ -3314,6 +3507,33 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn("素材文档：master.xlsx / 资料：related.txt", page.get_data(as_text=True))
 
+    def test_create_consistency_task_removes_files_when_database_insert_fails(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'consistency-cross-document'"
+            ).fetchone()
+        self._reject_task_inserts()
+
+        response = self.client.post(
+            "/consistency",
+            data={
+                "master_documents": (io.BytesIO("素材参数 10A".encode("utf-8")), "master.txt"),
+                "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("创建多文档对照任务失败", response.get_data(as_text=True))
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
     def test_consistency_task_title_uses_document_metadata_for_legacy_task(self):
         task = {
             "original_filename": "多文档对照检查：素材3个 / 资料1个",
@@ -3421,6 +3641,34 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_language_consistency_task_removes_files_when_database_insert_fails(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+            ).fetchone()
+        self._reject_task_inserts()
+
+        response = self.client.post(
+            "/language-consistency",
+            data={
+                "document_a": (io.BytesIO("中文参数 10A".encode("utf-8")), "zh.txt"),
+                "document_b": (io.BytesIO("English parameter 10A".encode("utf-8")), "en.txt"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+                "submission_token": "b" * 32,
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("创建跨语种检查任务失败", response.get_data(as_text=True))
+        with self.app.app_context():
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+        self.assertEqual(total, 0)
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_duplicate_language_consistency_submission_creates_one_task(self):
         model_id = self._configure_provider()

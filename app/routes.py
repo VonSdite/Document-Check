@@ -35,6 +35,7 @@ from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, c
 from .config import save_network_config
 from .db import (
     default_check_item_codes,
+    delete_task_record,
     get_bool_setting,
     get_db,
     get_ip_username,
@@ -730,10 +731,13 @@ def register_routes(app):
     def user_models():
         return _model_management_response(_model_page_identity(), "user_models")
 
-    @app.get("/models/fetch")
+    @app.post("/models/fetch")
     def user_fetch_models():
         _model_page_identity()
-        provider_data = _provider_query_data()
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return {"error": "请求数据格式不正确。"}, 400
+        provider_data = _provider_connection_data(data, "模型拉取")
         if isinstance(provider_data, str):
             return {"error": provider_data}, 400
         network = outbound_network_config()
@@ -756,7 +760,7 @@ def register_routes(app):
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return {"ok": False, "error": "请求数据格式不正确。"}, 400
-        provider_data = _provider_payload_data(data)
+        provider_data = _provider_connection_data(data, "模型测试")
         if isinstance(provider_data, str):
             return {"ok": False, "error": provider_data}, 400
         model_name = str(data.get("model_name") or "").strip()
@@ -1945,25 +1949,10 @@ def _provider_form_data() -> dict | str:
     )
 
 
-def _provider_query_data() -> dict | str:
+def _provider_connection_data(data: dict, name: str) -> dict | str:
     return _normalize_provider_input(
         {
-            "name": "模型拉取",
-            "api_base": request.args.get("api_base", ""),
-            "api_key": request.args.get("api_key", ""),
-            "request_timeout": request.args.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
-            "max_input_chars": str(PROVIDER_INPUT_LIMIT_DEFAULT),
-            "is_active": True,
-            "models": [{"model_name": "placeholder", "force_disable_thinking": False}],
-        },
-        require_models=False,
-    )
-
-
-def _provider_payload_data(data: dict) -> dict | str:
-    return _normalize_provider_input(
-        {
-            "name": "模型测试",
+            "name": name,
             "api_base": data.get("api_base", ""),
             "api_key": data.get("api_key", ""),
             "request_timeout": data.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
@@ -2677,9 +2666,8 @@ def _prepare_document_task_row(
         created_at,
         file_type,
     )
-    upload.save(destination)
+    file_size = _save_uploaded_file(upload, destination)
     saved_paths.append(destination)
-    file_size = os.path.getsize(destination)
     try:
         document_text = extract_text(destination, file_type).strip()
     except DocumentReadError as exc:
@@ -2766,8 +2754,12 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
     created_at = now_text()
     stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
     image_dir = _image_output_dir_for_stored(stored_filename)
-    upload.save(destination)
-    file_size = os.path.getsize(destination)
+    try:
+        file_size = _save_uploaded_file(upload, destination)
+    except Exception:
+        current_app.logger.exception("保存图片检查文档失败")
+        flash("PDF 上传失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
 
     extracted_text = ""
     text_error = ""
@@ -2787,6 +2779,7 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
     except DocumentReadError as exc:
         images = []
         image_error = str(exc)
+        _remove_directory(image_dir)
         current_app.logger.warning(
             "图片检查任务未能提取 PDF 内嵌图片 file=%s error=%s",
             original_filename,
@@ -2847,44 +2840,52 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
         ],
     }
     owner_name = identity.display_name or None
-    db.execute(
-        """
-        INSERT INTO tasks(
-            task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-            original_filename, stored_filename, file_type, file_size,
-            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-            request_timeout, max_input_chars, force_disable_thinking,
-            status, progress, created_at, updated_at
+    try:
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+                original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+                request_timeout, max_input_chars, force_disable_thinking,
+                status, progress, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            """,
+            (
+                IMAGE_TASK_TYPE,
+                identity.ip,
+                owner_name,
+                identity.subject,
+                owner_name,
+                identity.source,
+                original_filename,
+                stored_filename,
+                file_type,
+                file_size,
+                prepared_document_text,
+                json.dumps(document_meta, ensure_ascii=False),
+                json.dumps(check_ids, ensure_ascii=False),
+                json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_name"],
+                model["model_name"],
+                model["api_base"],
+                model["api_key"],
+                model["request_timeout"],
+                model["max_input_chars"],
+                1 if model["force_disable_thinking"] else 0,
+                created_at,
+                created_at,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-        """,
-        (
-            IMAGE_TASK_TYPE,
-            identity.ip,
-            owner_name,
-            identity.subject,
-            owner_name,
-            identity.source,
-            original_filename,
-            stored_filename,
-            file_type,
-            file_size,
-            prepared_document_text,
-            json.dumps(document_meta, ensure_ascii=False),
-            json.dumps(check_ids, ensure_ascii=False),
-            json.dumps(check_snapshots, ensure_ascii=False),
-            model["provider_name"],
-            model["model_name"],
-            model["api_base"],
-            model["api_key"],
-            model["request_timeout"],
-            model["max_input_chars"],
-            1 if model["force_disable_thinking"] else 0,
-            created_at,
-            created_at,
-        ),
-    )
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        _remove_uploaded_file(destination)
+        _remove_directory(image_dir)
+        current_app.logger.exception("创建图片检查任务失败")
+        flash("创建图片检查任务失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
     return redirect(url_for(_task_list_endpoint(admin_created, IMAGE_TASK_TYPE)))
 
 
@@ -2918,8 +2919,12 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
     created_at = now_text()
     stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
     frame_dir = _image_output_dir_for_stored(stored_filename)
-    upload.save(destination)
-    file_size = os.path.getsize(destination)
+    try:
+        file_size = _save_uploaded_file(upload, destination)
+    except Exception:
+        current_app.logger.exception("保存视频检查文件失败")
+        flash("视频上传失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
 
     try:
         frames, frame_selection = extract_video_frames(
@@ -2962,44 +2967,52 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
         ],
     }
     owner_name = identity.display_name or None
-    db.execute(
-        """
-        INSERT INTO tasks(
-            task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-            original_filename, stored_filename, file_type, file_size,
-            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-            request_timeout, max_input_chars, force_disable_thinking,
-            status, progress, created_at, updated_at
+    try:
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+                original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+                request_timeout, max_input_chars, force_disable_thinking,
+                status, progress, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            """,
+            (
+                VIDEO_TASK_TYPE,
+                identity.ip,
+                owner_name,
+                identity.subject,
+                owner_name,
+                identity.source,
+                original_filename,
+                stored_filename,
+                file_type,
+                file_size,
+                prepared_document_text,
+                json.dumps(document_meta, ensure_ascii=False),
+                json.dumps(check_ids, ensure_ascii=False),
+                json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_name"],
+                model["model_name"],
+                model["api_base"],
+                model["api_key"],
+                model["request_timeout"],
+                model["max_input_chars"],
+                1 if model["force_disable_thinking"] else 0,
+                created_at,
+                created_at,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-        """,
-        (
-            VIDEO_TASK_TYPE,
-            identity.ip,
-            owner_name,
-            identity.subject,
-            owner_name,
-            identity.source,
-            original_filename,
-            stored_filename,
-            file_type,
-            file_size,
-            prepared_document_text,
-            json.dumps(document_meta, ensure_ascii=False),
-            json.dumps(check_ids, ensure_ascii=False),
-            json.dumps(check_snapshots, ensure_ascii=False),
-            model["provider_name"],
-            model["model_name"],
-            model["api_base"],
-            model["api_key"],
-            model["request_timeout"],
-            model["max_input_chars"],
-            1 if model["force_disable_thinking"] else 0,
-            created_at,
-            created_at,
-        ),
-    )
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        _remove_uploaded_file(destination)
+        _remove_directory(frame_dir)
+        current_app.logger.exception("创建视频检查任务失败")
+        flash("创建视频检查任务失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
     return redirect(url_for(_task_list_endpoint(admin_created, VIDEO_TASK_TYPE)))
 
 
@@ -3036,6 +3049,11 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
         _remove_uploaded_files(saved_paths)
         flash(f"文档读取失败：{exc}", "error")
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+    except Exception:
+        _remove_uploaded_files(saved_paths)
+        current_app.logger.exception("准备多文档对照任务失败")
+        flash("文档上传失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     validation_text = _compose_consistency_validation_text(
         [
@@ -3068,44 +3086,51 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
     original_filename = _consistency_title_from_groups(document_meta["groups"])
     owner_name = identity.display_name or None
 
-    db.execute(
-        """
-        INSERT INTO tasks(
-            task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-            original_filename, stored_filename, file_type, file_size,
-            document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-            request_timeout, max_input_chars, force_disable_thinking,
-            status, progress, created_at, updated_at
+    try:
+        db.execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+                original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
+                request_timeout, max_input_chars, force_disable_thinking,
+                status, progress, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            """,
+            (
+                CONSISTENCY_TASK_TYPE,
+                identity.ip,
+                owner_name,
+                identity.subject,
+                owner_name,
+                identity.source,
+                original_filename,
+                first_file["stored_filename"],
+                "多文档",
+                file_size,
+                validation_text,
+                json.dumps(document_meta, ensure_ascii=False),
+                json.dumps(check_ids, ensure_ascii=False),
+                json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_name"],
+                model["model_name"],
+                model["api_base"],
+                model["api_key"],
+                model["request_timeout"],
+                model["max_input_chars"],
+                1 if model["force_disable_thinking"] else 0,
+                created_at,
+                created_at,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-        """,
-        (
-            CONSISTENCY_TASK_TYPE,
-            identity.ip,
-            owner_name,
-            identity.subject,
-            owner_name,
-            identity.source,
-            original_filename,
-            first_file["stored_filename"],
-            "多文档",
-            file_size,
-            validation_text,
-            json.dumps(document_meta, ensure_ascii=False),
-            json.dumps(check_ids, ensure_ascii=False),
-            json.dumps(check_snapshots, ensure_ascii=False),
-            model["provider_name"],
-            model["model_name"],
-            model["api_base"],
-            model["api_key"],
-            model["request_timeout"],
-            model["max_input_chars"],
-            1 if model["force_disable_thinking"] else 0,
-            created_at,
-            created_at,
-        ),
-    )
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        _remove_uploaded_files(saved_paths)
+        current_app.logger.exception("创建多文档对照任务失败")
+        flash("创建多文档对照任务失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
     return redirect(url_for(_task_list_endpoint(admin_created, CONSISTENCY_TASK_TYPE)))
 
 
@@ -3146,6 +3171,11 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
     except DocumentReadError as exc:
         _remove_uploaded_files(saved_paths)
         flash(f"文档读取失败：{exc}", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+    except Exception:
+        _remove_uploaded_files(saved_paths)
+        current_app.logger.exception("准备跨语种检查任务失败")
+        flash("文档上传失败，请稍后再试。", "error")
         return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
 
     validation_text = _compose_language_consistency_validation_text(file_a, file_b)
@@ -3212,6 +3242,7 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
                 created_at,
             ),
         )
+        db.commit()
     except sqlite3.IntegrityError:
         db.rollback()
         duplicate = _language_consistency_submission_exists(db, identity.subject, submission_token)
@@ -3219,8 +3250,15 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
         if duplicate:
             flash("该跨语种检查任务已提交，无需重复提交。", "success")
             return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-        raise
-    db.commit()
+        current_app.logger.exception("创建跨语种检查任务失败")
+        flash("创建跨语种检查任务失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+    except Exception:
+        db.rollback()
+        _remove_uploaded_files(saved_paths)
+        current_app.logger.exception("创建跨语种检查任务失败")
+        flash("创建跨语种检查任务失败，请稍后再试。", "error")
+        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
     return redirect(url_for(_task_list_endpoint(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)))
 
 
@@ -3294,9 +3332,8 @@ def _save_consistency_upload_group(uploads: list, ip: str, created_at: str, labe
         file_type = extension_of(upload.filename)
         original_filename = _clean_upload_filename(upload.filename, file_type)
         stored_filename, destination = _upload_destination(original_filename, ip, created_at, file_type)
-        upload.save(destination)
+        file_size = _save_uploaded_file(upload, destination)
         saved_paths.append(destination)
-        file_size = os.path.getsize(destination)
         try:
             text = extract_text(destination, file_type).strip()
         except DocumentReadError as exc:
@@ -3548,7 +3585,7 @@ def _delete_task(task):
         return False
     for image_dir in image_dirs:
         _remove_empty_directory(image_dir)
-    db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
+    delete_task_record(db, task["id"])
     db.commit()
     return True
 
@@ -3612,6 +3649,15 @@ def _remove_uploaded_file(path: Path):
     return ok, error
 
 
+def _save_uploaded_file(upload, destination: Path) -> int:
+    try:
+        upload.save(destination)
+        return os.path.getsize(destination)
+    except Exception:
+        _remove_uploaded_file(destination)
+        raise
+
+
 def _remove_uploaded_files(paths: list[Path]):
     failures = []
     for path in paths:
@@ -3649,7 +3695,9 @@ def _task_upload_paths(task) -> list[Path]:
     else:
         paths.append(_task_upload_path(task))
     for image in _task_image_items(task):
-        paths.append(image_path_from_item(_image_folder(), image))
+        image_path = image_path_from_item(_image_folder(), image)
+        if image_path is not None:
+            paths.append(image_path)
     return paths
 
 

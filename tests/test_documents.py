@@ -16,6 +16,7 @@ from app.images import (
     candidate_pdf_pages_for_image_check,
     extract_images,
     format_image_document_text,
+    image_path_from_item,
     image_items_from_meta,
     select_pdf_page_numbers,
 )
@@ -187,6 +188,24 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0]["filename"], "0001_page001-image001.png")
         self.assertEqual(images[0]["relative_path"], "task/0001_page001-image001.png")
+
+    def test_image_items_from_meta_tolerates_invalid_size(self):
+        raw = '{"images":[{"filename":"image.png","relative_path":"task/image.png","size_bytes":"invalid"}]}'
+
+        images = image_items_from_meta(raw)
+
+        self.assertEqual(images[0]["size_bytes"], 0)
+
+    def test_image_path_rejects_absolute_and_parent_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            self.assertIsNone(image_path_from_item(root, {"relative_path": "/etc/passwd"}))
+            self.assertIsNone(image_path_from_item(root, {"relative_path": "../outside.png"}))
+            self.assertEqual(
+                image_path_from_item(root, {"relative_path": "task/image.png"}),
+                root.resolve() / "task" / "image.png",
+            )
 
     def test_formats_page_screenshots_in_image_document_text(self):
         text = format_image_document_text(

@@ -152,6 +152,7 @@ def init_db():
             item_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
             FOREIGN KEY(rule_id) REFERENCES report_suppression_rules(id) ON DELETE CASCADE,
+            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
             UNIQUE(rule_id, task_id, result_code, item_id)
         );
 
@@ -213,6 +214,7 @@ def init_db():
     )
     _migrate_task_owners(db)
     _migrate_model_thinking_defaults(db)
+    _cleanup_orphaned_report_suppression_hits(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
 
@@ -281,6 +283,22 @@ def _migrate_model_thinking_defaults(db):
         "INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)",
         (MODEL_THINKING_DEFAULT_MIGRATION_KEY, now),
     )
+
+
+def _cleanup_orphaned_report_suppression_hits(db):
+    db.execute(
+        """
+        DELETE FROM report_suppression_hits
+        WHERE NOT EXISTS (
+            SELECT 1 FROM tasks WHERE tasks.id = report_suppression_hits.task_id
+        )
+        """
+    )
+
+
+def delete_task_record(db, task_id: int):
+    db.execute("DELETE FROM report_suppression_hits WHERE task_id = ?", (task_id,))
+    return db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
 
 def set_setting(key: str, value):
