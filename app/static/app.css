@@ -707,7 +707,7 @@ td {
 
 .settings-concurrency-form {
   display: grid;
-  grid-template-columns: repeat(3, minmax(180px, 1fr)) auto;
+  grid-template-columns: repeat(3, minmax(180px, 1fr)) 128px;
   gap: 14px;
   align-items: end;
 }
@@ -790,7 +790,17 @@ td {
 }
 
 .settings-save-button {
+  width: 128px;
   min-width: 128px;
+}
+
+.settings-concurrency-form .settings-save-button {
+  grid-column: 4;
+  grid-row: 2;
+}
+
+.settings-concurrency-form > label:nth-of-type(n + 4) {
+  grid-row: 2;
 }
 
 .settings-new-check-form {
@@ -986,17 +996,17 @@ td {
   border-top: 3px solid #dce8f6;
 }
 
-.create-panel > .panel-head:first-child {
+.create-panel > .panel-head {
   margin-bottom: 18px;
 }
 
-.create-panel > .panel-head:first-child h2 {
+.create-panel > .panel-head h2 {
   display: inline-flex;
   align-items: center;
   gap: 9px;
 }
 
-.create-panel > .panel-head:first-child h2::before {
+.create-panel > .panel-head h2::before {
   content: "";
   width: 4px;
   height: 17px;
@@ -1217,7 +1227,7 @@ td {
 .file-upload-control.has-file {
   border-color: #8fb2df;
   background: #eef6ff;
-  box-shadow: inset 4px 0 0 var(--primary), 0 0 0 1px rgba(91, 130, 189, 0.08);
+  box-shadow: 0 0 0 1px rgba(91, 130, 189, 0.08);
 }
 
 .file-upload-control.has-file:hover {
@@ -1534,17 +1544,13 @@ td {
   background: #fff;
   color: var(--text);
   font-weight: 700;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .check-chip:hover,
 .check-chip:has(input:checked) {
   border-color: #bfd2ec;
   background: #f5f8fd;
-}
-
-.check-chip:has(input:checked) {
-  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 .title-with-help h2 {
