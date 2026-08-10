@@ -569,8 +569,38 @@ td {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
-.metric-grid.nine {
-  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+.admin-metric-groups {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.admin-metric-group {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgba(34, 60, 98, 0.045);
+}
+
+.admin-metric-group-title {
+  margin: 0 0 12px 2px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.admin-metric-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.admin-metric-grid > .metric {
+  flex: 1 1 calc((100% - 56px) / 5);
+  min-width: calc((100% - 56px) / 5);
+  background: var(--panel-soft);
+  box-shadow: none;
 }
 
 .metric,
@@ -605,13 +635,6 @@ td {
 
 .metric.slim strong {
   font-size: 22px;
-}
-
-.overview-status-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 14px;
-  margin: -8px 0 22px;
 }
 
 .overview-grid {
