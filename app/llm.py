@@ -805,31 +805,13 @@ def _chat_completions_endpoint(api_base: str) -> str:
 def _disable_thinking_in_payload(
     payload: dict, *, api_base: str = "", model_name: str = ""
 ):
-    # adapter = _thinking_payload_adapter(api_base, model_name)
-    # if adapter == "dingpan":
-    #     chat_template_kwargs = payload.get("chat_template_kwargs")
-    #     if not isinstance(chat_template_kwargs, dict):
-    #         chat_template_kwargs = {}
-    #         payload["chat_template_kwargs"] = chat_template_kwargs
-    #     chat_template_kwargs["thinking"] = False
-    #     chat_template_kwargs["enable_thinking"] = False
-    #     return
-    # if adapter == "codeagent":
-    #     payload["thinking"] = {"type": "disabled"}
-    #     return
-    # if adapter in {"deepseek", "glm", "kimi", "minimax"}:
-    #     payload["thinking"] = {"type": "disabled"}
-    #     return
-    # if adapter == "qwen":
-    #     payload["enable_thinking"] = False
-    #     return
-    # if adapter == "openai":
-    #     payload["reasoning_effort"] = "none"
-    #     return
     payload["enable_thinking"] = False
     payload["thinking"] = {"type": "disabled"}
     payload["reasoning_effort"] = "none"
-    payload["chat_template_kwargs"] = {"enable_thinking": False, "thinking": False}
+    payload["chat_template_kwargs"] = {
+        "enable_thinking": False,
+        "thinking": False,
+    }
 
 
 def _thinking_disabled_in_payload(payload: dict) -> bool:

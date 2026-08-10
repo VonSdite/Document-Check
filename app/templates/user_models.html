@@ -29,7 +29,7 @@
           <div>
             <span class="field-with-help">
               <span class="field-label">模型 ID 列表</span>
-              <span class="help-tip" tabindex="0" data-tip="每行模型会保存名称和是否强制关闭思考。钉盘和 CodeAgent 按域名适配；其他接口按官方域名和模型 ID 特征发送厂商参数；其余型号同时发送全部兼容关闭参数。">?</span>
+              <span class="help-tip" tabindex="0" data-tip="每行模型会保存名称和是否强制关闭思考。开启后会同时发送全部兼容关闭参数。">?</span>
             </span>
           </div>
           <div class="model-editor-actions">
@@ -49,7 +49,7 @@
                 <th>
                   <span class="table-heading-help">
                     强制关闭思考
-                    <span class="help-tip" tabindex="0" data-tip="开启后按域名和模型 ID 适配：DeepSeek V4、GLM 4.5-5.2、Kimi K2.5/K2.6、MiniMax M3 使用 thinking.type=disabled；Qwen 混合思考模型使用 enable_thinking=false；OpenAI GPT-5.6 使用 reasoning_effort=none；钉盘和 CodeAgent 使用各自域名规则；其余型号同时发送全部兼容关闭参数。">?</span>
+                    <span class="help-tip" tabindex="0" data-tip="开启后统一发送 enable_thinking=false、thinking.type=disabled、reasoning_effort=none，以及 chat_template_kwargs 中的两个关闭开关。">?</span>
                   </span>
                 </th>
                 <th class="right">操作</th>

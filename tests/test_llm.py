@@ -44,6 +44,18 @@ class FakeSession:
 
 
 class LLMResponseParsingTest(unittest.TestCase):
+    def assert_all_thinking_disable_flags(self, payload):
+        self.assertIs(payload["enable_thinking"], False)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertEqual(
+            payload["chat_template_kwargs"],
+            {
+                "enable_thinking": False,
+                "thinking": False,
+            },
+        )
+
     def test_requires_full_chat_completions_endpoint(self):
         with self.assertRaisesRegex(llm.LLMError, "chat/completions"):
             llm._chat_completions_endpoint("http://example.test/v1")
@@ -507,9 +519,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertNotIn("enable_thinking", first_payload)
         self.assertNotIn("chat_template_kwargs", first_payload)
         self.assertNotIn("thinking", first_payload)
-        self.assertEqual(second_payload["thinking"], {"type": "disabled"})
-        self.assertNotIn("enable_thinking", second_payload)
-        self.assertNotIn("chat_template_kwargs", second_payload)
+        self.assert_all_thinking_disable_flags(second_payload)
         self.assertIn("下一次重试自动关闭思考", "\n".join(logs.output))
         sleep.assert_called_once_with(1)
 
@@ -555,12 +565,8 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertTrue(first_response.closed)
         self.assertTrue(second_response.closed)
         self.assertEqual(len(fake_session.calls), 2)
-        self.assertEqual(fake_session.calls[0][1]["json"]["thinking"], {"type": "disabled"})
-        self.assertEqual(fake_session.calls[1][1]["json"]["thinking"], {"type": "disabled"})
-        self.assertNotIn("enable_thinking", fake_session.calls[0][1]["json"])
-        self.assertNotIn("chat_template_kwargs", fake_session.calls[0][1]["json"])
-        self.assertNotIn("enable_thinking", fake_session.calls[1][1]["json"])
-        self.assertNotIn("chat_template_kwargs", fake_session.calls[1][1]["json"])
+        self.assert_all_thinking_disable_flags(fake_session.calls[0][1]["json"])
+        self.assert_all_thinking_disable_flags(fake_session.calls[1][1]["json"])
         sleep.assert_called_once_with(1)
 
     def test_generic_reasoning_only_retry_does_not_add_deepseek_thinking_flags(self):
@@ -703,7 +709,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(payload["reasoning_effort"], "none")
 
-    def test_force_disable_thinking_adds_deepseek_payload_flag(self):
+    def test_force_disable_thinking_adds_all_payload_flags_for_deepseek(self):
         fake_session = FakeSession(
             [
                 FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
@@ -723,22 +729,20 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         self.assertEqual(result, "完成")
         payload = fake_session.calls[0][1]["json"]
-        self.assertEqual(payload["thinking"], {"type": "disabled"})
-        self.assertNotIn("enable_thinking", payload)
-        self.assertNotIn("chat_template_kwargs", payload)
+        self.assert_all_thinking_disable_flags(payload)
 
-    def test_force_disable_thinking_uses_model_name_adapter_on_other_hosts(self):
+    def test_force_disable_thinking_classifies_models_but_adds_all_payload_flags(self):
         cases = (
-            ("DeepSeek-V4-Flash-H200", "deepseek", {"thinking": {"type": "disabled"}}),
-            ("qwen3.5-plus", "qwen", {"enable_thinking": False}),
-            ("glm-4.7", "glm", {"thinking": {"type": "disabled"}}),
-            ("glm-4.5v", "glm", {"thinking": {"type": "disabled"}}),
-            ("kimi-k2.6", "kimi", {"thinking": {"type": "disabled"}}),
-            ("MiniMax-M3", "minimax", {"thinking": {"type": "disabled"}}),
-            ("gpt-5.6-sol", "openai", {"reasoning_effort": "none"}),
+            ("DeepSeek-V4-Flash-H200", "deepseek"),
+            ("qwen3.5-plus", "qwen"),
+            ("glm-4.7", "glm"),
+            ("glm-4.5v", "glm"),
+            ("kimi-k2.6", "kimi"),
+            ("MiniMax-M3", "minimax"),
+            ("gpt-5.6-sol", "openai"),
         )
 
-        for model_name, adapter, expected in cases:
+        for model_name, adapter in cases:
             with self.subTest(model_name=model_name):
                 api_base = "https://proxy.example.test/v1/chat/completions"
                 self.assertEqual(
@@ -753,7 +757,7 @@ class LLMResponseParsingTest(unittest.TestCase):
                     model_name=model_name,
                 )
 
-                self.assertEqual(payload, expected)
+                self.assert_all_thinking_disable_flags(payload)
 
     def test_force_disable_thinking_uses_all_fallback_flags_without_confirmed_official_disable(self):
         cases = (
@@ -829,7 +833,7 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_reasoning_effort_none_counts_as_disabled_thinking(self):
         self.assertTrue(llm._thinking_disabled_in_payload({"reasoning_effort": "none"}))
 
-    def test_force_disable_thinking_uses_dingpan_chat_template_flag(self):
+    def test_force_disable_thinking_adds_all_payload_flags_for_dingpan(self):
         fake_session = FakeSession(
             [
                 FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
@@ -849,12 +853,7 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         self.assertEqual(result, "完成")
         payload = fake_session.calls[0][1]["json"]
-        self.assertEqual(
-            payload["chat_template_kwargs"],
-            {"thinking": False, "enable_thinking": False},
-        )
-        self.assertNotIn("enable_thinking", payload)
-        self.assertNotIn("thinking", payload)
+        self.assert_all_thinking_disable_flags(payload)
 
     def test_force_disable_thinking_uses_codeagent_adapter_for_snapengine_hosts(self):
         hosts = (
@@ -893,9 +892,7 @@ class LLMResponseParsingTest(unittest.TestCase):
 
                 self.assertEqual(result, "完成")
                 payload = fake_session.calls[0][1]["json"]
-                self.assertEqual(payload["thinking"], {"type": "disabled"})
-                self.assertNotIn("enable_thinking", payload)
-                self.assertNotIn("chat_template_kwargs", payload)
+                self.assert_all_thinking_disable_flags(payload)
 
     def test_dingpan_reasoning_only_retry_uses_chat_template_thinking_flag(self):
         fake_session = FakeSession(
@@ -927,14 +924,9 @@ class LLMResponseParsingTest(unittest.TestCase):
         first_payload = fake_session.calls[0][1]["json"]
         second_payload = fake_session.calls[1][1]["json"]
         self.assertNotIn("chat_template_kwargs", first_payload)
-        self.assertEqual(
-            second_payload["chat_template_kwargs"],
-            {"thinking": False, "enable_thinking": False},
-        )
-        self.assertNotIn("enable_thinking", second_payload)
-        self.assertNotIn("thinking", second_payload)
+        self.assert_all_thinking_disable_flags(second_payload)
 
-    def test_dingpan_thinking_flag_preserves_other_chat_template_kwargs(self):
+    def test_force_disable_thinking_replaces_existing_chat_template_kwargs(self):
         payload = {"chat_template_kwargs": {"some_option": "keep"}}
 
         llm._disable_thinking_in_payload(
@@ -943,16 +935,7 @@ class LLMResponseParsingTest(unittest.TestCase):
             model_name="qwen-model",
         )
 
-        self.assertEqual(
-            payload,
-            {
-                "chat_template_kwargs": {
-                    "some_option": "keep",
-                    "thinking": False,
-                    "enable_thinking": False,
-                }
-            },
-        )
+        self.assert_all_thinking_disable_flags(payload)
 
     def test_run_image_check_sends_multimodal_chat_content(self):
         fake_session = FakeSession(
