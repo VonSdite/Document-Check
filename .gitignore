@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .codegraph/
+.uv-cache/
 
 instance/
 uploads/
@@ -13,6 +14,10 @@ uploads/
 *.db
 data/sensitive_terms.*
 data/sensitive_words.*
+data/common_terms.*
+data/common_words.*
+data/常用词检查表.*
+data/常用词表.*
 
 .env
 config.yaml

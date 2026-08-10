@@ -39,6 +39,7 @@ def create_app():
         UPLOAD_FOLDER=str(root_dir / "instance" / "uploads"),
         IMAGE_FOLDER=str(root_dir / "instance" / "extracted_images"),
         SENSITIVE_TERMS_PATH=str(root_dir / "instance" / "sensitive_terms.xlsx"),
+        COMMON_TERMS_PATH=str(root_dir / "instance" / "common_terms.xlsx"),
         LOG_FILE=str(root_dir / "instance" / "logs" / "app.log"),
         MAX_UPLOAD_MB=server_config["max_upload_mb"],
         MAX_CONTENT_LENGTH=server_config["max_upload_mb"] * 1024 * 1024,

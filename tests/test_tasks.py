@@ -9,6 +9,7 @@ from unittest.mock import patch
 from flask import Flask
 from openpyxl import Workbook
 
+from app.common_terms import COMMON_TERMS_CHECK_CODE
 from app.db import get_db, init_db, now_text, set_setting
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
@@ -406,6 +407,56 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("新称", first_item["suggestion"])
         self.assertIn("文件：doc.txt", first_item["location"])
         self.assertIn("页码：第2页", first_item["location"])
+
+    def test_common_terms_check_uses_local_rules_without_llm(self):
+        terms_path = Path(self.temp_dir.name) / "common_terms.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        assert sheet is not None
+        sheet.append(["常用词", "常见错误/不推荐用法"])
+        sheet.append(["OpenAI", "Open AI"])
+        sheet.append(["登录", "登陆"])
+        workbook.save(terms_path)
+        workbook.close()
+        self.app.config["COMMON_TERMS_PATH"] = str(terms_path)
+
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                checks_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'doc.txt', 'doc.txt', 'txt', 1,
+                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (json.dumps([1]), created_at, created_at),
+        )
+        db.commit()
+        task = db.execute("SELECT * FROM tasks").fetchone()
+        check_items = [{"code": COMMON_TERMS_CHECK_CODE, "name": "常用词检查", "prompt": "本地检查"}]
+        document_text = "file: doc.txt\n\n[第2页]\nOpenAI 正确，openai 错误，Open AI 不推荐，请勿写成登陆。"
+
+        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+            results = _run_check_items_concurrently(
+                self.app,
+                task,
+                check_items,
+                document_text,
+                max_workers=1,
+                stream_trace_enabled=False,
+            )
+
+        self.assertEqual(len(results), 1)
+        report = results[0]["structured_report"]
+        self.assertIn("发现 3 类常用词写法问题", report["summary"])
+        self.assertEqual(len(report["items"]), 3)
+        self.assertTrue(all(item["type"] == "issue" for item in report["items"]))
 
     def test_passes_force_disable_thinking_to_llm(self):
         db = get_db()
