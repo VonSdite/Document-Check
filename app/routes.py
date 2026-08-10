@@ -4803,7 +4803,7 @@ def _is_report_auxiliary_section_start(line: str) -> bool:
 
 def _report_item_id(result_code: str, index: int, text: str) -> str:
     source = f"{result_code}\n{index}\n{text}"
-    return hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(source.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def _infer_report_item_type(text: str) -> str:

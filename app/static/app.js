@@ -483,7 +483,7 @@ function saveIpUsernameInput(input) {
     input.value = nextValue;
     return;
   }
-  if (input.dataset.pendingValue === nextValue) {
+  if (input.dataset.pendingValue !== undefined) {
     return;
   }
 
@@ -515,12 +515,17 @@ function saveIpUsernameInput(input) {
       showToast(savedUsername ? "IP 用户名已保存。" : "IP 用户名已清除。", "success");
     })
     .catch(() => {
-      input.value = savedValue;
+      if (input.value.trim() === nextValue) {
+        input.value = savedValue;
+      }
       showToast("IP 用户名保存失败，请稍后重试。", "error");
     })
     .finally(() => {
       delete input.dataset.pendingValue;
       input.classList.remove("is-saving");
+      if (input.value.trim() !== (input.dataset.savedValue || "")) {
+        saveIpUsernameInput(input);
+      }
     });
 }
 
