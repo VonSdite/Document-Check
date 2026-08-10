@@ -7,6 +7,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .common_terms import (
+    COMMON_TERMS_CHECK_CODE,
+    build_common_terms_invalid_report,
+    build_common_terms_missing_report,
+    build_common_terms_report,
+    common_terms_file_candidates,
+    find_common_terms_file,
+    format_common_terms_report,
+    load_common_terms,
+)
 from .db import delete_task_record, get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
 from .file_cleanup import (
@@ -592,6 +602,9 @@ def _run_check_items_concurrently(
             if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                 structured_report = _run_sensitive_terms_check(app, document_text, issue_output_limit)
                 content = format_sensitive_terms_report(structured_report)
+            elif item["code"] == COMMON_TERMS_CHECK_CODE:
+                structured_report = _run_common_terms_check(app, document_text, issue_output_limit)
+                content = format_common_terms_report(structured_report)
             else:
                 network = outbound_network_config()
                 content = run_check(
@@ -691,6 +704,40 @@ def _run_sensitive_terms_check(app, document_text: str, issue_output_limit: int)
             error="未读取到有效敏感词规则，请确认表头包含“不规范用语”和“规范用语”两列。",
         )
     return build_sensitive_terms_report(
+        document_text,
+        rules,
+        source_path=terms_path,
+        issue_limit=issue_output_limit,
+    )
+
+
+def _run_common_terms_check(app, document_text: str, issue_output_limit: int) -> dict:
+    root_dir = Path(app.config.get("ROOT_DIR") or Path(app.instance_path).parent)
+    instance_dir = Path(app.instance_path)
+    configured_path = app.config.get("COMMON_TERMS_PATH")
+    candidates = common_terms_file_candidates(
+        root_dir=root_dir,
+        instance_dir=instance_dir,
+        configured_path=configured_path,
+    )
+    terms_path = find_common_terms_file(
+        root_dir=root_dir,
+        instance_dir=instance_dir,
+        configured_path=configured_path,
+    )
+    if terms_path is None:
+        return build_common_terms_missing_report(candidates=candidates)
+
+    try:
+        rules = load_common_terms(terms_path)
+    except Exception as exc:
+        return build_common_terms_invalid_report(source_path=terms_path, error=str(exc))
+    if not rules:
+        return build_common_terms_invalid_report(
+            source_path=terms_path,
+            error="未读取到有效常用词规则，请确认表头包含“常用词”和“常见错误/不推荐用法”两列。",
+        )
+    return build_common_terms_report(
         document_text,
         rules,
         source_path=terms_path,
