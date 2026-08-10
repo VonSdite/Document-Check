@@ -629,14 +629,6 @@ td {
   line-height: 1;
 }
 
-.metric.slim {
-  padding: 14px 16px;
-}
-
-.metric.slim strong {
-  font-size: 22px;
-}
-
 .overview-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
