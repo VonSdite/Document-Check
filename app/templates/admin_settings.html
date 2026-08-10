@@ -220,8 +220,37 @@
   {% endif %}
 </section>
 
+<section class="panel settings-section prompt-settings-section" id="prompt-settings" data-prompt-tabs>
+  <div class="settings-section-head prompt-settings-head">
+    <div>
+      <h2>提示词设置</h2>
+      <p>按检查维度维护检查项和提示词。</p>
+    </div>
+  </div>
+  <div class="prompt-settings-tabs" role="tablist" aria-label="提示词检查维度">
+    {% for group in check_item_groups %}
+    <button
+      class="prompt-settings-tab{{ ' is-active' if loop.first else '' }}"
+      id="prompt-tab-{{ group.task_type }}"
+      type="button"
+      role="tab"
+      aria-selected="{{ 'true' if loop.first else 'false' }}"
+      aria-controls="prompt-panel-{{ group.task_type }}"
+      tabindex="{{ '0' if loop.first else '-1' }}"
+      data-prompt-tab="{{ group.task_type }}"
+    >{{ group.tab_title }}</button>
+    {% endfor %}
+  </div>
+
 {% for group in check_item_groups %}
-<section class="panel settings-section">
+<section
+  class="prompt-settings-panel"
+  id="prompt-panel-{{ group.task_type }}"
+  role="tabpanel"
+  aria-labelledby="prompt-tab-{{ group.task_type }}"
+  data-prompt-panel="{{ group.task_type }}"
+  {% if not loop.first %}hidden{% endif %}
+>
   <div class="settings-section-head">
     <div>
       <h2 class="title-with-help">{{ group.title }}
@@ -348,5 +377,6 @@
   </div>
 </section>
 {% endfor %}
+</section>
 {% endif %}
 {% endblock %}

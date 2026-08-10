@@ -705,6 +705,51 @@ td {
   font-weight: 600;
 }
 
+.prompt-settings-head {
+  margin-bottom: 16px;
+}
+
+.prompt-settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.prompt-settings-tab {
+  flex: 0 0 auto;
+  min-width: 112px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.prompt-settings-tab:hover {
+  color: var(--primary-strong);
+  background: #f5f9ff;
+}
+
+.prompt-settings-tab:focus-visible {
+  outline: 2px solid rgba(91, 130, 189, 0.38);
+  outline-offset: -2px;
+}
+
+.prompt-settings-tab.is-active {
+  border-bottom-color: var(--primary);
+  color: var(--primary-strong);
+  background: #f5f9ff;
+}
+
+.prompt-settings-panel[hidden] {
+  display: none;
+}
+
 .settings-concurrency-form {
   display: grid;
   grid-template-columns: repeat(3, minmax(180px, 1fr)) 128px;

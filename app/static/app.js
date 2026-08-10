@@ -703,6 +703,90 @@ document.addEventListener("focusout", (event) => {
 window.addEventListener("resize", closeHelpTip);
 window.addEventListener("scroll", closeHelpTip, true);
 
+const PROMPT_TAB_SESSION_KEY = "document-check:admin-prompt-tab";
+
+function promptTabButtons(container) {
+  return Array.from(container.querySelectorAll("[data-prompt-tab]"));
+}
+
+function activatePromptTab(container, taskType, focus = false) {
+  const tabs = promptTabButtons(container);
+  const activeTab = tabs.find((tab) => tab.dataset.promptTab === taskType);
+  if (!activeTab) {
+    return;
+  }
+
+  tabs.forEach((tab) => {
+    const active = tab === activeTab;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+    tab.tabIndex = active ? 0 : -1;
+  });
+  container.querySelectorAll("[data-prompt-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.promptPanel !== taskType;
+  });
+
+  try {
+    window.sessionStorage.setItem(PROMPT_TAB_SESSION_KEY, taskType);
+  } catch (_error) {
+    // 浏览器禁用会话存储时，当前页面内的切换仍然有效。
+  }
+  if (focus) {
+    activeTab.focus();
+  }
+}
+
+document.querySelectorAll("[data-prompt-tabs]").forEach((container) => {
+  const tabs = promptTabButtons(container);
+  let savedTaskType = "";
+  try {
+    savedTaskType = window.sessionStorage.getItem(PROMPT_TAB_SESSION_KEY) || "";
+  } catch (_error) {
+    savedTaskType = "";
+  }
+  const initialTab = tabs.find((tab) => tab.dataset.promptTab === savedTaskType)
+    || tabs.find((tab) => tab.getAttribute("aria-selected") === "true")
+    || tabs[0];
+  if (initialTab) {
+    activatePromptTab(container, initialTab.dataset.promptTab || "");
+  }
+});
+
+document.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-prompt-tab]");
+  const container = tab?.closest("[data-prompt-tabs]");
+  if (!tab || !container) {
+    return;
+  }
+  activatePromptTab(container, tab.dataset.promptTab || "");
+});
+
+document.addEventListener("keydown", (event) => {
+  const tab = event.target.closest("[data-prompt-tab]");
+  const container = tab?.closest("[data-prompt-tabs]");
+  if (!tab || !container || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    return;
+  }
+
+  const tabs = promptTabButtons(container);
+  const currentIndex = tabs.indexOf(tab);
+  let targetIndex = currentIndex;
+  if (event.key === "Home") {
+    targetIndex = 0;
+  } else if (event.key === "End") {
+    targetIndex = tabs.length - 1;
+  } else {
+    const offset = event.key === "ArrowRight" ? 1 : -1;
+    targetIndex = (currentIndex + offset + tabs.length) % tabs.length;
+  }
+
+  const targetTab = tabs[targetIndex];
+  if (targetTab) {
+    event.preventDefault();
+    activatePromptTab(container, targetTab.dataset.promptTab || "", true);
+  }
+});
+
 let checkItemDragArmed = false;
 let draggedCheckItemRow = null;
 let suppressCheckItemClick = false;

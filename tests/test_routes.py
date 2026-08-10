@@ -684,6 +684,24 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("language_consistency_check", html)
         self.assertIn("image_check", html)
         self.assertIn("video_check", html)
+        tab_list = _required_tag(soup.find(attrs={"data-prompt-tabs": True}))
+        tabs = tab_list.select("[data-prompt-tab]")
+        panels = tab_list.select("[data-prompt-panel]")
+        self.assertEqual(
+            [tab.get_text(strip=True) for tab in tabs],
+            ["单文档检查", "多文档对照", "跨语种检查", "图片检查", "视频检查"],
+        )
+        self.assertEqual(len(panels), 5)
+        for index, (tab, panel) in enumerate(zip(tabs, panels, strict=True)):
+            task_type = tab["data-prompt-tab"]
+            self.assertEqual(panel["data-prompt-panel"], task_type)
+            self.assertEqual(tab["aria-controls"], panel["id"])
+            self.assertEqual(panel["aria-labelledby"], tab["id"])
+            self.assertEqual(tab["aria-selected"], "true" if index == 0 else "false")
+            self.assertEqual(tab["tabindex"], "0" if index == 0 else "-1")
+            self.assertEqual(panel.has_attr("hidden"), index != 0)
+            task_type_input = _required_tag(panel.find("input", {"name": "task_type"}))
+            self.assertEqual(task_type_input.get("value"), task_type)
         document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查提示词说明"}))
         consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照提示词说明"}))
         language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种检查提示词说明"}))

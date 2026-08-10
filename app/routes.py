@@ -1223,6 +1223,7 @@ def register_routes(app):
             check_item_groups=[
                 {
                     "task_type": DOCUMENT_TASK_TYPE,
+                    "tab_title": "单文档检查",
                     "title": "单文档检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除。",
                     "new_title": "新增单文档检查项",
@@ -1234,6 +1235,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": CONSISTENCY_TASK_TYPE,
+                    "tab_title": "多文档对照",
                     "title": "多文档对照提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。",
                     "new_title": "新增多文档对照项",
@@ -1245,6 +1247,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
+                    "tab_title": "跨语种检查",
                     "title": "跨语种检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。",
                     "new_title": "新增跨语种检查项",
@@ -1256,6 +1259,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": IMAGE_TASK_TYPE,
+                    "tab_title": "图片检查",
                     "title": "图片检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。",
                     "new_title": "新增图片检查项",
@@ -1267,6 +1271,7 @@ def register_routes(app):
                 },
                 {
                     "task_type": VIDEO_TASK_TYPE,
+                    "tab_title": "视频检查",
                     "title": "视频检查提示词",
                     "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。",
                     "new_title": "新增视频检查项",
