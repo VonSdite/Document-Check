@@ -2213,8 +2213,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="pending_issue_acceptance"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "50.0%")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_acceptance_rate"]')).get_text(strip=True), "-")
-        self.assertIn("AI 检查条目统计", exported.get_data(as_text=True))
-        self.assertIn("条目 1", exported.get_data(as_text=True))
+        detail_text = soup.get_text(" ", strip=True)
+        self.assertNotIn("可在条目判定列标记为问题、建议或非问题", detail_text)
+        self.assertNotIn("共 2 条：", detail_text)
+        issue_count = _required_tag(soup.select_one('[data-report-count="issue"]'))
+        self.assertEqual(_required_tag(issue_count.parent).get_text(" ", strip=True), "问题 1")
+
+        exported_soup = BeautifulSoup(exported.get_data(as_text=True), "html.parser")
+        exported_text = exported_soup.get_text(" ", strip=True)
+        self.assertIn("AI 检查条目统计", exported_text)
+        self.assertNotIn("共 2 条：", exported_text)
+        self.assertEqual(
+            _required_tag(exported_soup.select_one(".report-counts span")).get_text(" ", strip=True),
+            "问题 1",
+        )
+        self.assertIn("条目 1", exported_text)
 
     def test_task_report_exports_excel_for_statistics(self):
         with self.app.app_context():

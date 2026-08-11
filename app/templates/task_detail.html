@@ -115,37 +115,27 @@
 <section class="panel report-classification-summary" data-report-summary>
   <div>
     <h2>AI 检查条目统计</h2>
-    <p>可在{{ REPORT_ITEM_TYPE_LABEL }}列标记为问题、建议或非问题，统计会随判定自动更新。</p>
   </div>
   <div class="report-counts">
-    <span><strong data-report-count="issue">{{ report_totals.issue }}</strong>问题</span>
-    <span><strong data-report-count="suggestion">{{ report_totals.suggestion }}</strong>建议</span>
-    <span><strong data-report-count="non_issue">{{ report_totals.non_issue }}</strong>非问题</span>
-    <span><strong data-report-count="accepted_issue">{{ report_totals.accepted_issue }}</strong>接纳问题</span>
-    <span><strong data-report-count="rejected_issue">{{ report_totals.rejected_issue }}</strong>不接纳问题</span>
-    <span><strong data-report-count="pending_issue_acceptance">{{ report_totals.pending_issue_acceptance }}</strong>待确认问题</span>
-    <span><strong data-report-count="issue_detection_rate">{{ report_totals.issue_detection_rate }}</strong>问题检出率</span>
-    <span><strong data-report-count="issue_acceptance_rate">{{ report_totals.issue_acceptance_rate }}</strong>问题接纳率</span>
-    <span><strong data-report-count="suppressed">{{ report_totals.suppressed or 0 }}</strong>已忽略误报</span>
-    <span><strong data-report-count="total">{{ report_totals.total }}</strong>合计</span>
+    <span>问题<strong data-report-count="issue">{{ report_totals.issue }}</strong></span>
+    <span>建议<strong data-report-count="suggestion">{{ report_totals.suggestion }}</strong></span>
+    <span>非问题<strong data-report-count="non_issue">{{ report_totals.non_issue }}</strong></span>
+    <span>接纳问题<strong data-report-count="accepted_issue">{{ report_totals.accepted_issue }}</strong></span>
+    <span>不接纳问题<strong data-report-count="rejected_issue">{{ report_totals.rejected_issue }}</strong></span>
+    <span>待确认问题<strong data-report-count="pending_issue_acceptance">{{ report_totals.pending_issue_acceptance }}</strong></span>
+    <span>问题检出率<strong data-report-count="issue_detection_rate">{{ report_totals.issue_detection_rate }}</strong></span>
+    <span>问题接纳率<strong data-report-count="issue_acceptance_rate">{{ report_totals.issue_acceptance_rate }}</strong></span>
+    <span>已忽略误报<strong data-report-count="suppressed">{{ report_totals.suppressed or 0 }}</strong></span>
+    <span>合计<strong data-report-count="total">{{ report_totals.total }}</strong></span>
   </div>
 </section>
 
 <section class="result-stack" data-report-results data-report-classification-url="{{ report_classification_url }}">
   {% for result in results %}
-  <article class="panel result-panel" data-report-result data-result-code="{{ result.code }}">
+  <article class="panel result-panel">
     <div class="panel-head">
       <div>
         <h2>{{ result.name }}</h2>
-        <p>
-          共 <span data-report-result-count="total">{{ result.report_counts.total }}</span> 条：
-          问题 <span data-report-result-count="issue">{{ result.report_counts.issue }}</span>，
-          建议 <span data-report-result-count="suggestion">{{ result.report_counts.suggestion }}</span>，
-          非问题 <span data-report-result-count="non_issue">{{ result.report_counts.non_issue }}</span>；
-          问题检出率 <span data-report-result-count="issue_detection_rate">{{ result.report_counts.issue_detection_rate }}</span>，
-          问题接纳率 <span data-report-result-count="issue_acceptance_rate">{{ result.report_counts.issue_acceptance_rate }}</span>
-          {% if result.report_counts.suppressed %}，已忽略误报 <span data-report-result-count="suppressed">{{ result.report_counts.suppressed }}</span>{% endif %}
-        </p>
       </div>
     </div>
     {% if result.report_items %}

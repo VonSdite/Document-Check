@@ -438,7 +438,6 @@ function saveReportItemReview(item) {
       }
       applyReportItemSave(item, data);
       updateReportCounts(data.totals || {});
-      updateResultCounts(item, data.result_counts || {});
       showToast(
         data.suppression_candidate_created
           ? "报告条目复核结果已保存，并已生成误报忽略候选规则。"
@@ -474,18 +473,6 @@ document.addEventListener("change", (event) => {
 function updateReportCounts(totals) {
   Object.entries(totals || {}).forEach(([key, value]) => {
     document.querySelectorAll(`[data-report-count="${key}"]`).forEach((node) => {
-      node.textContent = String(value ?? 0);
-    });
-  });
-}
-
-function updateResultCounts(item, counts) {
-  const result = item.closest("[data-report-result]");
-  if (!(result instanceof HTMLElement)) {
-    return;
-  }
-  Object.entries(counts || {}).forEach(([key, value]) => {
-    result.querySelectorAll(`[data-report-result-count="${key}"]`).forEach((node) => {
       node.textContent = String(value ?? 0);
     });
   });

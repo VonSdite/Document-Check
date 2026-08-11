@@ -2301,12 +2301,7 @@ td {
 }
 
 .report-classification-summary h2 {
-  margin: 0 0 4px;
-}
-
-.report-classification-summary p {
   margin: 0;
-  color: var(--muted);
 }
 
 .report-counts {
