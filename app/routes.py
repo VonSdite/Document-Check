@@ -2285,7 +2285,7 @@ def _find_enabled_model(model_id: str, owner_subject: str | None = None) -> dict
 
 def _admin_overview_range() -> dict:
     today = date.today()
-    default_start = today - timedelta(days=29)
+    default_start = today
     start_date = _date_arg("start_date", default_start)
     end_date = _date_arg("end_date", today)
     if start_date > end_date:

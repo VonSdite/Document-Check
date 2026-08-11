@@ -185,7 +185,7 @@
                 </svg>
               </a>{% endif %}
             </div>
-            <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB{% if not source_files_available %} · 原文件已清理或缺失{% endif %}</div>
+            <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB{% if not source_files_available %}<span class="source-file-status source-file-status-missing">原文件已清理或缺失</span>{% endif %}</div>
           </td>
           <td class="task-owner-cell">
             {{ owner_display(task) }}

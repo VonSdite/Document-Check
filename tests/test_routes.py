@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import unittest
 import zipfile
+from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
@@ -305,7 +306,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         missing_soup = BeautifulSoup(missing_list.get_data(as_text=True), "html.parser")
         missing_row = _required_tag(missing_soup.select_one(f'tr[data-task-id="{task_id}"]'))
         self.assertIn("原文件已清理或缺失", missing_row.get_text(" ", strip=True))
+        self.assertIsNotNone(missing_row.select_one(".source-file-status-missing"))
         self.assertIsNone(missing_row.select_one(".task-download-link"))
+
+        missing_detail = self.client.get(f"/admin/tasks/{task_id}")
+        self.assertEqual(missing_detail.status_code, 200)
+        missing_detail_soup = BeautifulSoup(missing_detail.get_data(as_text=True), "html.parser")
+        self.assertIsNotNone(missing_detail_soup.select_one(".source-file-status-missing"))
+        self.assertIsNone(missing_detail_soup.select_one(".source-file-download-link"))
 
         missing_download = self.client.get(
             f"/admin/tasks/{task_id}/document",
@@ -322,6 +330,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         restored_row = _required_tag(restored_soup.select_one(f'tr[data-task-id="{task_id}"]'))
         self.assertNotIn("原文件已清理或缺失", restored_row.get_text(" ", strip=True))
         self.assertIsNotNone(restored_row.select_one(".task-download-link"))
+
+        restored_detail = self.client.get(f"/admin/tasks/{task_id}")
+        self.assertEqual(restored_detail.status_code, 200)
+        restored_detail_soup = BeautifulSoup(restored_detail.get_data(as_text=True), "html.parser")
+        self.assertIsNotNone(restored_detail_soup.select_one(".source-file-status-available"))
+        self.assertIsNotNone(restored_detail_soup.select_one(".source-file-download-link"))
 
         restored_download = self.client.get(f"/admin/tasks/{task_id}/document")
         self.assertEqual(restored_download.status_code, 200)
@@ -882,6 +896,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
             for link in BeautifulSoup(html, "html.parser").select(".overview-quick-filter")
         }
         self.assertEqual(set(quick_filters), {"今天", "近7天", "近30天"})
+        actions = BeautifulSoup(html, "html.parser").select_one(".overview-filter-actions")
+        self.assertEqual(
+            [element.name for element in actions.find_all(["div", "button"], recursive=False)],
+            ["div", "button"],
+        )
         for link in quick_filters.values():
             query = parse_qs(urlparse(link["href"]).query)
             self.assertIn("start_date", query)
@@ -897,6 +916,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
         seven_day_response = self.client.get(quick_filters["近7天"]["href"])
         seven_day_soup = BeautifulSoup(seven_day_response.get_data(as_text=True), "html.parser")
         self.assertIn("active", seven_day_soup.select_one('[data-range="7-days"]')["class"])
+
+    def test_admin_overview_defaults_to_today_and_uses_query_label(self):
+        response = self.client.get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        start_date = _required_tag(soup.find("input", {"name": "start_date"}))
+        end_date = _required_tag(soup.find("input", {"name": "end_date"}))
+        self.assertEqual(start_date.get("value"), date.today().isoformat())
+        self.assertEqual(end_date.get("value"), date.today().isoformat())
+        self.assertIn("active", _required_tag(soup.select_one('[data-range="today"]')).get("class", []))
+        overview_filter = _required_tag(soup.select_one(".overview-filter"))
+        self.assertEqual(
+            _required_tag(overview_filter.find("button", {"type": "submit"})).get_text(strip=True),
+            "查询",
+        )
 
     def test_admin_overview_uses_ip_username_mapping(self):
         self._insert_task(ip="10.0.0.8", created_at="2026-05-01 10:00:00")
@@ -2437,9 +2472,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual([radio.get("value") for radio in acceptance_radios], ["pending", "accepted", "rejected"])
         self.assertEqual(len(rows[0].select(".report-acceptance-cell select")), 0)
         self.assertEqual([radio.get("value") for radio in acceptance_radios if radio.has_attr("checked")], ["pending"])
+        self.assertEqual(acceptance.get("data-saved-value"), "pending")
         reason = _required_tag(rows[0].select_one("[data-report-rejection-reason]"))
         note = _required_tag(rows[0].select_one("[data-report-rejection-note]"))
-        self.assertEqual(acceptance.get("data-saved-value"), "pending")
         self.assertTrue(reason.has_attr("disabled"))
         self.assertTrue(note.has_attr("disabled"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))

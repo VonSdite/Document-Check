@@ -21,7 +21,6 @@
       <input type="date" name="end_date" value="{{ selected_range.end_date }}">
     </label>
     <div class="overview-filter-actions">
-      <button class="primary-button" type="submit">查看统计</button>
       <div class="overview-quick-filters" aria-label="快捷时间范围">
         <a
           class="overview-quick-filter{% if selected_range.start_date == selected_range.today and selected_range.end_date == selected_range.today %} active{% endif %}"
@@ -42,6 +41,7 @@
           {% if selected_range.start_date == selected_range.last_30_start and selected_range.end_date == selected_range.today %}aria-current="page"{% endif %}
         >近30天</a>
       </div>
+      <button class="primary-button" type="submit">查询</button>
     </div>
   </form>
 </section>

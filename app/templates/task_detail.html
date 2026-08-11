@@ -8,6 +8,7 @@
 {% endblock %}
 
 {% block content %}
+{% set source_files_available = task_source_files_available(task) %}
 <div class="report-toolbar">
   <a class="secondary-button" href="{{ back_url }}">返回列表</a>
   {% if task.status == "completed" %}
@@ -66,12 +67,19 @@
     <div>
       <dt>原文件</dt>
       <dd>
-        {% if task_source_files_available(task) %}
-        可下载
+        {% if source_files_available %}
+        <span class="source-file-status source-file-status-available">可下载</span>
+        <a class="source-file-download-link" href="{{ url_for('admin_download_task_document' if mode == 'admin' else 'user_download_task_document', task_id=task.id) }}" title="下载原文件" aria-label="下载原文件">
+          <svg class="source-file-download-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3v11"></path>
+            <path d="m7 10 5 5 5-5"></path>
+            <path d="M5 20h14"></path>
+          </svg>
+        </a>
         {% elif task.source_files_cleaned_at %}
-        已于 {{ task.source_files_cleaned_at }} 自动清理
+        <span class="source-file-status source-file-status-missing">已于 {{ task.source_files_cleaned_at }} 自动清理</span>
         {% else %}
-        已清理或缺失
+        <span class="source-file-status source-file-status-missing">已清理或缺失</span>
         {% endif %}
       </dd>
     </div>
