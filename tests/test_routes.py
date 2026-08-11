@@ -2645,6 +2645,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         exported_soup = BeautifulSoup(exported.get_data(as_text=True), "html.parser")
         exported_text = exported_soup.get_text(" ", strip=True)
+        self.assertIn("dataset.tableColumnResizer", exported.get_data(as_text=True))
         exported_meta_labels = [node.get_text(strip=True) for node in exported_soup.select(".report-meta-list > div > dt")]
         self.assertEqual(exported_meta_labels[:4], ["任务类型", "归属用户", "文件名称", "文件信息"])
         exported_headers = [node.get_text(strip=True) for node in exported_soup.select(".report-table th")]

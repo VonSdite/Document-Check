@@ -5197,6 +5197,7 @@ def _export_task_report(task):
     if not static_folder:
         raise RuntimeError("静态资源目录未配置，无法导出报告。")
     app_css = (Path(static_folder) / "app.css").read_text(encoding="utf-8")
+    table_resize_js = (Path(static_folder) / "table-resize.js").read_text(encoding="utf-8")
     results = _task_results(task)
     html = render_template(
         "task_report_export.html",
@@ -5208,6 +5209,7 @@ def _export_task_report(task):
         media_report=_is_media_report_task_type(task["task_type"]),
         document_groups=_task_document_groups(task),
         app_css=app_css,
+        table_resize_js=table_resize_js,
     )
     filename = f"document-check-report-{task['id']}.html"
     return Response(

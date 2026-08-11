@@ -188,6 +188,67 @@ td {
   font-size: 14px;
 }
 
+.table-column-resizable {
+  position: relative;
+}
+
+.table-column-resizer {
+  position: absolute;
+  top: 0;
+  right: -7px;
+  bottom: 0;
+  z-index: 4;
+  width: 14px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.table-column-resizer::before {
+  content: "";
+  position: absolute;
+  top: 22%;
+  bottom: 22%;
+  left: 50%;
+  width: 1px;
+  border-radius: 999px;
+  background: transparent;
+  transform: translateX(-50%);
+}
+
+.table-column-resizable:hover > .table-column-resizer::before,
+.table-column-resizer:focus-visible::before {
+  width: 2px;
+  background: #8ba9cf;
+}
+
+.table-column-resizer.is-active::before {
+  top: 12%;
+  bottom: 12%;
+  width: 3px;
+  background: var(--primary-strong);
+  box-shadow: 0 0 0 3px rgba(91, 130, 189, 0.12);
+}
+
+table.table-columns-resized {
+  table-layout: fixed;
+}
+
+body.table-column-resize-active,
+body.table-column-resize-active * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+@media print {
+  .table-column-resizer {
+    display: none !important;
+  }
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -2095,6 +2156,16 @@ td {
   justify-content: flex-end;
   gap: 6px;
   flex-wrap: nowrap;
+}
+
+.task-table th.right,
+.admin-task-table th.right {
+  text-align: center;
+}
+
+.task-table td.right .task-actions,
+.admin-task-table td.right .task-actions {
+  justify-content: center;
 }
 
 .task-actions form {

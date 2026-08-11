@@ -19,6 +19,21 @@ def _write_config(root_dir: str, config: dict):
 
 
 class ProviderConfigTest(unittest.TestCase):
+    def test_all_table_templates_load_column_resize_support(self):
+        template_dir = Path(__file__).resolve().parents[1] / "app" / "templates"
+        table_templates = []
+        for template_path in template_dir.glob("*.html"):
+            source = template_path.read_text(encoding="utf-8")
+            if "<table" not in source:
+                continue
+            table_templates.append(template_path.name)
+            self.assertTrue(
+                '{% extends "base.html" %}' in source or "{{ table_resize_js|safe }}" in source,
+                f"{template_path.name} 未加载表格列宽拖拽脚本",
+            )
+
+        self.assertGreater(len(table_templates), 0)
+
     def test_default_admin_url_and_port(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = load_local_config(Path(temp_dir))
@@ -417,6 +432,7 @@ class ProviderConfigTest(unittest.TestCase):
                 self.assertEqual(created_app.config["APPLICATION_ROOT"], "/infoCheck")
                 self.assertIn('href="/infoCheck/static/app.css"', html)
                 self.assertIn('src="/infoCheck/static/app.js"', html)
+                self.assertIn('src="/infoCheck/static/table-resize.js"', html)
             finally:
                 created_app.extensions["task_scheduler"].stop()
 
