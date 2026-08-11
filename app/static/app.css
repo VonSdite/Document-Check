@@ -2209,6 +2209,16 @@ td {
   gap: 16px;
 }
 
+.result-stack {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.result-panel {
+  width: 100%;
+  min-width: 0;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2489,7 +2499,7 @@ td {
 }
 
 .report-acceptance-cell {
-  width: 180px;
+  width: 200px;
 }
 
 .report-item-title {
@@ -2581,7 +2591,7 @@ td {
 .rejection-controls {
   display: grid;
   gap: 6px;
-  margin: 2px 0 0 23px;
+  margin-top: 2px;
 }
 
 .rejection-controls[hidden] {
