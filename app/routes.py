@@ -79,6 +79,7 @@ from .task_types import (
     document_groups_from_meta,
     task_type_label,
 )
+from .tasks import cleanup_task_file_cache, task_file_cache_snapshot
 from .videos import allowed_video_file, extract_video_frames, format_video_document_text, video_extension_of
 
 
@@ -1002,6 +1003,42 @@ def register_routes(app):
     @admin_required
     def admin_prompts():
         return redirect(url_for("admin_settings"))
+
+    @app.get(f"{admin_prefix}/settings/task-cache")
+    @admin_required
+    def admin_task_file_cache():
+        snapshot = task_file_cache_snapshot(current_app)
+        items = []
+        for item in snapshot["items"]:
+            row = dict(item)
+            if row["task_type"] in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
+                row["title"] = _consistency_task_title(row)
+            else:
+                row["title"] = str(row["original_filename"] or f"任务 #{row['id']}")
+            row["task_type_label"] = task_type_label(row["task_type"])
+            row["report_url"] = url_for("admin_task_detail", task_id=row["id"])
+            row.pop("document_meta_json", None)
+            items.append(row)
+        snapshot["items"] = items
+        return snapshot
+
+    @app.post(f"{admin_prefix}/settings/task-cache/cleanup")
+    @admin_required
+    def admin_cleanup_task_file_cache():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not isinstance(data.get("task_ids"), list):
+            return {"ok": False, "error": "请选择需要清理的任务。"}, 400
+        task_ids = []
+        for value in data["task_ids"]:
+            try:
+                task_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if task_id > 0 and task_id not in task_ids:
+                task_ids.append(task_id)
+        if not task_ids:
+            return {"ok": False, "error": "请选择需要清理的任务。"}, 400
+        return {"ok": True, **cleanup_task_file_cache(current_app, task_ids)}
 
     @app.route(f"{admin_prefix}/settings", methods=["GET", "POST"])
     @admin_required

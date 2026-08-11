@@ -15,7 +15,9 @@ from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
 from app.tasks import (
     TaskScheduler,
+    cleanup_task_file_cache,
     cleanup_expired_task_files,
+    task_file_cache_snapshot,
     _document_check_items,
     _document_text_for_image_batch,
     _format_image_check_issue_summary,
@@ -435,6 +437,109 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIsNotNone(task)
         self.assertIsNone(task["source_files_cleaned_at"])
         self.assertTrue(old_upload.exists())
+
+    def test_task_file_cache_snapshot_counts_actual_files_and_sorts_oldest_smallest_first(self):
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        image_root = Path(self.app.config["IMAGE_FOLDER"])
+        (upload_dir / "large.pdf").write_bytes(b"1234")
+        (upload_dir / "small.txt").write_bytes(b"12")
+        (upload_dir / "running.mp4").write_bytes(b"123456789")
+        image_dir = image_root / "large-images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        (image_dir / "page.png").write_bytes(b"png")
+        image_meta = json.dumps(
+            {
+                "page_images": [
+                    {
+                        "filename": "page.png",
+                        "relative_path": "large-images/page.png",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        db = get_db()
+        rows = [
+            (IMAGE_TASK_TYPE, "large.pdf", "large.pdf", image_meta, "completed"),
+            ("document_check", "small.txt", "small.txt", "{}", "failed"),
+            (VIDEO_TASK_TYPE, "running.mp4", "running.mp4", "{}", "running"),
+        ]
+        for task_type, original, stored, meta, status in rows:
+            db.execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type, file_size,
+                    document_meta_json, checks_json, model_name, api_base, status, progress,
+                    created_at, updated_at, finished_at
+                )
+                VALUES (?, '127.0.0.1', ?, ?, 'pdf', 1, ?, '[]', 'model-a',
+                        'https://example.test/v1/chat/completions', ?, 100,
+                        '2026-05-01 10:00:00', '2026-05-01 10:00:00', '2026-05-01 10:00:00')
+                """,
+                (task_type, original, stored, meta, status),
+            )
+        db.commit()
+
+        snapshot = task_file_cache_snapshot(self.app)
+
+        self.assertEqual(snapshot["total_size_bytes"], 18)
+        self.assertEqual(snapshot["upload_size_bytes"], 15)
+        self.assertEqual(snapshot["generated_size_bytes"], 3)
+        self.assertEqual(snapshot["cleanable_size_bytes"], 9)
+        self.assertEqual(snapshot["cleanable_count"], 2)
+        self.assertEqual([item["original_filename"] for item in snapshot["items"]], ["small.txt", "large.pdf"])
+        self.assertEqual([item["file_count"] for item in snapshot["items"]], [1, 2])
+
+    def test_cleanup_task_file_cache_preserves_report_and_removes_cleaned_task_from_snapshot(self):
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        completed_file = upload_dir / "completed.txt"
+        running_file = upload_dir / "running.txt"
+        completed_file.write_bytes(b"complete")
+        running_file.write_bytes(b"running")
+        db = get_db()
+        completed_id = db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                document_text, result_json, checks_json, model_name, api_base,
+                status, progress, created_at, updated_at, finished_at
+            )
+            VALUES (
+                '127.0.0.1', 'completed.txt', 'completed.txt', 'txt', 8,
+                '正文', '[{"result":"保留报告"}]', '[]', 'model-a',
+                'https://example.test/v1/chat/completions', 'completed', 100,
+                '2026-05-01 10:00:00', '2026-05-01 10:00:00', '2026-05-01 10:00:00'
+            )
+            """
+        ).lastrowid
+        running_id = db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, model_name, api_base,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'running.txt', 'running.txt', 'txt', 7,
+                '运行正文', '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                'running', 50, '2026-05-01 10:00:00', '2026-05-01 10:00:00'
+            )
+            """
+        ).lastrowid
+        db.commit()
+
+        result = cleanup_task_file_cache(self.app, [completed_id, running_id])
+
+        self.assertEqual(result["cleaned_ids"], [completed_id])
+        self.assertEqual(result["freed_size_bytes"], 8)
+        self.assertEqual(result["skipped_ids"], [running_id])
+        self.assertFalse(completed_file.exists())
+        self.assertTrue(running_file.exists())
+        completed = db.execute("SELECT * FROM tasks WHERE id = ?", (completed_id,)).fetchone()
+        self.assertIsNone(completed["document_text"])
+        self.assertIsNotNone(completed["source_files_cleaned_at"])
+        self.assertEqual(completed["result_json"], '[{"result":"保留报告"}]')
+        self.assertEqual(task_file_cache_snapshot(self.app)["items"], [])
 
     def test_document_check_sends_full_text_once(self):
         db = get_db()

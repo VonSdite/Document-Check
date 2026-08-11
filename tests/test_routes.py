@@ -245,6 +245,47 @@ class AdminSettingsRouteTest(unittest.TestCase):
             get_db().commit()
             return cursor.lastrowid
 
+    def _insert_cache_task(
+        self,
+        *,
+        original_filename: str,
+        stored_filename: str,
+        status: str = "completed",
+        finished_at: str = "2026-05-01 10:00:00",
+        task_type: str = DOCUMENT_TASK_TYPE,
+        document_meta_json: str = "{}",
+        document_text: str = "缓存正文",
+        result_json: str = '[{"result":"历史报告"}]',
+    ) -> int:
+        with self.app.app_context():
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, owner_subject, original_filename, stored_filename,
+                    file_type, file_size, document_text, document_meta_json, result_json,
+                    checks_json, model_name, api_base, status, progress,
+                    created_at, updated_at, finished_at
+                )
+                VALUES (?, '127.0.0.1', 'ip:127.0.0.1', ?, ?, 'pdf', 1, ?, ?, ?,
+                        '[]', 'model-a', 'https://example.test/v1/chat/completions', ?, 100,
+                        ?, ?, ?)
+                """,
+                (
+                    task_type,
+                    original_filename,
+                    stored_filename,
+                    document_text,
+                    document_meta_json,
+                    result_json,
+                    status,
+                    finished_at,
+                    finished_at,
+                    finished_at if status in {"completed", "failed", "canceled"} else None,
+                ),
+            )
+            get_db().commit()
+            return int(cursor.lastrowid)
+
     def test_admin_delete_task_reports_locked_file_without_removing_task(self):
         self._insert_task()
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "stored.txt"
@@ -824,6 +865,112 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("0 表示不自动清理", tip.get("data-tip", ""))
         self.assertIn("任务历史、检查报告和人工复核结果继续保留", tip.get("data-tip", ""))
         self.assertNotIn("任务结束并超过保留天数", field.get_text(" ", strip=True))
+
+    def test_admin_settings_shows_task_file_cache_summary_and_cleanup_dialog(self):
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        cache = _required_tag(soup.select_one("[data-task-cache]"))
+        self.assertEqual(cache.get("data-task-cache-url"), "/admin/settings/task-cache")
+        self.assertEqual(cache.get("data-task-cache-cleanup-url"), "/admin/settings/task-cache/cleanup")
+        self.assertEqual(
+            _required_tag(cache.select_one(".settings-task-cache-label")).get_text(strip=True),
+            "任务文件缓存",
+        )
+        self.assertEqual(cache.name, "details")
+        self.assertIsNone(cache.get("open"))
+        concurrency_section = _required_tag(cache.find_parent("section"))
+        self.assertIsNotNone(concurrency_section.select_one(".settings-concurrency-form"))
+        self.assertEqual(_required_tag(cache.select_one("[data-task-cache-total]")).get_text(strip=True), "统计中...")
+        self.assertIsNotNone(cache.select_one("[data-task-cache-open]"))
+        self.assertIsNone(cache.select_one("[data-task-cache-refresh]"))
+        dialog = _required_tag(soup.find("dialog", {"id": "task-cache-modal"}))
+        time_heading = _required_tag(dialog.select_one('[data-task-cache-sort-heading="finished_at"]'))
+        size_heading = _required_tag(dialog.select_one('[data-task-cache-sort-heading="size_bytes"]'))
+        self.assertEqual(time_heading.get("aria-sort"), "ascending")
+        self.assertEqual(size_heading.get("aria-sort"), "none")
+
+    def test_admin_task_file_cache_lists_finished_tasks_with_report_links_and_actual_sizes(self):
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        (upload_dir / "large.pdf").write_bytes(b"1234")
+        (upload_dir / "small.pdf").write_bytes(b"12")
+        (upload_dir / "running.pdf").write_bytes(b"running")
+        large_id = self._insert_cache_task(original_filename="large.pdf", stored_filename="large.pdf")
+        small_id = self._insert_cache_task(original_filename="small.pdf", stored_filename="small.pdf")
+        self._insert_cache_task(
+            original_filename="running.pdf",
+            stored_filename="running.pdf",
+            status="running",
+        )
+
+        response = self.client.get("/admin/settings/task-cache")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["total_size_bytes"], 13)
+        self.assertEqual(data["cleanable_size_bytes"], 6)
+        self.assertEqual(data["cleanable_count"], 2)
+        self.assertEqual([item["id"] for item in data["items"]], [small_id, large_id])
+        self.assertEqual(data["items"][0]["report_url"], f"/admin/tasks/{small_id}")
+        self.assertEqual(data["items"][0]["task_type_label"], "单文档检查")
+        self.assertEqual(self.client.get(data["items"][0]["report_url"]).status_code, 200)
+
+    def test_admin_task_file_cache_cleanup_preserves_report_and_removes_successful_row(self):
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        completed_file = upload_dir / "completed.pdf"
+        running_file = upload_dir / "running.pdf"
+        completed_file.write_bytes(b"complete")
+        running_file.write_bytes(b"running")
+        completed_id = self._insert_cache_task(
+            original_filename="completed.pdf",
+            stored_filename="completed.pdf",
+        )
+        running_id = self._insert_cache_task(
+            original_filename="running.pdf",
+            stored_filename="running.pdf",
+            status="running",
+        )
+
+        response = self.client.post(
+            "/admin/settings/task-cache/cleanup",
+            json={"task_ids": [completed_id, running_id]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["cleaned_ids"], [completed_id])
+        self.assertEqual(data["skipped_ids"], [running_id])
+        self.assertFalse(completed_file.exists())
+        self.assertTrue(running_file.exists())
+        with self.app.app_context():
+            task = get_db().execute("SELECT * FROM tasks WHERE id = ?", (completed_id,)).fetchone()
+            self.assertIsNone(task["document_text"])
+            self.assertIsNotNone(task["source_files_cleaned_at"])
+            self.assertEqual(task["result_json"], '[{"result":"历史报告"}]')
+        refreshed = self.client.get("/admin/settings/task-cache").get_json()
+        self.assertNotIn(completed_id, [item["id"] for item in refreshed["items"]])
+        self.assertEqual(self.client.get(f"/admin/tasks/{completed_id}").status_code, 200)
+
+    def test_admin_task_file_cache_keeps_locked_task_available_for_retry(self):
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        locked_file = upload_dir / "locked.pdf"
+        locked_file.write_bytes(b"locked")
+        task_id = self._insert_cache_task(original_filename="locked.pdf", stored_filename="locked.pdf")
+
+        with patch("app.tasks.remove_file", return_value=(False, "[WinError 32] 文件正被占用")):
+            response = self.client.post(
+                "/admin/settings/task-cache/cleanup",
+                json={"task_ids": [task_id]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["cleaned_ids"], [])
+        self.assertEqual(data["failed"][0]["id"], task_id)
+        self.assertTrue(locked_file.exists())
+        refreshed = self.client.get("/admin/settings/task-cache").get_json()
+        self.assertIn(task_id, [item["id"] for item in refreshed["items"]])
 
     def test_admin_settings_saves_network_to_yaml_config(self):
         response = self.client.post(

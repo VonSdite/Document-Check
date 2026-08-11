@@ -100,7 +100,78 @@
     </div>
     <button class="primary-button settings-save-button" type="submit">保存设置</button>
   </form>
+  <details
+    class="settings-task-cache"
+    data-task-cache
+    data-task-cache-url="{{ url_for('admin_task_file_cache') }}"
+    data-task-cache-cleanup-url="{{ url_for('admin_cleanup_task_file_cache') }}"
+  >
+    <summary>
+      <span class="settings-task-cache-summary">
+        <span class="settings-task-cache-label">任务文件缓存</span>
+        <strong data-task-cache-total aria-live="polite">统计中...</strong>
+      </span>
+      <span class="settings-task-cache-summary-hint">详情</span>
+    </summary>
+    <div class="settings-task-cache-details">
+      <div class="settings-task-cache-meta">
+        <span>上传文件 <strong data-task-cache-uploads>-</strong></span>
+        <span>提取产物 <strong data-task-cache-generated>-</strong></span>
+        <span data-task-cache-cleanable aria-live="polite">正在计算可清理内容...</span>
+      </div>
+      <div class="settings-task-cache-actions">
+        <span data-task-cache-action-status>正在检查可清理内容...</span>
+        <button class="small-button" type="button" data-task-cache-open hidden>选择清理内容</button>
+      </div>
+    </div>
+  </details>
 </section>
+
+<dialog class="modal task-cache-modal" id="task-cache-modal">
+  <div class="modal-card task-cache-modal-card">
+    <div class="modal-head">
+      <div>
+        <h2>清理任务文件</h2>
+        <p>仅清理已完成、失败或已取消任务的源文件和提取产物，任务历史、报告和人工复核结果继续保留。</p>
+      </div>
+      <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <div class="task-cache-modal-body">
+      <div class="task-cache-dialog-summary" data-task-cache-dialog-summary aria-live="polite">正在统计可清理内容...</div>
+      <div class="empty-state compact task-cache-empty" data-task-cache-empty hidden>
+        <h3>暂无可清理内容</h3>
+        <p>排队中和运行中的任务不会出现在这里。</p>
+      </div>
+      <div class="table-wrap task-cache-table-wrap" data-task-cache-table-wrap hidden>
+        <table class="task-cache-table">
+          <thead>
+            <tr>
+              <th class="task-cache-select-column">
+                <input type="checkbox" data-task-cache-toggle aria-label="全选可清理任务">
+              </th>
+              <th>内容</th>
+              <th class="task-cache-sort-column" aria-sort="ascending" data-task-cache-sort-heading="finished_at">
+                <button type="button" data-task-cache-sort="finished_at">任务结束时间 <span aria-hidden="true">↑</span></button>
+              </th>
+              <th class="task-cache-sort-column right" aria-sort="none" data-task-cache-sort-heading="size_bytes">
+                <button type="button" data-task-cache-sort="size_bytes">大小 <span aria-hidden="true"></span></button>
+              </th>
+              <th class="right">文件数</th>
+            </tr>
+          </thead>
+          <tbody data-task-cache-rows></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="task-cache-modal-actions">
+      <div data-task-cache-selection>未选择任务</div>
+      <div class="modal-action-buttons">
+        <button class="secondary-button" type="button" data-modal-close>取消</button>
+        <button class="primary-button" type="button" data-task-cache-cleanup disabled>清理所选</button>
+      </div>
+    </div>
+  </div>
+</dialog>
 
 <section class="panel settings-section">
   <div class="settings-section-head">

@@ -1987,6 +1987,115 @@ def cleanup_expired_task_files(app) -> int:
     return cleaned
 
 
+def task_file_cache_snapshot(app) -> dict:
+    db = get_db()
+    tasks = db.execute(
+        """
+        SELECT id, task_type, original_filename, stored_filename, document_meta_json,
+               created_at, updated_at, finished_at
+        FROM tasks
+        WHERE status IN ('completed', 'failed', 'canceled')
+          AND source_files_cleaned_at IS NULL
+        """
+    ).fetchall()
+    items = []
+    for task in tasks:
+        size_bytes, file_count = _task_artifact_usage(app, task)
+        if file_count <= 0:
+            continue
+        finished_at = task["finished_at"] or task["updated_at"] or task["created_at"]
+        items.append(
+            {
+                "id": int(task["id"]),
+                "task_type": task["task_type"],
+                "original_filename": task["original_filename"],
+                "document_meta_json": task["document_meta_json"],
+                "finished_at": finished_at,
+                "size_bytes": size_bytes,
+                "file_count": file_count,
+            }
+        )
+    items.sort(key=lambda item: (item["finished_at"], item["size_bytes"], item["id"]))
+
+    upload_size_bytes = _directory_file_size(Path(app.config["UPLOAD_FOLDER"]))
+    generated_size_bytes = _directory_file_size(_task_image_folder(app))
+    return {
+        "generated_at": now_text(),
+        "total_size_bytes": upload_size_bytes + generated_size_bytes,
+        "upload_size_bytes": upload_size_bytes,
+        "generated_size_bytes": generated_size_bytes,
+        "cleanable_size_bytes": sum(item["size_bytes"] for item in items),
+        "cleanable_count": len(items),
+        "items": items,
+    }
+
+
+def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
+    normalized_ids = []
+    for value in task_ids:
+        try:
+            task_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if task_id > 0 and task_id not in normalized_ids:
+            normalized_ids.append(task_id)
+
+    result = {"cleaned_ids": [], "freed_size_bytes": 0, "failed": [], "skipped_ids": []}
+    if not normalized_ids:
+        return result
+
+    db = get_db()
+    placeholders = ",".join("?" for _ in normalized_ids)
+    tasks = {
+        int(task["id"]): task
+        for task in db.execute(
+            f"""
+            SELECT *
+            FROM tasks
+            WHERE id IN ({placeholders})
+              AND status IN ('completed', 'failed', 'canceled')
+              AND source_files_cleaned_at IS NULL
+            """,
+            tuple(normalized_ids),
+        ).fetchall()
+    }
+    for task_id in normalized_ids:
+        task = tasks.get(task_id)
+        if task is None:
+            result["skipped_ids"].append(task_id)
+            continue
+        size_bytes, _ = _task_artifact_usage(app, task)
+        try:
+            _remove_task_artifacts(app, task)
+        except TaskArtifactCleanupError as exc:
+            result["failed"].append({"id": task_id, "error": str(exc)})
+            continue
+        except Exception:
+            app.logger.exception("手动清理任务文件失败 task_id=%s", task_id)
+            result["failed"].append({"id": task_id, "error": "清理失败，请稍后重试。"})
+            continue
+        db.execute(
+            """
+            UPDATE tasks
+            SET document_text = NULL,
+                source_files_cleaned_at = ?
+            WHERE id = ?
+            """,
+            (now_text(), task_id),
+        )
+        result["cleaned_ids"].append(task_id)
+        result["freed_size_bytes"] += size_bytes
+
+    if result["cleaned_ids"]:
+        db.commit()
+        app.logger.info(
+            "手动清理任务文件完成 cleaned=%s freed_size_bytes=%s",
+            len(result["cleaned_ids"]),
+            result["freed_size_bytes"],
+        )
+    return result
+
+
 def _task_file_retention_days() -> int:
     return max(0, _int_setting("task_file_retention_days", DEFAULT_TASK_FILE_RETENTION_DAYS))
 
@@ -2062,6 +2171,43 @@ def _task_artifact_paths(app, task) -> list[Path]:
         if image_path is not None:
             paths.append(image_path)
     return _dedupe_paths(paths)
+
+
+def _task_artifact_usage(app, task) -> tuple[int, int]:
+    upload_root = Path(app.config["UPLOAD_FOLDER"])
+    image_root = _task_image_folder(app)
+    size_bytes = 0
+    file_count = 0
+    for path in _task_artifact_paths(app, task):
+        if not (_path_is_relative_to(path, upload_root) or _path_is_relative_to(path, image_root)):
+            continue
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            size_bytes += path.stat().st_size
+            file_count += 1
+        except OSError:
+            continue
+    return size_bytes, file_count
+
+
+def _directory_file_size(root: Path) -> int:
+    target = Path(root)
+    if not target.is_dir():
+        return 0
+    size_bytes = 0
+    try:
+        paths = target.rglob("*")
+        for path in paths:
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                size_bytes += path.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return size_bytes
+    return size_bytes
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
