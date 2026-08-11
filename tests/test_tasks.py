@@ -15,7 +15,7 @@ from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
 from app.tasks import (
     TaskScheduler,
-    cleanup_expired_task_reports,
+    cleanup_expired_task_files,
     _document_check_items,
     _document_text_for_image_batch,
     _format_image_check_issue_summary,
@@ -47,6 +47,8 @@ class TaskExecutionTest(unittest.TestCase):
         *,
         status: str = "queued",
         owner_subject: str = "ip:127.0.0.1",
+        provider_id: int | None = None,
+        api_key: str | None = None,
         claim_token: str | None = None,
         lease_expires_at: str | None = None,
     ) -> int:
@@ -55,18 +57,18 @@ class TaskExecutionTest(unittest.TestCase):
             """
             INSERT INTO tasks(
                 ip, owner_subject, original_filename, stored_filename, file_type, file_size,
-                document_text, checks_json, model_name, api_base, request_timeout,
+                document_text, checks_json, provider_id, model_name, api_base, api_key, request_timeout,
                 max_input_chars, status, progress, claim_token, lease_expires_at,
                 created_at, updated_at
             )
             VALUES (
                 '127.0.0.1', ?, 'scheduler.txt', 'scheduler.txt', 'txt', 1,
-                'file: scheduler.txt\n\n测试', '[]', 'test-model',
-                'http://example.test/v1/chat/completions', 30, 5000,
+                'file: scheduler.txt\n\n测试', '[]', ?, 'test-model',
+                'http://example.test/v1/chat/completions', ?, 30, 5000,
                 ?, 0, ?, ?, ?, ?
             )
             """,
-            (owner_subject, status, claim_token, lease_expires_at, now, now),
+            (owner_subject, provider_id, api_key, status, claim_token, lease_expires_at, now, now),
         )
         get_db().commit()
         return int(cursor.lastrowid)
@@ -174,7 +176,119 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(task["status"], "running")
         self.assertEqual(task["claim_token"], "current-claim")
 
-    def test_cleanup_expired_task_reports_removes_old_terminal_tasks_and_files(self):
+    def test_failed_and_worker_canceled_tasks_clear_api_key_snapshots(self):
+        failed_task_id = self._insert_scheduler_task(
+            status="running",
+            api_key="failed-secret",
+        )
+        canceled_task_id = self._insert_scheduler_task(
+            status="running",
+            api_key="canceled-secret",
+        )
+        get_db().execute(
+            "UPDATE tasks SET cancel_requested = 1 WHERE id = ?",
+            (canceled_task_id,),
+        )
+        get_db().commit()
+
+        scheduler = TaskScheduler(self.app)
+        scheduler._run_task(failed_task_id)
+        scheduler._run_task(canceled_task_id)
+
+        tasks = {
+            row["id"]: row
+            for row in get_db().execute(
+                "SELECT id, status, api_key FROM tasks WHERE id IN (?, ?)",
+                (failed_task_id, canceled_task_id),
+            ).fetchall()
+        }
+        self.assertEqual(tasks[failed_task_id]["status"], "failed")
+        self.assertIsNone(tasks[failed_task_id]["api_key"])
+        self.assertEqual(tasks[canceled_task_id]["status"], "canceled")
+        self.assertIsNone(tasks[canceled_task_id]["api_key"])
+
+    def test_task_uses_submission_config_snapshot_after_provider_changes(self):
+        db = get_db()
+        now = now_text()
+        provider_id = db.execute(
+            """
+            INSERT INTO user_model_providers(
+                owner_subject, name, api_base, api_key, request_timeout,
+                max_input_chars, is_active, created_at, updated_at
+            )
+            VALUES ('ip:127.0.0.1', '当前提供商',
+                    'https://current.example.test/v1/chat/completions',
+                    'current-secret', 45, 9000, 1, ?, ?)
+            """,
+            (now, now),
+        ).lastrowid
+        db.execute(
+            """
+            INSERT INTO user_model_configs(
+                provider_id, model_name, force_disable_thinking,
+                sort_order, created_at, updated_at
+            )
+            VALUES (?, 'test-model', 0, 10, ?, ?)
+            """,
+            (provider_id, now, now),
+        )
+        task_id = db.execute(
+            """
+            INSERT INTO tasks(
+                ip, owner_subject, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, checks_snapshot_json, provider_id,
+                provider_name, model_name, api_base, api_key, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'ip:127.0.0.1', 'current.txt', 'current.txt', 'txt', 1,
+                'file: current.txt\n\n测试', '[1]', ?, ?, '提交时名称', 'test-model',
+                'https://snapshot.example.test/v1/chat/completions', 'snapshot-secret',
+                37, 7000, 'running', 0, ?, ?
+            )
+            """,
+            (
+                json.dumps(
+                    [{"id": 1, "code": "typo", "name": "错别字检查", "prompt": "检查错别字"}],
+                    ensure_ascii=False,
+                ),
+                provider_id,
+                now,
+                now,
+            ),
+        ).lastrowid
+        db.commit()
+        db.execute(
+            """
+            UPDATE user_model_providers
+            SET name = '修改后的提供商',
+                api_base = 'https://changed.example.test/v1/chat/completions',
+                api_key = 'changed-secret',
+                request_timeout = 99,
+                max_input_chars = 1000,
+                is_active = 0
+            WHERE id = ?
+            """,
+            (provider_id,),
+        )
+        db.execute("DELETE FROM user_model_configs WHERE provider_id = ?", (provider_id,))
+        db.commit()
+        calls = []
+
+        with patch("app.tasks.run_check", side_effect=lambda **kwargs: calls.append(kwargs) or "完成"):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        task = db.execute(
+            "SELECT status, api_key FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "completed")
+        self.assertIsNone(task["api_key"])
+        self.assertEqual(calls[0]["api_base"], "https://snapshot.example.test/v1/chat/completions")
+        self.assertEqual(calls[0]["api_key"], "snapshot-secret")
+        self.assertEqual(calls[0]["request_timeout"], 37)
+
+    def test_cleanup_expired_task_files_preserves_history_and_removes_runtime_data(self):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         image_root = Path(self.app.config["IMAGE_FOLDER"])
         old_upload = upload_dir / "old.pdf"
@@ -191,7 +305,7 @@ class TaskExecutionTest(unittest.TestCase):
         old_image.write_bytes(b"png")
         old_frame_dir.mkdir(parents=True, exist_ok=True)
         old_frame.write_bytes(b"jpg")
-        set_setting("report_retention_days", 1)
+        set_setting("task_file_retention_days", 1)
         db = get_db()
         old_meta = {
             "images": [
@@ -223,11 +337,11 @@ class TaskExecutionTest(unittest.TestCase):
                 """
                 INSERT INTO tasks(
                     task_type, ip, original_filename, stored_filename, file_type, file_size,
-                    document_meta_json, checks_json, model_name, api_base, request_timeout,
+                    document_text, document_meta_json, result_json, checks_json, model_name, api_base, api_key, request_timeout,
                     max_input_chars, status, progress, created_at, updated_at, finished_at
                 )
-                VALUES (?, '127.0.0.1', ?, ?, 'pdf', 1, ?, '[]', 'model-a',
-                        'http://example.test/v1/chat/completions', 30, 5000,
+                VALUES (?, '127.0.0.1', ?, ?, 'pdf', 1, '保留前的文档正文', ?, '[{"result":"历史报告"}]', '[]', 'model-a',
+                        'http://example.test/v1/chat/completions', 'task-secret', 30, 5000,
                         ?, 100, ?, ?, ?)
                 """,
                 (task_type, original, stored, meta, status, finished_at, finished_at, finished_at),
@@ -256,13 +370,27 @@ class TaskExecutionTest(unittest.TestCase):
         )
         db.commit()
 
-        self.assertEqual(cleanup_expired_task_reports(self.app), 1)
+        self.assertEqual(cleanup_expired_task_files(self.app), 1)
 
         remaining = {
-            row["stored_filename"]: row["status"]
-            for row in db.execute("SELECT stored_filename, status FROM tasks").fetchall()
+            row["stored_filename"]: row
+            for row in db.execute(
+                """
+                SELECT stored_filename, status, document_text, document_meta_json,
+                       result_json, api_key, source_files_cleaned_at
+                FROM tasks
+                """
+            ).fetchall()
         }
-        self.assertEqual(remaining, {"recent.pdf": "completed", "running.pdf": "running"})
+        self.assertEqual(set(remaining), {"old.pdf", "recent.pdf", "running.pdf"})
+        self.assertEqual(remaining["old.pdf"]["status"], "completed")
+        self.assertIsNone(remaining["old.pdf"]["document_text"])
+        self.assertEqual(remaining["old.pdf"]["api_key"], "task-secret")
+        self.assertIsNotNone(remaining["old.pdf"]["source_files_cleaned_at"])
+        self.assertEqual(remaining["old.pdf"]["document_meta_json"], json.dumps(old_meta, ensure_ascii=False))
+        self.assertEqual(remaining["old.pdf"]["result_json"], '[{"result":"历史报告"}]')
+        self.assertEqual(remaining["recent.pdf"]["document_text"], "保留前的文档正文")
+        self.assertEqual(remaining["running.pdf"]["document_text"], "保留前的文档正文")
         self.assertFalse(old_upload.exists())
         self.assertFalse(old_image.exists())
         self.assertFalse(old_frame.exists())
@@ -274,13 +402,16 @@ class TaskExecutionTest(unittest.TestCase):
             row["task_id"]
             for row in db.execute("SELECT task_id FROM report_suppression_hits").fetchall()
         }
-        self.assertEqual(remaining_hit_task_ids, {task_ids["recent.pdf"]})
+        self.assertEqual(
+            remaining_hit_task_ids,
+            {task_ids["old.pdf"], task_ids["recent.pdf"]},
+        )
 
-    def test_cleanup_expired_task_reports_skips_locked_files(self):
+    def test_cleanup_expired_task_files_skips_locked_files(self):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         old_upload = upload_dir / "old.pdf"
         old_upload.write_text("old", encoding="utf-8")
-        set_setting("report_retention_days", 1)
+        set_setting("task_file_retention_days", 1)
         db = get_db()
         db.execute(
             """
@@ -298,10 +429,11 @@ class TaskExecutionTest(unittest.TestCase):
         db.commit()
 
         with patch("app.tasks.remove_file", return_value=(False, "[WinError 32] 文件正被占用")):
-            self.assertEqual(cleanup_expired_task_reports(self.app), 0)
+            self.assertEqual(cleanup_expired_task_files(self.app), 0)
 
         task = db.execute("SELECT * FROM tasks WHERE stored_filename = 'old.pdf'").fetchone()
         self.assertIsNotNone(task)
+        self.assertIsNone(task["source_files_cleaned_at"])
         self.assertTrue(old_upload.exists())
 
     def test_document_check_sends_full_text_once(self):
@@ -598,12 +730,12 @@ class TaskExecutionTest(unittest.TestCase):
             """
             INSERT INTO tasks(
                 ip, original_filename, stored_filename, file_type, file_size,
-                document_text, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
+                document_text, checks_json, checks_snapshot_json, model_name, api_base, api_key, request_timeout, max_input_chars,
                 status, progress, claim_token, lease_expires_at, created_at, updated_at
             )
             VALUES (
                 '127.0.0.1', 'missing.txt', 'missing.txt', 'txt', 1,
-                'file: missing.txt\n\n缓存文本', ?, ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'file: missing.txt\n\n缓存文本', ?, ?, 'test-model', 'http://example.test/v1/chat/completions', 'task-secret', 30, 5000,
                 'running', 0, 'test-claim', '2999-01-01 00:00:00', ?, ?
             )
             """,
@@ -636,13 +768,15 @@ class TaskExecutionTest(unittest.TestCase):
             TaskScheduler(self.app)._run_task(task_id, "test-claim")
 
         updated = db.execute(
-            "SELECT status, result_json, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+            "SELECT status, result_json, api_key, claim_token, lease_expires_at FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         self.assertEqual(updated["status"], "completed")
+        self.assertIsNone(updated["api_key"])
         self.assertIsNone(updated["claim_token"])
         self.assertIsNone(updated["lease_expires_at"])
         self.assertEqual(calls[0]["document_text"], "file: missing.txt\n\n缓存文本")
+        self.assertEqual(calls[0]["api_key"], "task-secret")
 
     def test_consistency_task_uses_selected_check_snapshot(self):
         db = get_db()

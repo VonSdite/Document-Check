@@ -63,6 +63,18 @@
     </div>
     <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
     <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>
+    <div>
+      <dt>原文件</dt>
+      <dd>
+        {% if task_source_files_available(task) %}
+        可下载
+        {% elif task.source_files_cleaned_at %}
+        已于 {{ task.source_files_cleaned_at }} 自动清理
+        {% else %}
+        已清理或缺失
+        {% endif %}
+      </dd>
+    </div>
     <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
     {% if task.started_at %}<div><dt>开始时间</dt><dd>{{ task.started_at }}</dd></div>{% endif %}
     {% if task.finished_at %}<div><dt>结束时间</dt><dd>{{ task.finished_at }}</dd></div>{% endif %}

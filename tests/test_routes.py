@@ -3,7 +3,9 @@ import json
 import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 import yaml
@@ -153,7 +155,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             session.clear()
 
-    def _configure_provider(self, owner_subject: str = "ip:127.0.0.1") -> str:
+    def _configure_provider(
+        self,
+        owner_subject: str = "ip:127.0.0.1",
+        api_key: str = "provider-secret",
+    ) -> str:
         with self.app.app_context():
             now = "2026-05-01 09:00:00"
             cursor = get_db().execute(
@@ -162,10 +168,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     owner_subject, name, api_base, api_key,
                     request_timeout, max_input_chars, is_active, created_at, updated_at
                 )
-                VALUES (?, '测试提供商', 'https://example.test/v1/chat/completions', '',
+                VALUES (?, '测试提供商', 'https://example.test/v1/chat/completions', ?,
                         30, 80000, 1, ?, ?)
                 """,
-                (owner_subject, now, now),
+                (owner_subject, api_key, now, now),
             )
             provider_id = cursor.lastrowid
             get_db().execute(
@@ -177,6 +183,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
             get_db().commit()
         return f"{provider_id}:0:model-a"
+
+    def _assert_task_uses_provider_reference(self, task, model_id: str):
+        self.assertEqual(task["provider_id"], int(model_id.split(":", 1)[0]))
+        self.assertEqual(task["provider_name"], "测试提供商")
+        self.assertEqual(task["model_name"], "model-a")
+        self.assertEqual(task["api_base"], "https://example.test/v1/chat/completions")
+        self.assertEqual(task["api_key"], "provider-secret")
+        self.assertEqual(task["request_timeout"], 30)
+        self.assertEqual(task["max_input_chars"], 80000)
 
     def _reject_task_inserts(self):
         with self.app.app_context():
@@ -280,6 +295,92 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 (task_id,),
             ).fetchone()
         self.assertIsNone(hit)
+
+    def test_task_list_and_download_follow_actual_source_file_state(self):
+        task_id = self._insert_task()
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "stored.txt"
+
+        missing_list = self.client.get("/admin/tasks")
+        self.assertEqual(missing_list.status_code, 200)
+        missing_soup = BeautifulSoup(missing_list.get_data(as_text=True), "html.parser")
+        missing_row = _required_tag(missing_soup.select_one(f'tr[data-task-id="{task_id}"]'))
+        self.assertIn("原文件已清理或缺失", missing_row.get_text(" ", strip=True))
+        self.assertIsNone(missing_row.select_one(".task-download-link"))
+
+        missing_download = self.client.get(
+            f"/admin/tasks/{task_id}/document",
+            follow_redirects=True,
+        )
+        self.assertEqual(missing_download.status_code, 200)
+        self.assertIn("原文件已清理或缺失，无法下载", missing_download.get_data(as_text=True))
+
+        upload_path.write_text("restored", encoding="utf-8")
+
+        restored_list = self.client.get("/admin/tasks")
+        self.assertEqual(restored_list.status_code, 200)
+        restored_soup = BeautifulSoup(restored_list.get_data(as_text=True), "html.parser")
+        restored_row = _required_tag(restored_soup.select_one(f'tr[data-task-id="{task_id}"]'))
+        self.assertNotIn("原文件已清理或缺失", restored_row.get_text(" ", strip=True))
+        self.assertIsNotNone(restored_row.select_one(".task-download-link"))
+
+        restored_download = self.client.get(f"/admin/tasks/{task_id}/document")
+        self.assertEqual(restored_download.status_code, 200)
+        self.assertEqual(restored_download.data, b"restored")
+
+    def test_multi_document_download_requires_every_source_file(self):
+        task_id = self._insert_task(task_type=CONSISTENCY_TASK_TYPE)
+        upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
+        first_path = upload_dir / "first.txt"
+        second_path = upload_dir / "second.txt"
+        first_path.write_text("first", encoding="utf-8")
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET document_meta_json = ? WHERE id = ?",
+                (
+                    json.dumps(
+                        {
+                            "groups": [
+                                {
+                                    "role": "master",
+                                    "label": "素材文档",
+                                    "files": [
+                                        {
+                                            "original_filename": "first.txt",
+                                            "stored_filename": "first.txt",
+                                            "file_type": "txt",
+                                            "file_size": 5,
+                                        },
+                                        {
+                                            "original_filename": "second.txt",
+                                            "stored_filename": "second.txt",
+                                            "file_type": "txt",
+                                            "file_size": 6,
+                                        },
+                                    ],
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    task_id,
+                ),
+            )
+            get_db().commit()
+
+        partial_download = self.client.get(
+            f"/admin/tasks/{task_id}/document",
+            follow_redirects=True,
+        )
+        self.assertEqual(partial_download.status_code, 200)
+        self.assertIn("部分或全部原文件已清理或缺失", partial_download.get_data(as_text=True))
+
+        second_path.write_text("second", encoding="utf-8")
+
+        complete_download = self.client.get(f"/admin/tasks/{task_id}/document")
+        self.assertEqual(complete_download.status_code, 200)
+        self.assertEqual(complete_download.mimetype, "application/zip")
+        with zipfile.ZipFile(io.BytesIO(complete_download.data)) as archive:
+            self.assertEqual(len(archive.namelist()), 2)
 
     def test_user_bulk_delete_removes_selected_history_tasks(self):
         deletable_task_ids = [
@@ -573,7 +674,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "check_item_concurrency": "3",
                 "image_page_check_max_pages": "36",
                 "issue_output_limit": "100",
-                "report_retention_days": "14",
+                "task_file_retention_days": "14",
             },
         )
 
@@ -584,7 +685,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(get_setting("check_item_concurrency"), 3)
             self.assertEqual(get_setting("image_page_check_max_pages"), 36)
             self.assertEqual(get_setting("issue_output_limit"), 30)
-            self.assertEqual(get_setting("report_retention_days"), 14)
+            self.assertEqual(get_setting("task_file_retention_days"), 14)
+
+    def test_admin_settings_places_task_retention_details_in_help_tip(self):
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        field = _required_tag(soup.select_one(".settings-task-retention-field"))
+        self.assertEqual(_required_tag(field.select_one(".field-label")).get_text(strip=True), "任务数据保留天数")
+        tip = _required_tag(field.find("button", {"aria-label": "任务数据保留说明"}))
+        self.assertIn("0 表示不自动清理", tip.get("data-tip", ""))
+        self.assertIn("任务历史、检查报告和人工复核结果继续保留", tip.get("data-tip", ""))
+        self.assertNotIn("任务结束并超过保留天数", field.get_text(" ", strip=True))
 
     def test_admin_settings_saves_network_to_yaml_config(self):
         response = self.client.post(
@@ -763,6 +876,27 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("测试用户A", html)
         self.assertIn("10.0.0.2", html)
         self.assertNotIn("10.0.0.3", html)
+
+        quick_filters = {
+            link.get_text(strip=True): link
+            for link in BeautifulSoup(html, "html.parser").select(".overview-quick-filter")
+        }
+        self.assertEqual(set(quick_filters), {"今天", "近7天", "近30天"})
+        for link in quick_filters.values():
+            query = parse_qs(urlparse(link["href"]).query)
+            self.assertIn("start_date", query)
+            self.assertIn("end_date", query)
+        self.assertNotIn("active", quick_filters["今天"].get("class", []))
+        self.assertNotIn("active", quick_filters["近7天"].get("class", []))
+        self.assertNotIn("active", quick_filters["近30天"].get("class", []))
+
+        today_response = self.client.get(quick_filters["今天"]["href"])
+        today_soup = BeautifulSoup(today_response.get_data(as_text=True), "html.parser")
+        self.assertIn("active", today_soup.select_one('[data-range="today"]')["class"])
+
+        seven_day_response = self.client.get(quick_filters["近7天"]["href"])
+        seven_day_soup = BeautifulSoup(seven_day_response.get_data(as_text=True), "html.parser")
+        self.assertIn("active", seven_day_soup.select_one('[data-range="7-days"]')["class"])
 
     def test_admin_overview_uses_ip_username_mapping(self):
         self._insert_task(ip="10.0.0.8", created_at="2026-05-01 10:00:00")
@@ -1471,6 +1605,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
         snapshots = json.loads(task["checks_snapshot_json"])
+        self._assert_task_uses_provider_reference(task, model_id)
         self.assertEqual(task["document_text"], "file: doc.txt\n\n测试文档")
         self.assertEqual(
             snapshots,
@@ -1661,6 +1796,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
         meta = json.loads(task["document_meta_json"])
         snapshots = json.loads(task["checks_snapshot_json"])
+        self._assert_task_uses_provider_reference(task, model_id)
         self.assertEqual(task["task_type"], IMAGE_TASK_TYPE)
         self.assertEqual(meta["source_document"]["file_type"], "pdf")
         self.assertEqual(len(meta["page_images"]), 1)
@@ -1816,6 +1952,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
         meta = json.loads(task["document_meta_json"])
         snapshots = json.loads(task["checks_snapshot_json"])
+        self._assert_task_uses_provider_reference(task, model_id)
         self.assertEqual(task["task_type"], VIDEO_TASK_TYPE)
         self.assertEqual(task["file_type"], "mp4")
         self.assertEqual(meta["source_video"]["file_type"], "mp4")
@@ -2935,6 +3072,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task_id = self._insert_task(status="running", created_at=f"2026-05-01 10:{index:02d}:00")
             if index == 0:
                 oldest_task_id = task_id
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET api_key = 'task-secret' WHERE id = ?",
+                (oldest_task_id,),
+            )
+            get_db().commit()
 
         response = self.client.get(
             "/?page=2",
@@ -2956,6 +3099,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(cancel_response.status_code, 302)
         self.assertEqual(cancel_response.headers["Location"], "/infoCheck/?page=2")
+        with self.app.app_context():
+            canceled = get_db().execute(
+                "SELECT status, api_key FROM tasks WHERE id = ?",
+                (oldest_task_id,),
+            ).fetchone()
+        self.assertEqual(canceled["status"], "canceled")
+        self.assertIsNone(canceled["api_key"])
 
     def test_user_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):
@@ -3583,9 +3733,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute(
-                "SELECT task_type, original_filename, document_text, checks_snapshot_json FROM tasks"
-            ).fetchone()
+            task = get_db().execute("SELECT * FROM tasks").fetchone()
+        self._assert_task_uses_provider_reference(task, model_id)
         self.assertEqual(task["task_type"], "consistency_check")
         self.assertEqual(task["original_filename"], "素材文档：master.xlsx / 资料：related.txt")
         self.assertIn("## 素材文档1：master.xlsx", task["document_text"])
@@ -3714,9 +3863,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute(
-                "SELECT task_type, original_filename, file_type, document_text, document_meta_json, checks_snapshot_json FROM tasks"
-            ).fetchone()
+            task = get_db().execute("SELECT * FROM tasks").fetchone()
+        self._assert_task_uses_provider_reference(task, model_id)
         self.assertEqual(task["task_type"], LANGUAGE_CONSISTENCY_TASK_TYPE)
         self.assertEqual(task["file_type"], "双文档")
         self.assertIn("跨语种检查：zh.txt / en.txt", task["original_filename"])

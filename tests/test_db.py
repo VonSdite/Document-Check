@@ -87,12 +87,14 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("document_text", columns)
         self.assertIn("document_meta_json", columns)
         self.assertIn("checks_snapshot_json", columns)
+        self.assertIn("provider_id", columns)
         self.assertIn("owner_subject", columns)
         self.assertIn("owner_name_snapshot", columns)
         self.assertIn("owner_source", columns)
         self.assertIn("submission_token", columns)
         self.assertIn("claim_token", columns)
         self.assertIn("lease_expires_at", columns)
+        self.assertIn("source_files_cleaned_at", columns)
 
         indexes = {
             row["name"]: row
@@ -100,6 +102,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         }
         self.assertEqual(indexes["idx_tasks_submission_token"]["unique"], 1)
         self.assertIn("idx_tasks_status_lease", indexes)
+        self.assertIn("idx_tasks_provider", indexes)
 
     def test_user_model_tables_exist(self):
         db = get_db()
@@ -120,6 +123,57 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("model_name", model_columns)
         self.assertIn("force_disable_thinking", model_columns)
         self.assertEqual(model_columns["force_disable_thinking"]["dflt_value"], "1")
+
+    def test_init_db_clears_only_finished_task_api_key_snapshots(self):
+        db = get_db()
+        now = now_text()
+        db.executemany(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                checks_json, model_name, api_base, api_key, status, progress,
+                created_at, updated_at
+            )
+            VALUES ('127.0.0.1', ?, ?, 'txt', 1, '[]', 'model-a',
+                    'https://example.test/v1/chat/completions', ?, ?, 0, ?, ?)
+            """,
+            [
+                ("queued.txt", "queued.txt", "queued-secret", "queued", now, now),
+                ("running.txt", "running.txt", "running-secret", "running", now, now),
+                ("completed.txt", "completed.txt", "completed-secret", "completed", now, now),
+                ("failed.txt", "failed.txt", "failed-secret", "failed", now, now),
+                ("canceled.txt", "canceled.txt", "canceled-secret", "canceled", now, now),
+            ],
+        )
+        provider_id = db.execute(
+            """
+            INSERT INTO user_model_providers(
+                owner_subject, name, api_base, api_key, request_timeout,
+                max_input_chars, is_active, created_at, updated_at
+            )
+            VALUES ('ip:127.0.0.1', '测试提供商', 'https://example.test',
+                    'provider-secret', 30, 500000, 1, ?, ?)
+            """,
+            (now, now),
+        ).lastrowid
+        db.commit()
+
+        init_db()
+
+        task_keys = {
+            row["status"]: row["api_key"]
+            for row in db.execute("SELECT status, api_key FROM tasks").fetchall()
+        }
+        self.assertEqual(task_keys["queued"], "queued-secret")
+        self.assertEqual(task_keys["running"], "running-secret")
+        self.assertIsNone(task_keys["completed"])
+        self.assertIsNone(task_keys["failed"])
+        self.assertIsNone(task_keys["canceled"])
+        provider = db.execute(
+            "SELECT api_key FROM user_model_providers WHERE id = ?",
+            (provider_id,),
+        ).fetchone()
+        self.assertEqual(provider["api_key"], "provider-secret")
 
     def test_init_db_migrates_existing_models_to_disable_thinking_once(self):
         db = get_db()
@@ -264,8 +318,18 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertEqual(get_setting("issue_output_limit"), 30)
 
-    def test_default_report_retention_is_disabled(self):
-        self.assertEqual(get_setting("report_retention_days"), 0)
+    def test_default_task_file_retention_is_disabled(self):
+        self.assertEqual(get_setting("task_file_retention_days"), 0)
+
+    def test_seed_defaults_migrates_report_retention_to_task_file_retention(self):
+        set_setting("report_retention_days", 14)
+        get_db().execute("DELETE FROM settings WHERE key = 'task_file_retention_days'")
+        get_db().commit()
+
+        seed_defaults()
+
+        self.assertEqual(get_setting("task_file_retention_days"), 14)
+        self.assertIsNone(get_setting("report_retention_days"))
 
     def test_llm_stream_trace_is_disabled_by_default(self):
         self.assertFalse(get_setting("llm_stream_trace_enabled"))

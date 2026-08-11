@@ -17,7 +17,7 @@ from .common_terms import (
     format_common_terms_report,
     load_common_terms,
 )
-from .db import delete_task_record, get_bool_setting, get_db, get_setting, now_text
+from .db import get_bool_setting, get_db, get_setting, now_text
 from .documents import DocumentReadError, extract_text, format_document_text
 from .file_cleanup import (
     describe_failures,
@@ -68,9 +68,9 @@ DEFAULT_IMAGE_CHECK_BATCH_SIZE = 4
 MAX_IMAGE_CHECK_BATCH_SIZE = 4
 IMAGE_CONTEXT_NEIGHBOR_PAGES = 1
 IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
-DEFAULT_REPORT_RETENTION_DAYS = 0
-REPORT_CLEANUP_INTERVAL_SECONDS = 3600
-REPORT_CLEANUP_BATCH_SIZE = 100
+DEFAULT_TASK_FILE_RETENTION_DAYS = 0
+TASK_FILE_CLEANUP_INTERVAL_SECONDS = 3600
+TASK_FILE_CLEANUP_BATCH_SIZE = 100
 TASK_LEASE_SECONDS = 90
 TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
 IMAGE_PAGE_CHECK_CODES = {
@@ -96,7 +96,7 @@ class TaskScheduler:
         self.app = app
         self._stop_event = threading.Event()
         self._launcher = threading.Thread(target=self._loop, daemon=True, name="task-launcher")
-        self._last_report_cleanup = 0.0
+        self._last_task_file_cleanup = 0.0
 
     def start(self):
         self._launcher.start()
@@ -109,18 +109,18 @@ class TaskScheduler:
         while not self._stop_event.is_set():
             try:
                 with self.app.app_context():
-                    self._cleanup_reports_if_due()
+                    self._cleanup_task_files_if_due()
                     self._launch_available_tasks()
             except Exception:
                 self.app.logger.exception("任务调度循环异常")
             self._stop_event.wait(2)
 
-    def _cleanup_reports_if_due(self):
+    def _cleanup_task_files_if_due(self):
         now = time.monotonic()
-        if now - self._last_report_cleanup < REPORT_CLEANUP_INTERVAL_SECONDS:
+        if now - self._last_task_file_cleanup < TASK_FILE_CLEANUP_INTERVAL_SECONDS:
             return
-        self._last_report_cleanup = now
-        cleanup_expired_task_reports(self.app)
+        self._last_task_file_cleanup = now
+        cleanup_expired_task_files(self.app)
 
     def _launch_available_tasks(self):
         claimed_tasks = self._claim_available_tasks()
@@ -246,7 +246,6 @@ class TaskScheduler:
                 if task["cancel_requested"]:
                     _mark_canceled(db, task_id, claim_token)
                     return
-
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
                 max_workers = max(
                     1,
@@ -347,6 +346,7 @@ class TaskScheduler:
                         result_json = ?,
                         summary = ?,
                         error = NULL,
+                        api_key = NULL,
                         claim_token = NULL,
                         lease_expires_at = NULL,
                         updated_at = ?,
@@ -1944,8 +1944,8 @@ def _task_image_folder(app) -> Path:
     return default_image_folder(app.config["UPLOAD_FOLDER"])
 
 
-def cleanup_expired_task_reports(app) -> int:
-    retention_days = _report_retention_days()
+def cleanup_expired_task_files(app) -> int:
+    retention_days = _task_file_retention_days()
     if retention_days <= 0:
         return 0
 
@@ -1956,30 +1956,39 @@ def cleanup_expired_task_reports(app) -> int:
         SELECT *
         FROM tasks
         WHERE status IN ('completed', 'failed', 'canceled')
+          AND source_files_cleaned_at IS NULL
           AND COALESCE(finished_at, updated_at, created_at) < ?
         ORDER BY COALESCE(finished_at, updated_at, created_at) ASC, id ASC
         LIMIT ?
         """,
-        (cutoff, REPORT_CLEANUP_BATCH_SIZE),
+        (cutoff, TASK_FILE_CLEANUP_BATCH_SIZE),
     ).fetchall()
-    deleted = 0
+    cleaned = 0
     for task in tasks:
         try:
             _remove_task_artifacts(app, task)
-            delete_task_record(db, task["id"])
-            deleted += 1
+            db.execute(
+                """
+                UPDATE tasks
+                SET document_text = NULL,
+                    source_files_cleaned_at = ?
+                WHERE id = ?
+                """,
+                (now_text(), task["id"]),
+            )
+            cleaned += 1
         except TaskArtifactCleanupError as exc:
-            app.logger.warning("定期清理检查报告跳过 task_id=%s error=%s", task["id"], exc)
+            app.logger.warning("定期清理任务文件跳过 task_id=%s error=%s", task["id"], exc)
         except Exception:
-            app.logger.exception("定期清理检查报告失败 task_id=%s", task["id"])
-    if deleted:
+            app.logger.exception("定期清理任务文件失败 task_id=%s", task["id"])
+    if cleaned:
         db.commit()
-        app.logger.info("定期清理检查报告完成 deleted=%s cutoff=%s retention_days=%s", deleted, cutoff, retention_days)
-    return deleted
+        app.logger.info("定期清理任务文件完成 cleaned=%s cutoff=%s retention_days=%s", cleaned, cutoff, retention_days)
+    return cleaned
 
 
-def _report_retention_days() -> int:
-    return max(0, _int_setting("report_retention_days", DEFAULT_REPORT_RETENTION_DAYS))
+def _task_file_retention_days() -> int:
+    return max(0, _int_setting("task_file_retention_days", DEFAULT_TASK_FILE_RETENTION_DAYS))
 
 
 def _issue_output_limit() -> int:
@@ -2236,6 +2245,7 @@ def _mark_canceled(db, task_id: int, claim_token: str | None = None):
         UPDATE tasks
         SET status = 'canceled',
             progress = 0,
+            api_key = NULL,
             claim_token = NULL,
             lease_expires_at = NULL,
             updated_at = ?,
@@ -2275,6 +2285,7 @@ def _mark_failed(
             error = ?,
             result_json = ?,
             summary = ?,
+            api_key = NULL,
             claim_token = NULL,
             lease_expires_at = NULL,
             updated_at = ?,

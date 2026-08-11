@@ -757,6 +757,11 @@ td {
   align-items: end;
 }
 
+.settings-task-retention-field {
+  grid-column: 3;
+  grid-row: 2;
+}
+
 .settings-ip-username-form {
   display: grid;
   grid-template-columns: minmax(180px, 320px) minmax(180px, 320px) 128px;
@@ -2493,10 +2498,52 @@ td {
 
 .overview-filter {
   display: grid;
-  grid-template-columns: repeat(2, minmax(180px, 240px)) auto auto;
+  grid-template-columns: repeat(2, minmax(180px, 240px)) auto;
   gap: 12px;
   align-items: end;
   justify-content: start;
+}
+
+.overview-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+}
+
+.overview-quick-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #dce7f4;
+  border-radius: 12px;
+  background: #eef4fb;
+}
+
+.overview-quick-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 5px 11px;
+  border-radius: 9px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.overview-quick-filter:hover {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--primary-strong);
+}
+
+.overview-quick-filter.active {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 3px 8px rgba(70, 111, 169, 0.2);
 }
 
 .switch-line {

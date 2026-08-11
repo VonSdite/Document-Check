@@ -104,20 +104,21 @@
       </thead>
       <tbody>
         {% for task in tasks %}
+        {% set source_files_available = task_source_files_available(task) %}
         <tr>
           {{ task_bulk.select_cell(task) }}
           <td class="task-file-cell">
             <div class="task-file-line">
               <a class="strong-link task-report-link" href="{{ url_for('user_task_detail', task_id=task.id) }}" target="_blank" rel="noopener" title="查看报告">{{ task.original_filename }}</a>
-              <a class="task-download-link" href="{{ url_for('user_download_task_document', task_id=task.id) }}" title="下载视频" aria-label="下载视频：{{ task.original_filename }}">
+              {% if source_files_available %}<a class="task-download-link" href="{{ url_for('user_download_task_document', task_id=task.id) }}" title="下载视频" aria-label="下载视频：{{ task.original_filename }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="M12 3v12"></path>
                   <path d="m7 10 5 5 5-5"></path>
                   <path d="M5 21h14"></path>
                 </svg>
-              </a>
+              </a>{% endif %}
             </div>
-            <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</div>
+            <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB{% if not source_files_available %} · 原文件已清理或缺失{% endif %}</div>
           </td>
           <td class="task-model-cell">{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
           <td>

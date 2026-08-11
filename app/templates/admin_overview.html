@@ -20,8 +20,29 @@
       结束日期
       <input type="date" name="end_date" value="{{ selected_range.end_date }}">
     </label>
-    <button class="primary-button" type="submit">查看统计</button>
-    <a class="secondary-button" href="{{ url_for('admin_dashboard') }}">近30天</a>
+    <div class="overview-filter-actions">
+      <button class="primary-button" type="submit">查看统计</button>
+      <div class="overview-quick-filters" aria-label="快捷时间范围">
+        <a
+          class="overview-quick-filter{% if selected_range.start_date == selected_range.today and selected_range.end_date == selected_range.today %} active{% endif %}"
+          data-range="today"
+          href="{{ url_for('admin_dashboard', start_date=selected_range.today, end_date=selected_range.today) }}"
+          {% if selected_range.start_date == selected_range.today and selected_range.end_date == selected_range.today %}aria-current="page"{% endif %}
+        >今天</a>
+        <a
+          class="overview-quick-filter{% if selected_range.start_date == selected_range.last_7_start and selected_range.end_date == selected_range.today %} active{% endif %}"
+          data-range="7-days"
+          href="{{ url_for('admin_dashboard', start_date=selected_range.last_7_start, end_date=selected_range.today) }}"
+          {% if selected_range.start_date == selected_range.last_7_start and selected_range.end_date == selected_range.today %}aria-current="page"{% endif %}
+        >近7天</a>
+        <a
+          class="overview-quick-filter{% if selected_range.start_date == selected_range.last_30_start and selected_range.end_date == selected_range.today %} active{% endif %}"
+          data-range="30-days"
+          href="{{ url_for('admin_dashboard', start_date=selected_range.last_30_start, end_date=selected_range.today) }}"
+          {% if selected_range.start_date == selected_range.last_30_start and selected_range.end_date == selected_range.today %}aria-current="page"{% endif %}
+        >近30天</a>
+      </div>
+    </div>
   </form>
 </section>
 

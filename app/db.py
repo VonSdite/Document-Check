@@ -72,6 +72,7 @@ def init_db():
             document_meta_json TEXT,
             checks_json TEXT NOT NULL,
             checks_snapshot_json TEXT,
+            provider_id INTEGER,
             provider_name TEXT,
             model_name TEXT NOT NULL,
             api_base TEXT NOT NULL,
@@ -90,7 +91,8 @@ def init_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             started_at TEXT,
-            finished_at TEXT
+            finished_at TEXT,
+            source_files_cleaned_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS user_model_providers (
@@ -192,6 +194,7 @@ def init_db():
     _ensure_column(db, "tasks", "document_text", "TEXT")
     _ensure_column(db, "tasks", "document_meta_json", "TEXT")
     _ensure_column(db, "tasks", "checks_snapshot_json", "TEXT")
+    _ensure_column(db, "tasks", "provider_id", "INTEGER")
     _ensure_column(db, "tasks", "force_disable_thinking", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(db, "tasks", "owner_subject", "TEXT")
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")
@@ -199,10 +202,12 @@ def init_db():
     _ensure_column(db, "tasks", "submission_token", "TEXT")
     _ensure_column(db, "tasks", "claim_token", "TEXT")
     _ensure_column(db, "tasks", "lease_expires_at", "TEXT")
+    _ensure_column(db, "tasks", "source_files_cleaned_at", "TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_lease ON tasks(status, lease_expires_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_provider ON tasks(provider_id)")
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_type_owner_created "
         "ON tasks(task_type, owner_subject, created_at DESC, id DESC)"
@@ -214,6 +219,7 @@ def init_db():
     )
     _migrate_task_owners(db)
     _migrate_model_thinking_defaults(db)
+    _clear_finished_task_api_keys(db)
     _cleanup_orphaned_report_suppression_hits(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
@@ -282,6 +288,17 @@ def _migrate_model_thinking_defaults(db):
     db.execute(
         "INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)",
         (MODEL_THINKING_DEFAULT_MIGRATION_KEY, now),
+    )
+
+
+def _clear_finished_task_api_keys(db):
+    db.execute(
+        """
+        UPDATE tasks
+        SET api_key = NULL
+        WHERE status IN ('completed', 'failed', 'canceled')
+          AND api_key IS NOT NULL
+        """
     )
 
 
@@ -823,6 +840,8 @@ def seed_defaults():
     db = get_db()
     now = now_text()
 
+    _migrate_task_file_retention_setting(db, now)
+
     defaults = {
         "global_concurrency": 3,
         "user_concurrency": 1,
@@ -830,7 +849,7 @@ def seed_defaults():
         "image_check_batch_size": 4,
         "image_page_check_max_pages": 120,
         "issue_output_limit": DEFAULT_ISSUE_OUTPUT_LIMIT,
-        "report_retention_days": 0,
+        "task_file_retention_days": 0,
         "llm_stream_trace_enabled": False,
     }
     for key, value in defaults.items():
@@ -883,6 +902,22 @@ def seed_defaults():
     _disable_merged_image_check_items(db, now)
     _remove_retired_default_check_items(db)
     db.commit()
+
+
+def _migrate_task_file_retention_setting(db, updated_at: str):
+    current = db.execute(
+        "SELECT 1 FROM settings WHERE key = 'task_file_retention_days'"
+    ).fetchone()
+    legacy = db.execute(
+        "SELECT value FROM settings WHERE key = 'report_retention_days'"
+    ).fetchone()
+    if current is None and legacy is not None:
+        db.execute(
+            "INSERT INTO settings(key, value, updated_at) VALUES ('task_file_retention_days', ?, ?)",
+            (legacy["value"], updated_at),
+        )
+    if legacy is not None:
+        db.execute("DELETE FROM settings WHERE key = 'report_retention_days'")
 
 
 def _remove_retired_default_check_items(db):

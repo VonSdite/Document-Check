@@ -92,7 +92,7 @@ STATUS_LABELS = {
 DELETABLE_TASK_STATUSES = {"completed", "failed", "canceled"}
 TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
-REPORT_RETENTION_DAYS_DEFAULT = 0
+TASK_FILE_RETENTION_DAYS_DEFAULT = 0
 ISSUE_OUTPUT_LIMIT_DEFAULT = DEFAULT_ISSUE_OUTPUT_LIMIT
 UPLOAD_PATH_SAFE_CHARS = 240
 UPLOAD_FILENAME_SAFE_CHARS = 180
@@ -347,6 +347,7 @@ def register_routes(app):
     app.add_template_global(_owner_meta, "owner_meta")
     app.add_template_global(_consistency_task_title, "consistency_task_title")
     app.add_template_global(_current_relative_url, "current_relative_url")
+    app.add_template_global(_task_source_files_available, "task_source_files_available")
 
     @app.context_processor
     def inject_globals():
@@ -1023,19 +1024,19 @@ def register_routes(app):
                     issue_output_limit = normalize_issue_output_limit(
                         int(request.form.get("issue_output_limit", str(ISSUE_OUTPUT_LIMIT_DEFAULT)))
                     )
-                    report_retention_days = max(
+                    task_file_retention_days = max(
                         0,
-                        int(request.form.get("report_retention_days", str(REPORT_RETENTION_DAYS_DEFAULT))),
+                        int(request.form.get("task_file_retention_days", str(TASK_FILE_RETENTION_DAYS_DEFAULT))),
                     )
                 except ValueError:
-                    flash("任务设置必须是整数，报告保留天数可为 0，其余必须为正整数。", "error")
+                    flash("任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。", "error")
                     return redirect(url_for("admin_settings"))
                 set_setting("global_concurrency", global_concurrency)
                 set_setting("user_concurrency", user_concurrency)
                 set_setting("check_item_concurrency", check_item_concurrency)
                 set_setting("image_page_check_max_pages", image_page_check_max_pages)
                 set_setting("issue_output_limit", issue_output_limit)
-                set_setting("report_retention_days", report_retention_days)
+                set_setting("task_file_retention_days", task_file_retention_days)
                 flash("任务设置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
@@ -1288,7 +1289,7 @@ def register_routes(app):
             image_page_check_max_pages=get_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES),
             issue_output_limit=get_setting("issue_output_limit", ISSUE_OUTPUT_LIMIT_DEFAULT),
             max_issue_output_limit=MAX_ISSUE_OUTPUT_LIMIT,
-            report_retention_days=get_setting("report_retention_days", REPORT_RETENTION_DAYS_DEFAULT),
+            task_file_retention_days=get_setting("task_file_retention_days", TASK_FILE_RETENTION_DAYS_DEFAULT),
             network=current_app.config["NETWORK"],
             llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
             settings_tab=settings_tab,
@@ -1740,7 +1741,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         SELECT
                t.id, t.task_type, t.ip, t.username_snapshot,
                t.owner_subject, t.owner_name_snapshot, t.owner_source,
-               t.original_filename, t.file_type, t.file_size,
+               t.original_filename, t.stored_filename, t.file_type, t.file_size,
                t.provider_name, t.model_name, t.status, t.progress,
                t.created_at, t.document_meta_json,
                {current_ip_username_expr} AS current_ip_username,
@@ -2295,6 +2296,9 @@ def _admin_overview_range() -> dict:
         "start_at": f"{start_date.isoformat()} 00:00:00",
         "end_at": f"{(end_date + timedelta(days=1)).isoformat()} 00:00:00",
         "days": (end_date - start_date).days + 1,
+        "today": today.isoformat(),
+        "last_7_start": (today - timedelta(days=6)).isoformat(),
+        "last_30_start": (today - timedelta(days=29)).isoformat(),
     }
 
 
@@ -2634,11 +2638,11 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-                request_timeout, max_input_chars, force_disable_thinking,
+                document_text, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
+                api_base, api_key, request_timeout, max_input_chars, force_disable_thinking,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             rows,
         )
@@ -2700,6 +2704,7 @@ def _prepare_document_task_row(
         prepared_document_text,
         json.dumps(check_ids, ensure_ascii=False),
         json.dumps(check_snapshots, ensure_ascii=False),
+        model["provider_id"],
         model["provider_name"],
         model["model_name"],
         model["api_base"],
@@ -2851,11 +2856,12 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-                request_timeout, max_input_chars, force_disable_thinking,
+                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
+                max_input_chars, force_disable_thinking,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 IMAGE_TASK_TYPE,
@@ -2872,6 +2878,7 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
                 model["api_base"],
@@ -2978,11 +2985,12 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-                request_timeout, max_input_chars, force_disable_thinking,
+                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
+                max_input_chars, force_disable_thinking,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 VIDEO_TASK_TYPE,
@@ -2999,6 +3007,7 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
                 model["api_base"],
@@ -3097,11 +3106,12 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-                request_timeout, max_input_chars, force_disable_thinking,
+                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
+                max_input_chars, force_disable_thinking,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 CONSISTENCY_TASK_TYPE,
@@ -3118,6 +3128,7 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
                 model["api_base"],
@@ -3214,11 +3225,12 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source, submission_token,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_name, model_name, api_base, api_key,
-                request_timeout, max_input_chars, force_disable_thinking,
+                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
+                max_input_chars, force_disable_thinking,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 LANGUAGE_CONSISTENCY_TASK_TYPE,
@@ -3236,6 +3248,7 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
+                model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
                 model["api_base"],
@@ -3557,6 +3570,7 @@ def _cancel_task(task):
         SET cancel_requested = 1,
             status = 'canceled',
             progress = 0,
+            api_key = NULL,
             claim_token = NULL,
             lease_expires_at = NULL,
             updated_at = ?,
@@ -3638,7 +3652,7 @@ def _download_task_document(task, fallback_endpoint: str):
 
     upload_path = _task_upload_path(task)
     if not upload_path.is_file():
-        flash("文档已删除，无法下载。", "error")
+        flash("原文件已清理或缺失，无法下载。", "error")
         return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
     return send_file(
         upload_path,
@@ -3688,22 +3702,41 @@ def _task_upload_path(task) -> Path:
 
 
 def _task_upload_paths(task) -> list[Path]:
-    groups = _task_document_groups(task)
-    upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
-    paths = []
-    if groups:
-        for group in groups:
-            for file_info in group["files"]:
-                stored_filename = Path(str(file_info.get("stored_filename") or "")).name
-                if stored_filename:
-                    paths.append(upload_folder / stored_filename)
-    else:
-        paths.append(_task_upload_path(task))
+    paths = _task_source_file_paths(task)
     for image in _task_image_items(task):
         image_path = image_path_from_item(_image_folder(), image)
         if image_path is not None:
             paths.append(image_path)
     return paths
+
+
+def _task_source_file_paths(task) -> list[Path]:
+    groups = _task_document_groups(task)
+    upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
+    if not groups:
+        return [_task_upload_path(task)]
+
+    paths = []
+    for group in groups:
+        for file_info in group["files"]:
+            stored_filename = Path(str(file_info.get("stored_filename") or "")).name
+            if stored_filename:
+                paths.append(upload_folder / stored_filename)
+    return paths
+
+
+def _task_source_files_available(task) -> bool:
+    groups = _task_document_groups(task)
+    if task["task_type"] in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE} and not groups:
+        return False
+    if groups and any(
+        not Path(str(file_info.get("stored_filename") or "")).name
+        for group in groups
+        for file_info in group["files"]
+    ):
+        return False
+    paths = _task_source_file_paths(task)
+    return bool(paths) and all(path.is_file() for path in paths)
 
 
 def _task_document_groups(task) -> list[dict]:
@@ -3747,10 +3780,12 @@ def _download_task_documents_zip(task, fallback_endpoint: str):
     if not groups:
         flash("文档信息缺失，无法下载。", "error")
         return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
+    if not _task_source_files_available(task):
+        flash("部分或全部原文件已清理或缺失，无法完整下载。", "error")
+        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
 
     upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
     buffer = io.BytesIO()
-    added = 0
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         used_names = set()
         for group in groups:
@@ -3759,18 +3794,11 @@ def _download_task_documents_zip(task, fallback_endpoint: str):
                 if not stored_filename:
                     continue
                 upload_path = upload_folder / stored_filename
-                if not upload_path.is_file():
-                    continue
                 archive_name = _unique_archive_name(
                     used_names,
                     f"{group['label']}/{Path(str(file_info.get('original_filename') or stored_filename)).name}",
                 )
                 archive.write(upload_path, archive_name)
-                added += 1
-    if added == 0:
-        flash("文档已删除，无法下载。", "error")
-        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
-
     buffer.seek(0)
     return send_file(
         buffer,
