@@ -45,9 +45,17 @@
       </div>
       <div class="progress"><span style="width: {{ task.progress }}%"></span></div>
       <dl class="meta-list report-meta-list">
-        <div><dt>任务类型</dt><dd>{{ task_type_label(task.task_type) }}</dd></div>
+        <div class="report-meta-half"><dt>任务类型</dt><dd>{{ task_type_label(task.task_type) }}</dd></div>
+        <div class="report-meta-half">
+          <dt>归属用户</dt>
+          <dd>
+            {{ owner_display(task) }}
+            {% set owner_meta_text = owner_meta(task) %}
+            {% if owner_meta_text %}<div class="subline">{{ owner_meta_text }}</div>{% endif %}
+          </dd>
+        </div>
         {% if document_groups %}
-        <div class="report-file-meta">
+        <div class="report-document-groups-meta">
           <dt>文档组</dt>
           <dd>
             <div class="report-document-groups">
@@ -69,17 +77,8 @@
           <dt>文件名称</dt>
           <dd>{{ task.original_filename }}</dd>
         </div>
+        <div><dt>文件信息</dt><dd>{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</dd></div>
         {% endif %}
-        <div>
-          <dt>归属用户</dt>
-          <dd>
-            {{ owner_display(task) }}
-            {% set owner_meta_text = owner_meta(task) %}
-            {% if owner_meta_text %} · {{ owner_meta_text }}{% endif %}
-          </dd>
-        </div>
-        <div><dt>文件类型</dt><dd>{{ task.file_type }}</dd></div>
-        <div><dt>文件大小</dt><dd>{{ (task.file_size / 1024)|round(1) }} KB</dd></div>
         <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
         {% if task.started_at %}<div><dt>开始时间</dt><dd>{{ task.started_at }}</dd></div>{% endif %}
         {% if task.finished_at %}<div><dt>结束时间</dt><dd>{{ task.finished_at }}</dd></div>{% endif %}

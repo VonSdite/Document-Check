@@ -335,7 +335,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(restored_detail.status_code, 200)
         restored_detail_soup = BeautifulSoup(restored_detail.get_data(as_text=True), "html.parser")
         self.assertIsNotNone(restored_detail_soup.select_one(".source-file-status-available"))
-        self.assertIsNotNone(restored_detail_soup.select_one(".source-file-download-link"))
+        download_link = _required_tag(restored_detail_soup.select_one(".source-file-download-link"))
+        self.assertEqual(download_link.get_text(" ", strip=True), "下载原文件")
 
         restored_download = self.client.get(f"/admin/tasks/{task_id}/document")
         self.assertEqual(restored_download.status_code, 200)
@@ -2207,6 +2208,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         items = soup.select("[data-report-item]")
         self.assertEqual(len(items), 2)
+        meta_labels = [node.get_text(strip=True) for node in soup.select(".report-meta-list > div > dt")]
+        self.assertEqual(meta_labels[:5], ["任务类型", "归属用户", "原文件", "文件名称", "文件信息"])
+        file_meta = _required_tag(soup.select_one(".report-file-meta"))
+        self.assertEqual(file_meta.get_text(" ", strip=True), "文件名称 report.txt")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "0")
@@ -2221,6 +2226,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         exported_soup = BeautifulSoup(exported.get_data(as_text=True), "html.parser")
         exported_text = exported_soup.get_text(" ", strip=True)
+        exported_meta_labels = [node.get_text(strip=True) for node in exported_soup.select(".report-meta-list > div > dt")]
+        self.assertEqual(exported_meta_labels[:4], ["任务类型", "归属用户", "文件名称", "文件信息"])
         self.assertIn("AI 检查条目统计", exported_text)
         self.assertNotIn("共 2 条：", exported_text)
         self.assertEqual(

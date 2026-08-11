@@ -1836,19 +1836,15 @@ td {
 }
 
 .source-file-download-link {
-  display: inline-grid;
-  width: 20px;
-  height: 20px;
-  margin-left: 4px;
-  place-items: center;
-  border-radius: 50%;
-  color: currentColor;
+  gap: 5px;
+  margin-left: 0;
+  text-decoration: none;
   transition: color 0.15s ease, background 0.15s ease;
 }
 
 .source-file-download-link:hover,
 .source-file-download-link:focus-visible {
-  background: rgba(255, 255, 255, 0.72);
+  background: #dff1fc;
   color: var(--primary-strong);
 }
 
@@ -2229,11 +2225,47 @@ td {
 }
 
 .report-meta-list {
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
 }
 
-.report-file-meta {
+.report-meta-list > div {
+  grid-column: span 2;
+  display: block;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.report-meta-list dt {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.report-meta-list dd {
+  margin-top: 5px;
+  color: var(--text);
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.report-meta-list > .report-file-meta {
+  grid-column: span 4;
+}
+
+.report-meta-list > .report-document-groups-meta {
   grid-column: 1 / -1;
+}
+
+.report-meta-list > .report-meta-half {
+  grid-column: span 3;
+}
+
+.report-meta-list .source-file-status {
+  margin-left: 0;
 }
 
 .report-document-groups {
@@ -3200,6 +3232,12 @@ td {
 }
 
 @media (max-width: 720px) {
+  .report-meta-list > div,
+  .report-meta-list > .report-file-meta,
+  .report-meta-list > .report-meta-half {
+    grid-column: 1 / -1;
+  }
+
   .report-classification-summary {
     align-items: stretch;
     flex-direction: column;
