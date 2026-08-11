@@ -3674,7 +3674,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertFalse(rejection_controls.has_attr("hidden"))
         self.assertFalse(rejection_reason.has_attr("disabled"))
         empty_reason = _required_tag(rejection_reason.select_one('option[value=""]'))
-        self.assertEqual(empty_reason.get_text(strip=True), "不选择原因")
+        self.assertEqual(empty_reason.get_text(strip=True), "--")
         self.assertEqual(rejection_reason.select("option")[0], empty_reason)
 
         other_response = self.client.post(

@@ -198,7 +198,7 @@
                 {% if status == "rejected" %}
                 <div class="rejection-controls" data-report-rejection-controls {{ "hidden" if item.acceptance_status != "rejected" else "" }}>
                   <select data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" aria-label="条目 {{ item.index }} 不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
-                    <option value="">不选择原因</option>
+                    <option value="">--</option>
                     {% for reason, reason_label in REPORT_REJECTION_REASONS.items() %}
                     <option value="{{ reason }}" {{ "selected" if item.rejection_reason == reason else "" }}>{{ reason_label }}</option>
                     {% endfor %}

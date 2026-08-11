@@ -437,12 +437,6 @@ function saveReportItemReview(item) {
       }
       applyReportItemSave(item, data);
       updateReportCounts(data.totals || {});
-      showToast(
-        data.suppression_candidate_created
-          ? "报告条目复核结果已保存，并已生成误报忽略候选规则。"
-          : "报告条目复核结果已保存。",
-        "success",
-      );
     })
     .catch(() => {
       revertReportItemControls(item);
