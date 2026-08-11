@@ -10,11 +10,30 @@
 {% block content %}
 {% set source_files_available = task_source_files_available(task) %}
 <div class="report-toolbar">
-  <a class="secondary-button" href="{{ back_url }}">返回列表</a>
+  <a class="report-back-button" href="{{ back_url }}">
+    <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M19 12H5"></path>
+      <path d="m12 19-7-7 7-7"></path>
+    </svg>
+    <span>返回列表</span>
+  </a>
   {% if task.status == "completed" %}
-  <div class="report-export-actions">
-    <a class="secondary-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">导出 HTML</a>
-    <a class="secondary-button" href="{{ url_for('admin_export_task_excel' if mode == 'admin' else 'user_export_task_excel', task_id=task.id) }}">导出 EXCEL</a>
+  <div class="report-export-actions" aria-label="导出报告">
+    <a class="primary-button report-export-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">
+      <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 3v11"></path>
+        <path d="m7 10 5 5 5-5"></path>
+        <path d="M5 20h14"></path>
+      </svg>
+      <span>导出 HTML</span>
+    </a>
+    <a class="primary-button report-export-button" href="{{ url_for('admin_export_task_excel' if mode == 'admin' else 'user_export_task_excel', task_id=task.id) }}">
+      <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="4" y="3" width="16" height="18" rx="2"></rect>
+        <path d="M8 8h8M8 12h8M8 16h3M13 16h3"></path>
+      </svg>
+      <span>导出 EXCEL</span>
+    </a>
   </div>
   {% endif %}
 </div>
