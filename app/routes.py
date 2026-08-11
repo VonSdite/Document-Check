@@ -1180,10 +1180,12 @@ def register_routes(app):
                 prompt = request.form.get("prompt", "").strip()
                 enabled = 1 if request.form.get("enabled") == "on" else 0
                 if not name or not prompt:
+                    if _wants_json_response():
+                        return {"ok": False, "error": "检查项名称和提示词不能为空。"}, 400
                     flash("检查项名称和提示词不能为空。", "error")
                     return redirect(url_for("admin_settings"))
                 now = now_text()
-                db.execute(
+                cursor = db.execute(
                     """
                     INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1201,6 +1203,14 @@ def register_routes(app):
                     ),
                 )
                 db.commit()
+                if _wants_json_response():
+                    item = db.execute("SELECT * FROM check_items WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                    return {
+                        "ok": True,
+                        "message": "扩展检查项已创建，可继续添加。",
+                        "item_id": int(cursor.lastrowid),
+                        "html": render_template("_check_item_rows.html", item=item, is_builtin=False),
+                    }
                 flash("扩展检查项已创建。", "success")
                 return redirect(url_for("admin_settings"))
 
@@ -1222,17 +1232,29 @@ def register_routes(app):
             if action == "delete_check_item":
                 item_id = request.form.get("item_id")
                 if not item_id or not item_id.isdigit():
+                    if _wants_json_response():
+                        return {"ok": False, "error": "检查项不存在，无法删除。"}, 400
                     flash("检查项不存在，无法删除。", "error")
                     return redirect(url_for("admin_settings"))
                 item = db.execute("SELECT code FROM check_items WHERE id = ?", (item_id,)).fetchone()
                 if item is None:
+                    if _wants_json_response():
+                        return {"ok": False, "error": "检查项不存在，无法删除。"}, 404
                     flash("检查项不存在，无法删除。", "error")
                     return redirect(url_for("admin_settings"))
                 if item["code"] in default_check_item_codes():
+                    if _wants_json_response():
+                        return {"ok": False, "error": "内置检查项不能删除。"}, 400
                     flash("内置检查项不能删除。", "error")
                     return redirect(url_for("admin_settings"))
                 db.execute("DELETE FROM check_items WHERE id = ?", (item_id,))
                 db.commit()
+                if _wants_json_response():
+                    return {
+                        "ok": True,
+                        "message": "扩展检查项已删除。",
+                        "item_id": int(item_id),
+                    }
                 flash("扩展检查项已删除。", "success")
                 return redirect(url_for("admin_settings"))
 

@@ -835,6 +835,123 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+async function createCheckItemWithoutReload(form) {
+  const submitButton = form.querySelector('button[type="submit"]');
+  const originalText = submitButton?.textContent || "创建检查项";
+  if (submitButton instanceof HTMLButtonElement) {
+    submitButton.disabled = true;
+    submitButton.textContent = "创建中...";
+  }
+  form.setAttribute("aria-busy", "true");
+
+  try {
+    const response = await fetch(form.getAttribute("action") || window.location.href, {
+      method: form.getAttribute("method") || "POST",
+      body: new FormData(form),
+      credentials: "same-origin",
+      headers: {
+        "Accept": "application/json",
+        "X-Requested-With": "fetch",
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "检查项创建失败，请稍后重试。");
+    }
+
+    const panel = form.closest("[data-prompt-panel]");
+    const rows = panel?.querySelector("[data-check-item-table] tbody");
+    const template = document.createElement("template");
+    template.innerHTML = String(data.html || "").trim();
+    const createdRow = template.content.querySelector("[data-check-item-row]");
+    const createdDetail = template.content.querySelector("[data-check-item-detail]");
+    if (!rows || !createdRow || !createdDetail) {
+      throw new Error("检查项已创建，但列表更新失败，请刷新页面查看。");
+    }
+
+    rows.prepend(template.content);
+    form.reset();
+    const nameInput = form.querySelector('input[name="name"]');
+    if (nameInput instanceof HTMLInputElement) {
+      nameInput.focus({ preventScroll: true });
+    }
+    showToast(data.message || "扩展检查项已创建，可继续添加。", "success");
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "检查项创建失败，请稍后重试。", "error");
+  } finally {
+    form.removeAttribute("aria-busy");
+    if (submitButton instanceof HTMLButtonElement) {
+      submitButton.disabled = false;
+      submitButton.textContent = originalText;
+    }
+  }
+}
+
+document.addEventListener("submit", (event) => {
+  const form = event.target.closest("[data-create-check-item-form]");
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  event.preventDefault();
+  createCheckItemWithoutReload(form);
+});
+
+async function deleteCheckItemWithoutReload(form) {
+  const itemId = form.querySelector('input[name="item_id"]')?.value || "";
+  const row = document.querySelector(`[data-check-item-row][data-check-item-id="${itemId}"]`);
+  const detail = document.querySelector(`[data-check-item-detail="${itemId}"]`);
+  const rows = row?.closest("tbody")
+    ? Array.from(row.closest("tbody").querySelectorAll("[data-check-item-row]"))
+    : [];
+  const rowIndex = rows.indexOf(row);
+  const focusRow = rows[rowIndex + 1] || rows[rowIndex - 1] || null;
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton instanceof HTMLButtonElement) {
+    submitButton.disabled = true;
+  }
+  form.setAttribute("aria-busy", "true");
+
+  try {
+    const response = await fetch(form.getAttribute("action") || window.location.href, {
+      method: form.getAttribute("method") || "POST",
+      body: new FormData(form),
+      credentials: "same-origin",
+      headers: {
+        "Accept": "application/json",
+        "X-Requested-With": "fetch",
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "检查项删除失败，请稍后重试。");
+    }
+
+    detail?.remove();
+    row?.remove();
+    const focusTarget = focusRow?.querySelector("[data-check-item-toggle]");
+    if (focusTarget instanceof HTMLButtonElement) {
+      focusTarget.focus({ preventScroll: true });
+    }
+    showToast(data.message || "扩展检查项已删除。", "success");
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "检查项删除失败，请稍后重试。", "error");
+  } finally {
+    form.removeAttribute("aria-busy");
+    if (submitButton instanceof HTMLButtonElement) {
+      submitButton.disabled = false;
+    }
+  }
+}
+
+document.addEventListener("submit", (event) => {
+  const form = event.target.closest("[data-delete-check-item-form]");
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  event.preventDefault();
+  deleteCheckItemWithoutReload(form);
+});
+
 let checkItemDragArmed = false;
 let draggedCheckItemRow = null;
 let suppressCheckItemClick = false;

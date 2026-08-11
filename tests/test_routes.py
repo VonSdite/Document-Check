@@ -1145,6 +1145,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(panel.has_attr("hidden"), index != 0)
             task_type_input = _required_tag(panel.find("input", {"name": "task_type"}))
             self.assertEqual(task_type_input.get("value"), task_type)
+            self.assertIsNotNone(panel.select_one("[data-create-check-item-form]"))
         document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查提示词说明"}))
         consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照提示词说明"}))
         language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种检查提示词说明"}))
@@ -1830,6 +1831,106 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(item["description"], "检查资料是否遗漏素材关键内容")
         self.assertEqual(item["prompt"], "只检查资料遗漏。")
         self.assertEqual(item["enabled"], 1)
+
+    def test_admin_settings_creates_check_item_without_page_reload(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "create_check_item",
+                "task_type": DOCUMENT_TASK_TYPE,
+                "name": "连续创建测试项",
+                "description": "用于验证局部创建",
+                "prompt": "只验证局部创建。",
+                "enabled": "on",
+            },
+            headers={"Accept": "application/json", "X-Requested-With": "fetch"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["message"], "扩展检查项已创建，可继续添加。")
+        self.assertIsInstance(data["item_id"], int)
+        html = BeautifulSoup(data["html"], "html.parser")
+        row = _required_tag(html.select_one('[data-check-item-row]'))
+        detail = _required_tag(html.select_one('[data-check-item-detail]'))
+        self.assertEqual(row.get("data-check-item-id"), str(data["item_id"]))
+        self.assertEqual(detail.get("data-check-item-detail"), str(data["item_id"]))
+        self.assertIn("连续创建测试项", row.get_text(" ", strip=True))
+        self.assertIn("只验证局部创建。", detail.get_text(" ", strip=True))
+        self.assertIsNotNone(row.select_one("[data-delete-check-item-form]"))
+
+    def test_admin_settings_deletes_check_item_without_page_reload(self):
+        created = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "create_check_item",
+                "task_type": DOCUMENT_TASK_TYPE,
+                "name": "局部删除测试项",
+                "prompt": "只验证局部删除。",
+            },
+            headers={"Accept": "application/json", "X-Requested-With": "fetch"},
+        ).get_json()
+
+        response = self.client.post(
+            "/admin/settings",
+            data={"action": "delete_check_item", "item_id": str(created["item_id"])},
+            headers={"Accept": "application/json", "X-Requested-With": "fetch"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {
+                "ok": True,
+                "message": "扩展检查项已删除。",
+                "item_id": created["item_id"],
+            },
+        )
+        with self.app.app_context():
+            item = get_db().execute("SELECT 1 FROM check_items WHERE id = ?", (created["item_id"],)).fetchone()
+        self.assertIsNone(item)
+
+    def test_admin_settings_returns_json_error_for_invalid_check_item(self):
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "create_check_item",
+                "task_type": DOCUMENT_TASK_TYPE,
+                "name": "缺少提示词",
+                "prompt": "",
+            },
+            headers={"Accept": "application/json", "X-Requested-With": "fetch"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"ok": False, "error": "检查项名称和提示词不能为空。"})
+
+    def test_admin_settings_orders_new_check_items_first(self):
+        for name in ("先创建的检查项", "后创建的检查项"):
+            response = self.client.post(
+                "/admin/settings",
+                data={
+                    "action": "create_check_item",
+                    "task_type": DOCUMENT_TASK_TYPE,
+                    "name": name,
+                    "prompt": f"{name}提示词。",
+                },
+            )
+            self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            rows = get_db().execute(
+                """
+                SELECT name
+                FROM check_items
+                WHERE task_type = ? AND name IN (?, ?)
+                ORDER BY sort_order ASC, id ASC
+                """,
+                (DOCUMENT_TASK_TYPE, "先创建的检查项", "后创建的检查项"),
+            ).fetchall()
+
+        self.assertEqual([row["name"] for row in rows], ["后创建的检查项", "先创建的检查项"])
 
     def test_admin_settings_creates_image_check_item(self):
         response = self.client.post(

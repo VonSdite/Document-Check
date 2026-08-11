@@ -1,0 +1,74 @@
+<tr class="check-item-row" draggable="true" data-check-item-row data-check-item-id="{{ item.id }}">
+  <td class="check-item-drag-cell">
+    <button class="drag-handle" type="button" data-check-item-drag aria-label="拖动排序">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <circle cx="9" cy="6" r="1.5"></circle>
+        <circle cx="15" cy="6" r="1.5"></circle>
+        <circle cx="9" cy="12" r="1.5"></circle>
+        <circle cx="15" cy="12" r="1.5"></circle>
+        <circle cx="9" cy="18" r="1.5"></circle>
+        <circle cx="15" cy="18" r="1.5"></circle>
+      </svg>
+    </button>
+  </td>
+  <td>
+    <div class="check-item-row-main">
+      <span class="check-item-kind status-pill {{ 'status-completed' if is_builtin else 'status-queued' }}">{{ "内置" if is_builtin else "扩展" }}</span>
+      <button class="check-item-toggle" type="button" data-check-item-toggle aria-expanded="false" aria-controls="check-item-detail-{{ item.id }}">
+        <span>{{ item.name }}</span>
+      </button>
+      <div class="check-item-row-actions">
+        {% if not is_builtin %}
+        <form method="post" class="check-item-delete-form" data-delete-check-item-form>
+          <input type="hidden" name="action" value="delete_check_item">
+          <input type="hidden" name="item_id" value="{{ item.id }}">
+          <button class="check-item-delete-button" type="submit" data-confirm-click="确认删除该扩展检查项？已创建的历史任务报告不会被删除。" aria-label="删除扩展检查项：{{ item.name }}">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 6h18"></path>
+              <path d="M8 6V4h8v2"></path>
+              <path d="M19 6l-1 14H6L5 6"></path>
+              <path d="M10 11v5"></path>
+              <path d="M14 11v5"></path>
+            </svg>
+          </button>
+        </form>
+        {% endif %}
+        <svg class="check-item-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="m8 10 4 4 4-4"></path>
+        </svg>
+      </div>
+    </div>
+  </td>
+</tr>
+<tr class="check-item-detail-row" id="check-item-detail-{{ item.id }}" data-check-item-detail="{{ item.id }}" hidden>
+  <td></td>
+  <td>
+    <div class="check-item-detail-panel">
+      <form method="post" class="stack-form">
+        <input type="hidden" name="action" value="prompt">
+        <input type="hidden" name="item_id" value="{{ item.id }}">
+        <div class="form-grid">
+          <label>检查项名称<input name="name" value="{{ item.name }}" required></label>
+          <div class="form-field">
+            <span class="field-with-help">
+              <span class="field-label">说明</span>
+              <button class="help-tip" type="button" aria-label="说明用途" data-tip="显示在创建检查页，鼠标悬浮检查项时可查看。">?</button>
+            </span>
+            <input name="description" value="{{ item.description or '' }}">
+          </div>
+        </div>
+        <label>提示词<textarea name="prompt" rows="10" required>{{ item.prompt }}</textarea></label>
+        <div class="form-actions">
+          <label class="switch-line">
+            <input type="checkbox" name="enabled" {{ "checked" if item.enabled else "" }}>
+            <span>启用</span>
+          </label>
+          {% if is_builtin %}
+          <button class="secondary-button settings-save-button" type="submit" name="reset_prompt" value="1" formnovalidate data-confirm-click="确认将该检查项提示词重置为默认内容？">重置</button>
+          {% endif %}
+          <button class="primary-button settings-save-button" type="submit">保存</button>
+        </div>
+      </form>
+    </div>
+  </td>
+</tr>
