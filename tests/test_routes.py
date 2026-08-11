@@ -1237,6 +1237,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "查询",
         )
 
+    def test_admin_overview_daily_trend_is_limited_to_30_days(self):
+        for day in range(1, 32):
+            self._insert_task(created_at=f"2026-05-{day:02d} 10:00:00")
+
+        response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-31")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        daily_panel = _required_tag(soup.select_one(".overview-grid .panel:last-child"))
+        daily_rows = daily_panel.select("tbody tr")
+        self.assertEqual(len(daily_rows), 30)
+        self.assertEqual(daily_rows[0].find("td").get_text(strip=True), "2026-05-31")
+        self.assertEqual(daily_rows[-1].find("td").get_text(strip=True), "2026-05-02")
+        self.assertIn("<span>提交任务</span><strong>31</strong>", response.get_data(as_text=True))
+
     def test_admin_overview_uses_ip_username_mapping(self):
         self._insert_task(ip="10.0.0.8", created_at="2026-05-01 10:00:00")
         self.client.post(

@@ -2426,6 +2426,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         WHERE created_at >= ? AND created_at < ? AND {mode_clause}
         GROUP BY day
         ORDER BY day DESC
+        LIMIT 30
         """,
         (
             DOCUMENT_TASK_TYPE,
