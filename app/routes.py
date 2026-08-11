@@ -26,9 +26,10 @@ from flask import (
     session,
     url_for,
 )
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, current_identity, subject_label
@@ -190,8 +191,14 @@ MEDIA_REPORT_ITEM_DETAIL_FIELDS = (
     ("suggestion", "建议"),
 )
 REPORT_EXPORT_MIMETYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+REPORT_EXPORT_SHEET_NAME = "报告条目"
+REPORT_EXPORT_RESULT_CODE_HEADER = "检查项编码（请勿修改）"
+REPORT_EXPORT_ITEM_ID_HEADER = "条目标识（请勿修改）"
+REPORT_IMPORT_MAX_BYTES = 10 * 1024 * 1024
+REPORT_IMPORT_MAX_ROWS = 5000
 REPORT_EXPORT_HEADER_FILL = PatternFill("solid", fgColor="EAF0F8")
 REPORT_EXPORT_HEADER_FONT = Font(bold=True)
+REPORT_EXPORT_EDITABLE_FILL = PatternFill("solid", fgColor="FFF4CC")
 REPORT_TOTAL_EXPORT_ROWS = (
     ("问题", "issue"),
     ("建议", "suggestion"),
@@ -204,6 +211,12 @@ REPORT_TOTAL_EXPORT_ROWS = (
     ("问题接纳率", "issue_acceptance_rate"),
     ("合计", "total"),
 )
+
+
+class ReportExcelImportError(ValueError):
+    pass
+
+
 REPORT_ITEM_TYPE_LABEL = "条目判定"
 REPORT_ITEM_START_RE = re.compile(
     r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
@@ -706,6 +719,11 @@ def register_routes(app):
         task = _get_user_task_or_local_admin(task_id)
         return _export_task_report_excel(task)
 
+    @app.post("/tasks/<int:task_id>/import.xlsx")
+    def user_import_task_excel(task_id):
+        task = _get_user_task_or_local_admin(task_id)
+        return _import_task_report_excel(task, "user_task_detail")
+
     @app.get("/tasks/<int:task_id>/document")
     def user_download_task_document(task_id):
         task = _get_user_task_or_local_admin(task_id)
@@ -971,6 +989,12 @@ def register_routes(app):
     def admin_export_task_excel(task_id):
         task = _get_task_or_404(task_id)
         return _export_task_report_excel(task)
+
+    @app.post(f"{admin_prefix}/tasks/<int:task_id>/import.xlsx")
+    @admin_required
+    def admin_import_task_excel(task_id):
+        task = _get_task_or_404(task_id)
+        return _import_task_report_excel(task, "admin_task_detail")
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/document")
     @admin_required
@@ -5052,33 +5076,15 @@ def _update_report_item_type(task):
     if target is None or item_id not in valid_item_ids:
         return {"ok": False, "error": "报告条目不存在。"}, 404
 
-    classifications = target.get("item_classifications")
-    if not isinstance(classifications, dict):
-        classifications = {}
-    classifications[item_id] = item_type
-    target["item_classifications"] = classifications
-    if acceptance_supplied:
-        acceptances = target.get("item_acceptances")
-        if not isinstance(acceptances, dict):
-            acceptances = {}
-        if acceptance_status == "pending":
-            acceptances.pop(item_id, None)
-        else:
-            record = {"status": acceptance_status}
-            if acceptance_status == "rejected":
-                record["rejection_reason"] = rejection_reason
-                record["rejection_note"] = rejection_note
-            acceptances[item_id] = record
-        target["item_acceptances"] = acceptances
-
     db = get_db()
-    suppression_candidate_created = _maybe_create_report_suppression_candidate(
+    suppression_candidate_created = _apply_report_item_review(
         db,
         task=task,
         result_code=result_code,
         result=target,
         item_id=item_id,
         item_type=item_type,
+        acceptance_supplied=acceptance_supplied,
         acceptance_status=acceptance_status,
         rejection_reason=rejection_reason,
         rejection_note=rejection_note,
@@ -5117,6 +5123,52 @@ def _update_report_item_type(task):
     }
 
 
+def _apply_report_item_review(
+    db,
+    *,
+    task,
+    result_code: str,
+    result: dict,
+    item_id: str,
+    item_type: str,
+    acceptance_supplied: bool,
+    acceptance_status: str | None,
+    rejection_reason: str,
+    rejection_note: str,
+) -> bool:
+    classifications = result.get("item_classifications")
+    if not isinstance(classifications, dict):
+        classifications = {}
+    classifications[item_id] = item_type
+    result["item_classifications"] = classifications
+
+    if acceptance_supplied:
+        acceptances = result.get("item_acceptances")
+        if not isinstance(acceptances, dict):
+            acceptances = {}
+        if acceptance_status == "pending":
+            acceptances.pop(item_id, None)
+        else:
+            record = {"status": acceptance_status}
+            if acceptance_status == "rejected":
+                record["rejection_reason"] = rejection_reason
+                record["rejection_note"] = rejection_note
+            acceptances[item_id] = record
+        result["item_acceptances"] = acceptances
+
+    return _maybe_create_report_suppression_candidate(
+        db,
+        task=task,
+        result_code=result_code,
+        result=result,
+        item_id=item_id,
+        item_type=item_type,
+        acceptance_status=acceptance_status if acceptance_supplied else None,
+        rejection_reason=rejection_reason,
+        rejection_note=rejection_note,
+    )
+
+
 def _export_task_report(task):
     static_folder = current_app.static_folder
     if not static_folder:
@@ -5148,7 +5200,7 @@ def _export_task_report_excel(task):
     document_groups = _task_document_groups(task)
     workbook = Workbook()
     report_sheet = workbook.active
-    report_sheet.title = "报告条目"
+    report_sheet.title = REPORT_EXPORT_SHEET_NAME
 
     _fill_report_items_sheet(report_sheet, task, results, document_groups)
     _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
@@ -5166,6 +5218,246 @@ def _export_task_report_excel(task):
     )
 
 
+def _import_task_report_excel(task, detail_endpoint: str):
+    redirect_response = redirect(url_for(detail_endpoint, task_id=task["id"]))
+    if task["status"] != "completed":
+        flash("任务尚未完成，暂不能回填报告标注。", "error")
+        return redirect_response
+
+    upload = request.files.get("report_excel")
+    filename = str(upload.filename or "").strip() if upload is not None else ""
+    if upload is None or not filename:
+        flash("请选择需要回填的 Excel 报告。", "error")
+        return redirect_response
+    if Path(filename).suffix.lower() != ".xlsx":
+        flash("回填文件仅支持系统导出的 xlsx 格式报告。", "error")
+        return redirect_response
+
+    payload = upload.stream.read(REPORT_IMPORT_MAX_BYTES + 1)
+    if len(payload) > REPORT_IMPORT_MAX_BYTES:
+        flash("回填文件不能超过 10MB。", "error")
+        return redirect_response
+
+    try:
+        imported_count = _load_report_excel_reviews(task, payload)
+    except ReportExcelImportError as exc:
+        flash(str(exc), "error")
+        return redirect_response
+
+    flash(f"已从 Excel 回填 {imported_count} 条报告标注。", "success")
+    return redirect_response
+
+
+def _load_report_excel_reviews(task, payload: bytes) -> int:
+    try:
+        workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=False, keep_links=False)
+    except Exception as exc:
+        current_app.logger.warning("打开报告回填文件失败 task_id=%s error=%s", task["id"], exc)
+        raise ReportExcelImportError("无法读取回填文件，请上传系统导出的有效 xlsx 报告。") from exc
+
+    try:
+        if REPORT_EXPORT_SHEET_NAME not in workbook.sheetnames:
+            raise ReportExcelImportError(f"回填文件缺少“{REPORT_EXPORT_SHEET_NAME}”工作表。")
+        reviews = _parse_report_excel_reviews(task, workbook[REPORT_EXPORT_SHEET_NAME])
+    except ReportExcelImportError:
+        raise
+    except Exception as exc:
+        current_app.logger.warning("解析报告回填文件失败 task_id=%s error=%s", task["id"], exc)
+        raise ReportExcelImportError("无法读取回填文件，请上传系统导出的有效 xlsx 报告。") from exc
+    finally:
+        workbook.close()
+
+    results = _raw_task_results(task)
+    result_targets = _report_excel_item_targets(results)
+    db = get_db()
+    for review in reviews:
+        result = result_targets[(review["result_code"], review["item_id"])]
+        _apply_report_item_review(
+            db,
+            task=task,
+            result_code=review["result_code"],
+            result=result,
+            item_id=review["item_id"],
+            item_type=review["item_type"],
+            acceptance_supplied=review["acceptance_supplied"],
+            acceptance_status=review["acceptance_status"],
+            rejection_reason=review["rejection_reason"],
+            rejection_note=review["rejection_note"],
+        )
+    db.execute(
+        "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(results, ensure_ascii=False), now_text(), task["id"]),
+    )
+    db.commit()
+    return len(reviews)
+
+
+def _parse_report_excel_reviews(task, sheet) -> list[dict]:
+    if sheet.max_row > REPORT_IMPORT_MAX_ROWS + 1:
+        raise ReportExcelImportError(f"回填文件最多允许 {REPORT_IMPORT_MAX_ROWS} 行报告条目。")
+
+    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+    columns = {}
+    for index, value in enumerate(header_row):
+        header = _excel_import_text(value)
+        if not header:
+            continue
+        if header in columns:
+            raise ReportExcelImportError(f"“{REPORT_EXPORT_SHEET_NAME}”工作表存在重复列“{header}”。")
+        columns[header] = index
+
+    for required_header in ("任务ID", REPORT_ITEM_TYPE_LABEL):
+        if required_header not in columns:
+            raise ReportExcelImportError(f"回填文件缺少“{required_header}”列。")
+
+    metadata_headers = (REPORT_EXPORT_RESULT_CODE_HEADER, REPORT_EXPORT_ITEM_ID_HEADER)
+    has_metadata = all(header in columns for header in metadata_headers)
+    if any(header in columns for header in metadata_headers) and not has_metadata:
+        raise ReportExcelImportError("回填文件的隐藏条目标识列不完整，请重新导出报告。")
+    if not has_metadata and not all(header in columns for header in ("检查项", "条目")):
+        raise ReportExcelImportError("回填文件缺少条目标识列，无法匹配报告条目。")
+
+    results = _raw_task_results(task)
+    item_targets = _report_excel_item_targets(results)
+    legacy_targets = _legacy_report_excel_item_targets(task, results)
+    type_values = {**{code: code for code in REPORT_ITEM_TYPES}, **{label: code for code, label in REPORT_ITEM_TYPES.items()}}
+    acceptance_values = {
+        **{code: code for code in REPORT_ACCEPTANCE_STATUSES},
+        **{label: code for code, label in REPORT_ACCEPTANCE_STATUSES.items()},
+    }
+    rejection_values = {
+        **{code: code for code in REPORT_REJECTION_REASONS},
+        **{label: code for code, label in REPORT_REJECTION_REASONS.items()},
+    }
+
+    reviews = []
+    seen_targets = set()
+    for row_number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+        item_marker = _excel_import_text(_excel_row_value(row, columns, "条目"))
+        metadata_item_id = _excel_import_text(_excel_row_value(row, columns, REPORT_EXPORT_ITEM_ID_HEADER))
+        if not item_marker and not metadata_item_id:
+            continue
+
+        item_type_text = _excel_import_text(_excel_row_value(row, columns, REPORT_ITEM_TYPE_LABEL))
+        if not item_type_text:
+            continue
+        item_type = type_values.get(item_type_text)
+        if item_type is None:
+            raise ReportExcelImportError(
+                f"第 {row_number} 行“{REPORT_ITEM_TYPE_LABEL}”无效，请选择问题、建议或非问题。"
+            )
+
+        task_id = _excel_import_task_id(_excel_row_value(row, columns, "任务ID"))
+        if task_id != str(task["id"]):
+            raise ReportExcelImportError(f"第 {row_number} 行任务ID与当前报告不一致。")
+
+        if has_metadata:
+            result_code = _excel_import_text(_excel_row_value(row, columns, REPORT_EXPORT_RESULT_CODE_HEADER))
+            item_id = metadata_item_id
+            if not result_code or not item_id:
+                raise ReportExcelImportError(f"第 {row_number} 行条目标识缺失，请重新导出报告。")
+            target_key = (result_code, item_id)
+        else:
+            result_name = _excel_import_text(_excel_row_value(row, columns, "检查项"))
+            candidates = legacy_targets.get((result_name, item_marker), [])
+            if len(candidates) != 1:
+                raise ReportExcelImportError(
+                    f"第 {row_number} 行无法唯一匹配当前报告条目，请重新导出报告后标注。"
+                )
+            target_key = candidates[0]
+
+        if target_key not in item_targets:
+            raise ReportExcelImportError(f"第 {row_number} 行报告条目不存在或已发生变化，请重新导出报告。")
+        if target_key in seen_targets:
+            raise ReportExcelImportError(f"第 {row_number} 行与前面的行重复指向同一报告条目。")
+        seen_targets.add(target_key)
+
+        acceptance_supplied = False
+        acceptance_status = None
+        rejection_reason = ""
+        rejection_note = ""
+        if "是否接纳" in columns:
+            acceptance_text = _excel_import_text(_excel_row_value(row, columns, "是否接纳"))
+            if acceptance_text:
+                acceptance_status = acceptance_values.get(acceptance_text)
+                if acceptance_status is None:
+                    raise ReportExcelImportError(
+                        f"第 {row_number} 行“是否接纳”无效，请选择未确认、接纳或不接纳。"
+                    )
+                acceptance_supplied = True
+                if acceptance_status == "rejected":
+                    reason_text = _excel_import_text(_excel_row_value(row, columns, "不接纳原因"))
+                    if reason_text:
+                        rejection_reason = rejection_values.get(reason_text, "")
+                        if not rejection_reason:
+                            raise ReportExcelImportError(f"第 {row_number} 行“不接纳原因”无效。")
+                    rejection_note = _excel_import_text(_excel_row_value(row, columns, "人工原因"))
+                    if rejection_reason == "other" and not rejection_note:
+                        raise ReportExcelImportError(f"第 {row_number} 行选择其他原因时必须填写人工原因。")
+
+        reviews.append(
+            {
+                "result_code": target_key[0],
+                "item_id": target_key[1],
+                "item_type": item_type,
+                "acceptance_supplied": acceptance_supplied,
+                "acceptance_status": acceptance_status,
+                "rejection_reason": rejection_reason,
+                "rejection_note": rejection_note,
+            }
+        )
+
+    if not reviews:
+        raise ReportExcelImportError("回填文件中没有可识别的报告标注。")
+    return reviews
+
+
+def _report_excel_item_targets(results: list[dict]) -> dict[tuple[str, str], dict]:
+    targets = {}
+    for result in results:
+        result_code = str(result.get("code") or "")
+        for item in _result_report_items(result):
+            targets[(result_code, str(item.get("id") or ""))] = result
+    return targets
+
+
+def _legacy_report_excel_item_targets(task, results: list[dict]) -> dict[tuple[str, str], list[tuple[str, str]]]:
+    prepared = _prepare_task_results(
+        results,
+        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
+        task_id=task["id"],
+    )
+    targets = {}
+    for result in prepared:
+        result_name = str(result.get("name") or "").strip()
+        result_code = str(result.get("code") or "")
+        for item in result.get("report_items") or []:
+            key = (result_name, f"条目 {item.get('index')}")
+            targets.setdefault(key, []).append((result_code, str(item.get("id") or "")))
+    return targets
+
+
+def _excel_row_value(row: tuple, columns: dict[str, int], header: str):
+    index = columns.get(header)
+    if index is None or index >= len(row):
+        return None
+    return row[index]
+
+
+def _excel_import_text(value) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _excel_import_task_id(value) -> str:
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return _excel_import_text(value)
+
+
 def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: list[dict]) -> None:
     report_item_fields = _report_item_fields_for_task(task["task_type"])
     headers = [
@@ -5179,6 +5471,8 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
         "是否接纳",
         "不接纳原因",
         "人工原因",
+        REPORT_EXPORT_RESULT_CODE_HEADER,
+        REPORT_EXPORT_ITEM_ID_HEADER,
     ]
     sheet.append(headers)
     context = _excel_task_context(task, document_groups)
@@ -5195,6 +5489,8 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
                     "",
                     "",
                     "",
+                    _excel_cell_text(result.get("code")),
+                    "",
                 ]
             )
             continue
@@ -5209,9 +5505,44 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
                     _excel_cell_text(item.get("acceptance_label")),
                     _excel_cell_text(item.get("rejection_reason_label")) if item.get("acceptance_status") == "rejected" else "",
                     _excel_cell_text(item.get("rejection_note")) if item.get("acceptance_status") == "rejected" else "",
+                    _excel_cell_text(result.get("code")),
+                    _excel_cell_text(item.get("id")),
                 ]
             )
     _style_excel_sheet(sheet)
+    _configure_report_review_sheet(sheet, headers)
+
+
+def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
+    columns = {header: index + 1 for index, header in enumerate(headers)}
+    last_row = max(sheet.max_row, 2)
+    validation_choices = (
+        (REPORT_ITEM_TYPE_LABEL, tuple(REPORT_ITEM_TYPES.values())),
+        ("是否接纳", tuple(REPORT_ACCEPTANCE_STATUSES.values())),
+        ("不接纳原因", tuple(REPORT_REJECTION_REASONS.values())),
+    )
+    for header, choices in validation_choices:
+        column = columns[header]
+        column_letter = get_column_letter(column)
+        validation = DataValidation(
+            type="list",
+            formula1=f'"{",".join(choices)}"',
+            allow_blank=header == "不接纳原因",
+        )
+        validation.error = f"请从下拉列表中选择有效的{header}。"
+        validation.errorTitle = "标注值无效"
+        validation.prompt = f"请选择{header}。"
+        validation.promptTitle = "报告标注"
+        validation.showErrorMessage = True
+        validation.showInputMessage = True
+        sheet.add_data_validation(validation)
+        validation.add(f"{column_letter}2:{column_letter}{last_row}")
+        for row in range(2, sheet.max_row + 1):
+            sheet.cell(row=row, column=column).fill = REPORT_EXPORT_EDITABLE_FILL
+
+    for header in (REPORT_EXPORT_RESULT_CODE_HEADER, REPORT_EXPORT_ITEM_ID_HEADER):
+        sheet.column_dimensions[get_column_letter(columns[header])].hidden = True
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{sheet.max_row}"
 
 
 def _fill_report_totals_sheet(sheet, report_totals: dict) -> None:

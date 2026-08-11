@@ -34,6 +34,17 @@
       </svg>
       <span>导出 EXCEL</span>
     </a>
+    <form class="report-import-form" method="post" enctype="multipart/form-data" action="{{ url_for('admin_import_task_excel' if mode == 'admin' else 'user_import_task_excel', task_id=task.id) }}" data-prevent-double-submit="true">
+      <input class="report-import-input" name="report_excel" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-report-import-input required>
+      <button class="primary-button report-export-button report-import-button" type="button" data-report-import-trigger>
+        <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 21V10"></path>
+          <path d="m7 14 5-5 5 5"></path>
+          <path d="M5 4h14"></path>
+        </svg>
+        <span data-report-import-label>回填 EXCEL</span>
+      </button>
+    </form>
   </div>
   {% endif %}
 </div>

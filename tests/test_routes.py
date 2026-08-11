@@ -286,6 +286,51 @@ class AdminSettingsRouteTest(unittest.TestCase):
             get_db().commit()
             return int(cursor.lastrowid)
 
+    def _insert_report_task(self, *, status: str = "completed"):
+        structured_report = {
+            "summary": "发现 1 个明确问题，1 个建议。",
+            "items": [
+                {
+                    "status": "issue",
+                    "category": "参数不一致",
+                    "location": "第1章",
+                    "description": "参数 A 前后不一致",
+                    "suggestion": "统一参数 A。",
+                },
+                {
+                    "status": "suggestion",
+                    "category": "补充说明",
+                    "location": "第2章",
+                    "description": "未说明温度范围",
+                    "suggestion": "补充适用温度范围。",
+                },
+            ],
+        }
+        result_json = [
+            {
+                "code": "consistency",
+                "name": "全文一致性检查",
+                "result": json.dumps(structured_report, ensure_ascii=False),
+            }
+        ]
+        with self.app.app_context():
+            now = "2026-05-23 13:00:00"
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'report.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        ?, 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), status, now, now),
+            )
+            get_db().commit()
+            return cursor.lastrowid
+
     def test_admin_delete_task_reports_locked_file_without_removing_task(self):
         self._insert_task()
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "stored.txt"
@@ -2600,6 +2645,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "是否接纳",
                     "不接纳原因",
                     "人工原因",
+                    "检查项编码（请勿修改）",
+                    "条目标识（请勿修改）",
                 ),
             )
             self.assertEqual(len(report_rows), 3)
@@ -2612,6 +2659,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(report_rows[1][14], "不接纳")
             self.assertEqual(report_rows[1][15], "模型误报")
             self.assertEqual(report_rows[1][16], "上下文可解释")
+            self.assertEqual(report_rows[1][17], "consistency")
+            self.assertTrue(report_rows[1][18])
             self.assertEqual(report_rows[2][12], "补充适用范围。")
             self.assertEqual(report_rows[2][13], "建议")
             stats = dict(workbook["统计"].iter_rows(min_row=2, values_only=True))
@@ -2622,6 +2671,132 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(stats["问题接纳率"], "0.0%")
         finally:
             workbook.close()
+
+    def test_task_report_excel_import_persists_offline_reviews(self):
+        task_id = self._insert_report_task()
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        detail_soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        import_form = _required_tag(detail_soup.select_one(".report-import-form"))
+        self.assertEqual(import_form.get("action"), f"/admin/tasks/{task_id}/import.xlsx")
+        self.assertEqual(_required_tag(import_form.select_one("input")).get("accept").split(",")[0], ".xlsx")
+
+        exported = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+        workbook = load_workbook(io.BytesIO(exported.data))
+        try:
+            sheet = workbook["报告条目"]
+            headers = {cell.value: cell.column for cell in sheet[1]}
+            result_code_column = headers["检查项编码（请勿修改）"]
+            item_id_column = headers["条目标识（请勿修改）"]
+            self.assertTrue(sheet.column_dimensions[sheet.cell(1, result_code_column).column_letter].hidden)
+            self.assertTrue(sheet.column_dimensions[sheet.cell(1, item_id_column).column_letter].hidden)
+            self.assertEqual(len(sheet.data_validations.dataValidation), 3)
+
+            item_id = sheet.cell(2, item_id_column).value
+            sheet.cell(2, headers["条目判定"]).value = "非问题"
+            sheet.cell(2, headers["是否接纳"]).value = "不接纳"
+            sheet.cell(2, headers["不接纳原因"]).value = "模型误报"
+            sheet.cell(2, headers["人工原因"]).value = "已由业务人员确认"
+            annotated = io.BytesIO()
+            workbook.save(annotated)
+        finally:
+            workbook.close()
+        annotated.seek(0)
+
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/import.xlsx",
+            data={"report_excel": (annotated, "annotated-report.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("已从 Excel 回填 2 条报告标注", response.get_data(as_text=True))
+        with self.app.app_context():
+            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            stored = json.loads(task["result_json"])
+            candidate = get_db().execute(
+                "SELECT reason FROM report_suppression_rules WHERE source_task_id = ? AND source_item_id = ?",
+                (task_id, item_id),
+            ).fetchone()
+        self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
+        self.assertEqual(
+            stored[0]["item_acceptances"][item_id],
+            {
+                "status": "rejected",
+                "rejection_reason": "false_positive",
+                "rejection_note": "已由业务人员确认",
+            },
+        )
+        self.assertEqual(candidate["reason"], "模型误报")
+
+    def test_task_report_excel_import_rejects_invalid_rows_without_partial_update(self):
+        task_id = self._insert_report_task()
+        exported = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+        workbook = load_workbook(io.BytesIO(exported.data))
+        try:
+            sheet = workbook["报告条目"]
+            headers = {cell.value: cell.column for cell in sheet[1]}
+            sheet.cell(2, headers["条目判定"]).value = "非问题"
+            sheet.cell(3, headers["条目判定"]).value = "无法判断"
+            annotated = io.BytesIO()
+            workbook.save(annotated)
+        finally:
+            workbook.close()
+        annotated.seek(0)
+
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/import.xlsx",
+            data={"report_excel": (annotated, "invalid-report.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("第 3 行“条目判定”无效", response.get_data(as_text=True))
+        with self.app.app_context():
+            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            stored = json.loads(task["result_json"])
+        self.assertNotIn("item_classifications", stored[0])
+        self.assertNotIn("item_acceptances", stored[0])
+
+        corrupt_response = self.client.post(
+            f"/admin/tasks/{task_id}/import.xlsx",
+            data={"report_excel": (io.BytesIO(b"not-an-xlsx"), "corrupt-report.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        self.assertEqual(corrupt_response.status_code, 200)
+        self.assertIn("无法读取回填文件", corrupt_response.get_data(as_text=True))
+
+    def test_task_report_excel_import_accepts_legacy_export_without_hidden_ids(self):
+        task_id = self._insert_report_task()
+        exported = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+        workbook = load_workbook(io.BytesIO(exported.data))
+        try:
+            sheet = workbook["报告条目"]
+            headers = {cell.value: cell.column for cell in sheet[1]}
+            item_id = sheet.cell(2, headers["条目标识（请勿修改）"]).value
+            sheet.cell(2, headers["条目判定"]).value = "非问题"
+            sheet.delete_cols(headers["检查项编码（请勿修改）"], 2)
+            legacy = io.BytesIO()
+            workbook.save(legacy)
+        finally:
+            workbook.close()
+        legacy.seek(0)
+
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/import.xlsx",
+            data={"report_excel": (legacy, "legacy-report.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("已从 Excel 回填 2 条报告标注", response.get_data(as_text=True))
+        with self.app.app_context():
+            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            stored = json.loads(task["result_json"])
+        self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
 
     def test_video_task_report_exports_excel_with_compact_media_columns(self):
         with self.app.app_context():
@@ -2682,9 +2857,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "是否接纳",
                     "不接纳原因",
                     "人工原因",
+                    "检查项编码（请勿修改）",
+                    "条目标识（请勿修改）",
                 ),
             )
-            self.assertEqual(len(rows[1]), 10)
+            self.assertEqual(len(rows[1]), 12)
             self.assertIn("画面显示未确认接地线状态", rows[1][5])
             self.assertIn("位置/画面：视频时间 00:01.000", rows[1][5])
             self.assertIn("建议：补充接地线确认动作", rows[1][5])
