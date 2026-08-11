@@ -572,6 +572,74 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(active_link.get_text(strip=True), "模型")
         self.assertEqual(active_link.get("title"), "模型管理")
 
+    def test_model_page_shows_all_models_when_provider_has_five(self):
+        model_id = self._configure_provider()
+        provider_id = int(model_id.split(":", 1)[0])
+        with self.app.app_context():
+            db = get_db()
+            now = "2026-05-01 09:00:00"
+            for index, model_name in enumerate(("model-b", "model-c", "model-d", "model-e"), start=2):
+                db.execute(
+                    """
+                    INSERT INTO user_model_configs(
+                        provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at
+                    )
+                    VALUES (?, ?, 0, ?, ?, ?)
+                    """,
+                    (provider_id, model_name, index * 10, now, now),
+                )
+            db.commit()
+
+        response = self.client.get("/models")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        model_group = _required_tag(soup.select_one("[data-provider-model-group]"))
+        model_chips = model_group.select("[data-provider-model]")
+        self.assertEqual([chip.get_text(" ", strip=True) for chip in model_chips], [f"model-{letter}" for letter in "abcde"])
+        self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips))
+        self.assertIsNone(model_group.select_one("[data-provider-model-summary]"))
+        self.assertIsNone(model_group.select_one("[data-provider-model-toggle]"))
+
+    def test_model_page_collapses_provider_models_after_first_five(self):
+        model_id = self._configure_provider()
+        provider_id = int(model_id.split(":", 1)[0])
+        with self.app.app_context():
+            db = get_db()
+            now = "2026-05-01 09:00:00"
+            for index, model_name in enumerate(("model-b", "model-c", "model-d", "model-e", "model-f", "model-g"), start=2):
+                db.execute(
+                    """
+                    INSERT INTO user_model_configs(
+                        provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at
+                    )
+                    VALUES (?, ?, 0, ?, ?, ?)
+                    """,
+                    (provider_id, model_name, index * 10, now, now),
+                )
+            db.commit()
+
+        response = self.client.get("/models")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        model_group = _required_tag(soup.select_one("[data-provider-model-group]"))
+        model_list = _required_tag(model_group.select_one("[data-provider-model-list]"))
+        model_chips = model_list.select("[data-provider-model]")
+        self.assertEqual([chip.get_text(" ", strip=True) for chip in model_chips], [f"model-{letter}" for letter in "abcdefg"])
+        self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips[:5]))
+        self.assertTrue(all(chip.has_attr("hidden") for chip in model_chips[5:]))
+
+        summary = _required_tag(model_group.select_one("[data-provider-model-summary]"))
+        remaining = _required_tag(summary.select_one("[data-provider-model-remaining]"))
+        toggle = _required_tag(summary.select_one("[data-provider-model-toggle]"))
+        self.assertIn("共 7 个", summary.get_text(" ", strip=True))
+        self.assertEqual(remaining.get_text(" ", strip=True), "还有 2 个未显示")
+        self.assertEqual(toggle.get_text(strip=True), "查看全部")
+        self.assertEqual(toggle.get("aria-controls"), model_list.get("id"))
+        self.assertEqual(toggle.get("aria-expanded"), "false")
+        self.assertEqual(toggle.get("data-overflow-count"), "2")
+
     def test_diagnostics_fetch_returns_saved_state(self):
         response = self.client.post(
             "/admin/settings",

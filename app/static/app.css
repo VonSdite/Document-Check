@@ -2782,6 +2782,48 @@ td {
   gap: 8px;
 }
 
+.model-chips > [hidden] {
+  display: none;
+}
+
+.provider-model-group {
+  display: grid;
+  gap: 9px;
+}
+
+.provider-model-summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.provider-model-count {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  background: #fff;
+}
+
+.provider-model-toggle {
+  border: 0;
+  padding: 3px 0;
+  color: var(--primary-strong);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.provider-model-toggle:hover,
+.provider-model-toggle:focus-visible {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

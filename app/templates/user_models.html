@@ -108,15 +108,32 @@
           </td>
           <td class="provider-api-cell">{{ provider.api_base }}</td>
           <td>
-            <div class="model-chips">
-              {% for model in models_by_provider[provider.id] %}
-              <span class="chip">
-                {{ model.model_name }}
-                {% if model.force_disable_thinking %}<span class="model-chip-meta">关闭思考</span>{% endif %}
-              </span>
-              {% else %}
-              <span class="muted">无模型</span>
-              {% endfor %}
+            {% set provider_models = models_by_provider[provider.id] %}
+            <div class="provider-model-group" data-provider-model-group>
+              <div class="model-chips" id="provider-model-list-{{ provider.id }}" data-provider-model-list>
+                {% for model in provider_models %}
+                <span class="chip" data-provider-model{% if loop.index > 5 %} hidden{% endif %}>
+                  {{ model.model_name }}
+                  {% if model.force_disable_thinking %}<span class="model-chip-meta">关闭思考</span>{% endif %}
+                </span>
+                {% else %}
+                <span class="muted">无模型</span>
+                {% endfor %}
+              </div>
+              {% if provider_models|length > 5 %}
+              <div class="provider-model-summary" data-provider-model-summary>
+                <span class="provider-model-count">共 {{ provider_models|length }} 个</span>
+                <span data-provider-model-remaining>还有 {{ provider_models|length - 5 }} 个未显示</span>
+                <button
+                  class="provider-model-toggle"
+                  type="button"
+                  aria-controls="provider-model-list-{{ provider.id }}"
+                  aria-expanded="false"
+                  data-provider-model-toggle
+                  data-overflow-count="{{ provider_models|length - 5 }}"
+                >查看全部</button>
+              </div>
+              {% endif %}
             </div>
           </td>
           <td>

@@ -1051,6 +1051,28 @@ document.addEventListener("click", (event) => {
   }
 });
 
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-provider-model-toggle]");
+  if (!(toggle instanceof HTMLButtonElement)) {
+    return;
+  }
+  const group = toggle.closest("[data-provider-model-group]");
+  if (!group) {
+    return;
+  }
+  const expanded = toggle.getAttribute("aria-expanded") !== "true";
+  const models = group.querySelectorAll("[data-provider-model]");
+  models.forEach((model, index) => {
+    model.hidden = !expanded && index >= 5;
+  });
+  toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  toggle.textContent = expanded ? "收起" : "查看全部";
+  const remaining = group.querySelector("[data-provider-model-remaining]");
+  if (remaining) {
+    remaining.textContent = expanded ? "还有 0 个未显示" : `还有 ${toggle.dataset.overflowCount} 个未显示`;
+  }
+});
+
 let activeFetchModelForm = null;
 let fetchedModelCandidates = [];
 let fetchedModelSelection = new Set();
