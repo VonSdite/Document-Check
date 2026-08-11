@@ -373,6 +373,26 @@ td {
   margin-left: auto;
 }
 
+.report-import-form {
+  display: inline-flex;
+  margin: 0;
+}
+
+.report-import-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.report-import-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+  transform: none;
+}
+
 .report-toolbar .report-back-button,
 .report-toolbar .report-export-button {
   min-height: 44px;
@@ -3365,6 +3385,21 @@ td {
 }
 
 @media (max-width: 720px) {
+  .report-export-actions {
+    width: 100%;
+    justify-content: stretch;
+    margin-left: 0;
+  }
+
+  .report-export-actions > .report-export-button,
+  .report-import-form {
+    flex: 1 1 135px;
+  }
+
+  .report-import-form .report-export-button {
+    width: 100%;
+  }
+
   .report-meta-list > div,
   .report-meta-list > .report-file-meta,
   .report-meta-list > .report-meta-half {

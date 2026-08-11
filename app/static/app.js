@@ -94,6 +94,40 @@ document.addEventListener("submit", (event) => {
   });
 });
 
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-report-import-trigger]");
+  if (!(trigger instanceof HTMLButtonElement)) {
+    return;
+  }
+  const input = trigger.form?.querySelector("[data-report-import-input]");
+  if (input instanceof HTMLInputElement) {
+    input.click();
+  }
+});
+
+document.addEventListener("change", (event) => {
+  const input = event.target.closest("[data-report-import-input]");
+  if (!(input instanceof HTMLInputElement) || !input.files?.[0]) {
+    return;
+  }
+  const file = input.files[0];
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    input.value = "";
+    showToast("回填文件仅支持系统导出的 xlsx 格式报告。", "error");
+    return;
+  }
+  const form = input.form;
+  const trigger = form?.querySelector("[data-report-import-trigger]");
+  const label = form?.querySelector("[data-report-import-label]");
+  if (trigger instanceof HTMLButtonElement) {
+    trigger.disabled = true;
+  }
+  if (label) {
+    label.textContent = "正在回填...";
+  }
+  form?.requestSubmit();
+});
+
 function hideToast(toast) {
   toast.classList.add("is-hiding");
   window.setTimeout(() => toast.remove(), 220);
