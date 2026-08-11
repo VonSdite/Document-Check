@@ -264,44 +264,81 @@ document.addEventListener("change", (event) => {
 
 function reportItemControls(item) {
   return {
-    type: item.querySelector("[data-report-item-type]"),
-    acceptance: item.querySelector("[data-report-acceptance-status]"),
+    type: item.querySelectorAll("[data-report-item-type]"),
+    acceptance: item.querySelectorAll("[data-report-acceptance-status]"),
     reason: item.querySelector("[data-report-rejection-reason]"),
     note: item.querySelector("[data-report-rejection-note]"),
   };
 }
 
+function reportControlNodes(control) {
+  if (control instanceof NodeList) {
+    return Array.from(control);
+  }
+  return control ? [control] : [];
+}
+
+function reportControlValue(control, fallback = "") {
+  const nodes = reportControlNodes(control);
+  const selected = nodes.find((node) => (
+    node instanceof HTMLInputElement && node.type === "radio" ? node.checked : true
+  ));
+  return selected?.value || fallback;
+}
+
+function setReportControlValue(control, value) {
+  reportControlNodes(control).forEach((node) => {
+    if (node instanceof HTMLInputElement && node.type === "radio") {
+      node.checked = node.value === value;
+    } else if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement) {
+      node.value = value;
+    }
+  });
+}
+
+function setReportControlSavedValue(control, value) {
+  reportControlNodes(control).forEach((node) => {
+    node.dataset.savedValue = value;
+  });
+}
+
+function reportControlDisabled(control) {
+  const nodes = reportControlNodes(control);
+  return nodes.length > 0 && nodes.every((node) => node.disabled);
+}
+
 function syncReportAcceptanceFields(item) {
   const controls = reportItemControls(item);
-  if (!(controls.acceptance instanceof HTMLSelectElement)) {
+  if (controls.acceptance.length === 0) {
     return;
   }
-  const rejected = controls.acceptance.value === "rejected";
+  const rejected = reportControlValue(controls.acceptance) === "rejected";
+  const acceptanceDisabled = reportControlDisabled(controls.acceptance);
   [controls.reason, controls.note].forEach((control) => {
     if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) {
-      control.disabled = controls.acceptance.disabled || !rejected;
+      control.disabled = acceptanceDisabled || !rejected;
     }
   });
 }
 
 function setReportItemControlsDisabled(item, disabled) {
   Object.values(reportItemControls(item)).forEach((control) => {
-    if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) {
-      control.disabled = disabled;
-    }
+    reportControlNodes(control).forEach((node) => {
+      if (node instanceof HTMLSelectElement || node instanceof HTMLInputElement) {
+        node.disabled = disabled;
+      }
+    });
   });
 }
 
 function revertReportItemControls(item) {
   const controls = reportItemControls(item);
-  if (controls.type instanceof HTMLSelectElement) {
-    controls.type.value = controls.type.dataset.savedValue || "issue";
-    item.dataset.itemType = controls.type.value;
-  }
-  if (controls.acceptance instanceof HTMLSelectElement) {
-    controls.acceptance.value = controls.acceptance.dataset.savedValue || "pending";
-    item.dataset.acceptanceStatus = controls.acceptance.value;
-  }
+  const savedType = reportControlNodes(controls.type)[0]?.dataset.savedValue || "issue";
+  setReportControlValue(controls.type, savedType);
+  item.dataset.itemType = savedType;
+  const savedAcceptance = reportControlNodes(controls.acceptance)[0]?.dataset.savedValue || "pending";
+  setReportControlValue(controls.acceptance, savedAcceptance);
+  item.dataset.acceptanceStatus = savedAcceptance;
   if (controls.reason instanceof HTMLSelectElement) {
     controls.reason.value = controls.reason.dataset.savedValue || "";
   }
@@ -313,18 +350,14 @@ function revertReportItemControls(item) {
 
 function applyReportItemSave(item, data) {
   const controls = reportItemControls(item);
-  const savedType = data.item_type || controls.type?.value || "issue";
-  const savedAcceptance = data.acceptance_status || controls.acceptance?.value || "pending";
+  const savedType = data.item_type || reportControlValue(controls.type, "issue");
+  const savedAcceptance = data.acceptance_status || reportControlValue(controls.acceptance, "pending");
   const savedReason = data.rejection_reason || "";
   const savedNote = data.rejection_note || "";
-  if (controls.type instanceof HTMLSelectElement) {
-    controls.type.value = savedType;
-    controls.type.dataset.savedValue = savedType;
-  }
-  if (controls.acceptance instanceof HTMLSelectElement) {
-    controls.acceptance.value = savedAcceptance;
-    controls.acceptance.dataset.savedValue = savedAcceptance;
-  }
+  setReportControlValue(controls.type, savedType);
+  setReportControlSavedValue(controls.type, savedType);
+  setReportControlValue(controls.acceptance, savedAcceptance);
+  setReportControlSavedValue(controls.acceptance, savedAcceptance);
   if (controls.reason instanceof HTMLSelectElement) {
     controls.reason.value = savedReason;
     controls.reason.dataset.savedValue = savedReason;
@@ -343,8 +376,8 @@ function reportItemPayload(item) {
   return {
     result_code: item.dataset.resultCode,
     item_id: item.dataset.itemId,
-    item_type: controls.type instanceof HTMLSelectElement ? controls.type.value : "issue",
-    acceptance_status: controls.acceptance instanceof HTMLSelectElement ? controls.acceptance.value : "pending",
+    item_type: reportControlValue(controls.type, "issue"),
+    acceptance_status: reportControlValue(controls.acceptance, "pending"),
     rejection_reason: controls.reason instanceof HTMLSelectElement ? controls.reason.value : "",
     rejection_note: controls.note instanceof HTMLInputElement ? controls.note.value.trim() : "",
   };

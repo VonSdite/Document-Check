@@ -2299,8 +2299,6 @@ td {
   white-space: nowrap;
 }
 
-.report-status-cell select,
-.report-acceptance-cell select,
 .report-rejection-cell select,
 .report-rejection-cell input {
   width: 100%;
@@ -2312,6 +2310,62 @@ td {
   color: var(--text);
   font: inherit;
   font-weight: 700;
+}
+
+.report-radio-group {
+  display: grid;
+  gap: 5px;
+}
+
+.report-radio-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.report-radio-option:hover {
+  border-color: #d7e4f2;
+  background: #f4f8fd;
+}
+
+.report-radio-option input[type="radio"] {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #b8c7da;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: none;
+  appearance: none;
+}
+
+.report-radio-option input[type="radio"]:checked {
+  border: 5px solid var(--primary);
+}
+
+.report-radio-option input[type="radio"]:focus-visible {
+  outline: 2px solid rgba(85, 127, 189, 0.42);
+  outline-offset: 2px;
+}
+
+.report-radio-option input[type="radio"]:disabled {
+  cursor: not-allowed;
+}
+
+.report-radio-option input[type="radio"]:disabled + span {
+  color: #94a3b8;
 }
 
 .report-rejection-cell input {

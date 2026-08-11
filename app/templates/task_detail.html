@@ -164,18 +164,24 @@
             </td>
             {% endfor %}
             <td class="report-status-cell">
-              <select data-report-item-type data-saved-value="{{ item.type }}" aria-label="条目 {{ item.index }} {{ REPORT_ITEM_TYPE_LABEL }}" {{ "disabled" if controls_disabled else "" }}>
+              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} {{ REPORT_ITEM_TYPE_LABEL }}">
                 {% for type, label in report_item_types.items() %}
-                <option value="{{ type }}" {{ "selected" if item.type == type else "" }}>{{ label }}</option>
+                <label class="report-radio-option report-radio-option-{{ type }}">
+                  <input type="radio" name="report-item-type-{{ item.id }}" value="{{ type }}" data-report-item-type data-saved-value="{{ item.type }}" aria-label="{{ label }}" {{ "checked" if item.type == type else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <span>{{ label }}</span>
+                </label>
                 {% endfor %}
-              </select>
+              </div>
             </td>
             <td class="report-acceptance-cell">
-              <select data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="条目 {{ item.index }} 是否接纳" {{ "disabled" if controls_disabled else "" }}>
+              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否接纳">
                 {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
-                <option value="{{ status }}" {{ "selected" if item.acceptance_status == status else "" }}>{{ label }}</option>
+                <label class="report-radio-option report-radio-option-{{ status }}">
+                  <input type="radio" name="report-acceptance-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <span>{{ label }}</span>
+                </label>
                 {% endfor %}
-              </select>
+              </div>
             </td>
             <td class="report-rejection-cell">
               <div class="rejection-controls">
