@@ -71,6 +71,15 @@ textarea {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
+select {
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='%23172033' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 10px 6px;
+  appearance: none;
+}
+
 textarea {
   resize: vertical;
   min-height: 110px;
@@ -862,6 +871,7 @@ td {
   grid-template-columns: minmax(160px, 0.9fr) minmax(220px, 1.4fr) minmax(150px, 0.8fr) 128px;
   gap: 14px;
   align-items: end;
+  padding-right: 16px;
 }
 
 .settings-network-mode-field {
@@ -2418,10 +2428,14 @@ td {
   padding: 7px 9px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: #fff;
+  background-color: #fff;
   color: var(--text);
   font: inherit;
   font-weight: 700;
+}
+
+.report-rejection-cell select {
+  padding-right: 36px;
 }
 
 .report-radio-group {
@@ -2486,7 +2500,7 @@ td {
 
 .report-rejection-cell :disabled {
   color: #94a3b8;
-  background: var(--panel-soft);
+  background-color: var(--panel-soft);
 }
 
 .rejection-controls {
