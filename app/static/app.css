@@ -2496,7 +2496,8 @@ td {
 }
 
 .report-status-cell {
-  width: 8%;
+  width: 9%;
+  white-space: nowrap;
 }
 
 .report-acceptance-cell {
@@ -2645,11 +2646,11 @@ td {
 }
 
 .report-field-impact {
-  width: 10%;
+  width: 9%;
 }
 
 .report-field-media_summary {
-  width: 75%;
+  width: 74%;
 }
 
 .report-cell-text {
