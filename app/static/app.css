@@ -1315,6 +1315,60 @@ td {
   min-width: 0;
 }
 
+.model-select-shell {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.model-select-shell.is-disabled {
+  opacity: 0.55;
+}
+
+.model-select-shell select:disabled {
+  opacity: 1;
+}
+
+.model-select-current {
+  position: absolute;
+  inset: 1px 35px 1px 1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 11px;
+  border-radius: calc(var(--radius) - 1px) 0 0 calc(var(--radius) - 1px);
+  background: #fff;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 400;
+  pointer-events: none;
+}
+
+.model-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-thinking-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid #c9dcf4;
+  border-radius: 999px;
+  background: #edf5ff;
+  color: var(--primary-strong);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.model-thinking-badge[hidden] {
+  display: none;
+}
+
 .field-with-help input {
   flex: 1;
 }

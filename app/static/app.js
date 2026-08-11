@@ -1652,6 +1652,44 @@ function restoreLastModelSelection(select) {
   }
 }
 
+function updateModelSelectPresentation(select) {
+  const shell = select.closest(".model-select-shell");
+  const label = shell?.querySelector("[data-model-select-label]");
+  const badge = shell?.querySelector("[data-model-thinking-badge]");
+  const option = select.selectedOptions[0];
+  if (!shell || !label || !badge || !option) {
+    return;
+  }
+  label.textContent = option.dataset.modelLabel || option.textContent?.trim() || "";
+  badge.hidden = option.dataset.thinkingDisabled !== "true";
+  shell.classList.toggle("is-disabled", select.disabled);
+}
+
+function enhanceModelSelect(select) {
+  if (select.closest(".model-select-shell")) {
+    updateModelSelectPresentation(select);
+    return;
+  }
+  const shell = document.createElement("span");
+  shell.className = "model-select-shell";
+  select.before(shell);
+  shell.appendChild(select);
+
+  const current = document.createElement("span");
+  current.className = "model-select-current";
+  current.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.className = "model-select-label";
+  label.dataset.modelSelectLabel = "1";
+  const badge = document.createElement("span");
+  badge.className = "model-thinking-badge";
+  badge.dataset.modelThinkingBadge = "1";
+  badge.textContent = "关闭思考";
+  current.append(label, badge);
+  shell.appendChild(current);
+  updateModelSelectPresentation(select);
+}
+
 function resetDefaultUncheckedChecks(form) {
   if (!(form instanceof HTMLFormElement) || form.dataset.defaultUncheckedChecks !== "true") {
     return;
@@ -1675,6 +1713,11 @@ window.addEventListener("pageshow", () => {
   document.querySelectorAll("form[data-prevent-double-submit='true']").forEach((form) => {
     resetDoubleSubmitForm(form);
   });
+  document.querySelectorAll('select[name="model_id"]').forEach((select) => {
+    if (select instanceof HTMLSelectElement) {
+      updateModelSelectPresentation(select);
+    }
+  });
 });
 
 document.querySelectorAll('select[name="model_id"]').forEach((select) => {
@@ -1682,6 +1725,7 @@ document.querySelectorAll('select[name="model_id"]').forEach((select) => {
     return;
   }
   restoreLastModelSelection(select);
+  enhanceModelSelect(select);
 });
 
 document.addEventListener("submit", (event) => {
@@ -1984,6 +2028,7 @@ document.addEventListener("change", (event) => {
   }
   if (input instanceof HTMLSelectElement && input.name === "model_id") {
     writeLastModelId(input.value);
+    updateModelSelectPresentation(input);
     return;
   }
   if (!(input instanceof HTMLInputElement) || input.type !== "file") {

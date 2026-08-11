@@ -534,6 +534,49 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertEqual(len(task_panels), 1)
                 self.assertEqual(_required_tag(task_panels[0].find("h2")).get_text(strip=True), "任务记录")
 
+    def test_task_model_select_marks_thinking_disabled_options_for_badge(self):
+        model_id = self._configure_provider()
+        provider_id = int(model_id.split(":", 1)[0])
+        with self.app.app_context():
+            now = "2026-05-01 09:00:00"
+            get_db().execute(
+                """
+                INSERT INTO user_model_configs(
+                    provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at
+                )
+                VALUES (?, 'model-a', 1, 20, ?, ?)
+                """,
+                (provider_id, now, now),
+            )
+            get_db().commit()
+
+        task_routes = (
+            "/",
+            "/consistency",
+            "/language-consistency",
+            "/images",
+            "/videos",
+            "/admin/tasks",
+            "/admin/consistency",
+            "/admin/language-consistency",
+            "/admin/images",
+            "/admin/videos",
+        )
+        expected_label = "测试提供商 / model-a"
+
+        for route in task_routes:
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                options = soup.select('select[name="model_id"] option[data-model-label]')
+                self.assertEqual(len(options), 2)
+                self.assertTrue(all(option.get("data-model-label") == expected_label for option in options))
+                normal_option = next(option for option in options if option.get("data-thinking-disabled") is None)
+                disabled_option = next(option for option in options if option.get("data-thinking-disabled") == "true")
+                self.assertEqual(normal_option.get_text(strip=True), expected_label)
+                self.assertEqual(disabled_option.get_text(strip=True), f"{expected_label}（关闭思考）")
+
     def test_admin_metric_groups_are_categorized_and_limited_to_five_items(self):
         task_groups = (("任务概况", 5), ("AI 结果统计", 4), ("AI 质量指标", 2))
         pages = (
