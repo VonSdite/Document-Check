@@ -5000,8 +5000,6 @@ def _update_report_item_type(task):
         if acceptance_status is None:
             return {"ok": False, "error": "接纳状态数据无效。"}, 400
         if acceptance_status == "rejected":
-            if not rejection_reason and not rejection_note:
-                return {"ok": False, "error": "不接纳时必须选择或填写原因。"}, 400
             if rejection_reason == "other" and not rejection_note:
                 return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
 

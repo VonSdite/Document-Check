@@ -161,14 +161,13 @@
             {% endfor %}
             <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
             <th class="report-acceptance-cell">是否接纳</th>
-            <th class="report-rejection-cell">不接纳原因</th>
           </tr>
         </thead>
         <tbody>
           {% for item in result.report_items %}
           {% set controls_disabled = task.status in ["queued", "running"] %}
           <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
-            <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
+            <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span></td>
             {% for field, label in report_item_fields %}
             {% set field_value = item[field] %}
             <td class="report-field report-field-{{ field }}">
@@ -196,18 +195,18 @@
                   <input type="radio" name="report-acceptance-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
                   <span>{{ label }}</span>
                 </label>
+                {% if status == "rejected" %}
+                <div class="rejection-controls" data-report-rejection-controls {{ "hidden" if item.acceptance_status != "rejected" else "" }}>
+                  <select data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" aria-label="条目 {{ item.index }} 不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                    <option value="">不选择原因</option>
+                    {% for reason, reason_label in REPORT_REJECTION_REASONS.items() %}
+                    <option value="{{ reason }}" {{ "selected" if item.rejection_reason == reason else "" }}>{{ reason_label }}</option>
+                    {% endfor %}
+                  </select>
+                  <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="人工填写原因（可选）" aria-label="条目 {{ item.index }} 人工填写不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                </div>
+                {% endif %}
                 {% endfor %}
-              </div>
-            </td>
-            <td class="report-rejection-cell">
-              <div class="rejection-controls">
-                <select data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" aria-label="条目 {{ item.index }} 不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
-                  <option value="">选择原因</option>
-                  {% for reason, label in REPORT_REJECTION_REASONS.items() %}
-                  <option value="{{ reason }}" {{ "selected" if item.rejection_reason == reason else "" }}>{{ label }}</option>
-                  {% endfor %}
-                </select>
-                <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="人工填写原因" aria-label="条目 {{ item.index }} 人工填写不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
               </div>
             </td>
           </tr>
@@ -239,7 +238,7 @@
           <tbody>
             {% for item in result.suppressed_report_items %}
             <tr class="report-item is-suppressed">
-              <td class="report-index-cell"><span class="report-item-title">条目 {{ item.index }}</span></td>
+              <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span></td>
               {% for field, label in report_item_fields %}
               {% set field_value = item[field] %}
               <td class="report-field report-field-{{ field }}">

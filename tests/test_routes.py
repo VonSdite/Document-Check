@@ -2339,13 +2339,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         exported_text = exported_soup.get_text(" ", strip=True)
         exported_meta_labels = [node.get_text(strip=True) for node in exported_soup.select(".report-meta-list > div > dt")]
         self.assertEqual(exported_meta_labels[:4], ["任务类型", "归属用户", "文件名称", "文件信息"])
+        exported_headers = [node.get_text(strip=True) for node in exported_soup.select(".report-table th")]
+        self.assertEqual(exported_headers[-2:], ["条目判定", "是否接纳"])
+        self.assertNotIn("不接纳原因", exported_headers)
         self.assertIn("AI 检查条目统计", exported_text)
         self.assertNotIn("共 2 条：", exported_text)
         self.assertEqual(
             _required_tag(exported_soup.select_one(".report-counts span")).get_text(" ", strip=True),
             "问题 1",
         )
-        self.assertIn("条目 1", exported_text)
+        self.assertEqual(
+            _required_tag(exported_soup.select_one(".report-table tbody .report-index-cell")).get_text(strip=True),
+            "1",
+        )
 
     def test_task_report_exports_excel_for_statistics(self):
         with self.app.app_context():
@@ -2411,6 +2417,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
             },
         )
         self.assertEqual(review_response.status_code, 200)
+
+        exported = self.client.get(f"/admin/tasks/{task_id}/export")
+        exported_soup = BeautifulSoup(exported.get_data(as_text=True), "html.parser")
+        exported_acceptance = _required_tag(exported_soup.select_one(".report-table tbody .report-acceptance-cell"))
+        self.assertEqual(exported_acceptance.get_text(" ", strip=True), "不接纳 模型误报：上下文可解释")
+        self.assertIsNone(exported_soup.select_one(".report-rejection-cell"))
 
         response = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
 
@@ -2590,7 +2602,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
         self.assertEqual(
             headers,
-            ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳", "不接纳原因"],
+            ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳"],
         )
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 1)
@@ -2601,13 +2613,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
         acceptance = _required_tag(rows[0].select_one("[data-report-acceptance-status]"))
         acceptance_radios = rows[0].select("input[type='radio'][data-report-acceptance-status]")
         self.assertEqual([radio.get("value") for radio in acceptance_radios], ["pending", "accepted", "rejected"])
-        self.assertEqual(len(rows[0].select(".report-acceptance-cell select")), 0)
+        self.assertEqual(len(rows[0].select(".report-acceptance-cell select")), 1)
         self.assertEqual([radio.get("value") for radio in acceptance_radios if radio.has_attr("checked")], ["pending"])
         self.assertEqual(acceptance.get("data-saved-value"), "pending")
         reason = _required_tag(rows[0].select_one("[data-report-rejection-reason]"))
         note = _required_tag(rows[0].select_one("[data-report-rejection-note]"))
+        rejection_controls = _required_tag(rows[0].select_one("[data-report-rejection-controls]"))
+        self.assertIsNotNone(rejection_controls.find_parent(class_="report-acceptance-cell"))
+        self.assertTrue(rejection_controls.has_attr("hidden"))
         self.assertTrue(reason.has_attr("disabled"))
         self.assertTrue(note.has_attr("disabled"))
+        self.assertEqual(_required_tag(rows[0].select_one(".report-index-cell")).get_text(strip=True), "1")
+        self.assertIsNone(rows[0].select_one(".report-rejection-cell"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
         self.assertIn("报告硬限制保留前 1 条，省略 1 条", soup.get_text(" ", strip=True))
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
@@ -2660,7 +2677,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(exported.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
-        self.assertEqual(headers, ["条目", "AI检查结论", "条目判定", "是否接纳", "不接纳原因"])
+        self.assertEqual(headers, ["条目", "AI检查结论", "条目判定", "是否接纳"])
         table = _required_tag(soup.select_one(".report-table-media"))
         self.assertIn("report-table-media", table.get("class", []))
         row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(" ", strip=True)
@@ -3595,7 +3612,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             updated_rule = get_db().execute("SELECT hit_count FROM report_suppression_rules WHERE id = ?", (rule_id,)).fetchone()
             self.assertEqual(updated_rule["hit_count"], 1)
 
-    def test_report_item_reject_requires_reason(self):
+    def test_report_item_reject_allows_empty_reason_but_other_requires_note(self):
         with self.app.app_context():
             now = "2026-05-24 12:30:00"
             result_json = [
@@ -3642,8 +3659,36 @@ class AdminSettingsRouteTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.get_json()["error"], "不接纳时必须选择或填写原因。")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["acceptance_status"], "rejected")
+        self.assertEqual(payload["rejection_reason"], "")
+        self.assertEqual(payload["rejection_note"], "")
+
+        updated_detail = self.client.get(f"/admin/tasks/{task_id}")
+        updated_soup = BeautifulSoup(updated_detail.get_data(as_text=True), "html.parser")
+        rejection_controls = _required_tag(updated_soup.select_one("[data-report-rejection-controls]"))
+        rejection_reason = _required_tag(rejection_controls.select_one("[data-report-rejection-reason]"))
+        self.assertFalse(rejection_controls.has_attr("hidden"))
+        self.assertFalse(rejection_reason.has_attr("disabled"))
+        empty_reason = _required_tag(rejection_reason.select_one('option[value=""]'))
+        self.assertEqual(empty_reason.get_text(strip=True), "不选择原因")
+        self.assertEqual(rejection_reason.select("option")[0], empty_reason)
+
+        other_response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "issue",
+                "acceptance_status": "rejected",
+                "rejection_reason": "other",
+                "rejection_note": "",
+            },
+        )
+
+        self.assertEqual(other_response.status_code, 400)
+        self.assertEqual(other_response.get_json()["error"], "选择其他原因时必须填写具体原因。")
 
     def test_create_task_uses_trusted_header_identity(self):
         model_id = self._configure_provider("trusted_header:100086")

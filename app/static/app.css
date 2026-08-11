@@ -2479,7 +2479,9 @@ td {
 }
 
 .report-index-cell {
-  width: 88px;
+  width: 56px;
+  min-width: 56px;
+  text-align: center;
 }
 
 .report-status-cell {
@@ -2487,11 +2489,7 @@ td {
 }
 
 .report-acceptance-cell {
-  width: 124px;
-}
-
-.report-rejection-cell {
-  width: 190px;
+  width: 220px;
 }
 
 .report-item-title {
@@ -2502,8 +2500,8 @@ td {
   white-space: nowrap;
 }
 
-.report-rejection-cell select,
-.report-rejection-cell input {
+.rejection-controls select,
+.rejection-controls input {
   width: 100%;
   min-height: 36px;
   padding: 7px 9px;
@@ -2515,7 +2513,7 @@ td {
   font-weight: 700;
 }
 
-.report-rejection-cell select {
+.rejection-controls select {
   padding-right: 36px;
 }
 
@@ -2575,11 +2573,7 @@ td {
   color: #94a3b8;
 }
 
-.report-rejection-cell input {
-  margin-top: 6px;
-}
-
-.report-rejection-cell :disabled {
+.rejection-controls :disabled {
   color: #94a3b8;
   background-color: var(--panel-soft);
 }
@@ -2587,6 +2581,18 @@ td {
 .rejection-controls {
   display: grid;
   gap: 6px;
+  margin: 2px 0 0 23px;
+}
+
+.rejection-controls[hidden] {
+  display: none;
+}
+
+.report-acceptance-reason {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .report-field {

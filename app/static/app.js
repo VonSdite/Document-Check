@@ -314,6 +314,10 @@ function syncReportAcceptanceFields(item) {
   }
   const rejected = reportControlValue(controls.acceptance) === "rejected";
   const acceptanceDisabled = reportControlDisabled(controls.acceptance);
+  const rejectionControls = item.querySelector("[data-report-rejection-controls]");
+  if (rejectionControls instanceof HTMLElement) {
+    rejectionControls.hidden = !rejected;
+  }
   [controls.reason, controls.note].forEach((control) => {
     if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) {
       control.disabled = acceptanceDisabled || !rejected;
@@ -389,11 +393,6 @@ function validateReportAcceptance(item) {
   syncReportAcceptanceFields(item);
   if (payload.acceptance_status !== "rejected") {
     return true;
-  }
-  if (!payload.rejection_reason && !payload.rejection_note) {
-    showToast("不接纳时必须选择或填写原因。", "error");
-    controls.reason?.focus();
-    return false;
   }
   if (payload.rejection_reason === "other" && !payload.rejection_note) {
     showToast("选择其他原因时必须填写具体原因。", "error");
