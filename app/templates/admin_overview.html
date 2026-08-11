@@ -99,49 +99,6 @@
 <div class="overview-grid">
   <section class="panel">
     <div class="panel-head compact-head">
-      <h2>每日提交趋势</h2>
-    </div>
-    {% if daily_rows %}
-    <div class="table-wrap">
-      <table class="overview-table">
-        <thead>
-          <tr>
-            <th>日期</th>
-            <th>活跃用户</th>
-            <th>提交任务</th>
-            <th>单文档检查</th>
-            <th>多文档对照</th>
-            <th>跨语种检查</th>
-            <th>图片检查</th>
-            <th>视频检查</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in daily_rows %}
-          <tr>
-            <td>{{ row.day }}</td>
-            <td>{{ row.users }}</td>
-            <td>{{ row.tasks }}</td>
-            <td>{{ row.document_tasks }}</td>
-            <td>{{ row.consistency_tasks }}</td>
-            <td>{{ row.language_consistency_tasks }}</td>
-            <td>{{ row.image_tasks }}</td>
-            <td>{{ row.video_tasks }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% else %}
-    <div class="empty-state compact">
-      <h3>暂无统计数据</h3>
-      <p>当前时间段内没有任务提交。</p>
-    </div>
-    {% endif %}
-  </section>
-
-  <section class="panel">
-    <div class="panel-head compact-head">
       <h2>用户使用排行</h2>
     </div>
     {% if user_rows %}
@@ -188,6 +145,49 @@
     <div class="empty-state compact">
       <h3>暂无用户使用记录</h3>
       <p>当前时间段内没有用户提交任务。</p>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact-head">
+      <h2>每日提交趋势</h2>
+    </div>
+    {% if daily_rows %}
+    <div class="table-wrap">
+      <table class="overview-table">
+        <thead>
+          <tr>
+            <th>日期</th>
+            <th>活跃用户</th>
+            <th>提交任务</th>
+            <th>单文档检查</th>
+            <th>多文档对照</th>
+            <th>跨语种检查</th>
+            <th>图片检查</th>
+            <th>视频检查</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in daily_rows %}
+          <tr>
+            <td>{{ row.day }}</td>
+            <td>{{ row.users }}</td>
+            <td>{{ row.tasks }}</td>
+            <td>{{ row.document_tasks }}</td>
+            <td>{{ row.consistency_tasks }}</td>
+            <td>{{ row.language_consistency_tasks }}</td>
+            <td>{{ row.image_tasks }}</td>
+            <td>{{ row.video_tasks }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state compact">
+      <h3>暂无统计数据</h3>
+      <p>当前时间段内没有任务提交。</p>
     </div>
     {% endif %}
   </section>
