@@ -2604,6 +2604,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             headers,
             ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳"],
         )
+        self.assertIn("report-field-severity_label", _required_tag(soup.select_one(".report-table th:nth-child(2)")).get("class", []))
+        self.assertIn("report-field-confidence_label", _required_tag(soup.select_one(".report-table th:nth-child(3)")).get("class", []))
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 1)
         item_type_radios = rows[0].select("input[type='radio'][data-report-item-type]")

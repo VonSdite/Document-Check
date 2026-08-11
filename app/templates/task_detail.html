@@ -157,7 +157,7 @@
           <tr>
             <th class="report-index-cell">条目</th>
             {% for field, label in report_item_fields %}
-            <th>{{ label }}</th>
+            <th class="report-field-{{ field }}">{{ label }}</th>
             {% endfor %}
             <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
             <th class="report-acceptance-cell">是否接纳</th>
@@ -230,7 +230,7 @@
             <tr>
               <th class="report-index-cell">条目</th>
               {% for field, label in report_item_fields %}
-              <th>{{ label }}</th>
+              <th class="report-field-{{ field }}">{{ label }}</th>
               {% endfor %}
               <th>忽略规则</th>
             </tr>

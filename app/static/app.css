@@ -2485,11 +2485,11 @@ td {
 }
 
 .report-status-cell {
-  width: 132px;
+  width: 108px;
 }
 
 .report-acceptance-cell {
-  width: 220px;
+  width: 180px;
 }
 
 .report-item-title {
@@ -2598,6 +2598,14 @@ td {
 .report-field {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.report-field-severity_label {
+  width: 84px;
+}
+
+.report-field-confidence_label {
+  width: 100px;
 }
 
 .report-field-category {
