@@ -2451,25 +2451,26 @@ td {
 
 .report-table-wrap {
   width: 100%;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #fff;
 }
 
 .report-table {
-  min-width: 1500px;
+  min-width: 0;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
 }
 
 .report-table-media {
-  min-width: 1080px;
+  min-width: 0;
 }
 
 .report-table th,
 .report-table td {
+  padding: 12px 8px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   vertical-align: top;
@@ -2489,17 +2490,17 @@ td {
 }
 
 .report-index-cell {
-  width: 56px;
-  min-width: 56px;
+  width: 3%;
+  min-width: 0;
   text-align: center;
 }
 
 .report-status-cell {
-  width: 108px;
+  width: 8%;
 }
 
 .report-acceptance-cell {
-  width: 200px;
+  width: 14%;
 }
 
 .report-item-title {
@@ -2525,6 +2526,11 @@ td {
 
 .rejection-controls select {
   padding-right: 36px;
+}
+
+.rejection-controls input::placeholder {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .report-radio-group {
@@ -2611,33 +2617,39 @@ td {
 }
 
 .report-field-severity_label {
-  width: 84px;
+  width: 4%;
 }
 
 .report-field-confidence_label {
-  width: 100px;
+  width: 5%;
 }
 
 .report-field-category {
-  width: 150px;
+  width: 7%;
 }
 
 .report-field-location {
-  width: 180px;
+  width: 8%;
 }
 
-.report-field-excerpt,
-.report-field-description,
+.report-field-excerpt {
+  width: 13%;
+}
+
+.report-field-description {
+  width: 14%;
+}
+
 .report-field-suggestion {
-  width: 220px;
+  width: 14%;
 }
 
 .report-field-impact {
-  width: 170px;
+  width: 10%;
 }
 
 .report-field-media_summary {
-  width: 540px;
+  width: 75%;
 }
 
 .report-cell-text {
@@ -3369,10 +3381,6 @@ td {
 
   .report-counts span {
     flex: 1 1 120px;
-  }
-
-  .report-table {
-    min-width: 1040px;
   }
 }
 
