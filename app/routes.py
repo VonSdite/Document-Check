@@ -81,6 +81,7 @@ from .task_types import (
     task_type_label,
 )
 from .tasks import cleanup_task_file_cache, task_file_cache_snapshot
+from .text_language import estimate_text_language, text_language_label
 from .videos import allowed_video_file, extract_video_frames, format_video_document_text, video_extension_of
 
 
@@ -3511,10 +3512,8 @@ def _document_static_profile(file_info: dict) -> dict:
         for match in LANGUAGE_STATIC_TOKEN_RE.finditer(text)
     }
     tokens = {token for token in tokens if token}
-    cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin_chars = len(re.findall(r"[A-Za-z]", text))
     return {
-        "language": _estimate_text_language(cjk_chars, latin_chars),
+        "language": text_language_label(estimate_text_language(text)),
         "nonspace_chars": len(nonspace_text),
         "paragraphs": len(paragraphs),
         "tokens": tokens,
@@ -3536,18 +3535,6 @@ def _extract_static_headings(text: str, limit: int) -> list[str]:
         if len(headings) >= limit:
             break
     return headings
-
-
-def _estimate_text_language(cjk_chars: int, latin_chars: int) -> str:
-    if cjk_chars >= 40 and latin_chars >= 80 and min(cjk_chars, latin_chars) / max(cjk_chars, latin_chars) >= 0.2:
-        return "中英混合"
-    if cjk_chars >= max(20, latin_chars):
-        return "中文为主"
-    if latin_chars >= max(40, cjk_chars):
-        return "拉丁语系为主"
-    if cjk_chars or latin_chars:
-        return "语种特征较少，需人工确认"
-    return "未识别"
 
 
 def _normalize_static_token(value: str) -> str:

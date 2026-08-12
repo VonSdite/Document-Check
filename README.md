@@ -316,7 +316,7 @@ SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、A
 
 单文档检查内置“敏感词检查”。请将公司内部词表放到 `instance/sensitive_terms.xlsx`，也支持同目录下的 `sensitive_terms.xlsm`、`sensitive_terms.xls`、`sensitive_terms.csv`、`sensitive_words.xlsx`、`sensitive_words.xlsm`、`sensitive_words.xls`、`sensitive_words.csv`。词表至少需要包含“不规范用语”和“规范用语”两列；可参考 `data/sensitive_terms_example.csv` 的表头。`instance/` 和 `data/sensitive_terms.*` 已加入 `.gitignore`，真实内部词表不会被提交。
 
-单文档检查还内置“常用词检查”。请将检查表放到 `instance/common_terms.xlsx`；同目录下的 `common_terms`、`common_words`、`常用词检查表`、`常用词表` 文件名均可使用，支持 `xlsx`、`xlsm`、`xls`、`csv` 格式。检查表必须包含“常用词”和“常见错误/不推荐用法”两列；“常用词”列是唯一正确写法，英文大小写严格敏感，文档中的写法只有与该单元格完全一致才视为正确。“常见错误/不推荐用法”单元格可使用换行、逗号、分号或顿号填写多个写法。可参考 `data/common_terms_example.csv`；真实内部检查表路径已加入 `.gitignore`，不会提交到仓库。
+单文档检查还内置“常用词检查”。请将检查表放到 `instance/common_terms.xlsx`；同目录下的 `common_terms`、`common_words`、`常用词检查表`、`常用词表` 文件名均可使用，支持 `xlsx`、`xlsm`、`xls`、`csv` 格式。检查表必须包含“常用词”和“常见错误/不推荐用法”两列；“常用词”列是唯一正确写法，英文大小写严格敏感，文档中的写法只有与该单元格完全一致才视为正确。“常见错误/不推荐用法”单元格可使用换行、逗号、分号或顿号填写多个写法。可选增加“适用语种”列：留空或填写“全部/all”表示所有文档均执行，填写“中文/zh”表示仅在中文为主的文档中执行；语种条件会同时约束错误用法匹配和自动大小写检查。中英混合、语种特征不足或无法识别时，系统会保守跳过仅中文规则并在报告摘要中说明。未增加该列的旧检查表默认全部适用。可参考 `data/common_terms_example.csv`；真实内部检查表路径已加入 `.gitignore`，不会提交到仓库。
 
 “多文档对照检查”页面支持上传 1-5 个素材文档和 1-3 个资料文档。资料通常是根据素材文档写作生成的，系统会以素材文档作为依据，调用所选模型检查资料内容是否存在口径不一致、遗漏、偏差或需要人工确认的内容，并输出报告。多文档对照项可在系统设置中单独维护，支持修改内置提示词、新增扩展检查项、停用、删除和排序；提交任务时会保存所选检查项快照，后续修改提示词不会影响已提交任务。
 

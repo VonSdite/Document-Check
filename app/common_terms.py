@@ -8,6 +8,7 @@ from openpyxl import load_workbook
 import xlrd
 
 from .term_locations import DocumentLocationIndex, TERM_LOCATIONS_PER_ISSUE, excerpt_for
+from .text_language import TEXT_LANGUAGE_CHINESE, estimate_text_language, text_language_label
 
 
 COMMON_TERMS_CHECK_CODE = "common-terms"
@@ -46,8 +47,42 @@ _DISCOURAGED_HEADER_NAMES = {
     "错误用法",
     "不推荐用法",
 }
+_LANGUAGE_HEADER_NAMES = {
+    "适用语种",
+    "适用语言",
+    "文档语种",
+    "规则适用语种",
+}
 _EMPTY_DISCOURAGED_VALUES = {"", "-", "--", "—", "/", "无", "不涉及", "na", "n/a"}
 _DISCOURAGED_SEPARATOR_RE = re.compile(r"[\r\n,，;；、]+")
+_LANGUAGE_SCOPE_ALL = "all"
+_LANGUAGE_SCOPE_CHINESE = TEXT_LANGUAGE_CHINESE
+_LANGUAGE_SCOPE_ALL_VALUES = {
+    "",
+    "*",
+    "all",
+    "any",
+    "全部",
+    "所有",
+    "不限",
+    "通用",
+    "全部/all",
+    "all/全部",
+}
+_LANGUAGE_SCOPE_CHINESE_VALUES = {
+    "zh",
+    "zh-cn",
+    "zh-hans",
+    "zh-hant",
+    "中文",
+    "中文为主",
+    "中文文档",
+    "仅中文",
+    "简体中文",
+    "繁体中文",
+    "中文/zh",
+    "zh/中文",
+}
 
 
 @dataclass(frozen=True)
@@ -56,6 +91,7 @@ class CommonTermRule:
     discouraged: tuple[str, ...] = ()
     sheet: str = ""
     row_number: int = 0
+    language_scope: str = _LANGUAGE_SCOPE_ALL
 
 
 def find_common_terms_file(
@@ -117,12 +153,20 @@ def build_common_terms_report(
     source_path: Path,
     issue_limit: int,
 ) -> dict:
-    matches = _find_common_term_matches(document_text, rules)
+    language = estimate_text_language(document_text)
+    active_rules = [rule for rule in rules if _rule_applies_to_language(rule, language)]
+    skipped_rule_count = len(rules) - len(active_rules)
+    matches = _find_common_term_matches(document_text, active_rules)
+    context_summary = _common_terms_context_summary(
+        source_path=source_path,
+        language=language,
+        skipped_rule_count=skipped_rule_count,
+    )
     if not matches:
         return {
             "summary": (
                 "常用词检查结论：未发现错误、不推荐用法或大小写不一致问题。\n"
-                f"词表文件：{source_path}"
+                f"{context_summary}"
             ),
             "items": [],
         }
@@ -132,7 +176,7 @@ def build_common_terms_report(
     occurrence_total = sum(match["count"] for match in matches)
     summary = (
         f"常用词检查结论：发现 {len(matches)} 类常用词写法问题，合计 {occurrence_total} 处命中。\n"
-        f"词表文件：{source_path}"
+        f"{context_summary}"
     )
     if hidden_count:
         summary += f"\n受报告条目上限限制，仅展示前 {len(visible_matches)} 类，另有 {hidden_count} 类未展开。"
@@ -270,9 +314,15 @@ def _rules_from_rows(rows, sheet_name: str):
         if not standard:
             continue
         discouraged = _split_discouraged(_row_cell(values, header["discouraged"]))
+        language_scope = _normalize_language_scope(
+            _row_cell(values, header.get("language")),
+            sheet_name=sheet_name,
+            row_number=row_number,
+        )
         yield CommonTermRule(
             standard=standard,
             discouraged=tuple(discouraged),
+            language_scope=language_scope,
             sheet=sheet_name,
             row_number=row_number,
         )
@@ -281,15 +331,22 @@ def _rules_from_rows(rows, sheet_name: str):
 def _header_mapping(row: list) -> dict | None:
     standard_index = None
     discouraged_index = None
+    language_index = None
     for index, value in enumerate(row):
         kind = _header_kind(value)
         if kind == "standard" and standard_index is None:
             standard_index = index
         if kind == "discouraged" and discouraged_index is None:
             discouraged_index = index
+        if kind == "language" and language_index is None:
+            language_index = index
     if standard_index is None or discouraged_index is None:
         return None
-    return {"standard": standard_index, "discouraged": discouraged_index}
+    return {
+        "standard": standard_index,
+        "discouraged": discouraged_index,
+        "language": language_index,
+    }
 
 
 def _header_kind(value) -> str:
@@ -300,6 +357,8 @@ def _header_kind(value) -> str:
         return "discouraged"
     if text in _STANDARD_HEADER_NAMES:
         return "standard"
+    if text in _LANGUAGE_HEADER_NAMES:
+        return "language"
     return ""
 
 
@@ -307,8 +366,8 @@ def _compact_header(value) -> str:
     return re.sub(r"[\s:：*＊（）()【】\[\]<>《》]+", "", _cell_text(value))
 
 
-def _row_cell(row: list, index: int) -> str:
-    if index >= len(row):
+def _row_cell(row: list, index: int | None) -> str:
+    if index is None or index >= len(row):
         return ""
     return _cell_text(row[index])
 
@@ -333,26 +392,56 @@ def _split_discouraged(value: str) -> list[str]:
     return values
 
 
+def _normalize_language_scope(value: str, *, sheet_name: str, row_number: int) -> str:
+    normalized = re.sub(r"[_\s]+", "-", str(value or "").strip().lower())
+    if normalized in _LANGUAGE_SCOPE_ALL_VALUES:
+        return _LANGUAGE_SCOPE_ALL
+    if normalized in _LANGUAGE_SCOPE_CHINESE_VALUES:
+        return _LANGUAGE_SCOPE_CHINESE
+    raise ValueError(
+        f"工作表“{sheet_name}”第 {row_number} 行的“适用语种”值“{value}”无效；"
+        "目前支持留空/全部/all，或中文/zh。"
+    )
+
+
 def _dedupe_rules(rules) -> list[CommonTermRule]:
     result = []
     positions = {}
     for rule in rules:
         if not rule.standard:
             continue
-        if rule.standard not in positions:
-            positions[rule.standard] = len(result)
+        key = (rule.standard, rule.language_scope)
+        if key not in positions:
+            positions[key] = len(result)
             result.append(rule)
             continue
-        index = positions[rule.standard]
+        index = positions[key]
         existing = result[index]
         discouraged = tuple(dict.fromkeys(existing.discouraged + rule.discouraged))
         result[index] = CommonTermRule(
             standard=existing.standard,
             discouraged=discouraged,
+            language_scope=existing.language_scope,
             sheet=existing.sheet,
             row_number=existing.row_number,
         )
     return result
+
+
+def _rule_applies_to_language(rule: CommonTermRule, language: str) -> bool:
+    if rule.language_scope == _LANGUAGE_SCOPE_ALL:
+        return True
+    return rule.language_scope == language
+
+
+def _common_terms_context_summary(*, source_path: Path, language: str, skipped_rule_count: int) -> str:
+    lines = [
+        f"文档语种估计：{text_language_label(language)}。",
+        f"词表文件：{source_path}",
+    ]
+    if skipped_rule_count:
+        lines.append(f"已跳过 {skipped_rule_count} 条不适用于当前文档语种的常用词规则。")
+    return "\n".join(lines)
 
 
 def _find_common_term_matches(document_text: str, rules: list[CommonTermRule]) -> list[dict]:
