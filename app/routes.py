@@ -4039,19 +4039,6 @@ def _prepare_task_results(
         result_code = str(item.get("code") or "")
         structured_report = _result_structured_report(item)
         report_items = _result_report_items(item, structured_report)
-        classifications = item.get("item_classifications")
-        if not isinstance(classifications, dict):
-            classifications = {}
-        acceptances = item.get("item_acceptances")
-        if not isinstance(acceptances, dict):
-            acceptances = {}
-        for report_item in report_items:
-            saved_type = classifications.get(report_item["id"])
-            report_item["type"] = _normalize_report_item_type(saved_type) or report_item["type"]
-            report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
-            acceptance = _normalize_report_acceptance(acceptances.get(report_item["id"]))
-            report_item.update(acceptance)
-            report_item["media_summary"] = _media_report_item_text(report_item)
         original_report_item_count = len(report_items)
         report_items = _deduplicate_report_items(report_items)
         report_items.sort(key=_report_item_priority_key)
@@ -4070,6 +4057,19 @@ def _prepare_task_results(
             original_count=original_report_item_count,
             duplicate_count=duplicate_count,
         )
+        classifications = item.get("item_classifications")
+        if not isinstance(classifications, dict):
+            classifications = {}
+        acceptances = item.get("item_acceptances")
+        if not isinstance(acceptances, dict):
+            acceptances = {}
+        for report_item in report_items + suppressed_items:
+            saved_type = classifications.get(report_item["id"])
+            report_item["type"] = _normalize_report_item_type(saved_type) or report_item["type"]
+            report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
+            acceptance = _normalize_report_acceptance(acceptances.get(report_item["id"]))
+            report_item.update(acceptance)
+            report_item["media_summary"] = _media_report_item_text(report_item)
         for display_index, report_item in enumerate(report_items, start=1):
             report_item["index"] = display_index
         item["result_summary"] = _result_report_summary(item, structured_report)
@@ -5111,22 +5111,16 @@ def _update_report_item_type(task):
         task_id=task["id"],
     )
     updated_result = next((item for item in prepared if str(item.get("code") or "") == result_code), None)
-    updated_report_item = None
-    if updated_result:
-        updated_report_item = next(
-            (item for item in updated_result.get("report_items", []) if item.get("id") == item_id),
-            None,
-        )
+    saved_acceptances = target.get("item_acceptances")
+    if not isinstance(saved_acceptances, dict):
+        saved_acceptances = {}
+    updated_acceptance = _normalize_report_acceptance(saved_acceptances.get(item_id))
     return {
         "ok": True,
         "item_id": item_id,
         "item_type": item_type,
         "item_type_label": REPORT_ITEM_TYPES[item_type],
-        "acceptance_status": (updated_report_item or {}).get("acceptance_status", "pending"),
-        "acceptance_label": (updated_report_item or {}).get("acceptance_label", REPORT_ACCEPTANCE_STATUSES["pending"]),
-        "rejection_reason": (updated_report_item or {}).get("rejection_reason", ""),
-        "rejection_reason_label": (updated_report_item or {}).get("rejection_reason_label", ""),
-        "rejection_note": (updated_report_item or {}).get("rejection_note", ""),
+        **updated_acceptance,
         "result_counts": (updated_result or {}).get("report_counts", {}),
         "totals": _report_item_totals(prepared),
         "suppression_candidate_created": suppression_candidate_created,

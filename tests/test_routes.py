@@ -3910,6 +3910,176 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(accepted_payload["totals"]["issue_detection_rate"], "100.0%")
         self.assertEqual(accepted_payload["totals"]["issue_acceptance_rate"], "100.0%")
 
+    def test_report_review_keeps_limited_item_visible_and_returns_saved_acceptance(self):
+        with self.app.app_context():
+            now = "2026-05-24 12:10:00"
+            structured_report = {
+                "summary": "发现两个候选问题。",
+                "items": [
+                    {
+                        "status": "issue",
+                        "category": "交付内容",
+                        "description": "第一条候选问题",
+                        "suggestion": "修改第一条",
+                    },
+                    {
+                        "status": "issue",
+                        "category": "安全信息",
+                        "description": "第二条候选问题",
+                        "suggestion": "修改第二条",
+                    },
+                ],
+            }
+            result_json = [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": json.dumps(structured_report, ensure_ascii=False),
+                    "issue_output_limit": 1,
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'limited.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        initial_row = _required_tag(soup.select_one("[data-report-item]"))
+        item_id = initial_row["data-item-id"]
+        self.assertIn("第一条候选问题", initial_row.get_text(" ", strip=True))
+        self.assertNotIn(
+            "第二条候选问题",
+            " ".join(row.get_text(" ", strip=True) for row in soup.select("[data-report-item]")),
+        )
+
+        type_response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "non_issue",
+                "acceptance_status": "pending",
+            },
+        )
+
+        self.assertEqual(type_response.status_code, 200)
+        self.assertEqual(type_response.get_json()["item_type"], "non_issue")
+        refreshed = self.client.get(f"/admin/tasks/{task_id}")
+        refreshed_soup = BeautifulSoup(refreshed.get_data(as_text=True), "html.parser")
+        refreshed_rows = refreshed_soup.select("[data-report-item]")
+        self.assertEqual(len(refreshed_rows), 1)
+        self.assertEqual(refreshed_rows[0]["data-item-id"], item_id)
+        self.assertIn("第一条候选问题", refreshed_rows[0].get_text(" ", strip=True))
+        self.assertNotIn(
+            "第二条候选问题",
+            " ".join(row.get_text(" ", strip=True) for row in refreshed_rows),
+        )
+        self.assertEqual(
+            _required_tag(refreshed_rows[0].select_one("[data-report-item-type][checked]"))["value"],
+            "non_issue",
+        )
+
+        accepted_response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "non_issue",
+                "acceptance_status": "accepted",
+            },
+        )
+
+        self.assertEqual(accepted_response.status_code, 200)
+        self.assertEqual(accepted_response.get_json()["acceptance_status"], "accepted")
+
+        rejected_response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "compliance",
+                "item_id": item_id,
+                "item_type": "non_issue",
+                "acceptance_status": "rejected",
+                "rejection_reason": "false_positive",
+                "rejection_note": "上下文可解释",
+            },
+        )
+
+        self.assertEqual(rejected_response.status_code, 200)
+        rejected_payload = rejected_response.get_json()
+        self.assertEqual(rejected_payload["acceptance_status"], "rejected")
+        self.assertEqual(rejected_payload["rejection_reason"], "false_positive")
+        self.assertEqual(rejected_payload["rejection_note"], "上下文可解释")
+
+    def test_report_review_response_does_not_depend_on_visible_items(self):
+        with self.app.app_context():
+            now = "2026-05-24 12:15:00"
+            result_json = [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": (
+                        "1. 问题类型：参数错误\n"
+                        "位置：第1章\n"
+                        "问题描述：参数值前后不一致\n"
+                        "修改建议：统一参数值。"
+                    ),
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'filtered.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        item_id = _required_tag(soup.select_one("[data-report-item]"))["data-item-id"]
+        filtered_prepared = [
+            {
+                "code": "compliance",
+                "report_items": [],
+                "report_counts": {},
+            }
+        ]
+
+        with patch("app.routes._prepare_task_results", return_value=filtered_prepared):
+            response = self.client.post(
+                f"/admin/tasks/{task_id}/report-items",
+                json={
+                    "result_code": "compliance",
+                    "item_id": item_id,
+                    "item_type": "non_issue",
+                    "acceptance_status": "accepted",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["item_type"], "non_issue")
+        self.assertEqual(payload["acceptance_status"], "accepted")
+
     def test_report_suppression_candidate_can_hide_future_similar_description(self):
         result_json = [
             {
