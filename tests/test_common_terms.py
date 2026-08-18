@@ -137,6 +137,26 @@ class CommonTermsTest(unittest.TestCase):
         self.assertIn("文档语种估计：中文为主", report["summary"])
         self.assertNotIn("已跳过", report["summary"])
 
+    def test_model_identifiers_do_not_skip_chinese_only_rules(self):
+        rules = [CommonTermRule("App", ("APP",), language_scope="zh")]
+        document_text = (
+            "这是中文产品资料，用于说明设备安装、配置、操作、验证和维护方法。" * 3
+            + "SUN2000-50KTL-M3 S5735-L48T4X-A1 NetCol5000-A UPS5000-E V100R001C00 " * 4
+            + "请打开 APP 并检查设备状态。"
+        )
+
+        report = build_common_terms_report(
+            document_text,
+            rules,
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+
+        self.assertEqual(len(report["items"]), 1)
+        self.assertIn("不推荐用法“APP”", report["items"][0]["description"])
+        self.assertIn("文档语种估计：中文为主", report["summary"])
+        self.assertNotIn("已跳过", report["summary"])
+
     def test_chinese_only_rule_is_skipped_for_english_document(self):
         rules = [CommonTermRule("App", ("APP", "app"), language_scope="zh")]
         document_text = (

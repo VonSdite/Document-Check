@@ -18,11 +18,13 @@ _TEXT_LANGUAGE_LABELS = {
     TEXT_LANGUAGE_UNKNOWN: "未识别",
 }
 
+_ASCII_TECHNICAL_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/+#-]*")
+
 
 def estimate_text_language(text: str) -> str:
     value = str(text or "")
     cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", value))
-    latin_chars = sum(_is_latin(character) for character in value)
+    latin_chars = _latin_prose_character_count(value)
     japanese_chars = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff]", value))
     hangul_chars = len(re.findall(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]", value))
     other_letter_chars = sum(
@@ -85,6 +87,20 @@ def _is_han(character: str) -> bool:
 
 def _is_latin(character: str) -> bool:
     return "LATIN" in unicodedata.name(character, "")
+
+
+def _latin_prose_character_count(value: str) -> int:
+    text_without_identifiers = _ASCII_TECHNICAL_TOKEN_RE.sub(
+        lambda match: "" if _is_alphanumeric_identifier(match.group(0)) else match.group(0),
+        value,
+    )
+    return sum(_is_latin(character) for character in text_without_identifiers)
+
+
+def _is_alphanumeric_identifier(token: str) -> bool:
+    return any(character.isdigit() for character in token) and any(
+        character.isascii() and character.isalpha() for character in token
+    )
 
 
 def _is_japanese(character: str) -> bool:
