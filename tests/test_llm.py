@@ -93,6 +93,10 @@ class LLMResponseParsingTest(unittest.TestCase):
         user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
         self.assertIn("解析换行/分页造成的空白", user_content)
         self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", user_content)
+        self.assertEqual(
+            fake_session.calls[0][1]["json"]["max_completion_tokens"],
+            llm._MAX_COMPLETION_TOKENS,
+        )
 
     def test_document_check_prompt_clamps_issue_output_limit_to_hard_max(self):
         fake_session = FakeSession(
@@ -268,6 +272,39 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(fake_session.calls[0][1]["json"]["response_format"], {"type": "json_object"})
         self.assertNotIn("response_format", fake_session.calls[1][1]["json"])
         sleep.assert_not_called()
+
+    def test_output_token_limit_falls_back_to_max_tokens_when_unsupported(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    status_code=400,
+                    text='{"error":{"message":"max_completion_tokens is not supported"}}',
+                ),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+            )
+
+        self.assertEqual(result, "完成")
+        first_payload = fake_session.calls[0][1]["json"]
+        second_payload = fake_session.calls[1][1]["json"]
+        self.assertEqual(first_payload["max_completion_tokens"], llm._MAX_COMPLETION_TOKENS)
+        self.assertNotIn("max_completion_tokens", second_payload)
+        self.assertEqual(second_payload["max_tokens"], llm._MAX_COMPLETION_TOKENS)
 
     def test_reads_stream_chat_completion_content(self):
         response = FakeResponse(
@@ -477,6 +514,63 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertFalse(fake_session.calls[0][1]["verify"])
         self.assertFalse(fake_session.calls[1][1]["verify"])
         sleep.assert_called_once_with(1)
+
+    def test_stops_repeated_stream_without_retry(self):
+        repeated = "重复内容" * 20
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        f'data: {{"choices":[{{"delta":{{"content":"{repeated}"}}}}]}}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            with self.assertRaisesRegex(llm.LLMError, "疑似重复输出"):
+                llm.run_check(
+                    api_base="http://example.test/v1/chat/completions",
+                    api_key="key",
+                    model_name="test-model",
+                    check_name="规范性",
+                    prompt="检查",
+                    document_text="文档",
+                )
+
+        self.assertEqual(len(fake_session.calls), 1)
+
+    def test_stops_stream_when_content_character_limit_is_exceeded(self):
+        first = "a" * 12
+        second = "b" * 12
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        f'data: {{"choices":[{{"delta":{{"content":"{first}"}}}}]}}',
+                        f'data: {{"choices":[{{"delta":{{"content":"{second}"}}}}]}}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm, "_MAX_STREAM_CONTENT_CHARS", 20),
+        ):
+            with self.assertRaisesRegex(llm.LLMError, "超过字符上限"):
+                llm.run_check(
+                    api_base="http://example.test/v1/chat/completions",
+                    api_key="key",
+                    model_name="test-model",
+                    check_name="规范性",
+                    prompt="检查",
+                    document_text="文档",
+                )
+
+        self.assertEqual(len(fake_session.calls), 1)
 
     def test_deepseek_reasoning_only_retry_automatically_disables_thinking(self):
         first_response = FakeResponse(

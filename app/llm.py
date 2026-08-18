@@ -23,6 +23,10 @@ _REASONING_ONLY_CHUNK_LIMIT = 8_000
 _REASONING_ONLY_CHAR_LIMIT = 32_000
 _DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT = 64
 _DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT = 256
+_MAX_COMPLETION_TOKENS = 12_288
+_MAX_STREAM_CONTENT_CHARS = 65_536
+_REPEAT_WINDOW_SIZES = (16, 32, 64, 128, 256)
+_REPEAT_WINDOW_COUNT = 3
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
 _JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
@@ -153,6 +157,10 @@ class _StreamParseError(LLMError):
     pass
 
 
+class _StreamOutputLimitError(LLMError):
+    pass
+
+
 def run_check(
     *,
     api_base: str,
@@ -198,6 +206,7 @@ def run_check(
             },
         ],
         "temperature": 0,
+        "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
@@ -206,7 +215,7 @@ def run_check(
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
-        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s document_chars=%s",
+        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -216,6 +225,8 @@ def run_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
+        _MAX_COMPLETION_TOKENS,
+        _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(document_text),
     )
@@ -299,6 +310,7 @@ def run_image_check(
             },
         ],
         "temperature": 0,
+        "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
@@ -307,7 +319,7 @@ def run_image_check(
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
-        "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s data_url_chars=%s",
+        "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s data_url_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -319,6 +331,8 @@ def run_image_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
+        _MAX_COMPLETION_TOKENS,
+        _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(image_data_url),
     )
@@ -434,6 +448,7 @@ def run_multimodal_document_check(
             },
         ],
         "temperature": 0,
+        "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
@@ -443,7 +458,7 @@ def run_multimodal_document_check(
 
     data_url_chars = sum(len(image["data_url"]) for image in normalized_images)
     logger.info(
-        "LLM 图文联合请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s batch=%s/%s images=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s prompt_chars=%s document_chars=%s data_url_chars=%s",
+        "LLM 图文联合请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s batch=%s/%s images=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s data_url_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -456,6 +471,8 @@ def run_multimodal_document_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
+        _MAX_COMPLETION_TOKENS,
+        _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(document_text),
         data_url_chars,
@@ -523,6 +540,7 @@ def _run_payload_with_retries(
     last_error = None
     active_payload = dict(payload)
     response_format_fallback_used = False
+    output_token_fallback_used = False
     attempt = 1
     while attempt <= _MAX_RETRIES + 1:
         attempt_parts = []
@@ -574,6 +592,8 @@ def _run_payload_with_retries(
             last_error = exc
             if on_content and attempt_parts:
                 on_content("")
+            if isinstance(exc, _StreamOutputLimitError):
+                raise
             if (
                 not response_format_fallback_used
                 and "response_format" in active_payload
@@ -584,6 +604,23 @@ def _run_payload_with_retries(
                 response_format_fallback_used = True
                 logger.warning(
                     "LLM JSON 输出模式不被模型服务支持，已降级为提示词约束 JSON request_id=%s task_id=%s attempt=%s error=%s",
+                    request_id,
+                    task_id or "-",
+                    attempt,
+                    exc,
+                )
+                continue
+            if (
+                not output_token_fallback_used
+                and "max_completion_tokens" in active_payload
+                and _is_output_token_limit_unsupported_error(exc)
+            ):
+                active_payload = dict(active_payload)
+                active_payload.pop("max_completion_tokens", None)
+                active_payload["max_tokens"] = _MAX_COMPLETION_TOKENS
+                output_token_fallback_used = True
+                logger.warning(
+                    "LLM 服务不支持 max_completion_tokens，已降级为 max_tokens request_id=%s task_id=%s attempt=%s error=%s",
                     request_id,
                     task_id or "-",
                     attempt,
@@ -895,6 +932,38 @@ def _is_json_response_format_unsupported_error(error: Exception) -> bool:
     return any(marker in text for marker in unsupported_markers)
 
 
+def _is_output_token_limit_unsupported_error(error: Exception) -> bool:
+    text = str(error or "").lower()
+    if not any(
+        marker in text
+        for marker in (
+            "max_completion_tokens",
+            "max completion tokens",
+            "max_tokens",
+            "max tokens",
+        )
+    ):
+        return False
+    unsupported_markers = (
+        "not support",
+        "not supported",
+        "unsupported",
+        "invalid",
+        "unrecognized",
+        "unknown",
+        "not permitted",
+        "not allowed",
+        "extra inputs are not permitted",
+        "不支持",
+        "无效",
+        "非法",
+        "不允许",
+        "未识别",
+        "未知",
+    )
+    return any(marker in text for marker in unsupported_markers)
+
+
 def _thinking_payload_adapter(api_base: str, model_name: str) -> str | None:
     hostname = _endpoint_hostname(api_base)
     if hostname == _DINGPAN_THINKING_HOST:
@@ -1081,6 +1150,8 @@ def _read_stream_lines(
     thinking_disabled: bool = False,
 ) -> str:
     parts = []
+    content_chars = 0
+    content_tail = ""
     diagnostics = _OpenAIChatDiagnostics()
     reasoning_chunk_limit, reasoning_char_limit = _reasoning_only_limits(
         thinking_disabled
@@ -1165,7 +1236,34 @@ def _read_stream_lines(
         delta = _extract_chat_content(data)
         if not delta:
             continue
+        content_chars += len(delta)
+        if content_chars > _MAX_STREAM_CONTENT_CHARS:
+            logger.warning(
+                "LLM 流式正文超过字符上限，提前中止 request_id=%s task_id=%s attempt=%s chars=%s limit=%s %s",
+                request_id,
+                task_id or "-",
+                attempt or "-",
+                content_chars,
+                _MAX_STREAM_CONTENT_CHARS,
+                diagnostics.log_summary(),
+            )
+            raise _StreamOutputLimitError(
+                f"模型流式正文超过字符上限 {_MAX_STREAM_CONTENT_CHARS}，已提前终止本次请求。"
+            )
         parts.append(delta)
+        content_tail = (content_tail + delta)[-max(_REPEAT_WINDOW_SIZES) * _REPEAT_WINDOW_COUNT :]
+        if _repeated_content_tail(content_tail):
+            logger.warning(
+                "LLM 流式正文疑似重复输出，提前中止 request_id=%s task_id=%s attempt=%s chars=%s %s",
+                request_id,
+                task_id or "-",
+                attempt or "-",
+                content_chars,
+                diagnostics.log_summary(),
+            )
+            raise _StreamOutputLimitError(
+                "模型流式正文疑似重复输出，已提前终止本次请求。"
+            )
         if on_delta:
             on_delta(delta)
 
@@ -1190,6 +1288,28 @@ def _read_stream_lines(
         )
         raise error_type(_empty_content_message(diagnostics))
     return content
+
+
+def _repeated_content_tail(text: str) -> bool:
+    for window_size in _REPEAT_WINDOW_SIZES:
+        required = window_size * _REPEAT_WINDOW_COUNT
+        if len(text) < required:
+            continue
+        tail = text[-required:]
+        windows = [
+            tail[index : index + window_size]
+            for index in range(0, required, window_size)
+        ]
+        if all(_text_similarity(windows[0], window) >= 0.9 for window in windows[1:]):
+            return True
+    return False
+
+
+def _text_similarity(left: str, right: str) -> float:
+    if not left or len(left) != len(right):
+        return 0.0
+    same = sum(first == second for first, second in zip(left, right))
+    return same / len(left)
 
 
 def _reasoning_only_limits(thinking_disabled: bool) -> tuple[int, int]:
