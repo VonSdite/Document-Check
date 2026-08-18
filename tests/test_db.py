@@ -122,7 +122,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertNotIn("ssl_verify", provider_columns)
         self.assertIn("model_name", model_columns)
         self.assertIn("force_disable_thinking", model_columns)
-        self.assertEqual(model_columns["force_disable_thinking"]["dflt_value"], "1")
+        self.assertEqual(model_columns["force_disable_thinking"]["dflt_value"], "0")
 
     def test_init_db_clears_only_finished_task_api_key_snapshots(self):
         db = get_db()
@@ -175,7 +175,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(provider["api_key"], "provider-secret")
 
-    def test_init_db_migrates_existing_models_to_disable_thinking_once(self):
+    def test_init_db_migrates_existing_models_to_enable_thinking_once(self):
         db = get_db()
         db.execute("DELETE FROM settings WHERE key = ?", (MODEL_THINKING_DEFAULT_MIGRATION_KEY,))
         now = now_text()
@@ -197,9 +197,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                (provider_id, "legacy-model", 0, 10, now, now),
-                (provider_id, "duplicate-model", 0, 20, now, now),
-                (provider_id, "duplicate-model", 1, 30, now, now),
+                (provider_id, "legacy-model", 1, 10, now, now),
+                (provider_id, "duplicate-model", 1, 20, now, now),
+                (provider_id, "duplicate-model", 0, 30, now, now),
             ],
         )
         db.commit()
@@ -211,7 +211,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ).fetchall()
         self.assertEqual(
             [(row["model_name"], row["force_disable_thinking"]) for row in rows],
-            [("duplicate-model", 1), ("legacy-model", 1)],
+            [("duplicate-model", 0), ("legacy-model", 0)],
         )
         marker = db.execute(
             "SELECT value FROM settings WHERE key = ?",
@@ -220,14 +220,14 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(marker["value"], "true")
 
         db.execute(
-            "UPDATE user_model_configs SET force_disable_thinking = 0 WHERE model_name = 'legacy-model'"
+            "UPDATE user_model_configs SET force_disable_thinking = 1 WHERE model_name = 'legacy-model'"
         )
         db.commit()
         init_db()
         preserved = db.execute(
             "SELECT force_disable_thinking FROM user_model_configs WHERE model_name = 'legacy-model'"
         ).fetchone()
-        self.assertEqual(preserved["force_disable_thinking"], 0)
+        self.assertEqual(preserved["force_disable_thinking"], 1)
 
     def test_ip_username_table_exists(self):
         db = get_db()

@@ -8,7 +8,7 @@ from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
 from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
 
 
-MODEL_THINKING_DEFAULT_MIGRATION_KEY = "model_force_disable_thinking_default_v1"
+MODEL_THINKING_DEFAULT_MIGRATION_KEY = "model_force_disable_thinking_default_v2"
 
 
 def now_text() -> str:
@@ -112,7 +112,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             provider_id INTEGER NOT NULL,
             model_name TEXT NOT NULL,
-            force_disable_thinking INTEGER NOT NULL DEFAULT 1,
+            force_disable_thinking INTEGER NOT NULL DEFAULT 0,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -267,21 +267,21 @@ def _migrate_model_thinking_defaults(db):
     db.execute(
         """
         DELETE FROM user_model_configs AS current
-        WHERE current.force_disable_thinking = 0
+        WHERE current.force_disable_thinking = 1
           AND EXISTS (
               SELECT 1
-              FROM user_model_configs AS disabled
-              WHERE disabled.provider_id = current.provider_id
-                AND disabled.model_name = current.model_name
-                AND disabled.force_disable_thinking = 1
+              FROM user_model_configs AS enabled
+              WHERE enabled.provider_id = current.provider_id
+                AND enabled.model_name = current.model_name
+                AND enabled.force_disable_thinking = 0
           )
         """
     )
     db.execute(
         """
         UPDATE user_model_configs
-        SET force_disable_thinking = 1, updated_at = ?
-        WHERE force_disable_thinking = 0
+        SET force_disable_thinking = 0, updated_at = ?
+        WHERE force_disable_thinking = 1
         """,
         (now,),
     )

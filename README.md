@@ -284,7 +284,7 @@ SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、A
 - 单次请求文本上限按提供商单独设置，默认 80000 字。
 - 模型 ID 列表使用表格维护，可手动新增、整理，也可从当前 API 地址拉取模型后在弹窗中选择加入。
 - 每个模型 ID 行都有“测试”按钮，用于从平台服务端按当前 API 地址、API Key、系统出站网络配置和模型 ID 发起一次 Chat Completions 连通性测试。
-- 每个模型可单独开启“强制关闭思考”。开启后，系统统一写入 `enable_thinking=false`、`thinking: {"type": "disabled"}`、`reasoning_effort="none"` 和 `chat_template_kwargs: {"enable_thinking": false, "thinking": false}`，兼容使用不同关闭参数的模型服务。
+- 模型默认保留思考能力；每个模型仍可单独开启“强制关闭思考”。开启后，系统统一写入 `enable_thinking=false`、`thinking: {"type": "disabled"}`、`reasoning_effort="none"` 和 `chat_template_kwargs: {"enable_thinking": false, "thinking": false}`，兼容使用不同关闭参数的模型服务。
 
 ## 检查流程
 
