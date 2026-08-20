@@ -135,11 +135,18 @@ REPORT_ACCEPTANCE_STATUSES = {
     "rejected": "不接纳",
 }
 REPORT_REJECTION_REASONS = {
-    "model_hallucination": "模型幻觉",
     "false_positive": "模型误报",
+    "model_hallucination": "模型幻觉",
     "evidence_insufficient": "证据不足",
     "not_applicable": "不适用",
     "other": "其他",
+}
+REPORT_REJECTION_REASON_HINTS = {
+    "false_positive": "能找到模型依据，但结论判断不成立",
+    "model_hallucination": "找不到模型引用的原文、位置或事实",
+    "evidence_insufficient": "信息不完整，暂时无法判断结论对错",
+    "not_applicable": "这条检查规则不适用于当前文档或场景",
+    "other": "无法归入以上原因，请补充说明",
 }
 REPORT_SUPPRESSION_REJECTION_REASONS = {"model_hallucination", "false_positive", "not_applicable"}
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
@@ -356,6 +363,7 @@ def register_routes(app):
     app.add_template_global(REPORT_ITEM_TYPE_LABEL, "REPORT_ITEM_TYPE_LABEL")
     app.add_template_global(REPORT_ACCEPTANCE_STATUSES, "REPORT_ACCEPTANCE_STATUSES")
     app.add_template_global(REPORT_REJECTION_REASONS, "REPORT_REJECTION_REASONS")
+    app.add_template_global(REPORT_REJECTION_REASON_HINTS, "REPORT_REJECTION_REASON_HINTS")
     app.add_template_global(lambda: app.config["ADMIN_URL"], "admin_url")
     app.add_template_global(subject_label, "subject_label")
     app.add_template_global(_owner_display, "owner_display")
@@ -5071,6 +5079,8 @@ def _update_report_item_type(task):
         if acceptance_status is None:
             return {"ok": False, "error": "接纳状态数据无效。"}, 400
         if acceptance_status == "rejected":
+            if not rejection_reason:
+                return {"ok": False, "error": "选择不认可时必须选择原因。"}, 400
             if rejection_reason == "other" and not rejection_note:
                 return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
 
@@ -5393,10 +5403,11 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
                 acceptance_supplied = True
                 if acceptance_status == "rejected":
                     reason_text = _excel_import_text(_excel_row_value(row, columns, "不接纳原因"))
-                    if reason_text:
-                        rejection_reason = rejection_values.get(reason_text, "")
-                        if not rejection_reason:
-                            raise ReportExcelImportError(f"第 {row_number} 行“不接纳原因”无效。")
+                    if not reason_text:
+                        raise ReportExcelImportError(f"第 {row_number} 行选择不接纳时必须填写“不接纳原因”。")
+                    rejection_reason = rejection_values.get(reason_text, "")
+                    if not rejection_reason:
+                        raise ReportExcelImportError(f"第 {row_number} 行“不接纳原因”无效。")
                     rejection_note = _excel_import_text(_excel_row_value(row, columns, "人工原因"))
                     if rejection_reason == "other" and not rejection_note:
                         raise ReportExcelImportError(f"第 {row_number} 行选择其他原因时必须填写人工原因。")

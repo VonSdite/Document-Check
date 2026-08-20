@@ -302,6 +302,7 @@ function reportItemControls(item) {
     type: item.querySelectorAll("[data-report-item-type]"),
     acceptance: item.querySelectorAll("[data-report-acceptance-status]"),
     reason: item.querySelector("[data-report-rejection-reason]"),
+    reasonTrigger: item.querySelector("[data-report-rejection-trigger]"),
     note: item.querySelector("[data-report-rejection-note]"),
   };
 }
@@ -353,17 +354,27 @@ function syncReportAcceptanceFields(item) {
   if (rejectionControls instanceof HTMLElement) {
     rejectionControls.hidden = !rejected;
   }
-  [controls.reason, controls.note].forEach((control) => {
-    if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) {
-      control.disabled = acceptanceDisabled || !rejected;
-    }
+  [controls.reason, controls.reasonTrigger, controls.note].forEach((control) => {
+    reportControlNodes(control).forEach((node) => {
+      if (
+        node instanceof HTMLSelectElement
+        || node instanceof HTMLInputElement
+        || node instanceof HTMLButtonElement
+      ) {
+        node.disabled = acceptanceDisabled || !rejected;
+      }
+    });
   });
 }
 
 function setReportItemControlsDisabled(item, disabled) {
   Object.values(reportItemControls(item)).forEach((control) => {
     reportControlNodes(control).forEach((node) => {
-      if (node instanceof HTMLSelectElement || node instanceof HTMLInputElement) {
+      if (
+        node instanceof HTMLSelectElement
+        || node instanceof HTMLInputElement
+        || node instanceof HTMLButtonElement
+      ) {
         node.disabled = disabled;
       }
     });
@@ -378,13 +389,14 @@ function revertReportItemControls(item) {
   const savedAcceptance = reportControlNodes(controls.acceptance)[0]?.dataset.savedValue || "pending";
   setReportControlValue(controls.acceptance, savedAcceptance);
   item.dataset.acceptanceStatus = savedAcceptance;
-  if (controls.reason instanceof HTMLSelectElement) {
-    controls.reason.value = controls.reason.dataset.savedValue || "";
-  }
+  const savedReason = reportControlNodes(controls.reason)[0]?.dataset.savedValue || "";
+  setReportControlValue(controls.reason, savedReason);
+  setReportControlSavedValue(controls.reason, savedReason);
   if (controls.note instanceof HTMLInputElement) {
     controls.note.value = controls.note.dataset.savedValue || "";
   }
   syncReportAcceptanceFields(item);
+  syncReportRejectionTrigger(item);
 }
 
 function applyReportItemSave(item, data) {
@@ -397,10 +409,8 @@ function applyReportItemSave(item, data) {
   setReportControlSavedValue(controls.type, savedType);
   setReportControlValue(controls.acceptance, savedAcceptance);
   setReportControlSavedValue(controls.acceptance, savedAcceptance);
-  if (controls.reason instanceof HTMLSelectElement) {
-    controls.reason.value = savedReason;
-    controls.reason.dataset.savedValue = savedReason;
-  }
+  setReportControlValue(controls.reason, savedReason);
+  setReportControlSavedValue(controls.reason, savedReason);
   if (controls.note instanceof HTMLInputElement) {
     controls.note.value = savedNote;
     controls.note.dataset.savedValue = savedNote;
@@ -408,6 +418,7 @@ function applyReportItemSave(item, data) {
   item.dataset.itemType = savedType;
   item.dataset.acceptanceStatus = savedAcceptance;
   syncReportAcceptanceFields(item);
+  syncReportRejectionTrigger(item);
 }
 
 function reportItemPayload(item) {
@@ -417,7 +428,7 @@ function reportItemPayload(item) {
     item_id: item.dataset.itemId,
     item_type: reportControlValue(controls.type, "issue"),
     acceptance_status: reportControlValue(controls.acceptance, "pending"),
-    rejection_reason: controls.reason instanceof HTMLSelectElement ? controls.reason.value : "",
+    rejection_reason: reportControlValue(controls.reason),
     rejection_note: controls.note instanceof HTMLInputElement ? controls.note.value.trim() : "",
   };
 }
@@ -429,12 +440,55 @@ function validateReportAcceptance(item) {
   if (payload.acceptance_status !== "rejected") {
     return true;
   }
+  if (!payload.rejection_reason) {
+    openReportRejectionDialog(item);
+    return false;
+  }
   if (payload.rejection_reason === "other" && !payload.rejection_note) {
     showToast("选择其他原因时必须填写具体原因。", "error");
     controls.note?.focus();
     return false;
   }
   return true;
+}
+
+let activeReportRejectionItem = null;
+
+function reportRejectionChoice(reason) {
+  return Array.from(document.querySelectorAll("[data-report-rejection-choice]"))
+    .find((choice) => choice.dataset.reportRejectionChoice === reason) || null;
+}
+
+function syncReportRejectionTrigger(item) {
+  const controls = reportItemControls(item);
+  if (!(controls.reasonTrigger instanceof HTMLButtonElement)) {
+    return;
+  }
+  const reason = reportControlValue(controls.reason);
+  const choice = reportRejectionChoice(reason);
+  const label = controls.reasonTrigger.querySelector("[data-report-rejection-trigger-label]");
+  const hint = controls.reasonTrigger.querySelector("[data-report-rejection-trigger-hint]");
+  controls.reasonTrigger.classList.toggle("has-value", Boolean(choice));
+  if (label) {
+    label.textContent = choice?.dataset.rejectionLabel || "选择不认可原因";
+  }
+  if (hint) {
+    hint.textContent = choice?.dataset.rejectionHint || "查看判断标准后选择";
+  }
+}
+
+function openReportRejectionDialog(item) {
+  const modal = document.querySelector("[data-report-rejection-modal]");
+  if (!(modal instanceof HTMLDialogElement)) {
+    return;
+  }
+  activeReportRejectionItem = item;
+  const currentReason = reportControlValue(reportItemControls(item).reason);
+  modal.querySelectorAll("[data-report-rejection-choice]").forEach((choice) => {
+    choice.classList.toggle("is-selected", choice.dataset.reportRejectionChoice === currentReason);
+    choice.setAttribute("aria-pressed", choice.dataset.reportRejectionChoice === currentReason ? "true" : "false");
+  });
+  openModal(modal.id);
 }
 
 function saveReportItemReview(item) {
@@ -493,6 +547,53 @@ document.addEventListener("change", (event) => {
   }
   const item = control.closest("[data-report-item]");
   if (!(item instanceof HTMLElement)) {
+    return;
+  }
+  saveReportItemReview(item);
+});
+
+const reportRejectionModal = document.querySelector("[data-report-rejection-modal]");
+if (reportRejectionModal instanceof HTMLDialogElement) {
+  reportRejectionModal.addEventListener("close", () => {
+    const item = activeReportRejectionItem;
+    activeReportRejectionItem = null;
+    if (!(item instanceof HTMLElement) || reportItemPayload(item).rejection_reason) {
+      return;
+    }
+    const controls = reportItemControls(item);
+    const savedAcceptance = reportControlNodes(controls.acceptance)[0]?.dataset.savedValue || "pending";
+    setReportControlValue(controls.acceptance, savedAcceptance);
+    item.dataset.acceptanceStatus = savedAcceptance;
+    syncReportAcceptanceFields(item);
+  });
+}
+
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-report-rejection-trigger]");
+  if (trigger instanceof HTMLButtonElement) {
+    const item = trigger.closest("[data-report-item]");
+    if (item instanceof HTMLElement) {
+      openReportRejectionDialog(item);
+    }
+    return;
+  }
+
+  const choice = event.target.closest("[data-report-rejection-choice]");
+  if (!(choice instanceof HTMLButtonElement) || !(activeReportRejectionItem instanceof HTMLElement)) {
+    return;
+  }
+  const item = activeReportRejectionItem;
+  const controls = reportItemControls(item);
+  const reason = choice.dataset.reportRejectionChoice || "";
+  setReportControlValue(controls.reason, reason);
+  syncReportRejectionTrigger(item);
+  const modal = choice.closest("dialog");
+  if (modal instanceof HTMLDialogElement) {
+    modal.close();
+  }
+  activeReportRejectionItem = null;
+  if (reason === "other" && controls.note instanceof HTMLInputElement && !controls.note.value.trim()) {
+    controls.note.focus();
     return;
   }
   saveReportItemReview(item);

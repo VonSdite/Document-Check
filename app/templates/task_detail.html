@@ -171,7 +171,7 @@
             <th class="report-field-{{ field }}">{{ label }}</th>
             {% endfor %}
             <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
-            <th class="report-acceptance-cell">是否接纳</th>
+            <th class="report-acceptance-cell">是否认可 AI 结论</th>
           </tr>
         </thead>
         <tbody>
@@ -200,21 +200,20 @@
               </div>
             </td>
             <td class="report-acceptance-cell">
-              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否接纳">
+              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">
                 {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
                 <label class="report-radio-option report-radio-option-{{ status }}">
-                  <input type="radio" name="report-acceptance-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
-                  <span>{{ label }}</span>
+                  <input type="radio" name="report-acceptance-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ '认可' if status == 'accepted' else '不认可' if status == 'rejected' else label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <span>{{ "认可" if status == "accepted" else "不认可" if status == "rejected" else label }}</span>
                 </label>
                 {% if status == "rejected" %}
                 <div class="rejection-controls" data-report-rejection-controls {{ "hidden" if item.acceptance_status != "rejected" else "" }}>
-                  <select data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" aria-label="条目 {{ item.index }} 不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
-                    <option value="">--</option>
-                    {% for reason, reason_label in REPORT_REJECTION_REASONS.items() %}
-                    <option value="{{ reason }}" {{ "selected" if item.rejection_reason == reason else "" }}>{{ reason_label }}</option>
-                    {% endfor %}
-                  </select>
-                  <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="人工填写原因（可选）" aria-label="条目 {{ item.index }} 人工填写不接纳原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                  <input type="hidden" value="{{ item.rejection_reason }}" data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                  <button class="rejection-reason-trigger{{ ' has-value' if item.rejection_reason else '' }}" type="button" data-report-rejection-trigger {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                    <span data-report-rejection-trigger-label>{{ item.rejection_reason_label or "选择不认可原因" }}</span>
+                    <small data-report-rejection-trigger-hint>{{ REPORT_REJECTION_REASON_HINTS.get(item.rejection_reason, "查看判断标准后选择") }}</small>
+                  </button>
+                  <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="补充说明（选择“其他”时必填）" aria-label="条目 {{ item.index }} 人工填写不认可原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
                 </div>
                 {% endif %}
                 {% endfor %}
@@ -274,5 +273,34 @@
   </article>
   {% endfor %}
 </section>
+
+<dialog class="modal report-rejection-modal" id="report-rejection-modal" data-report-rejection-modal>
+  <div class="modal-card report-rejection-modal-card">
+    <div class="modal-head">
+      <div>
+        <h2>选择不认可原因</h2>
+        <p>先判断模型给出的依据能否在文档或图片中找到。</p>
+      </div>
+      <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <div class="report-rejection-modal-body">
+      <div class="rejection-reason-list" role="list">
+        {% for reason, reason_label in REPORT_REJECTION_REASONS.items() %}
+        <button class="rejection-reason-option rejection-reason-{{ reason }}" type="button" data-report-rejection-choice="{{ reason }}" data-rejection-label="{{ reason_label }}" data-rejection-hint="{{ REPORT_REJECTION_REASON_HINTS[reason] }}">
+          <span class="rejection-reason-marker" aria-hidden="true"></span>
+          <span class="rejection-reason-copy">
+            <strong>{{ reason_label }}</strong>
+            <small>{{ REPORT_REJECTION_REASON_HINTS[reason] }}</small>
+          </span>
+        </button>
+        {% endfor %}
+      </div>
+      <div class="rejection-distinction">
+        <strong>误报和幻觉怎么区分？</strong>
+        <span>找得到原文但结论不成立，是模型误报；找不到模型声称存在的原文、位置或事实，才是模型幻觉。</span>
+      </div>
+    </div>
+  </div>
+</dialog>
 {% endif %}
 {% endblock %}

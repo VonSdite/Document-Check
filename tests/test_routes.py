@@ -3043,7 +3043,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
         self.assertEqual(
             headers,
-            ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否接纳"],
+            ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否认可 AI 结论"],
         )
         self.assertIn("report-field-severity_label", _required_tag(soup.select_one(".report-table th:nth-child(2)")).get("class", []))
         self.assertIn("report-field-confidence_label", _required_tag(soup.select_one(".report-table th:nth-child(3)")).get("class", []))
@@ -3056,7 +3056,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
         acceptance = _required_tag(rows[0].select_one("[data-report-acceptance-status]"))
         acceptance_radios = rows[0].select("input[type='radio'][data-report-acceptance-status]")
         self.assertEqual([radio.get("value") for radio in acceptance_radios], ["pending", "accepted", "rejected"])
-        self.assertEqual(len(rows[0].select(".report-acceptance-cell select")), 1)
+        self.assertEqual(len(rows[0].select(".report-acceptance-cell select")), 0)
+        rejection_reasons = rows[0].select("[data-report-rejection-reason]")
+        self.assertEqual(len(rejection_reasons), 1)
+        self.assertEqual(rejection_reasons[0].get("type"), "hidden")
+        rejection_choices = soup.select("[data-report-rejection-choice]")
+        self.assertEqual(
+            [choice.get("data-report-rejection-choice") for choice in rejection_choices],
+            ["false_positive", "model_hallucination", "evidence_insufficient", "not_applicable", "other"],
+        )
+        self.assertIn("找不到模型引用的原文、位置或事实", _required_tag(soup.select_one(".rejection-reason-model_hallucination")).get_text(" ", strip=True))
         self.assertEqual([radio.get("value") for radio in acceptance_radios if radio.has_attr("checked")], ["pending"])
         self.assertEqual(acceptance.get("data-saved-value"), "pending")
         reason = _required_tag(rows[0].select_one("[data-report-rejection-reason]"))
@@ -3120,7 +3129,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(exported.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
-        self.assertEqual(headers, ["条目", "AI检查结论", "条目判定", "是否接纳"])
+        self.assertEqual(headers, ["条目", "AI检查结论", "条目判定", "是否认可 AI 结论"])
         table = _required_tag(soup.select_one(".report-table-media"))
         self.assertIn("report-table-media", table.get("class", []))
         row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(" ", strip=True)
@@ -4225,7 +4234,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             updated_rule = get_db().execute("SELECT hit_count FROM report_suppression_rules WHERE id = ?", (rule_id,)).fetchone()
             self.assertEqual(updated_rule["hit_count"], 1)
 
-    def test_report_item_reject_allows_empty_reason_but_other_requires_note(self):
+    def test_report_item_reject_requires_reason_and_other_requires_note(self):
         with self.app.app_context():
             now = "2026-05-24 12:30:00"
             result_json = [
@@ -4272,21 +4281,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 400)
         payload = response.get_json()
-        self.assertEqual(payload["acceptance_status"], "rejected")
-        self.assertEqual(payload["rejection_reason"], "")
-        self.assertEqual(payload["rejection_note"], "")
+        self.assertEqual(payload["error"], "选择不认可时必须选择原因。")
 
         updated_detail = self.client.get(f"/admin/tasks/{task_id}")
         updated_soup = BeautifulSoup(updated_detail.get_data(as_text=True), "html.parser")
         rejection_controls = _required_tag(updated_soup.select_one("[data-report-rejection-controls]"))
         rejection_reason = _required_tag(rejection_controls.select_one("[data-report-rejection-reason]"))
-        self.assertFalse(rejection_controls.has_attr("hidden"))
-        self.assertFalse(rejection_reason.has_attr("disabled"))
-        empty_reason = _required_tag(rejection_reason.select_one('option[value=""]'))
-        self.assertEqual(empty_reason.get_text(strip=True), "--")
-        self.assertEqual(rejection_reason.select("option")[0], empty_reason)
+        self.assertTrue(rejection_controls.has_attr("hidden"))
+        self.assertTrue(rejection_reason.has_attr("disabled"))
+        self.assertEqual(rejection_reason.name, "input")
+        self.assertEqual(rejection_reason.get("type"), "hidden")
 
         other_response = self.client.post(
             f"/admin/tasks/{task_id}/report-items",
