@@ -2901,11 +2901,21 @@ body.table-column-resize-active * {
 }
 
 .report-rejection-modal {
-  width: min(560px, calc(100vw - 28px));
+  position: fixed;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  margin: 0;
+  overflow: visible;
+}
+
+.report-rejection-modal::backdrop {
+  background: transparent;
 }
 
 .report-rejection-modal-card {
+  max-height: calc(100vh - 24px);
   grid-template-rows: auto minmax(0, 1fr);
+  box-shadow: 0 16px 36px rgba(16, 32, 51, 0.18);
 }
 
 .report-rejection-modal .modal-head {
@@ -2915,25 +2925,50 @@ body.table-column-resize-active * {
 .report-rejection-modal .modal-head p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .report-rejection-modal-body {
   display: grid;
-  gap: 14px;
-  padding: 16px 20px 20px;
+  gap: 10px;
+  padding: 12px 14px 14px;
   overflow: auto;
+}
+
+.report-rejection-modal .modal-head {
+  padding: 13px 14px;
+}
+
+.report-rejection-modal .modal-head h2 {
+  font-size: 16px;
+}
+
+.report-rejection-modal .rejection-reason-list {
+  gap: 5px;
+}
+
+.report-rejection-modal .rejection-reason-option {
+  gap: 8px;
+  padding: 7px 8px;
+}
+
+.report-rejection-modal .rejection-reason-copy strong {
+  font-size: 13px;
+}
+
+.report-rejection-modal .rejection-reason-copy small {
+  font-size: 11px;
 }
 
 .rejection-distinction {
   display: grid;
   gap: 3px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid #cfe0f3;
   border-radius: 8px;
   background: #f4f8fd;
   color: #315477;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.5;
 
 }

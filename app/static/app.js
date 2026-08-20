@@ -479,7 +479,8 @@ function syncReportRejectionTrigger(item) {
 
 function openReportRejectionDialog(item) {
   const modal = document.querySelector("[data-report-rejection-modal]");
-  if (!(modal instanceof HTMLDialogElement)) {
+  const trigger = reportItemControls(item).reasonTrigger;
+  if (!(modal instanceof HTMLDialogElement) || !(trigger instanceof HTMLButtonElement)) {
     return;
   }
   activeReportRejectionItem = item;
@@ -489,6 +490,34 @@ function openReportRejectionDialog(item) {
     choice.setAttribute("aria-pressed", choice.dataset.reportRejectionChoice === currentReason ? "true" : "false");
   });
   openModal(modal.id);
+  window.requestAnimationFrame(() => placeReportRejectionModal(modal, trigger));
+}
+
+function placeReportRejectionModal(modal, anchor) {
+  if (!(modal instanceof HTMLDialogElement) || !modal.open || !(anchor instanceof HTMLElement)) {
+    return;
+  }
+  const rect = anchor.getBoundingClientRect();
+  const margin = 12;
+  const gap = 8;
+  const width = modal.offsetWidth;
+  const height = modal.offsetHeight;
+  let left = rect.right + gap;
+  let top = rect.top;
+  if (left + width > window.innerWidth - margin) {
+    left = rect.left - width - gap;
+  }
+  if (left < margin) {
+    left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin));
+  }
+  if (top + height > window.innerHeight - margin) {
+    top = window.innerHeight - height - margin;
+  }
+  if (top < margin) {
+    top = margin;
+  }
+  modal.style.left = `${left}px`;
+  modal.style.top = `${top}px`;
 }
 
 function saveReportItemReview(item) {
@@ -567,6 +596,20 @@ if (reportRejectionModal instanceof HTMLDialogElement) {
     syncReportAcceptanceFields(item);
   });
 }
+
+function repositionReportRejectionModal() {
+  if (!(activeReportRejectionItem instanceof HTMLElement)) {
+    return;
+  }
+  const modal = document.querySelector("[data-report-rejection-modal]");
+  const trigger = reportItemControls(activeReportRejectionItem).reasonTrigger;
+  if (modal instanceof HTMLDialogElement && trigger instanceof HTMLButtonElement) {
+    placeReportRejectionModal(modal, trigger);
+  }
+}
+
+window.addEventListener("resize", repositionReportRejectionModal);
+window.addEventListener("scroll", repositionReportRejectionModal, true);
 
 document.addEventListener("click", (event) => {
   const trigger = event.target.closest("[data-report-rejection-trigger]");
