@@ -1523,7 +1523,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.app.config["REAL_IP_HEADER"] = "X-Real-IP"
         model_id = self._configure_provider("ip:10.20.30.40")
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
         response = self.client.post(
             "/",
@@ -2002,7 +2002,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_rejects_disabled_check_item_before_saving_file(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
             get_db().execute("UPDATE check_items SET enabled = 0 WHERE id = ?", (item["id"],))
             get_db().commit()
 
@@ -2040,11 +2040,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIsNone(upload.get("data-file-limit"))
         field = _required_tag(upload.find_parent(class_="multi-file-field"))
         self.assertIsNotNone(field.select_one("[data-file-list]"))
+        check_names = [
+            label.get_text(" ", strip=True)
+            for label in soup.select(".check-chip")
+        ]
+        self.assertTrue(any("文档规范性检查" in name for name in check_names))
+        self.assertTrue(any("易理解性检查" in name for name in check_names))
+        self.assertTrue(any("内容正确性检查" in name for name in check_names))
+        self.assertTrue(any("内容完整性检查" in name for name in check_names))
+        self.assertFalse(any("错别字检查" in name for name in check_names))
 
     def test_create_task_saves_check_snapshot_and_extracted_text(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id, code, name, prompt FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'").fetchone()
 
         response = self.client.post(
             "/",
@@ -2077,7 +2086,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_saves_long_filename_when_upload_folder_is_missing(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
         upload_folder = Path(self.app.config["ROOT_DIR"]) / ("deep-" + "x" * 50) / "uploads"
         self.app.config["UPLOAD_FOLDER"] = str(upload_folder)
@@ -2112,7 +2121,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
-                "SELECT id, code, name, prompt FROM check_items WHERE code = 'typo'"
+                "SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'"
             ).fetchone()
 
         response = self.client.post(
@@ -2152,7 +2161,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_rejects_entire_batch_when_one_document_has_no_text(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
         response = self.client.post(
             "/",
@@ -2177,7 +2186,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_handles_unexpected_upload_preparation_error(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
         with patch("app.routes.extract_text", side_effect=ValueError("company parser failed")):
             response = self.client.post(
@@ -2203,7 +2212,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_removes_partial_file_when_upload_save_fails(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
         def fail_after_partial_write(_upload, destination, buffer_size=16384):
             Path(destination).write_bytes(b"partial")
@@ -4319,7 +4328,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             },
         }
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
         response = self.client.post(
             "/",
@@ -4485,7 +4494,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             session[SAML_USER_SESSION_KEY] = {"user_id": "100086", "username": "张三"}
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
         response = self.client.post(
             "/",

@@ -339,24 +339,43 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertFalse(get_bool_setting("llm_stream_trace_enabled", False))
 
-    def test_default_consistency_prompt_covers_constraint_conflicts(self):
+    def test_default_correctness_prompt_covers_verifiable_conflicts(self):
         db = get_db()
         item = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
 
-        self.assertIn("约束性与安全信息一致性", item["prompt"])
-        self.assertIn("严禁、禁止、不可、不得、必须", item["prompt"])
-        self.assertIn("章节标题、段落主题、小节范围", item["prompt"])
+        self.assertIn("技术文档内容正确性审查专家", item["prompt"])
+        self.assertIn("只能判断文内正确性和一致性", item["prompt"])
+        self.assertIn("约束强度冲突", item["prompt"])
+        self.assertIn("至少提供两处可以直接对照的文档证据", item["prompt"])
         self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
 
-    def test_default_compliance_prompt_targets_customer_documents(self):
+    def test_default_compliance_prompt_merges_language_rules_without_structure_checks(self):
         db = get_db()
         item = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
 
-        self.assertIn("客户资料规范审查专家", item["prompt"])
-        self.assertIn("面向客户发布", item["prompt"])
-        self.assertIn("TODO/占位符", item["prompt"])
-        self.assertIn("注意/警告/危险/提示", item["prompt"])
-        self.assertIn("问题类型、位置、原文摘录、问题描述、客户影响、修改建议", item["prompt"])
+        self.assertIn("语言文字规范", item["prompt"])
+        self.assertIn("错别字", item["prompt"])
+        self.assertIn("位置优先使用文档文本中明确出现的章节号", item["prompt"])
+        self.assertIn("页码仅作为章节位置的辅助信息", item["prompt"])
+        self.assertIn("不检查标题层级、章节顺序、目录、编号、交叉引用", item["prompt"])
+        self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
+
+    def test_default_understandability_and_completeness_prompts_have_disjoint_boundaries(self):
+        db = get_db()
+        understandability = db.execute(
+            "SELECT name, prompt FROM check_items WHERE code = 'understandability'"
+        ).fetchone()
+        completeness = db.execute(
+            "SELECT name, prompt FROM check_items WHERE code = 'completeness'"
+        ).fetchone()
+
+        self.assertEqual(understandability["name"], "易理解性检查")
+        self.assertIn("内容已经提供，但表达方式导致客户难以准确理解", understandability["prompt"])
+        self.assertIn("信息完全没有提供属于内容完整性检查", understandability["prompt"])
+        self.assertEqual(completeness["name"], "内容完整性检查")
+        self.assertIn("完整性判断必须保守", completeness["prompt"])
+        self.assertIn("不能因为没有看到某个常见章节就直接判为缺失", completeness["prompt"])
+        self.assertIn("位置优先使用文档文本中明确出现的章节号", completeness["prompt"])
 
     def test_default_check_items_are_grouped_by_task_type(self):
         db = get_db()
@@ -390,6 +409,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ]
 
         self.assertIn("typo", document_codes)
+        self.assertIn("understandability", document_codes)
+        self.assertIn("completeness", document_codes)
         self.assertIn("sensitive-terms", document_codes)
         self.assertIn("common-terms", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
@@ -409,6 +430,11 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("video-installation-sequence", default_check_item_codes(VIDEO_TASK_TYPE))
         self.assertIn("sensitive-terms", default_check_item_codes(DOCUMENT_TASK_TYPE))
         self.assertIn("common-terms", default_check_item_codes(DOCUMENT_TASK_TYPE))
+        typo_state = db.execute(
+            "SELECT enabled, description FROM check_items WHERE code = 'typo'"
+        ).fetchone()
+        self.assertFalse(bool(typo_state["enabled"]))
+        self.assertIn("已合并至“文档规范性检查”", typo_state["description"])
         language_consistency_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
             (LANGUAGE_CONSISTENCY_TASK_TYPE, "language-consistency-cross-lingual"),
@@ -423,15 +449,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
             "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "compliance"),
         ).fetchone()
-        typo_item = db.execute(
-            "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
-            (DOCUMENT_TASK_TYPE, "typo"),
-        ).fetchone()
-        self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", compliance_item["prompt"])
-        self.assertIn("不要把解析换行/分页造成的空白当作多余空格", typo_item["prompt"])
-        self.assertIn("页码：未提取", typo_item["prompt"])
-        self.assertIn("章节：未识别", typo_item["prompt"])
-        self.assertIn("位置（文件/页码/章节或工作表/附近线索）", typo_item["prompt"])
+        self.assertIn("不要把解析造成的变化判为原文问题", compliance_item["prompt"])
+        self.assertIn("位置优先使用文档文本中明确出现的章节号", compliance_item["prompt"])
+        self.assertIn("页码仅作为章节位置的辅助信息", compliance_item["prompt"])
         sensitive_terms_item = db.execute(
             "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "sensitive-terms"),
@@ -515,7 +535,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ).fetchone()
         self.assertIsNone(row)
 
-    def test_seed_defaults_migrates_stock_typo_prompt_to_location_version(self):
+    def test_seed_defaults_disables_stock_typo_prompt_after_merging(self):
         db = get_db()
         legacy_prompt = """你是一名中文校对专家。请检查文档中的错别字、漏字、多字、标点误用、重复表达、常见语病和明显不通顺句子。
 注意：文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；不要把解析换行/分页造成的空白当作多余空格或标点问题。
@@ -531,12 +551,16 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         seed_defaults()
 
-        row = db.execute("SELECT prompt FROM check_items WHERE code = 'typo'").fetchone()
+        row = db.execute(
+            "SELECT prompt, description, enabled FROM check_items WHERE code = 'typo'"
+        ).fetchone()
         self.assertIn("页码：未提取", row["prompt"])
         self.assertIn("章节：未识别", row["prompt"])
         self.assertIn("位置（文件/页码/章节或工作表/附近线索）", row["prompt"])
+        self.assertIn("已合并至“文档规范性检查”", row["description"])
+        self.assertFalse(bool(row["enabled"]))
 
-    def test_seed_defaults_migrates_stock_compliance_prompt_to_customer_document_version(self):
+    def test_seed_defaults_migrates_stock_compliance_prompt_to_language_norm_version(self):
         db = get_db()
         legacy_prompt = """你是一名严谨的文档规范审查专家。请检查文档的标题层级、章节结构、编号、术语、格式表达、引用说明、表格/图片说明、落款与附件等规范性问题。
 注意：文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
@@ -555,8 +579,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"])
-        self.assertIn("客户资料规范审查专家", row["prompt"])
-        self.assertIn("面向客户发布", row["prompt"])
+        self.assertIn("语言文字规范", row["prompt"])
+        self.assertIn("页码仅作为章节位置的辅助信息", row["prompt"])
 
     def test_seed_defaults_keeps_custom_compliance_prompt(self):
         db = get_db()
@@ -572,7 +596,25 @@ class CheckItemDefaultsTest(unittest.TestCase):
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
 
-    def test_seed_defaults_migrates_stock_consistency_prompt_to_constraint_version(self):
+    def test_seed_defaults_migrates_expanded_compliance_prompt_used_by_existing_tool(self):
+        db = get_db()
+        expanded_prompt = """你是资深技术文档规范审查专家，熟悉面向客户资料的语言规范、结构规范、合规要求、品牌表达、客户可读性和交付质量要求。
+一、检查目标
+请从客户视角出发检查文档。
+10. 版本、版权和发布信息规范
+若未发现明显规范性问题，请明确回复：“未发现明显规范性问题。”"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            (expanded_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
+        self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"])
+
+    def test_seed_defaults_migrates_stock_consistency_prompt_to_correctness_version(self):
         db = get_db()
         legacy_prompt = """你是一名全文一致性审查专家。请检查文档内部是否存在前后矛盾或口径不一致，包括但不限于人名/组织名、项目名、日期、金额、数量、单位、缩写、术语定义、章节引用、结论与正文依据。
 输出要求：
@@ -587,10 +629,13 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         seed_defaults()
 
-        row = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
+        row = db.execute(
+            "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
+        ).fetchone()
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
-        self.assertIn("约束性与安全信息一致性", row["prompt"])
-        self.assertIn("严禁、禁止、不可、不得、必须", row["prompt"])
+        self.assertEqual(row["name"], "内容正确性检查")
+        self.assertIn("约束强度冲突", row["prompt"])
+        self.assertIn("只能判断文内正确性和一致性", row["prompt"])
 
     def test_seed_defaults_keeps_custom_consistency_prompt(self):
         db = get_db()
@@ -605,6 +650,42 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
+
+    def test_seed_defaults_migrates_expanded_consistency_prompt_used_by_existing_tool(self):
+        db = get_db()
+        expanded_prompt = """你是一个严谨的文档审查专家兼资深技术文档编辑，擅长发现资料文档中的矛盾与不一致。
+检查每个章节标题是否准确概括其正文内容。
+若未发现问题，请明确回复：“未发现明显不一致问题。”这个提示词呢应该怎么优化"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'consistency'",
+            (expanded_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
+        ).fetchone()
+        self.assertEqual(row["name"], "内容正确性检查")
+        self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
+
+    def test_seed_defaults_keeps_custom_typo_prompt_enabled(self):
+        db = get_db()
+        custom_prompt = "自定义错别字提示词：只检查用户提供的专用词典。"
+        db.execute(
+            "UPDATE check_items SET prompt = ?, enabled = 1 WHERE code = 'typo'",
+            (custom_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT prompt, enabled FROM check_items WHERE code = 'typo'"
+        ).fetchone()
+        self.assertEqual(row["prompt"], custom_prompt)
+        self.assertTrue(bool(row["enabled"]))
 
     def test_seed_defaults_migrates_stock_language_consistency_prompt_to_skip_no_action_items(self):
         db = get_db()
