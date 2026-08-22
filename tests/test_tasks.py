@@ -23,6 +23,7 @@ from app.tasks import (
     _format_image_check_issue_summary,
     _image_check_target,
     _run_check_items_concurrently,
+    _split_combined_check_output,
 )
 
 
@@ -1151,24 +1152,47 @@ class TaskExecutionTest(unittest.TestCase):
 
         def fake_run_multimodal_document_check(**kwargs):
             calls.append(kwargs)
-            return """### 检查项：image-figure-table-title-standard｜图表标题规范检查
-#### 总体判断
-发现表标题缺失。
-明确问题
-- page001 表格缺少表标题。
-需人工确认
-- 未发现需人工确认项。
-#### 未发现问题
-- 未发现其他图表标题问题。
-### 检查项：image-integrity-clarity｜图片完整性和清晰度检查
-#### 总体判断
-未发现明确清晰度问题。
-**明确问题**
-- 未发现明确问题。
-**需人工确认**
-- 页面截图较小，需人工确认清晰度。
-#### 未发现问题
-- 未发现明显异常。"""
+            return json.dumps(
+                {
+                    "results": [
+                        {
+                            "code": "image-figure-table-title-standard",
+                            "summary": "发现表标题缺失。",
+                            "items": [
+                                {
+                                    "status": "issue",
+                                    "severity": "medium",
+                                    "confidence": "high",
+                                    "category": "图表标题",
+                                    "location": "page001",
+                                    "excerpt": "表格上方未见标题",
+                                    "description": "表格缺少表标题。",
+                                    "impact": "不利于引用表格",
+                                    "suggestion": "补充表编号和标题",
+                                }
+                            ],
+                        },
+                        {
+                            "code": "image-integrity-clarity",
+                            "summary": "未发现明确清晰度问题。",
+                            "items": [
+                                {
+                                    "status": "suggestion",
+                                    "severity": "low",
+                                    "confidence": "low",
+                                    "category": "清晰度",
+                                    "location": "page001",
+                                    "excerpt": "页面截图较小",
+                                    "description": "页面截图较小，需人工确认清晰度。",
+                                    "impact": "",
+                                    "suggestion": "查看原始 PDF",
+                                }
+                            ],
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
 
         with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
             TaskScheduler(self.app)._run_task(task_id)
@@ -1181,14 +1205,67 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("image-figure-table-title-standard", calls[0]["prompt"])
         self.assertIn("image-integrity-clarity", calls[0]["prompt"])
         self.assertIn("PDF 页码", calls[0]["prompt"])
+        self.assertEqual(calls[0]["output_contract"], "multi_check_json")
         self.assertEqual(calls[0]["image_items"][0]["position"], "PDF第1页（page001-screenshot）")
         self.assertEqual([item["code"] for item in results], ["image-figure-table-title-standard", "image-integrity-clarity"])
         self.assertIn("PDF第1页（page001-screenshot）：0001_page001-screenshot.png", results[0]["result"])
-        self.assertIn("page001 表格缺少表标题", results[0]["result"])
-        self.assertIn("page001 表格缺少表标题", results[0]["result"].split("### 检查汇总", 1)[-1])
+        self.assertIn("page001：表格缺少表标题", results[0]["result"])
+        self.assertIn("page001：表格缺少表标题", results[0]["result"].split("### 检查汇总", 1)[-1])
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"])
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"].split("### 检查汇总", 1)[-1])
         self.assertIn("未覆盖 149 页", results[0]["result"])
+
+    def test_combined_json_output_maps_results_by_exact_code(self):
+        check_items = [
+            {"code": "video-a", "name": "检查A"},
+            {"code": "video-b", "name": "检查B"},
+        ]
+        content = json.dumps(
+            {
+                "results": [
+                    {
+                        "code": "video-a",
+                        "summary": "发现问题",
+                        "items": [
+                            {
+                                "status": "issue",
+                                "location": "00:01.000",
+                                "description": "安装顺序错误",
+                                "impact": "可能损坏设备",
+                                "suggestion": "调整安装顺序",
+                            }
+                        ],
+                    },
+                    {"code": "unknown", "summary": "忽略", "items": []},
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+        recognized = _split_combined_check_output(content, check_items, fill_missing=False)
+        completed = _split_combined_check_output(content, check_items)
+
+        self.assertEqual(list(recognized), ["video-a"])
+        self.assertIn("00:01.000：安装顺序错误", recognized["video-a"])
+        self.assertIn("建议：调整安装顺序", recognized["video-a"])
+        self.assertIn("模型未按要求返回该检查项的独立结果", completed["video-b"])
+
+    def test_combined_output_keeps_legacy_markdown_compatibility(self):
+        check_items = [
+            {"code": "video-a", "name": "检查A"},
+            {"code": "video-b", "name": "检查B"},
+        ]
+        content = """### 检查项：video-a｜检查A
+#### 总体判断
+未发现明确问题。
+
+### 检查项：video-b｜检查B
+#### 总体判断
+需人工确认。"""
+
+        sections = _split_combined_check_output(content, check_items, fill_missing=False)
+
+        self.assertEqual(set(sections), {"video-a", "video-b"})
 
     def test_video_task_runs_multimodal_check_for_extracted_frames(self):
         frame_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-video"

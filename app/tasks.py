@@ -33,7 +33,12 @@ from .images import (
     page_sections_from_document_text,
 )
 from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
-from .llm import LLMError, run_check, run_multimodal_document_check
+from .llm import (
+    LLMError,
+    MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
+    run_check,
+    run_multimodal_document_check,
+)
 from .network import outbound_network_config
 from .sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
@@ -846,7 +851,7 @@ def _run_image_check_items_concurrently(
                     raise TaskCanceled
 
                 with result_lock:
-                    sections = _split_combined_check_output(content, items) if content else {}
+                    sections = _split_combined_check_output(content, items, fill_missing=False) if content else {}
                     for item in items:
                         item_content = sections.get(item["code"], "")
                         result_text = _format_multimodal_image_check_result(
@@ -927,6 +932,7 @@ def _run_image_check_items_concurrently(
                     batch_index=batch_index,
                     batch_count=batch_count,
                     issue_output_limit=issue_output_limit,
+                    output_contract=MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
                     on_content=lambda content, current=current_batch: save_partial(
                         current,
                         content,
@@ -935,6 +941,9 @@ def _run_image_check_items_concurrently(
                     task_id=task_id,
                     stream_trace_enabled=stream_trace_enabled,
                 )
+                recognized_sections = _split_combined_check_output(content, items, fill_missing=False)
+                if not recognized_sections:
+                    raise RuntimeError(f"模型未返回可识别的{target_label}多检查项结果")
                 sections = _split_combined_check_output(content, items)
                 for item in items:
                     batch_results_by_code[item["code"]].append(
@@ -1104,7 +1113,7 @@ def _run_video_check_items_concurrently(
                     raise TaskCanceled
 
                 with result_lock:
-                    sections = _split_combined_check_output(content, check_items) if content else {}
+                    sections = _split_combined_check_output(content, check_items, fill_missing=False) if content else {}
                     for item in check_items:
                         item_content = sections.get(item["code"], "")
                         result_text = _format_multimodal_image_check_result(
@@ -1175,6 +1184,7 @@ def _run_video_check_items_concurrently(
                     batch_index=batch_index,
                     batch_count=len(batches),
                     issue_output_limit=issue_output_limit,
+                    output_contract=MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
                     on_content=lambda content, current=current_batch: save_partial(
                         current,
                         content,
@@ -1183,6 +1193,9 @@ def _run_video_check_items_concurrently(
                     task_id=task_id,
                     stream_trace_enabled=stream_trace_enabled,
                 )
+                recognized_sections = _split_combined_check_output(content, check_items, fill_missing=False)
+                if not recognized_sections:
+                    raise RuntimeError("模型未返回可识别的视频多检查项结果")
                 sections = _split_combined_check_output(content, check_items)
                 for item in check_items:
                     batch_results_by_code[item["code"]].append(
@@ -1260,23 +1273,10 @@ def _combined_video_check_prompt(check_items: list[dict]) -> str:
     item_blocks = []
     for item in check_items:
         item_blocks.append(
-            f"### 检查项：{item['code']}｜{item['name']}\n"
-            f"{str(item.get('prompt') or '').strip()}"
+            f"- code: {item['code']}\n"
+            f"  name: {item['name']}\n"
+            f"  专项要求: {str(item.get('prompt') or '').strip()}"
         )
-    required_sections = "\n".join(
-        (
-            f"### 检查项：{item['code']}｜{item['name']}\n"
-            "#### 总体判断\n"
-            "说明是否发现明确问题；没有明确问题时只写“未发现明确问题”。\n"
-            "#### 明确问题\n"
-            "- 只列能够从当前采样帧直接判定的异常，每条必须以视频时间点或帧文件名开头；没有明确问题时只写“未发现明确问题”，不要列正常项。\n"
-            "#### 需人工确认\n"
-            "- 只列证据不足、看不清、需要连续片段或业务资料确认的对象；没有需人工确认项时只写“未发现需人工确认项”。\n"
-            "#### 未发现问题\n"
-            "- 可简述正常项；这些内容不要写入“明确问题”。"
-        )
-        for item in check_items
-    )
     return (
         f"本次执行硬件产品安装调测视频质检，一次请求中合并 {len(check_items)} 个检查项。"
         "请对每个检查项独立判断，不要把其他检查项的结论混入当前检查项。\n\n"
@@ -1284,10 +1284,9 @@ def _combined_video_check_prompt(check_items: list[dict]) -> str:
         "请重点观察安装顺序、接线端子、安全防护、调测界面/参数、视频清晰度和关键步骤完整性。\n\n"
         "定位要求：引用画面时优先使用视频时间点（例如 00:12.300），必要时补充帧文件名；不要使用 PDF 页码定位。\n"
         "证据约束：只依据当前提供的采样帧和视频上下文判断；看不清、被遮挡、动作连续性证据不足或缺少产品图纸依据时放入“需人工确认”，不要编造不可见内容。\n"
-        "汇总约束：明确问题只放已确认异常；正常、未发现、符合、清晰、完整、无实质影响、无需修改、无需处理等无问题结论不得放入“明确问题”。\n\n"
-        "输出必须严格使用以下结构，并保留每个检查项的 code：\n"
-        f"{required_sections}\n\n"
-        "检查项提示词如下：\n\n"
+        "汇总约束：status=issue 只放已确认异常；证据不足放 status=suggestion；正常、未发现、符合、清晰、完整、无需修改等结论不得标记为 issue。\n"
+        "完整性要求：results 必须包含下列每个 code，且每个 code 只出现一次。\n\n"
+        "检查项定义：\n"
         f"{chr(10).join(item_blocks)}"
     )
 
@@ -1399,46 +1398,46 @@ def _combined_image_check_prompt(check_items: list[dict], target_kind: str, targ
     item_blocks = []
     for item in check_items:
         item_blocks.append(
-            f"### 检查项：{item['code']}｜{item['name']}\n"
-            f"{str(item.get('prompt') or '').strip()}"
+            f"- code: {item['code']}\n"
+            f"  name: {item['name']}\n"
+            f"  专项要求: {str(item.get('prompt') or '').strip()}"
         )
-    required_sections = "\n".join(
-        (
-            f"### 检查项：{item['code']}｜{item['name']}\n"
-            "#### 总体判断\n"
-            "说明是否发现明确问题；没有明确问题时只写“未发现明确问题”。\n"
-            "#### 明确问题\n"
-            "- 只列能从当前可见图片直接判定的异常，每条必须以“第N页”或图片位置开头；没有明确问题时只写“未发现明确问题”，不要列正常项。\n"
-            "#### 需人工确认\n"
-            "- 只列证据不足、看不清或需要业务确认的对象，每条必须以“第N页”或图片位置开头；没有需人工确认项时只写“未发现需人工确认项”。\n"
-            "#### 未发现问题\n"
-            "- 可简述正常项；这些内容不要写入“明确问题”。"
-        )
-        for item in check_items
-    )
     return (
         f"本次执行{target_label}，一次请求中合并 {len(check_items)} 个检查项。请对每个检查项独立判断，"
         "不要把其他检查项的结论混入当前检查项。\n\n"
         f"{target_instruction}\n\n"
         "定位要求：引用图片时优先使用 PDF 页码（例如“第12页”），同一页有多张图时再补充图片编号/位置；无法识别页码时使用图片编号或原始位置。\n"
-        "汇总约束：明确问题只放已确认异常；正常、未发现、符合、一致、清晰、完整等无问题结论只能放“未发现问题”，不得放入“明确问题”。\n"
+        "汇总约束：status=issue 只放已确认异常；证据不足放 status=suggestion；正常、未发现、符合、一致、清晰、完整等结论不得标记为 issue。\n"
         "证据约束：只能依据本次提供的 PDF 页面/图片和文档上下文；看不清、证据不足、跨页缺上下文时放入“需人工确认”，不要编造不可见内容。\n\n"
-        "输出必须严格使用以下结构，并保留每个检查项的 code：\n"
-        f"{required_sections}\n\n"
-        "检查项提示词如下：\n\n"
+        "完整性要求：results 必须包含下列每个 code，且每个 code 只出现一次。\n\n"
+        "检查项定义：\n"
         f"{chr(10).join(item_blocks)}"
     )
 
 
-def _split_combined_check_output(content: str, check_items: list[dict]) -> dict[str, str]:
+def _split_combined_check_output(
+    content: str,
+    check_items: list[dict],
+    *,
+    fill_missing: bool = True,
+) -> dict[str, str]:
     text = str(content or "").strip()
     if not text:
+        if not fill_missing:
+            return {}
         return {item["code"]: _missing_check_section(item, "模型未返回该检查项内容。") for item in check_items}
+
+    sections = _split_combined_json_output(text, check_items)
+    if sections:
+        if fill_missing:
+            _fill_missing_check_sections(sections, check_items)
+        return sections
+
     if len(check_items) == 1 and "### 检查项：" not in text:
         return {check_items[0]["code"]: text}
 
     headers = list(re.finditer(r"(?m)^###\s*检查项[:：]\s*(.+?)\s*$", text))
-    sections: dict[str, str] = {}
+    sections = {}
     for index, header in enumerate(headers):
         header_line = header.group(1).strip()
         start = header.start()
@@ -1447,9 +1446,133 @@ def _split_combined_check_output(content: str, check_items: list[dict]) -> dict[
         if matched_code:
             sections[matched_code] = text[start:end].strip()
 
-    for item in check_items:
-        sections.setdefault(item["code"], _missing_check_section(item, "模型未按要求返回该检查项的独立小节。"))
+    if fill_missing:
+        _fill_missing_check_sections(sections, check_items)
     return sections
+
+
+def _split_combined_json_output(content: str, check_items: list[dict]) -> dict[str, str]:
+    payload = _load_combined_json_output(content)
+    if isinstance(payload, dict):
+        results = payload.get("results")
+        if results is None and len(check_items) == 1 and isinstance(payload.get("items"), list):
+            results = [{"code": check_items[0]["code"], **payload}]
+    elif isinstance(payload, list):
+        results = payload
+    else:
+        results = None
+    if not isinstance(results, list):
+        return {}
+
+    items_by_code = {str(item.get("code") or ""): item for item in check_items}
+    sections = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        code = str(result.get("code") or "").strip()
+        item = items_by_code.get(code)
+        if item is None or code in sections:
+            continue
+        sections[code] = _format_combined_json_result(item, result)
+    return sections
+
+
+def _load_combined_json_output(content: str, depth: int = 0):
+    if depth > 2:
+        return None
+    text = str(content or "").strip()
+    if not text:
+        return None
+    candidates = [text]
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+    object_start = text.find("{")
+    object_end = text.rfind("}")
+    if object_start >= 0 and object_end > object_start:
+        candidates.append(text[object_start : object_end + 1])
+    array_start = text.find("[")
+    array_end = text.rfind("]")
+    if array_start >= 0 and array_end > array_start:
+        candidates.append(text[array_start : array_end + 1])
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, str):
+            nested = _load_combined_json_output(parsed, depth + 1)
+            if nested is not None:
+                return nested
+            continue
+        return parsed
+    return None
+
+
+def _format_combined_json_result(check_item: dict, result: dict) -> str:
+    issue_lines = []
+    manual_lines = []
+    normal_lines = []
+    raw_items = result.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        line = _format_combined_json_item(raw_item)
+        if not line:
+            continue
+        status = str(raw_item.get("status") or "").strip().lower()
+        if status == "issue":
+            issue_lines.append(line)
+        elif status == "non_issue":
+            normal_lines.append(line)
+        else:
+            manual_lines.append(line)
+
+    summary = str(result.get("summary") or "").strip()
+    if not summary:
+        summary = "发现明确问题。" if issue_lines else "未发现明确问题。"
+    issue_text = "\n".join(f"- {line}" for line in issue_lines) if issue_lines else "- 未发现明确问题。"
+    manual_text = "\n".join(f"- {line}" for line in manual_lines) if manual_lines else "- 未发现需人工确认项。"
+    normal_text = "\n".join(f"- {line}" for line in normal_lines) if normal_lines else "- 未单独列出正常项。"
+    return (
+        f"### 检查项：{check_item.get('code')}｜{check_item.get('name')}\n\n"
+        f"#### 总体判断\n{summary}\n\n"
+        f"#### 明确问题\n{issue_text}\n\n"
+        f"#### 需人工确认\n{manual_text}\n\n"
+        f"#### 未发现问题\n{normal_text}"
+    )
+
+
+def _format_combined_json_item(item: dict) -> str:
+    location = str(item.get("location") or "").strip()
+    description = str(item.get("description") or item.get("suggestion") or item.get("excerpt") or "").strip()
+    if not description:
+        return ""
+    line = f"{location}：{description}" if location else description
+    details = []
+    excerpt = str(item.get("excerpt") or "").strip()
+    impact = str(item.get("impact") or "").strip()
+    suggestion = str(item.get("suggestion") or "").strip()
+    if excerpt and excerpt not in line:
+        details.append(f"证据：{excerpt}")
+    if impact and impact not in line:
+        details.append(f"影响：{impact}")
+    if suggestion and suggestion not in line:
+        details.append(f"建议：{suggestion}")
+    if details:
+        line = line.rstrip("；。") + "；" + "；".join(details)
+    return line
+
+
+def _fill_missing_check_sections(sections: dict[str, str], check_items: list[dict]):
+    for item in check_items:
+        sections.setdefault(item["code"], _missing_check_section(item, "模型未按要求返回该检查项的独立结果。"))
 
 
 def _match_check_code_from_header(header_line: str, check_items: list[dict]) -> str:

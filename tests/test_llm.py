@@ -1094,20 +1094,24 @@ class LLMResponseParsingTest(unittest.TestCase):
                 batch_index=1,
                 batch_count=2,
                 issue_output_limit=33,
+                output_contract=llm.MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
             )
 
         self.assertEqual(result, "图文检查完成")
         payload = fake_session.calls[0][1]["json"]
         content = payload["messages"][1]["content"]
-        self.assertEqual([item["type"] for item in content], ["text", "text", "image_url", "text", "image_url"])
+        self.assertEqual([item["type"] for item in content], ["text", "image_url", "image_url"])
         self.assertIn("图文对应检查", content[0]["text"])
         self.assertIn("当前图片批次：1/2", content[0]["text"])
         self.assertIn("单次回复最多列出 30 条问题", content[0]["text"])
         self.assertIn("只输出一个 JSON 对象", content[0]["text"])
+        self.assertIn('"results"', content[0]["text"])
+        self.assertIn("results 必须覆盖用户要求的每个检查项 code", content[0]["text"])
+        self.assertNotIn('JSON 对象格式必须为：{"summary"', content[0]["text"])
         self.assertIn("正文提到图 1 是电源接线图", content[0]["text"])
-        self.assertIn("0001_page001-image001.png", content[1]["text"])
-        self.assertEqual(content[2]["image_url"]["url"], "data:image/png;base64,AAAA")
-        self.assertEqual(content[4]["image_url"]["url"], "data:image/jpeg;base64,BBBB")
+        self.assertIn("0001_page001-image001.png", content[0]["text"])
+        self.assertEqual(content[1]["image_url"]["url"], "data:image/png;base64,AAAA")
+        self.assertEqual(content[2]["image_url"]["url"], "data:image/jpeg;base64,BBBB")
 
     def test_retries_llm_errors_twice_before_success(self):
         fake_session = FakeSession(
