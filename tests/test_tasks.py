@@ -21,7 +21,9 @@ from app.tasks import (
     _document_check_items,
     _document_text_for_image_batch,
     _format_image_check_issue_summary,
+    _check_item_groups,
     _image_check_target,
+    _run_combined_multimodal_check_with_repair,
     _run_check_items_concurrently,
     _split_combined_check_output,
 )
@@ -1266,6 +1268,88 @@ class TaskExecutionTest(unittest.TestCase):
         sections = _split_combined_check_output(content, check_items, fill_missing=False)
 
         self.assertEqual(set(sections), {"video-a", "video-b"})
+
+    def test_multimodal_check_repairs_only_missing_codes(self):
+        check_items = [
+            {"code": "video-a", "name": "检查A"},
+            {"code": "video-b", "name": "检查B"},
+        ]
+        responses = [
+            json.dumps(
+                {"results": [{"code": "video-a", "summary": "检查A完成", "items": []}]},
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {"results": [{"code": "video-b", "summary": "检查B完成", "items": []}]},
+                ensure_ascii=False,
+            ),
+        ]
+
+        with patch("app.tasks.run_multimodal_document_check", side_effect=responses) as runner:
+            sections = _run_combined_multimodal_check_with_repair(
+                self.app,
+                check_items=check_items,
+                prompt_builder=lambda items: ",".join(item["code"] for item in items),
+                check_name="视频检查",
+                error_label="视频",
+                run_kwargs={"task_id": 7, "on_content": lambda content: None},
+            )
+
+        self.assertEqual(set(sections), {"video-a", "video-b"})
+        self.assertEqual(runner.call_count, 2)
+        self.assertEqual(runner.call_args_list[0].kwargs["prompt"], "video-a,video-b")
+        self.assertIn("video-b", runner.call_args_list[1].kwargs["prompt"])
+        self.assertNotIn("video-a,video-b", runner.call_args_list[1].kwargs["prompt"])
+        self.assertNotIn("on_content", runner.call_args_list[1].kwargs)
+
+    def test_multimodal_check_fails_after_two_unrecognized_responses(self):
+        check_items = [
+            {"code": "video-a", "name": "检查A"},
+            {"code": "video-b", "name": "检查B"},
+        ]
+
+        with (
+            patch("app.tasks.run_multimodal_document_check", side_effect=["无法解析", "仍然无法解析"]) as runner,
+            self.assertRaisesRegex(RuntimeError, "连续两次未返回可识别"),
+        ):
+            _run_combined_multimodal_check_with_repair(
+                self.app,
+                check_items=check_items,
+                prompt_builder=lambda items: ",".join(item["code"] for item in items),
+                check_name="视频检查",
+                error_label="视频",
+                run_kwargs={"task_id": 8},
+            )
+
+        self.assertEqual(runner.call_count, 2)
+
+    def test_multimodal_check_marks_still_missing_code_after_repair(self):
+        check_items = [
+            {"code": "video-a", "name": "检查A"},
+            {"code": "video-b", "name": "检查B"},
+        ]
+        first_response = json.dumps(
+            {"results": [{"code": "video-a", "summary": "检查A完成", "items": []}]},
+            ensure_ascii=False,
+        )
+
+        with patch("app.tasks.run_multimodal_document_check", side_effect=[first_response, "无法解析"]):
+            sections = _run_combined_multimodal_check_with_repair(
+                self.app,
+                check_items=check_items,
+                prompt_builder=lambda items: ",".join(item["code"] for item in items),
+                check_name="视频检查",
+                error_label="视频",
+                run_kwargs={"task_id": 9},
+            )
+
+        self.assertIn("检查A完成", sections["video-a"])
+        self.assertIn("模型未按要求返回该检查项的独立结果", sections["video-b"])
+
+    def test_multimodal_check_items_are_grouped_by_three(self):
+        groups = _check_item_groups([{"code": f"check-{index}"} for index in range(7)])
+
+        self.assertEqual([len(group) for group in groups], [3, 3, 1])
 
     def test_video_task_runs_multimodal_check_for_extracted_frames(self):
         frame_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-video"

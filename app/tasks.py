@@ -71,6 +71,7 @@ class TaskArtifactCleanupError(RuntimeError):
 DEFAULT_CHECK_ITEM_CONCURRENCY = 1
 DEFAULT_IMAGE_CHECK_BATCH_SIZE = 4
 MAX_IMAGE_CHECK_BATCH_SIZE = 4
+MULTIMODAL_CHECK_GROUP_SIZE = 3
 IMAGE_CONTEXT_NEIGHBOR_PAGES = 1
 IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
 DEFAULT_TASK_FILE_RETENTION_DAYS = 0
@@ -772,6 +773,7 @@ def _run_image_check_items_concurrently(
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
+    incomplete_codes: set[str] = set()
     result_lock = threading.Lock()
     save_lock = threading.Lock()
     cancel_event = threading.Event()
@@ -837,7 +839,6 @@ def _run_image_check_items_concurrently(
                 len(skipped_images),
                 batch_count,
             )
-            prompt = _combined_image_check_prompt(items, group["target_kind"], target_label)
             batch_results_by_code = {item["code"]: [] for item in items}
             last_stream_write = 0.0
 
@@ -916,35 +917,42 @@ def _run_image_check_items_concurrently(
                     "target_kind": group["target_kind"],
                 }
 
-                content = run_multimodal_document_check(
-                    api_base=task["api_base"],
-                    api_key=task["api_key"],
-                    proxy_mode=network["proxy_mode"],
-                    proxy=network["proxy"],
-                    ssl_verify=network["ssl_verify"],
-                    request_timeout=task["request_timeout"],
-                    model_name=task["model_name"],
-                    force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-                    check_name=f"{target_label}合并检查（{len(items)}项）",
-                    prompt=prompt,
-                    document_text=batch_document_text,
-                    image_items=multimodal_images,
-                    batch_index=batch_index,
-                    batch_count=batch_count,
-                    issue_output_limit=issue_output_limit,
-                    output_contract=MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
-                    on_content=lambda content, current=current_batch: save_partial(
-                        current,
-                        content,
-                        f"正在进行{target_label}：批次 {current['batch_index']}/{current['batch_count']}",
+                sections = _run_combined_multimodal_check_with_repair(
+                    app,
+                    check_items=items,
+                    prompt_builder=lambda selected_items: _combined_image_check_prompt(
+                        selected_items,
+                        group["target_kind"],
+                        target_label,
                     ),
-                    task_id=task_id,
-                    stream_trace_enabled=stream_trace_enabled,
+                    check_name=f"{target_label}合并检查",
+                    error_label=target_label,
+                    run_kwargs={
+                        "api_base": task["api_base"],
+                        "api_key": task["api_key"],
+                        "proxy_mode": network["proxy_mode"],
+                        "proxy": network["proxy"],
+                        "ssl_verify": network["ssl_verify"],
+                        "request_timeout": task["request_timeout"],
+                        "model_name": task["model_name"],
+                        "force_disable_thinking": _task_flag(task, "force_disable_thinking"),
+                        "document_text": batch_document_text,
+                        "image_items": multimodal_images,
+                        "batch_index": batch_index,
+                        "batch_count": batch_count,
+                        "issue_output_limit": issue_output_limit,
+                        "output_contract": MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
+                        "on_content": lambda content, current=current_batch: save_partial(
+                            current,
+                            content,
+                            f"正在进行{target_label}：批次 {current['batch_index']}/{current['batch_count']}",
+                        ),
+                        "task_id": task_id,
+                        "stream_trace_enabled": stream_trace_enabled,
+                    },
                 )
-                recognized_sections = _split_combined_check_output(content, items, fill_missing=False)
-                if not recognized_sections:
-                    raise RuntimeError(f"模型未返回可识别的{target_label}多检查项结果")
-                sections = _split_combined_check_output(content, items)
+                with result_lock:
+                    incomplete_codes.update(_unresolved_check_codes(sections, items))
                 for item in items:
                     batch_results_by_code[item["code"]].append(
                         {
@@ -1008,6 +1016,8 @@ def _run_image_check_items_concurrently(
             ordered = _ordered_results(check_items, completed_by_code, {})
         if len(ordered) != total:
             raise RuntimeError("部分图文检查项未完成")
+        if incomplete_codes:
+            raise RuntimeError(f"部分图片检查项补偿后仍未返回有效结果：{','.join(sorted(incomplete_codes))}")
         return ordered
     except Exception:
         cancel_event.set()
@@ -1039,10 +1049,12 @@ def _run_video_check_items_concurrently(
         raise RuntimeError("没有可检查的视频抽帧画面")
 
     batches = _image_batches(checkable_frames, _image_check_batch_size())
-    total_units = max(1, len(batches))
+    check_groups = _check_item_groups(check_items)
+    total_units = max(1, len(batches) * max(1, len(check_groups)))
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
+    incomplete_codes: set[str] = set()
     result_lock = threading.Lock()
     save_lock = threading.Lock()
     cancel_event = threading.Event()
@@ -1092,48 +1104,14 @@ def _run_video_check_items_concurrently(
                 raise TaskCanceled
 
             app.logger.info(
-                "任务视频多模态检查开始 task_id=%s checks=%s frames=%s skipped_frames=%s batches=%s",
+                "任务视频多模态检查开始 task_id=%s checks=%s groups=%s frames=%s skipped_frames=%s batches=%s",
                 task_id,
                 len(check_items),
+                len(check_groups),
                 len(checkable_frames),
                 len(skipped_frames),
                 len(batches),
             )
-            prompt = _combined_video_check_prompt(check_items)
-            batch_results_by_code = {item["code"]: [] for item in check_items}
-            last_stream_write = 0.0
-
-            def save_partial(current_batch: dict | None, content: str, summary: str, *, force: bool = False):
-                nonlocal last_stream_write
-                content = content.strip()
-                now = time.monotonic()
-                if not force and content and now - last_stream_write < 1.2:
-                    return
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
-                    raise TaskCanceled
-
-                with result_lock:
-                    sections = _split_combined_check_output(content, check_items, fill_missing=False) if content else {}
-                    for item in check_items:
-                        item_content = sections.get(item["code"], "")
-                        result_text = _format_multimodal_image_check_result(
-                            batch_results_by_code[item["code"]],
-                            current_batch=current_batch if item_content else None,
-                            current_content=item_content,
-                            skipped_images=skipped_frames,
-                        )
-                        if result_text:
-                            partial_by_code[item["code"]] = {
-                                "code": item["code"],
-                                "name": item["name"],
-                                "result": result_text,
-                            }
-                        elif not batch_results_by_code[item["code"]]:
-                            partial_by_code.pop(item["code"], None)
-
-                last_stream_write = now
-                save_snapshot(db, summary, current_progress())
-
             network = outbound_network_config()
             image_folder = _task_image_folder(app)
             if not batches:
@@ -1157,91 +1135,145 @@ def _run_video_check_items_concurrently(
                 )
                 return
 
-            for batch_index, batch in enumerate(batches, start=1):
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
-                    raise TaskCanceled
-                multimodal_images = _multimodal_image_inputs(image_folder, batch)
-                current_batch = {
-                    "batch_index": batch_index,
-                    "batch_count": len(batches),
-                    "images": batch,
-                    "target_label": "视频帧检查",
-                    "target_kind": "video_frame",
-                }
-                content = run_multimodal_document_check(
-                    api_base=task["api_base"],
-                    api_key=task["api_key"],
-                    proxy_mode=network["proxy_mode"],
-                    proxy=network["proxy"],
-                    ssl_verify=network["ssl_verify"],
-                    request_timeout=task["request_timeout"],
-                    model_name=task["model_name"],
-                    force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-                    check_name=f"视频帧检查合并检查（{len(check_items)}项）",
-                    prompt=prompt,
-                    document_text=_document_text_for_video_batch(document_text, batch, document_meta or {}),
-                    image_items=multimodal_images,
-                    batch_index=batch_index,
-                    batch_count=len(batches),
-                    issue_output_limit=issue_output_limit,
-                    output_contract=MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
-                    on_content=lambda content, current=current_batch: save_partial(
-                        current,
-                        content,
-                        f"正在进行视频帧检查：批次 {current['batch_index']}/{current['batch_count']}",
-                    ),
-                    task_id=task_id,
-                    stream_trace_enabled=stream_trace_enabled,
+            for group_index, items in enumerate(check_groups, start=1):
+                batch_results_by_code = {item["code"]: [] for item in items}
+                last_stream_write = 0.0
+
+                def save_partial(current_batch: dict | None, content: str, summary: str, *, force: bool = False):
+                    nonlocal last_stream_write
+                    content = content.strip()
+                    now = time.monotonic()
+                    if not force and content and now - last_stream_write < 1.2:
+                        return
+                    if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                        raise TaskCanceled
+
+                    with result_lock:
+                        sections = _split_combined_check_output(content, items, fill_missing=False) if content else {}
+                        for item in items:
+                            item_content = sections.get(item["code"], "")
+                            result_text = _format_multimodal_image_check_result(
+                                batch_results_by_code[item["code"]],
+                                current_batch=current_batch if item_content else None,
+                                current_content=item_content,
+                                skipped_images=skipped_frames,
+                            )
+                            if result_text:
+                                partial_by_code[item["code"]] = {
+                                    "code": item["code"],
+                                    "name": item["name"],
+                                    "result": result_text,
+                                }
+                            elif not batch_results_by_code[item["code"]]:
+                                partial_by_code.pop(item["code"], None)
+
+                    last_stream_write = now
+                    save_snapshot(db, summary, current_progress())
+
+                app.logger.info(
+                    "任务视频多模态检查组开始 task_id=%s group=%s/%s checks=%s",
+                    task_id,
+                    group_index,
+                    len(check_groups),
+                    len(items),
                 )
-                recognized_sections = _split_combined_check_output(content, check_items, fill_missing=False)
-                if not recognized_sections:
-                    raise RuntimeError("模型未返回可识别的视频多检查项结果")
-                sections = _split_combined_check_output(content, check_items)
-                for item in check_items:
-                    batch_results_by_code[item["code"]].append(
-                        {
+                for batch_index, batch in enumerate(batches, start=1):
+                    if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                        raise TaskCanceled
+                    multimodal_images = _multimodal_image_inputs(image_folder, batch)
+                    current_batch = {
+                        "batch_index": batch_index,
+                        "batch_count": len(batches),
+                        "images": batch,
+                        "target_label": "视频帧检查",
+                        "target_kind": "video_frame",
+                    }
+                    sections = _run_combined_multimodal_check_with_repair(
+                        app,
+                        check_items=items,
+                        prompt_builder=_combined_video_check_prompt,
+                        check_name="视频帧检查合并检查",
+                        error_label="视频",
+                        run_kwargs={
+                            "api_base": task["api_base"],
+                            "api_key": task["api_key"],
+                            "proxy_mode": network["proxy_mode"],
+                            "proxy": network["proxy"],
+                            "ssl_verify": network["ssl_verify"],
+                            "request_timeout": task["request_timeout"],
+                            "model_name": task["model_name"],
+                            "force_disable_thinking": _task_flag(task, "force_disable_thinking"),
+                            "document_text": _document_text_for_video_batch(document_text, batch, document_meta or {}),
+                            "image_items": multimodal_images,
                             "batch_index": batch_index,
                             "batch_count": len(batches),
-                            "images": batch,
-                            "target_label": "视频帧检查",
-                            "target_kind": "video_frame",
-                            "content": sections.get(item["code"], ""),
-                        }
+                            "issue_output_limit": issue_output_limit,
+                            "output_contract": MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
+                            "on_content": lambda content, current=current_batch: save_partial(
+                                current,
+                                content,
+                                f"正在进行视频帧检查：批次 {current['batch_index']}/{current['batch_count']}",
+                            ),
+                            "task_id": task_id,
+                            "stream_trace_enabled": stream_trace_enabled,
+                        },
                     )
-                progress = mark_unit_completed()
-                save_partial(
-                    None,
-                    "",
-                    f"已完成视频帧检查：{batch_index}/{len(batches)} 个批次",
-                    force=True,
-                )
+                    with result_lock:
+                        incomplete_codes.update(_unresolved_check_codes(sections, items))
+                    for item in items:
+                        batch_results_by_code[item["code"]].append(
+                            {
+                                "batch_index": batch_index,
+                                "batch_count": len(batches),
+                                "images": batch,
+                                "target_label": "视频帧检查",
+                                "target_kind": "video_frame",
+                                "content": sections.get(item["code"], ""),
+                            }
+                        )
+                    progress = mark_unit_completed()
+                    save_partial(
+                        None,
+                        "",
+                        f"已完成视频帧检查：检查组 {group_index}/{len(check_groups)}，批次 {batch_index}/{len(batches)}",
+                        force=True,
+                    )
+                    save_snapshot(
+                        db,
+                        f"正在进行视频检查，已完成 {completed_units}/{total_units} 个检查组批次。",
+                        progress,
+                    )
+
+                with result_lock:
+                    for item in items:
+                        completed_by_code[item["code"]] = {
+                            "code": item["code"],
+                            "name": item["name"],
+                            "result": _format_multimodal_image_check_result(
+                                batch_results_by_code[item["code"]],
+                                skipped_images=skipped_frames,
+                            ),
+                        }
+                        partial_by_code.pop(item["code"], None)
+                    completed_count = len(completed_by_code)
                 save_snapshot(
                     db,
-                    f"正在进行视频检查，已完成 {completed_units}/{total_units} 个视频批次。",
-                    progress,
+                    f"已完成 {completed_count}/{total} 个视频检查项。",
+                    current_progress(),
+                )
+                app.logger.info(
+                    "任务视频多模态检查组完成 task_id=%s group=%s/%s checks=%s",
+                    task_id,
+                    group_index,
+                    len(check_groups),
+                    len(items),
                 )
 
-            with result_lock:
-                for item in check_items:
-                    completed_by_code[item["code"]] = {
-                        "code": item["code"],
-                        "name": item["name"],
-                        "result": _format_multimodal_image_check_result(
-                            batch_results_by_code[item["code"]],
-                            skipped_images=skipped_frames,
-                        ),
-                    }
-                    partial_by_code.pop(item["code"], None)
-                completed_count = len(completed_by_code)
-            save_snapshot(
-                db,
-                f"已完成 {completed_count}/{total} 个视频检查项。",
-                current_progress(),
-            )
             app.logger.info(
-                "任务视频多模态检查完成 task_id=%s checks=%s frames=%s skipped_frames=%s batches=%s",
+                "任务视频多模态检查完成 task_id=%s checks=%s groups=%s frames=%s skipped_frames=%s batches=%s",
                 task_id,
                 len(check_items),
+                len(check_groups),
                 len(checkable_frames),
                 len(skipped_frames),
                 len(batches),
@@ -1257,6 +1289,8 @@ def _run_video_check_items_concurrently(
             ordered = _ordered_results(check_items, completed_by_code, {})
         if len(ordered) != total:
             raise RuntimeError("部分视频检查项未完成")
+        if incomplete_codes:
+            raise RuntimeError(f"部分视频检查项补偿后仍未返回有效结果：{','.join(sorted(incomplete_codes))}")
         return ordered
     except Exception:
         cancel_event.set()
@@ -1344,17 +1378,18 @@ def _image_check_groups(
             fallback_used = True
         checkable_images, skipped_images = _split_checkable_image_items(source_images)
         manual_notes = _image_check_manual_notes(target_kind, document_meta, fallback_used)
-        groups.append(
-            {
-                "target_kind": target_kind,
-                "label": IMAGE_CHECK_TARGET_LABELS[target_kind],
-                "items": items,
-                "checkable_images": checkable_images,
-                "skipped_images": skipped_images,
-                "manual_notes": manual_notes,
-                "batches": _image_batches(checkable_images, _image_check_batch_size()),
-            }
-        )
+        for item_group in _check_item_groups(items):
+            groups.append(
+                {
+                    "target_kind": target_kind,
+                    "label": IMAGE_CHECK_TARGET_LABELS[target_kind],
+                    "items": item_group,
+                    "checkable_images": checkable_images,
+                    "skipped_images": skipped_images,
+                    "manual_notes": manual_notes,
+                    "batches": _image_batches(checkable_images, _image_check_batch_size()),
+                }
+            )
     return groups
 
 
@@ -1415,11 +1450,88 @@ def _combined_image_check_prompt(check_items: list[dict], target_kind: str, targ
     )
 
 
+def _run_combined_multimodal_check_with_repair(
+    app,
+    *,
+    check_items: list[dict],
+    prompt_builder,
+    check_name: str,
+    error_label: str,
+    run_kwargs: dict,
+) -> dict[str, str]:
+    initial_kwargs = dict(run_kwargs)
+    initial_kwargs.update(
+        check_name=f"{check_name}（{len(check_items)}项）",
+        prompt=prompt_builder(check_items),
+    )
+    content = run_multimodal_document_check(**initial_kwargs)
+    sections = _split_combined_check_output(
+        content,
+        check_items,
+        fill_missing=False,
+    )
+    missing_items = _missing_check_items(check_items, sections)
+    if missing_items:
+        app.logger.warning(
+            "模型多检查项结果缺失，准备补偿请求 task_id=%s target=%s returned=%s missing=%s output_chars=%s",
+            run_kwargs.get("task_id") or "-",
+            error_label,
+            ",".join(sections) or "-",
+            ",".join(str(item.get("code") or "") for item in missing_items),
+            len(str(content or "")),
+        )
+        repair_kwargs = dict(run_kwargs)
+        repair_kwargs.pop("on_content", None)
+        repair_kwargs.update(
+            check_name=f"{check_name}补偿检查（{len(missing_items)}项）",
+            prompt=(
+                "上一次响应缺少以下检查项。只返回本次列出的缺失 code，不要重复其他检查项。\n\n"
+                + prompt_builder(missing_items)
+            ),
+        )
+        repair_content = run_multimodal_document_check(**repair_kwargs)
+        repair_sections = _split_combined_check_output(
+            repair_content,
+            missing_items,
+            fill_missing=False,
+            allow_single_plain_text=False,
+        )
+        sections.update(repair_sections)
+        missing_items = _missing_check_items(check_items, sections)
+        app.logger.info(
+            "模型多检查项补偿请求完成 task_id=%s target=%s repaired=%s remaining=%s output_chars=%s",
+            run_kwargs.get("task_id") or "-",
+            error_label,
+            ",".join(repair_sections) or "-",
+            ",".join(str(item.get("code") or "") for item in missing_items) or "-",
+            len(str(repair_content or "")),
+        )
+
+    if not sections:
+        raise RuntimeError(f"模型连续两次未返回可识别的{error_label}多检查项结果")
+    _fill_missing_check_sections(sections, check_items)
+    return sections
+
+
+def _missing_check_items(check_items: list[dict], sections: dict[str, str]) -> list[dict]:
+    return [item for item in check_items if str(item.get("code") or "") not in sections]
+
+
+def _unresolved_check_codes(sections: dict[str, str], check_items: list[dict]) -> set[str]:
+    marker = "模型未按要求返回该检查项的独立结果。"
+    return {
+        str(item.get("code") or "")
+        for item in check_items
+        if marker in str(sections.get(str(item.get("code") or "")) or "")
+    }
+
+
 def _split_combined_check_output(
     content: str,
     check_items: list[dict],
     *,
     fill_missing: bool = True,
+    allow_single_plain_text: bool = True,
 ) -> dict[str, str]:
     text = str(content or "").strip()
     if not text:
@@ -1433,7 +1545,7 @@ def _split_combined_check_output(
             _fill_missing_check_sections(sections, check_items)
         return sections
 
-    if len(check_items) == 1 and "### 检查项：" not in text:
+    if allow_single_plain_text and len(check_items) == 1 and "### 检查项：" not in text:
         return {check_items[0]["code"]: text}
 
     headers = list(re.finditer(r"(?m)^###\s*检查项[:：]\s*(.+?)\s*$", text))
@@ -1607,6 +1719,13 @@ def _image_check_batch_size() -> int:
 
 def _image_batches(image_items: list[dict], batch_size: int) -> list[list[dict]]:
     return [image_items[index : index + batch_size] for index in range(0, len(image_items), batch_size)]
+
+
+def _check_item_groups(check_items: list[dict]) -> list[list[dict]]:
+    return [
+        check_items[index : index + MULTIMODAL_CHECK_GROUP_SIZE]
+        for index in range(0, len(check_items), MULTIMODAL_CHECK_GROUP_SIZE)
+    ]
 
 
 def _document_text_for_image_batch(document_text: str, image_items: list[dict]) -> str:
