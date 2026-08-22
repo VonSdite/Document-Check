@@ -2046,7 +2046,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         ]
         self.assertTrue(any("文档规范性检查" in name for name in check_names))
         self.assertTrue(any("易理解性检查" in name for name in check_names))
-        self.assertTrue(any("内容正确性检查" in name for name in check_names))
+        self.assertTrue(any("全文一致性检查" in name for name in check_names))
         self.assertTrue(any("内容完整性检查" in name for name in check_names))
         self.assertFalse(any("错别字检查" in name for name in check_names))
 
@@ -2116,6 +2116,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(task["original_filename"], filename)
         self.assertTrue(task["document_text"].startswith(f"file: {filename}\n\n"))
         self.assertIn("[第1页]", task["document_text"])
+
+    def test_create_task_accepts_long_document_for_chunked_execution(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+        long_text = "长文档内容。" * 20_000
+
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO(long_text.encode("utf-8")), "long.txt"),
+                "checks": [str(item["id"])],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            task = get_db().execute("SELECT status, length(document_text) AS text_len FROM tasks").fetchone()
+        self.assertEqual(task["status"], "queued")
+        self.assertGreater(task["text_len"], 80_000)
 
     def test_create_task_creates_one_task_per_uploaded_document(self):
         model_id = self._configure_provider()

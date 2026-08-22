@@ -339,20 +339,22 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertFalse(get_bool_setting("llm_stream_trace_enabled", False))
 
-    def test_default_correctness_prompt_covers_verifiable_conflicts(self):
+    def test_default_consistency_prompt_covers_cross_document_internal_conflicts(self):
         db = get_db()
-        item = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
+        item = db.execute("SELECT name, prompt FROM check_items WHERE code = 'consistency'").fetchone()
 
-        self.assertIn("技术文档内容正确性审查专家", item["prompt"])
-        self.assertIn("只能判断文内直接可证的冲突", item["prompt"])
+        self.assertEqual(item["name"], "全文一致性检查")
+        self.assertIn("技术文档全文一致性审查专家", item["prompt"])
+        self.assertIn("只能判断文内可对照的一致性", item["prompt"])
         self.assertIn("约束强度冲突", item["prompt"])
-        self.assertIn("每条问题必须提供两处可以直接对照的证据", item["prompt"])
-        self.assertIn("X和Y不能同时成立", item["prompt"])
+        self.assertIn("issue 必须提供两处可以直接对照的证据", item["prompt"])
+        self.assertIn("结构与内容一致性", item["prompt"])
+        self.assertIn("编号或交叉引用错误", item["prompt"])
         self.assertIn("不得使用“通常”“应该”“意味着”", item["prompt"])
-        self.assertIn("如果 description 中出现“一致”“等价”“不构成冲突”", item["prompt"])
+        self.assertIn("可以输出 suggestion，并明确列出待确认条件", item["prompt"])
         self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
 
-    def test_default_compliance_prompt_merges_language_rules_without_structure_checks(self):
+    def test_default_compliance_prompt_covers_language_and_document_structure(self):
         db = get_db()
         item = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
 
@@ -360,7 +362,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("错别字", item["prompt"])
         self.assertIn("位置优先使用文档文本中明确出现的章节号", item["prompt"])
         self.assertIn("页码仅作为章节位置的辅助信息", item["prompt"])
-        self.assertIn("不检查标题层级、章节顺序、目录、编号、交叉引用", item["prompt"])
+        self.assertIn("结构与层级规范", item["prompt"])
+        self.assertIn("图表、步骤与交叉引用规范", item["prompt"])
+        self.assertIn("发布与交付规范", item["prompt"])
         self.assertIn("空格和换行不属于可靠证据", item["prompt"])
         self.assertIn("不得报告“多余空格”“缺少空格”“空格不统一”", item["prompt"])
         self.assertNotIn("中英文及数字间空格的明确格式问题", item["prompt"])
@@ -622,6 +626,26 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"])
         self.assertIn("空格和换行不属于可靠证据", row["prompt"])
 
+    def test_seed_defaults_migrates_current_language_only_compliance_prompt_to_structure_version(self):
+        db = get_db()
+        previous_prompt = """你是资深技术文档规范审查专家，熟悉面向客户资料的语言文字规范、术语规范、书写格式和客户表达要求。请只检查能够从抽取文本中直接确认的文字与表达规范问题。
+客户资料表达：内部沟通、研发评审、聊天式、情绪化、主观化、责备客户、推卸责任或明显过于随意的表达。
+不检查标题层级、章节顺序、目录、编号、交叉引用。
+输出前必须把候选原文中的空格和换行全部去除后重新判断。"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            (previous_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT prompt FROM check_items WHERE code = 'compliance'"
+        ).fetchone()
+        self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"])
+        self.assertIn("结构与层级规范", row["prompt"])
+
     def test_seed_defaults_migrates_previous_understandability_prompt_with_table_checks(self):
         db = get_db()
         previous_prompt = """你是资深技术文档易理解性审查专家。
@@ -677,7 +701,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"])
 
-    def test_seed_defaults_migrates_stock_consistency_prompt_to_correctness_version(self):
+    def test_seed_defaults_migrates_stock_consistency_prompt_to_current_version(self):
         db = get_db()
         legacy_prompt = """你是一名全文一致性审查专家。请检查文档内部是否存在前后矛盾或口径不一致，包括但不限于人名/组织名、项目名、日期、金额、数量、单位、缩写、术语定义、章节引用、结论与正文依据。
 输出要求：
@@ -696,9 +720,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
             "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
         ).fetchone()
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
-        self.assertEqual(row["name"], "内容正确性检查")
+        self.assertEqual(row["name"], "全文一致性检查")
         self.assertIn("约束强度冲突", row["prompt"])
-        self.assertIn("只能判断文内直接可证的冲突", row["prompt"])
+        self.assertIn("只能判断文内可对照的一致性", row["prompt"])
 
     def test_seed_defaults_keeps_custom_consistency_prompt(self):
         db = get_db()
@@ -729,7 +753,26 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
-        self.assertIn("只有一处原文、证据缺失或证据关系需要猜测时，不输出任何条目", row["prompt"])
+        self.assertIn("可以输出 suggestion，并明确列出待确认条件", row["prompt"])
+
+    def test_seed_defaults_migrates_strict_correctness_prompt_to_consistency_version(self):
+        db = get_db()
+        previous_prompt = """你是严谨的技术文档内容正确性审查专家。
+1. 只有一处原文、证据缺失或证据关系需要猜测时，不输出任何条目。
+8. 如果未发现明确问题，summary 写“未发现明显内容正确性问题”。"""
+        db.execute(
+            "UPDATE check_items SET name = '内容正确性检查', prompt = ? WHERE code = 'consistency'",
+            (previous_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
+        ).fetchone()
+        self.assertEqual(row["name"], "全文一致性检查")
+        self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
 
     def test_seed_defaults_migrates_expanded_consistency_prompt_used_by_existing_tool(self):
         db = get_db()
@@ -747,7 +790,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         row = db.execute(
             "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
         ).fetchone()
-        self.assertEqual(row["name"], "内容正确性检查")
+        self.assertEqual(row["name"], "全文一致性检查")
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
 
     def test_seed_defaults_keeps_custom_typo_prompt_enabled(self):
