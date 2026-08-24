@@ -2,6 +2,7 @@ import hmac
 import hashlib
 import io
 import json
+import mimetypes
 import os
 import re
 import sqlite3
@@ -697,6 +698,7 @@ def register_routes(app):
     def user_task_detail(task_id):
         task = _get_user_task_or_local_admin(task_id)
         results = _task_results(task)
+        _attach_report_media_urls(results, task, "user_task_media")
         back_endpoint = _task_list_endpoint(not _platform_enabled(), task["task_type"])
         return render_template(
             "task_detail.html",
@@ -706,7 +708,9 @@ def register_routes(app):
             report_totals=_report_item_totals(results),
             report_item_types=REPORT_ITEM_TYPES,
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
-            media_report=_is_media_report_task_type(task["task_type"]),
+            media_report=_uses_compact_media_report(task["task_type"]),
+            video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
+            video_stream_url=_task_video_stream_url(task, "user_task_video"),
             report_classification_url=url_for("admin_update_report_item_type" if not _platform_enabled() else "user_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
@@ -737,6 +741,16 @@ def register_routes(app):
     def user_download_task_document(task_id):
         task = _get_user_task_or_local_admin(task_id)
         return _download_task_document(task, "user_task_detail")
+
+    @app.get("/tasks/<int:task_id>/media/<media_id>")
+    def user_task_media(task_id, media_id):
+        task = _get_user_task_or_local_admin(task_id)
+        return _send_task_media(task, media_id)
+
+    @app.get("/tasks/<int:task_id>/video")
+    def user_task_video(task_id):
+        task = _get_user_task_or_local_admin(task_id)
+        return _stream_task_video(task)
 
     @app.post("/tasks/<int:task_id>/cancel")
     def user_cancel_task(task_id):
@@ -965,6 +979,7 @@ def register_routes(app):
     def admin_task_detail(task_id):
         task = _get_task_or_404(task_id)
         results = _task_results(task)
+        _attach_report_media_urls(results, task, "admin_task_media")
         back_endpoint = _task_list_endpoint(True, task["task_type"])
         return render_template(
             "task_detail.html",
@@ -974,7 +989,9 @@ def register_routes(app):
             report_totals=_report_item_totals(results),
             report_item_types=REPORT_ITEM_TYPES,
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
-            media_report=_is_media_report_task_type(task["task_type"]),
+            media_report=_uses_compact_media_report(task["task_type"]),
+            video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
+            video_stream_url=_task_video_stream_url(task, "admin_task_video"),
             report_classification_url=url_for("admin_update_report_item_type", task_id=task_id),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
@@ -1010,6 +1027,18 @@ def register_routes(app):
     def admin_download_task_document(task_id):
         task = _get_task_or_404(task_id)
         return _download_task_document(task, "admin_task_detail")
+
+    @app.get(f"{admin_prefix}/tasks/<int:task_id>/media/<media_id>")
+    @admin_required
+    def admin_task_media(task_id, media_id):
+        task = _get_task_or_404(task_id)
+        return _send_task_media(task, media_id)
+
+    @app.get(f"{admin_prefix}/tasks/<int:task_id>/video")
+    @admin_required
+    def admin_task_video(task_id):
+        task = _get_task_or_404(task_id)
+        return _stream_task_video(task)
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/cancel")
     @admin_required
@@ -3735,6 +3764,87 @@ def _download_task_document(task, fallback_endpoint: str):
     )
 
 
+def _task_video_stream_url(task, endpoint: str) -> str:
+    if (task["task_type"] or DOCUMENT_TASK_TYPE) != VIDEO_TASK_TYPE:
+        return ""
+    if not _task_source_files_available(task):
+        return ""
+    return url_for(endpoint, task_id=task["id"])
+
+
+def _stream_task_video(task):
+    if (task["task_type"] or DOCUMENT_TASK_TYPE) != VIDEO_TASK_TYPE:
+        abort(404)
+    upload_path = _task_upload_path(task)
+    if not upload_path.is_file():
+        abort(404)
+    mimetype = mimetypes.guess_type(task["original_filename"])[0] or "application/octet-stream"
+    return send_file(
+        upload_path,
+        mimetype=mimetype,
+        as_attachment=False,
+        download_name=task["original_filename"],
+        conditional=True,
+    )
+
+
+def _send_task_media(task, media_id: str):
+    normalized_id = str(media_id or "").strip()
+    if not normalized_id:
+        abort(404)
+    media_item = next(
+        (
+            item
+            for item in _task_image_items(task)
+            if normalized_id
+            in {
+                str(item.get("id") or ""),
+                str(item.get("filename") or ""),
+                str(item.get("stored_filename") or ""),
+            }
+        ),
+        None,
+    )
+    if media_item is None:
+        abort(404)
+    media_path = image_path_from_item(_image_folder(), media_item)
+    if media_path is None or not media_path.is_file():
+        abort(404)
+    return send_file(
+        media_path,
+        mimetype=str(media_item.get("mime_type") or "application/octet-stream"),
+        as_attachment=False,
+        download_name=str(media_item.get("filename") or media_path.name),
+        conditional=True,
+    )
+
+
+def _attach_report_media_urls(results: list[dict], task, endpoint: str) -> None:
+    available_items = [
+        item
+        for item in _task_image_items(task)
+        if (media_path := image_path_from_item(_image_folder(), item)) is not None and media_path.is_file()
+    ]
+    available_ids = {
+        value
+        for item in available_items
+        for value in (
+            str(item.get("id") or "").strip(),
+            str(item.get("filename") or "").strip(),
+            str(item.get("stored_filename") or "").strip(),
+        )
+        if value
+    }
+    if not available_ids:
+        return
+    for result in results:
+        for report_item in list(result.get("report_items") or []) + list(result.get("suppressed_report_items") or []):
+            for ref in report_item.get("evidence_refs") or []:
+                media_id = str(ref.get("id") or ref.get("filename") or "").strip()
+                if media_id in available_ids:
+                    ref["url"] = url_for(endpoint, task_id=task["id"], media_id=media_id)
+
+
 def _remove_uploaded_file(path: Path):
     ok, error = remove_file(path)
     if not ok:
@@ -3985,8 +4095,12 @@ def _is_media_report_task_type(task_type: str | None) -> bool:
     return (task_type or DOCUMENT_TASK_TYPE) in {IMAGE_TASK_TYPE, VIDEO_TASK_TYPE}
 
 
+def _uses_compact_media_report(task_type: str | None) -> bool:
+    return (task_type or DOCUMENT_TASK_TYPE) == IMAGE_TASK_TYPE
+
+
 def _report_item_fields_for_task(task_type: str | None) -> tuple[tuple[str, str], ...]:
-    if _is_media_report_task_type(task_type):
+    if _uses_compact_media_report(task_type):
         return MEDIA_REPORT_ITEM_FIELDS
     return REPORT_ITEM_FIELDS
 
@@ -5255,7 +5369,9 @@ def _export_task_report(task):
         report_totals=_report_item_totals(results),
         report_item_types=REPORT_ITEM_TYPES,
         report_item_fields=_report_item_fields_for_task(task["task_type"]),
-        media_report=_is_media_report_task_type(task["task_type"]),
+        media_report=_uses_compact_media_report(task["task_type"]),
+        video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
+        video_stream_url="",
         document_groups=_task_document_groups(task),
         app_css=app_css,
         table_resize_js=table_resize_js,
@@ -5575,7 +5691,10 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
                     *context,
                     _excel_cell_text(result.get("name")),
                     f"条目 {item.get('index')}",
-                    *[_excel_cell_text(item.get(field)) for field, _ in report_item_fields],
+                    *[
+                        _excel_report_item_field(item, field, task["task_type"])
+                        for field, _ in report_item_fields
+                    ],
                     _excel_cell_text(item.get("type_label")),
                     _excel_cell_text(item.get("acceptance_label")),
                     _excel_cell_text(item.get("rejection_reason_label")) if item.get("acceptance_status") == "rejected" else "",
@@ -5586,6 +5705,25 @@ def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: 
             )
     _style_excel_sheet(sheet)
     _configure_report_review_sheet(sheet, headers)
+
+
+def _excel_report_item_field(item: dict, field: str, task_type: str | None):
+    value = _excel_cell_text(item.get(field))
+    if (task_type or DOCUMENT_TASK_TYPE) != VIDEO_TASK_TYPE or field != "excerpt":
+        return value
+    evidence_lines = []
+    for ref in item.get("evidence_refs") or []:
+        position = str(ref.get("position") or "").strip()
+        filename = str(ref.get("filename") or "").strip()
+        label = position
+        if filename:
+            label = f"{label}（{filename}）" if label else filename
+        if label and label not in evidence_lines:
+            evidence_lines.append(label)
+    if not evidence_lines:
+        return value
+    evidence_text = "关键帧：" + "、".join(evidence_lines)
+    return f"{value}\n{evidence_text}" if value else evidence_text
 
 
 def _configure_report_review_sheet(sheet, headers: list[str]) -> None:

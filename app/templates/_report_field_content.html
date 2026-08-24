@@ -1,0 +1,40 @@
+{% set evidence_refs = item.evidence_refs or [] %}
+{% set has_video_evidence = video_report and evidence_refs %}
+{% if field_value %}
+<div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
+{% endif %}
+{% if has_video_evidence and field == "location" %}
+<div class="video-evidence-times" aria-label="视频证据时间点">
+  {% for ref in evidence_refs %}
+  {% if ref.timestamp_seconds is not none and video_stream_url %}
+  <button class="video-time-link" type="button" data-video-timestamp="{{ ref.timestamp_seconds }}" title="跳转原视频至 {{ ref.position or ref.filename }}">
+    {{ ref.position or ref.filename or "查看视频" }}
+  </button>
+  {% elif ref.position %}
+  <span class="video-time-label">{{ ref.position }}</span>
+  {% endif %}
+  {% endfor %}
+</div>
+{% elif has_video_evidence and field == "excerpt" %}
+<div class="video-evidence-gallery" aria-label="关键帧证据">
+  {% for ref in evidence_refs %}
+  <div class="video-evidence-frame">
+    {% if ref.url %}
+    {% if ref.timestamp_seconds is not none and video_stream_url %}
+    <button type="button" class="video-frame-jump" data-video-timestamp="{{ ref.timestamp_seconds }}" title="查看 {{ ref.position or ref.filename }} 对应原视频">
+      <img src="{{ ref.url }}" alt="{{ ref.position or ref.filename or '视频关键帧' }}" loading="lazy">
+    </button>
+    {% else %}
+    <a href="{{ ref.url }}" target="_blank" rel="noopener" title="打开关键帧原图">
+      <img src="{{ ref.url }}" alt="{{ ref.position or ref.filename or '视频关键帧' }}" loading="lazy">
+    </a>
+    {% endif %}
+    {% endif %}
+    <span>{{ ref.position or ref.filename or "关键帧" }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% if not field_value and not (has_video_evidence and field in ["location", "excerpt"]) %}
+<span class="report-empty-cell">-</span>
+{% endif %}

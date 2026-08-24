@@ -2946,7 +2946,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             stored = json.loads(task["result_json"])
         self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
 
-    def test_video_task_report_exports_excel_with_compact_media_columns(self):
+    def test_video_task_report_exports_excel_with_document_report_columns(self):
         with self.app.app_context():
             now = "2026-05-23 12:20:00"
             structured_report = {
@@ -3000,7 +3000,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "文件名称",
                     "检查项",
                     "条目",
-                    "AI检查结论",
+                    "严重程度",
+                    "证据可信度",
+                    "问题类型",
+                    "位置",
+                    "原文/证据",
+                    "问题描述",
+                    "影响",
+                    "修改建议",
                     "条目判定",
                     "是否接纳",
                     "不接纳原因",
@@ -3009,13 +3016,147 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "条目标识（请勿修改）",
                 ),
             )
-            self.assertEqual(len(rows[1]), 12)
-            self.assertIn("画面显示未确认接地线状态", rows[1][5])
-            self.assertIn("位置/画面：视频时间 00:01.000", rows[1][5])
-            self.assertIn("建议：补充接地线确认动作", rows[1][5])
-            self.assertEqual(rows[1][6], "问题")
+            self.assertEqual(len(rows[1]), 19)
+            self.assertEqual(rows[1][7], "安装顺序")
+            self.assertEqual(rows[1][8], "视频时间 00:01.000")
+            self.assertEqual(rows[1][9], "未确认接地线后直接上电")
+            self.assertIn("画面显示未确认接地线状态", rows[1][10])
+            self.assertEqual(rows[1][12], "补充接地线确认动作")
+            self.assertEqual(rows[1][13], "问题")
         finally:
             workbook.close()
+
+    def test_video_report_renders_frame_evidence_and_streams_source_video(self):
+        with self.app.app_context():
+            now = "2026-05-23 12:25:00"
+            upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "stored.mp4"
+            upload_path.write_bytes(b"video-bytes")
+            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            frame_dir = image_root / "task-video"
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            (frame_dir / "0001_t000001000.jpg").write_bytes(_TINY_PNG)
+            document_meta = {
+                "frames": [
+                    {
+                        "id": "frame-0001",
+                        "filename": "0001_t000001000.jpg",
+                        "stored_filename": "0001_t000001000.jpg",
+                        "relative_path": "task-video/0001_t000001000.jpg",
+                        "mime_type": "image/png",
+                        "position": "00:01.000",
+                        "timestamp_seconds": 1.0,
+                        "kind": "video_frame",
+                    }
+                ]
+            }
+            structured_report = {
+                "summary": "发现 1 条安装顺序问题。",
+                "items": [
+                    {
+                        "id": "video-stable-item-1",
+                        "status": "issue",
+                        "severity": "high",
+                        "confidence": "high",
+                        "category": "安装顺序",
+                        "location": "视频时间 00:01.000",
+                        "excerpt": "未确认接地线后直接上电",
+                        "description": "画面显示未确认接地线状态即执行上电步骤。",
+                        "impact": "存在安全风险",
+                        "suggestion": "补充接地线确认动作",
+                        "evidence_refs": [
+                            {
+                                "id": "frame-0001",
+                                "filename": "0001_t000001000.jpg",
+                                "relative_path": "task-video/0001_t000001000.jpg",
+                                "mime_type": "image/png",
+                                "position": "00:01.000",
+                                "timestamp_seconds": 1.0,
+                                "kind": "video_frame",
+                            }
+                        ],
+                    }
+                ],
+            }
+            result_json = [
+                {
+                    "code": "video-installation-sequence",
+                    "name": "安装顺序检查",
+                    "result": json.dumps(structured_report, ensure_ascii=False),
+                    "structured_report": structured_report,
+                }
+            ]
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, original_filename, stored_filename, file_type,
+                    file_size, document_meta_json, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'install.mp4', 'stored.mp4', 'mp4',
+                        2048, ?, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (
+                    VIDEO_TASK_TYPE,
+                    json.dumps(document_meta, ensure_ascii=False),
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        response = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
+        self.assertEqual(
+            headers,
+            [
+                "条目",
+                "严重程度",
+                "证据可信度",
+                "问题类型",
+                "位置",
+                "原文/证据",
+                "问题描述",
+                "影响",
+                "修改建议",
+                "条目判定",
+                "是否认可 AI 结论",
+            ],
+        )
+        row = _required_tag(soup.select_one("tr[data-report-item]"))
+        self.assertEqual(row.get("data-item-id"), "video-stable-item-1")
+        frame = _required_tag(row.select_one(".video-evidence-frame img"))
+        self.assertEqual(frame.get("src"), f"/admin/tasks/{task_id}/media/frame-0001")
+        jump = _required_tag(row.select_one("[data-video-timestamp]"))
+        self.assertEqual(jump.get("data-video-timestamp"), "1.0")
+        player = _required_tag(soup.select_one("video[data-report-video-player]"))
+        self.assertEqual(player.get("src"), f"/admin/tasks/{task_id}/video")
+
+        review_response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "video-installation-sequence",
+                "item_id": "video-stable-item-1",
+                "item_type": "issue",
+                "acceptance_status": "accepted",
+            },
+        )
+        self.assertEqual(review_response.status_code, 200)
+        self.assertTrue(review_response.get_json()["ok"])
+
+        media_response = self.client.get(f"/admin/tasks/{task_id}/media/frame-0001")
+        video_response = self.client.get(f"/admin/tasks/{task_id}/video")
+        self.assertEqual(media_response.status_code, 200)
+        self.assertEqual(media_response.data, _TINY_PNG)
+        self.assertEqual(video_response.status_code, 200)
+        self.assertEqual(video_response.data, b"video-bytes")
+        media_response.close()
+        video_response.close()
 
     def test_task_detail_renders_structured_json_report_table(self):
         with self.app.app_context():

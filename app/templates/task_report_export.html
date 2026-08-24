@@ -148,11 +148,7 @@
                 {% for field, label in report_item_fields %}
                 {% set field_value = item[field] %}
                 <td class="report-field report-field-{{ field }}">
-                  {% if field_value %}
-                  <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
-                  {% else %}
-                  <span class="report-empty-cell">-</span>
-                  {% endif %}
+                  {% include "_report_field_content.html" %}
                 </td>
                 {% endfor %}
                 <td class="report-status-cell"><span class="report-item-type-badge">{{ item.type_label }}</span></td>
@@ -195,11 +191,7 @@
                   {% for field, label in report_item_fields %}
                   {% set field_value = item[field] %}
                   <td class="report-field report-field-{{ field }}">
-                    {% if field_value %}
-                    <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
-                    {% else %}
-                    <span class="report-empty-cell">-</span>
-                    {% endif %}
+                    {% include "_report_field_content.html" %}
                   </td>
                   {% endfor %}
                   <td class="report-status-cell">

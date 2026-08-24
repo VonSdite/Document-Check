@@ -2960,5 +2960,26 @@ document.addEventListener("focusout", () => {
   });
 });
 
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-video-timestamp]");
+  if (!trigger) {
+    return;
+  }
+  const player = document.querySelector("[data-report-video-player]");
+  if (!(player instanceof HTMLVideoElement)) {
+    return;
+  }
+  const timestamp = Number(trigger.dataset.videoTimestamp);
+  if (!Number.isFinite(timestamp) || timestamp < 0) {
+    return;
+  }
+  player.currentTime = timestamp;
+  player.scrollIntoView({ behavior: "smooth", block: "center" });
+  const playback = player.play();
+  if (playback instanceof Promise) {
+    playback.catch(() => {});
+  }
+});
+
 updateBulkTaskControls();
 applyAutoRefreshState();

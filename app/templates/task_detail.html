@@ -121,6 +121,20 @@
   {% endif %}
 </section>
 
+{% if video_report and video_stream_url %}
+<section class="panel report-video-panel" id="report-video-review">
+  <div class="panel-head">
+    <div>
+      <h2>原视频复核</h2>
+      <p>点击报告中的时间点或关键帧，可跳转到对应位置。</p>
+    </div>
+  </div>
+  <video class="report-video-player" controls preload="metadata" src="{{ video_stream_url }}" data-report-video-player>
+    当前浏览器不支持视频播放，请下载原文件复核。
+  </video>
+</section>
+{% endif %}
+
 {% if results %}
 <section class="panel report-classification-summary" data-report-summary>
   <div>
@@ -182,11 +196,7 @@
             {% for field, label in report_item_fields %}
             {% set field_value = item[field] %}
             <td class="report-field report-field-{{ field }}">
-              {% if field_value %}
-              <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
-              {% else %}
-              <span class="report-empty-cell">-</span>
-              {% endif %}
+              {% include "_report_field_content.html" %}
             </td>
             {% endfor %}
             <td class="report-status-cell">
@@ -252,11 +262,7 @@
               {% for field, label in report_item_fields %}
               {% set field_value = item[field] %}
               <td class="report-field report-field-{{ field }}">
-                {% if field_value %}
-                <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
-                {% else %}
-                <span class="report-empty-cell">-</span>
-                {% endif %}
+                {% include "_report_field_content.html" %}
               </td>
               {% endfor %}
               <td class="report-status-cell">
