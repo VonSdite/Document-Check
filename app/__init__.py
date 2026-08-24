@@ -9,6 +9,11 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .config import load_local_config
 from .db import init_db, seed_defaults
 from .formatting import render_markdown
+from .observability import (
+    configure_access_logging,
+    log_startup_self_check,
+    register_observability,
+)
 from .routes import register_routes
 from .tasks import TaskScheduler
 
@@ -31,6 +36,7 @@ def create_app():
         LISTEN_HOST=server_config["host"] if local_config["platform"] else "127.0.0.1",
         LISTEN_PORT=server_config["port"],
         APPLICATION_ROOT=server_config["url_prefix"] or "/",
+        PROXY_FIX=server_config["proxy_fix"],
         REAL_IP_HEADER=server_config["real_ip_header"],
         NETWORK=local_config["network"],
         AUTH=local_config["auth"],
@@ -41,6 +47,7 @@ def create_app():
         SENSITIVE_TERMS_PATH=str(root_dir / "instance" / "sensitive_terms.xlsx"),
         COMMON_TERMS_PATH=str(root_dir / "instance" / "common_terms.xlsx"),
         LOG_FILE=str(root_dir / "instance" / "logs" / "app.log"),
+        ACCESS_LOG_FILE=str(root_dir / "instance" / "logs" / "access.log"),
         MAX_UPLOAD_MB=server_config["max_upload_mb"],
         MAX_CONTENT_LENGTH=server_config["max_upload_mb"] * 1024 * 1024,
     )
@@ -54,6 +61,7 @@ def create_app():
         init_db()
         seed_defaults()
 
+    register_observability(app)
     register_routes(app)
     app.add_template_filter(render_markdown, "markdown")
 
@@ -61,6 +69,8 @@ def create_app():
         scheduler = TaskScheduler(app)
         scheduler.start()
         app.extensions["task_scheduler"] = scheduler
+
+    log_startup_self_check(app)
 
     return app
 
@@ -96,6 +106,7 @@ def _configure_logging(app):
         target_logger.propagate = False
 
     app.logger.info("本地日志已启用：%s", log_file)
+    configure_access_logging(app)
 
 
 def _has_log_file_handler(target_logger, log_file: Path) -> bool:

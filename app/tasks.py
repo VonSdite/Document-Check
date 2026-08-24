@@ -138,6 +138,9 @@ class TaskScheduler:
         self._stop_event.set()
         self._launcher.join(timeout=3)
 
+    def is_alive(self) -> bool:
+        return self._launcher.is_alive() and not self._stop_event.is_set()
+
     def _loop(self):
         while not self._stop_event.is_set():
             try:
