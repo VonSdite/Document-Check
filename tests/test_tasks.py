@@ -23,9 +23,11 @@ from app.tasks import (
     _format_image_check_issue_summary,
     _check_item_groups,
     _image_check_target,
+    _merge_video_batch_reports,
     _run_combined_multimodal_check_with_repair,
     _run_check_items_concurrently,
     _split_combined_check_output,
+    _split_combined_structured_output,
 )
 
 
@@ -1408,6 +1410,106 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("建议：调整安装顺序", recognized["video-a"])
         self.assertIn("模型未按要求返回该检查项的独立结果", completed["video-b"])
 
+    def test_combined_structured_output_preserves_video_report_fields(self):
+        check_items = [{"code": "video-a", "name": "检查A"}]
+        content = json.dumps(
+            {
+                "results": [
+                    {
+                        "code": "video-a",
+                        "summary": "发现两个问题",
+                        "items": [
+                            {
+                                "status": "issue",
+                                "severity": "high",
+                                "confidence": "high",
+                                "category": "安装顺序",
+                                "location": "00:01.000",
+                                "excerpt": "设备已上电",
+                                "description": "未确认接地线后直接上电",
+                                "impact": "存在安全风险",
+                                "suggestion": "先确认接地",
+                            },
+                            {
+                                "status": "suggestion",
+                                "severity": "low",
+                                "confidence": "low",
+                                "category": "画面完整性",
+                                "location": "00:03.000",
+                                "excerpt": "端子被遮挡",
+                                "description": "无法确认接线关系",
+                                "impact": "可能漏检",
+                                "suggestion": "人工回看原视频",
+                            },
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+        sections = _split_combined_structured_output(content, check_items)
+
+        self.assertEqual(sections["video-a"]["summary"], "发现两个问题")
+        self.assertEqual(len(sections["video-a"]["items"]), 2)
+        self.assertEqual(sections["video-a"]["items"][0]["severity"], "high")
+        self.assertEqual(sections["video-a"]["items"][1]["status"], "suggestion")
+
+    def test_video_batch_reports_merge_duplicate_issue_and_evidence_frames(self):
+        frames = [
+            {
+                "id": "frame-0001",
+                "filename": "0001_t000001000.jpg",
+                "relative_path": "task-video/0001_t000001000.jpg",
+                "mime_type": "image/jpeg",
+                "position": "00:01.000",
+                "timestamp_seconds": 1.0,
+            },
+            {
+                "id": "frame-0002",
+                "filename": "0002_t000003000.jpg",
+                "relative_path": "task-video/0002_t000003000.jpg",
+                "mime_type": "image/jpeg",
+                "position": "00:03.000",
+                "timestamp_seconds": 3.0,
+            },
+        ]
+        batch_results = []
+        for index, frame in enumerate(frames, start=1):
+            batch_results.append(
+                {
+                    "batch_index": index,
+                    "batch_count": 2,
+                    "images": [frame],
+                    "structured_report": {
+                        "summary": "发现问题",
+                        "items": [
+                            {
+                                "status": "issue",
+                                "severity": "high",
+                                "confidence": "medium" if index == 1 else "high",
+                                "category": "安装顺序",
+                                "location": frame["position"],
+                                "excerpt": "设备已上电",
+                                "description": "未确认接地线后直接上电",
+                                "impact": "存在安全风险",
+                                "suggestion": "先确认接地",
+                            }
+                        ],
+                    },
+                }
+            )
+
+        report = _merge_video_batch_reports("video-a", batch_results)
+        reversed_report = _merge_video_batch_reports("video-a", list(reversed(batch_results)))
+
+        self.assertEqual(len(report["items"]), 1)
+        item = report["items"][0]
+        self.assertEqual(item["confidence"], "high")
+        self.assertEqual(len(item["evidence_refs"]), 2)
+        self.assertEqual(item["location"], "视频时间 00:01.000、00:03.000")
+        self.assertEqual(item["id"], reversed_report["items"][0]["id"])
+
     def test_combined_output_keeps_legacy_markdown_compatibility(self):
         check_items = [
             {"code": "video-a", "name": "检查A"},
@@ -1598,6 +1700,9 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["image_items"][0]["position"], "00:01.000")
         self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/jpeg;base64,"))
         self.assertEqual([item["code"] for item in results], ["video-installation-sequence"])
+        self.assertEqual(len(results[0]["structured_report"]["items"]), 1)
+        self.assertEqual(results[0]["structured_report"]["items"][0]["status"], "issue")
+        self.assertTrue(results[0]["structured_report"]["items"][0]["id"])
         self.assertIn("覆盖视频帧", results[0]["result"])
         self.assertIn("视频时间 00:01.000", results[0]["result"])
         self.assertIn("未确认接地线后直接上电", results[0]["result"])

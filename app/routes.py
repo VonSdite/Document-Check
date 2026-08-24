@@ -4572,9 +4572,10 @@ def _structured_report_items(result_code: str, structured_report: dict) -> list[
         index = len(items) + 1
         item_text = _structured_report_item_text(fields)
         item_type = fields.pop("type", "") or _infer_report_item_type(item_text)
+        explicit_id = _structured_report_item_id(raw_item)
         items.append(
             {
-                "id": _report_item_id(result_code, index, item_text),
+                "id": explicit_id or _report_item_id(result_code, index, item_text),
                 "index": index,
                 "text": item_text,
                 **fields,
@@ -4601,6 +4602,7 @@ def _normalize_structured_report_item(raw_item) -> dict:
             "description": text,
             "impact": "",
             "suggestion": "",
+            "evidence_refs": [],
             "type": _infer_report_item_type(text),
         } if text else {}
     if not isinstance(raw_item, dict):
@@ -4615,6 +4617,7 @@ def _normalize_structured_report_item(raw_item) -> dict:
     fields["severity_label"] = REPORT_SEVERITY_LABELS.get(fields["severity"], "")
     fields["confidence"] = _normalize_report_confidence(fields.get("confidence"))
     fields["confidence_label"] = REPORT_CONFIDENCE_LABELS.get(fields["confidence"], "")
+    fields["evidence_refs"] = _normalize_report_evidence_refs(raw_item.get("evidence_refs"))
     if _looks_like_status_only(fields["category"]):
         status = status or _normalize_report_item_status(fields["category"])
         fields["category"] = ""
@@ -4623,6 +4626,58 @@ def _normalize_structured_report_item(raw_item) -> dict:
     item_text = _structured_report_item_text(fields)
     fields["type"] = "non_issue" if _is_no_action_report_item(fields) else status or _infer_report_item_type(item_text)
     return fields
+
+
+def _structured_report_item_id(raw_item) -> str:
+    if not isinstance(raw_item, dict):
+        return ""
+    value = str(raw_item.get("id") or raw_item.get("item_id") or raw_item.get("report_item_id") or "").strip()
+    if not value or len(value) > 128:
+        return ""
+    return value if re.fullmatch(r"[A-Za-z0-9._:-]+", value) else ""
+
+
+def _normalize_report_evidence_refs(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    refs = []
+    seen = set()
+    for raw_ref in value:
+        if not isinstance(raw_ref, dict):
+            continue
+        media_id = str(raw_ref.get("id") or raw_ref.get("frame_id") or raw_ref.get("filename") or "").strip()
+        filename = str(raw_ref.get("filename") or "").strip()
+        position = str(raw_ref.get("position") or raw_ref.get("timestamp") or "").strip()
+        if not media_id and not filename and not position:
+            continue
+        key = media_id or filename or position
+        if key in seen:
+            continue
+        seen.add(key)
+        timestamp_seconds = raw_ref.get("timestamp_seconds")
+        try:
+            timestamp_seconds = None if timestamp_seconds is None else max(0.0, float(timestamp_seconds))
+        except (TypeError, ValueError):
+            timestamp_seconds = None
+        refs.append(
+            {
+                "id": media_id,
+                "filename": filename,
+                "position": position,
+                "timestamp_seconds": timestamp_seconds,
+                "relative_path": str(raw_ref.get("relative_path") or "").strip(),
+                "mime_type": str(raw_ref.get("mime_type") or "").strip(),
+                "kind": str(raw_ref.get("kind") or "").strip(),
+            }
+        )
+    refs.sort(
+        key=lambda ref: (
+            ref.get("timestamp_seconds") is None,
+            float(ref.get("timestamp_seconds") or 0),
+            str(ref.get("filename") or ""),
+        )
+    )
+    return refs
 
 
 def _normalize_report_severity(value) -> str:
@@ -4692,6 +4747,10 @@ def _deduplicate_report_items(report_items: list[dict]) -> list[dict]:
             unique_items.append(report_item)
             continue
         existing["location"] = _merge_report_field_values(existing.get("location"), report_item.get("location"))
+        existing["evidence_refs"] = _merge_report_evidence_refs(
+            existing.get("evidence_refs"),
+            report_item.get("evidence_refs"),
+        )
         if _report_item_priority_key(report_item) < _report_item_priority_key(existing):
             existing["severity"] = report_item.get("severity", "")
             existing["severity_label"] = report_item.get("severity_label", "")
@@ -4708,6 +4767,10 @@ def _merge_report_field_values(left, right) -> str:
     if not right_text or right_text in left_text:
         return left_text
     return f"{left_text}；{right_text}"
+
+
+def _merge_report_evidence_refs(left, right) -> list[dict]:
+    return _normalize_report_evidence_refs(list(left or []) + list(right or []))
 
 
 def _report_item_priority_key(report_item: dict) -> tuple[int, int, int, int]:

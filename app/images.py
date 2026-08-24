@@ -184,6 +184,7 @@ def image_items_from_meta(raw: str | None, key: str = "images") -> list[dict]:
                 "size_bytes": _safe_int(image.get("size_bytes")),
                 "kind": str(image.get("kind") or key.rstrip("s") or "image"),
                 "page_number": _safe_int(image.get("page_number")),
+                "timestamp_seconds": _safe_float(image.get("timestamp_seconds")),
             }
         )
     return normalized
@@ -755,6 +756,15 @@ def _safe_int(value) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _safe_float(value) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _direct_children(element: ET.Element, local_name: str) -> list[ET.Element]:

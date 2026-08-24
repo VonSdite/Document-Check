@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import threading
@@ -1433,6 +1434,11 @@ def _run_video_check_items_concurrently(
                 progress = mark_unit_completed()
                 with result_lock:
                     for item in check_items:
+                        structured_report = _merge_video_batch_reports(
+                            item["code"],
+                            [],
+                            skipped_frames=skipped_frames,
+                        )
                         completed_by_code[item["code"]] = {
                             "code": item["code"],
                             "name": item["name"],
@@ -1440,6 +1446,9 @@ def _run_video_check_items_concurrently(
                                 [],
                                 skipped_images=skipped_frames,
                             ),
+                            "structured_report": structured_report,
+                            "batch_reports": [],
+                            "issue_output_limit": issue_output_limit,
                         }
                         partial_by_code.pop(item["code"], None)
                     completed_count = len(completed_by_code)
@@ -1509,6 +1518,7 @@ def _run_video_check_items_concurrently(
                         prompt_builder=_combined_video_check_prompt,
                         check_name="视频帧检查合并检查",
                         error_label="视频",
+                        preserve_structured=True,
                         run_kwargs={
                             "api_base": task["api_base"],
                             "api_key": task["api_key"],
@@ -1536,6 +1546,7 @@ def _run_video_check_items_concurrently(
                     with result_lock:
                         incomplete_codes.update(_unresolved_check_codes(sections, items))
                     for item in items:
+                        structured_report = sections.get(item["code"], {})
                         batch_results_by_code[item["code"]].append(
                             {
                                 "batch_index": batch_index,
@@ -1543,7 +1554,8 @@ def _run_video_check_items_concurrently(
                                 "images": batch,
                                 "target_label": "视频帧检查",
                                 "target_kind": "video_frame",
-                                "content": sections.get(item["code"], ""),
+                                "content": _format_combined_json_result(item, structured_report),
+                                "structured_report": structured_report,
                             }
                         )
                     progress = mark_unit_completed()
@@ -1561,13 +1573,22 @@ def _run_video_check_items_concurrently(
 
                 with result_lock:
                     for item in items:
+                        batch_results = batch_results_by_code[item["code"]]
+                        structured_report = _merge_video_batch_reports(
+                            item["code"],
+                            batch_results,
+                            skipped_frames=skipped_frames,
+                        )
                         completed_by_code[item["code"]] = {
                             "code": item["code"],
                             "name": item["name"],
                             "result": _format_multimodal_image_check_result(
-                                batch_results_by_code[item["code"]],
+                                batch_results,
                                 skipped_images=skipped_frames,
                             ),
+                            "structured_report": structured_report,
+                            "batch_reports": _video_batch_report_snapshots(batch_results),
+                            "issue_output_limit": issue_output_limit,
                         }
                         partial_by_code.pop(item["code"], None)
                     completed_count = len(completed_by_code)
@@ -1666,6 +1687,323 @@ def _document_text_for_video_batch(document_text: str, frame_items: list[dict], 
         parts.append("video_sampling:\n" + "\n".join(selection_lines))
     parts.append("current_batch_video_frames:\n" + ("\n".join(frame_lines) if frame_lines else "- 未记录视频帧"))
     return "\n\n".join(parts).strip()
+
+
+def _merge_video_batch_reports(
+    result_code: str,
+    batch_results: list[dict],
+    *,
+    skipped_frames: list[dict] | None = None,
+) -> dict:
+    merged_items: list[dict] = []
+    items_by_key: dict[str, dict] = {}
+    for batch in batch_results:
+        report = batch.get("structured_report")
+        if not isinstance(report, dict):
+            continue
+        raw_items = report.get("items")
+        if not isinstance(raw_items, list):
+            continue
+        for raw_item in raw_items:
+            item = _normalize_video_report_item(raw_item)
+            if not item or _video_report_item_is_generic_non_issue(item):
+                continue
+            inferred_refs = _video_evidence_refs_for_item(item, batch)
+            item["evidence_refs"] = _merge_video_evidence_refs(
+                item.get("evidence_refs"),
+                inferred_refs,
+            )
+            evidence_location = _video_evidence_location(item["evidence_refs"])
+            if evidence_location:
+                item["location"] = evidence_location
+            key = _video_report_item_merge_key(item)
+            existing = items_by_key.get(key)
+            if existing is None:
+                items_by_key[key] = item
+                merged_items.append(item)
+            else:
+                _merge_video_report_item(existing, item)
+
+    for frame in skipped_frames or []:
+        item = _skipped_video_frame_report_item(frame)
+        key = _video_report_item_merge_key(item)
+        if key not in items_by_key:
+            items_by_key[key] = item
+            merged_items.append(item)
+
+    for item in merged_items:
+        evidence_location = _video_evidence_location(item.get("evidence_refs"))
+        if evidence_location:
+            item["location"] = evidence_location
+        item["id"] = _video_report_item_id(result_code, item)
+    merged_items.sort(key=_video_report_item_priority)
+
+    issue_count = sum(1 for item in merged_items if item.get("status") == "issue")
+    suggestion_count = sum(1 for item in merged_items if item.get("status") == "suggestion")
+    if issue_count or suggestion_count:
+        summary = f"视频检查形成 {issue_count} 个明确问题、{suggestion_count} 个需人工确认项。"
+    else:
+        summary = "未发现明确问题或需人工确认项。"
+    return {"summary": summary, "items": merged_items}
+
+
+def _normalize_video_report_item(raw_item) -> dict:
+    if isinstance(raw_item, str):
+        raw_item = {"status": "suggestion", "description": raw_item}
+    if not isinstance(raw_item, dict):
+        return {}
+    status = str(raw_item.get("status") or "suggestion").strip().lower()
+    if status not in {"issue", "suggestion", "non_issue"}:
+        status = "suggestion"
+    severity = str(raw_item.get("severity") or "").strip().lower()
+    if severity not in {"critical", "high", "medium", "low"}:
+        severity = "medium" if status == "issue" else "low"
+    confidence = str(raw_item.get("confidence") or "").strip().lower()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "medium" if status == "issue" else "low"
+    item = {
+        "status": status,
+        "severity": severity,
+        "confidence": confidence,
+        "category": str(raw_item.get("category") or "").strip(),
+        "location": str(raw_item.get("location") or "").strip(),
+        "excerpt": str(raw_item.get("excerpt") or "").strip(),
+        "description": str(raw_item.get("description") or "").strip(),
+        "impact": str(raw_item.get("impact") or "").strip(),
+        "suggestion": str(raw_item.get("suggestion") or "").strip(),
+        "evidence_refs": _normalize_video_evidence_refs(raw_item.get("evidence_refs")),
+    }
+    if not any(item.get(field) for field in ("category", "location", "excerpt", "description", "impact", "suggestion")):
+        return {}
+    return item
+
+
+def _video_report_item_is_generic_non_issue(item: dict) -> bool:
+    if item.get("status") != "non_issue":
+        return False
+    text = "".join(
+        str(item.get(field) or "")
+        for field in ("category", "excerpt", "description", "impact", "suggestion")
+    )
+    compact = re.sub(r"\s+", "", text)
+    return not compact or any(
+        marker in compact
+        for marker in ("未发现", "无明显", "未见", "正常", "符合", "一致", "清晰", "完整", "无需修改", "无异常")
+    )
+
+
+def _video_evidence_refs_for_item(item: dict, batch: dict) -> list[dict]:
+    frames = batch.get("images") or []
+    searchable = "\n".join(
+        str(item.get(field) or "")
+        for field in ("location", "excerpt", "description")
+    )
+    refs = []
+    for frame in frames:
+        filename = str(frame.get("filename") or "").strip()
+        frame_id = str(frame.get("id") or "").strip()
+        position = str(frame.get("position") or "").strip()
+        if not any(value and value in searchable for value in (filename, frame_id, position)):
+            continue
+        refs.append(_video_evidence_ref(frame))
+    if not refs and len(frames) == 1:
+        refs.append(_video_evidence_ref(frames[0]))
+    return [ref for ref in refs if ref]
+
+
+def _video_evidence_ref(frame: dict) -> dict:
+    frame_id = str(frame.get("id") or "").strip()
+    filename = str(frame.get("filename") or "").strip()
+    if not frame_id and not filename:
+        return {}
+    position = str(frame.get("position") or "").strip()
+    timestamp_seconds = _video_timestamp_seconds(frame.get("timestamp_seconds"), position)
+    return {
+        "id": frame_id or filename,
+        "filename": filename,
+        "position": position,
+        "timestamp_seconds": timestamp_seconds,
+        "relative_path": str(frame.get("relative_path") or "").strip(),
+        "mime_type": str(frame.get("mime_type") or "image/jpeg").strip(),
+        "kind": "video_frame",
+    }
+
+
+def _normalize_video_evidence_refs(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    refs = []
+    for raw_ref in value:
+        if not isinstance(raw_ref, dict):
+            continue
+        ref = _video_evidence_ref(raw_ref)
+        if ref:
+            refs.append(ref)
+    return _merge_video_evidence_refs(refs, [])
+
+
+def _merge_video_evidence_refs(left, right) -> list[dict]:
+    merged = []
+    seen = set()
+    for raw_ref in list(left or []) + list(right or []):
+        if not isinstance(raw_ref, dict):
+            continue
+        ref = _video_evidence_ref(raw_ref)
+        if not ref:
+            continue
+        key = ref.get("id") or ref.get("filename") or ref.get("position")
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(ref)
+    merged.sort(
+        key=lambda ref: (
+            ref.get("timestamp_seconds") is None,
+            float(ref.get("timestamp_seconds") or 0),
+            str(ref.get("filename") or ""),
+        )
+    )
+    return merged
+
+
+def _video_timestamp_seconds(value, position: str = "") -> float | None:
+    if value is not None and not isinstance(value, bool):
+        try:
+            return round(max(0.0, float(value)), 3)
+        except (TypeError, ValueError):
+            pass
+    match = re.search(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?", str(position or ""))
+    if not match:
+        return None
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = int(match.group(3) or 0)
+    millis = int((match.group(4) or "0").ljust(3, "0")[:3])
+    return round(hours * 3600 + minutes * 60 + seconds + millis / 1000, 3)
+
+
+def _video_evidence_location(refs) -> str:
+    positions = []
+    for ref in refs or []:
+        position = str(ref.get("position") or "").strip()
+        if position and position not in positions:
+            positions.append(position)
+    if not positions:
+        return ""
+    return "视频时间 " + "、".join(positions)
+
+
+def _video_report_item_merge_key(item: dict) -> str:
+    category = _normalize_video_issue_key_text(item.get("category"))
+    description = _normalize_video_issue_key_text(
+        item.get("description")
+        or item.get("excerpt")
+        or item.get("suggestion")
+        or item.get("impact")
+        or item.get("location")
+    )
+    return f"{category}\n{description}"
+
+
+def _normalize_video_issue_key_text(value) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"(?:视频时间\s*)?(?:\d{1,2}:)?\d{2}:\d{2}(?:\.\d{1,3})?", "", text)
+    text = re.sub(r"\b\d{4}_t\d+\.(?:jpg|jpeg|png)\b", "", text)
+    return re.sub(r"[\s，。；、,.!！?？:：;；/\\|()（）【】\[\]\"'“”‘’_-]+", "", text)
+
+
+def _merge_video_report_item(target: dict, source: dict) -> None:
+    status_order = {"issue": 0, "suggestion": 1, "non_issue": 2}
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    confidence_order = {"high": 0, "medium": 1, "low": 2}
+    if status_order.get(source.get("status"), 9) < status_order.get(target.get("status"), 9):
+        target["status"] = source.get("status")
+    if severity_order.get(source.get("severity"), 9) < severity_order.get(target.get("severity"), 9):
+        target["severity"] = source.get("severity")
+    if confidence_order.get(source.get("confidence"), 9) < confidence_order.get(target.get("confidence"), 9):
+        target["confidence"] = source.get("confidence")
+    for field in ("category", "excerpt", "description", "impact", "suggestion"):
+        target[field] = _merge_video_report_field(target.get(field), source.get(field))
+    target["evidence_refs"] = _merge_video_evidence_refs(
+        target.get("evidence_refs"),
+        source.get("evidence_refs"),
+    )
+
+
+def _merge_video_report_field(left, right) -> str:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text:
+        return right_text
+    if not right_text or right_text == left_text or right_text in left_text:
+        return left_text
+    if left_text in right_text:
+        return right_text
+    return f"{left_text}；{right_text}"
+
+
+def _video_report_item_id(result_code: str, item: dict) -> str:
+    source = "\n".join(
+        (
+            str(result_code or ""),
+            _normalize_video_issue_key_text(item.get("category")),
+            _normalize_video_issue_key_text(
+                item.get("description")
+                or item.get("excerpt")
+                or item.get("suggestion")
+                or item.get("impact")
+                or item.get("location")
+            ),
+        )
+    )
+    return hashlib.sha1(source.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
+
+def _video_report_item_priority(item: dict) -> tuple[int, int, int, str]:
+    return (
+        {"issue": 0, "suggestion": 1, "non_issue": 2}.get(str(item.get("status") or ""), 9),
+        {"high": 0, "medium": 1, "low": 2}.get(str(item.get("confidence") or ""), 9),
+        {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(str(item.get("severity") or ""), 9),
+        str(item.get("id") or ""),
+    )
+
+
+def _skipped_video_frame_report_item(frame: dict) -> dict:
+    ref = _video_evidence_ref(frame)
+    filename = str(frame.get("filename") or frame.get("id") or "视频帧")
+    position = str(frame.get("position") or "").strip()
+    return {
+        "status": "suggestion",
+        "severity": "low",
+        "confidence": "high",
+        "category": "视频帧读取",
+        "location": f"视频时间 {position}" if position else "",
+        "excerpt": filename,
+        "description": f"视频帧 {filename} 不是可识别的图片格式，系统已跳过。",
+        "impact": "该时间点未参与模型检查，可能影响视频检查完整性。",
+        "suggestion": "请人工回看对应时间点，或将视频转换为受支持格式后重新检查。",
+        "evidence_refs": [ref] if ref else [],
+    }
+
+
+def _video_batch_report_snapshots(batch_results: list[dict]) -> list[dict]:
+    snapshots = []
+    for batch in batch_results:
+        frames = []
+        for frame in batch.get("images") or []:
+            ref = _video_evidence_ref(frame)
+            if ref:
+                frames.append(ref)
+        report = batch.get("structured_report")
+        snapshots.append(
+            {
+                "batch_index": int(batch.get("batch_index") or 1),
+                "batch_count": int(batch.get("batch_count") or 1),
+                "frames": frames,
+                "structured_report": report if isinstance(report, dict) else {"summary": "", "items": []},
+            }
+        )
+    return snapshots
 
 
 def _image_check_groups(
@@ -1773,17 +2111,18 @@ def _run_combined_multimodal_check_with_repair(
     check_name: str,
     error_label: str,
     run_kwargs: dict,
-) -> dict[str, str]:
+    preserve_structured: bool = False,
+) -> dict[str, str] | dict[str, dict]:
     initial_kwargs = dict(run_kwargs)
     initial_kwargs.update(
         check_name=f"{check_name}（{len(check_items)}项）",
         prompt=prompt_builder(check_items),
     )
     content = run_multimodal_document_check(**initial_kwargs)
-    sections = _split_combined_check_output(
-        content,
-        check_items,
-        fill_missing=False,
+    sections = (
+        _split_combined_structured_output(content, check_items)
+        if preserve_structured
+        else _split_combined_check_output(content, check_items, fill_missing=False)
     )
     missing_items = _missing_check_items(check_items, sections)
     if missing_items:
@@ -1805,11 +2144,19 @@ def _run_combined_multimodal_check_with_repair(
             ),
         )
         repair_content = run_multimodal_document_check(**repair_kwargs)
-        repair_sections = _split_combined_check_output(
-            repair_content,
-            missing_items,
-            fill_missing=False,
-            allow_single_plain_text=False,
+        repair_sections = (
+            _split_combined_structured_output(
+                repair_content,
+                missing_items,
+                allow_single_plain_text=False,
+            )
+            if preserve_structured
+            else _split_combined_check_output(
+                repair_content,
+                missing_items,
+                fill_missing=False,
+                allow_single_plain_text=False,
+            )
         )
         sections.update(repair_sections)
         missing_items = _missing_check_items(check_items, sections)
@@ -1824,7 +2171,10 @@ def _run_combined_multimodal_check_with_repair(
 
     if not sections:
         raise RuntimeError(f"模型连续两次未返回可识别的{error_label}多检查项结果")
-    _fill_missing_check_sections(sections, check_items)
+    if preserve_structured:
+        _fill_missing_structured_check_sections(sections, check_items)
+    else:
+        _fill_missing_check_sections(sections, check_items)
     return sections
 
 
@@ -1832,13 +2182,19 @@ def _missing_check_items(check_items: list[dict], sections: dict[str, str]) -> l
     return [item for item in check_items if str(item.get("code") or "") not in sections]
 
 
-def _unresolved_check_codes(sections: dict[str, str], check_items: list[dict]) -> set[str]:
+def _unresolved_check_codes(sections: dict, check_items: list[dict]) -> set[str]:
     marker = "模型未按要求返回该检查项的独立结果。"
-    return {
-        str(item.get("code") or "")
-        for item in check_items
-        if marker in str(sections.get(str(item.get("code") or "")) or "")
-    }
+    unresolved = set()
+    for item in check_items:
+        code = str(item.get("code") or "")
+        section = sections.get(code)
+        if isinstance(section, dict):
+            if section.get("incomplete"):
+                unresolved.add(code)
+            continue
+        if marker in str(section or ""):
+            unresolved.add(code)
+    return unresolved
 
 
 def _split_combined_check_output(
@@ -1876,6 +2232,126 @@ def _split_combined_check_output(
     if fill_missing:
         _fill_missing_check_sections(sections, check_items)
     return sections
+
+
+def _split_combined_structured_output(
+    content: str,
+    check_items: list[dict],
+    *,
+    allow_single_plain_text: bool = True,
+) -> dict[str, dict]:
+    text = str(content or "").strip()
+    if not text:
+        return {}
+
+    payload = _load_combined_json_output(text)
+    if isinstance(payload, dict):
+        results = payload.get("results")
+        if results is None and len(check_items) == 1 and isinstance(payload.get("items"), list):
+            results = [{"code": check_items[0]["code"], **payload}]
+    elif isinstance(payload, list):
+        results = payload
+    else:
+        results = None
+
+    items_by_code = {str(item.get("code") or ""): item for item in check_items}
+    sections: dict[str, dict] = {}
+    if isinstance(results, list):
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            code = str(result.get("code") or "").strip()
+            if code not in items_by_code or code in sections:
+                continue
+            sections[code] = _normalize_combined_structured_result(result)
+    if sections:
+        return sections
+
+    legacy_sections = _split_combined_check_output(
+        text,
+        check_items,
+        fill_missing=False,
+        allow_single_plain_text=allow_single_plain_text,
+    )
+    return {
+        code: _legacy_combined_section_report(section)
+        for code, section in legacy_sections.items()
+        if str(section or "").strip()
+    }
+
+
+def _normalize_combined_structured_result(result: dict) -> dict:
+    raw_items = result.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = []
+    items = []
+    for raw_item in raw_items:
+        if isinstance(raw_item, dict):
+            items.append(dict(raw_item))
+        elif isinstance(raw_item, str) and raw_item.strip():
+            items.append(
+                {
+                    "status": "suggestion",
+                    "severity": "low",
+                    "confidence": "low",
+                    "category": "视频检查结果",
+                    "location": "",
+                    "excerpt": "",
+                    "description": raw_item.strip(),
+                    "impact": "",
+                    "suggestion": "请人工复核该结论。",
+                }
+            )
+    return {
+        "summary": str(result.get("summary") or "").strip(),
+        "items": items,
+    }
+
+
+def _legacy_combined_section_report(section: str) -> dict:
+    text = str(section or "").strip()
+    items = []
+    for line in _structured_section_items(text, "明确问题"):
+        if _summary_line_is_negative(line) or _summary_line_is_normal(line):
+            continue
+        items.append(_legacy_video_report_item(line, "issue"))
+    for line in _structured_section_items(text, "需人工确认"):
+        if _summary_line_is_negative(line) or _summary_line_is_normal(line):
+            continue
+        items.append(_legacy_video_report_item(line, "suggestion"))
+
+    summary_match = re.search(
+        r"(?ms)^#{0,6}\s*总体判断\s*$\s*(.*?)(?=^#{1,6}\s|\Z)",
+        text,
+    )
+    summary = summary_match.group(1).strip() if summary_match else ""
+    if not items and text and not _summary_line_is_negative(text) and not _summary_line_is_normal(text):
+        items.append(_legacy_video_report_item(text, "suggestion"))
+    return {"summary": summary, "items": items}
+
+
+def _legacy_video_report_item(line: str, status: str) -> dict:
+    text = re.sub(r"^[-*]\s*", "", str(line or "").strip()).strip()
+    location = ""
+    description = text
+    match = re.match(
+        r"^((?:视频时间\s*)?(?:\d{1,2}:)?\d{2}:\d{2}(?:\.\d{1,3})?(?:\s*[-–—~至]\s*(?:\d{1,2}:)?\d{2}:\d{2}(?:\.\d{1,3})?)?|[^：:]{1,40}(?:帧|画面))[:：]\s*(.+)$",
+        text,
+    )
+    if match:
+        location = match.group(1).strip()
+        description = match.group(2).strip()
+    return {
+        "status": status,
+        "severity": "medium" if status == "issue" else "low",
+        "confidence": "medium" if status == "issue" else "low",
+        "category": "视频检查结果",
+        "location": location,
+        "excerpt": "",
+        "description": description,
+        "impact": "",
+        "suggestion": "请人工复核并处理。" if status == "suggestion" else "",
+    }
 
 
 def _split_combined_json_output(content: str, check_items: list[dict]) -> dict[str, str]:
@@ -2000,6 +2476,31 @@ def _format_combined_json_item(item: dict) -> str:
 def _fill_missing_check_sections(sections: dict[str, str], check_items: list[dict]):
     for item in check_items:
         sections.setdefault(item["code"], _missing_check_section(item, "模型未按要求返回该检查项的独立结果。"))
+
+
+def _fill_missing_structured_check_sections(sections: dict[str, dict], check_items: list[dict]):
+    for item in check_items:
+        sections.setdefault(item["code"], _missing_structured_check_section())
+
+
+def _missing_structured_check_section() -> dict:
+    return {
+        "summary": "模型未按要求返回该检查项的独立结果。",
+        "incomplete": True,
+        "items": [
+            {
+                "status": "suggestion",
+                "severity": "low",
+                "confidence": "low",
+                "category": "检查结果完整性",
+                "location": "",
+                "excerpt": "",
+                "description": "模型未按要求返回该检查项的独立结果。",
+                "impact": "该检查项可能未被完整执行。",
+                "suggestion": "请重新执行任务或人工复核。",
+            }
+        ],
+    }
 
 
 def _match_check_code_from_header(header_line: str, check_items: list[dict]) -> str:
