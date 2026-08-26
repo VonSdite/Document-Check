@@ -1,7 +1,10 @@
+import json
+import subprocess
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 from openpyxl import Workbook
@@ -21,10 +24,15 @@ from app.images import (
     select_pdf_page_numbers,
 )
 from app.videos import (
+    _VideoFrameCommandError,
+    VideoFrameExtractionError,
     allowed_video_file,
+    extract_video_frames,
     format_video_document_text,
     video_extension_of,
     _decode_process_output,
+    _extract_frame,
+    _probe_video_duration,
     _sample_video_timestamps,
 )
 
@@ -286,6 +294,107 @@ class DocumentFormattingTest(unittest.TestCase):
         text = _decode_process_output(b"ffmpeg: \xe2\x80\x9cinput\xe2\x80\x9d")
 
         self.assertIn("\u201cinput\u201d", text)
+
+    def test_video_probe_uses_shorter_video_stream_duration(self):
+        payload = {
+            "streams": [{"duration": "131.057"}],
+            "format": {"duration": "150.000"},
+        }
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(payload).encode("utf-8"),
+            stderr=b"",
+        )
+
+        with patch("app.videos.subprocess.run", return_value=completed) as runner:
+            duration = _probe_video_duration(Path("video.mp4"))
+
+        self.assertEqual(duration, 131.057)
+        command = runner.call_args.args[0]
+        self.assertIn("-select_streams", command)
+        self.assertIn("v:0", command)
+        self.assertIn("stream=duration:format=duration", command)
+
+    def test_video_frame_command_hides_banner_and_selects_video_stream(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+
+        with patch("app.videos.subprocess.run", return_value=completed) as runner:
+            _extract_frame(Path("video.mp4"), Path("frame.jpg"), 131.057)
+
+        command = runner.call_args.args[0]
+        self.assertIn("-hide_banner", command)
+        self.assertEqual(command[command.index("-loglevel") + 1], "error")
+        self.assertEqual(command[command.index("-map") + 1], "0:v:0")
+
+    def test_video_frame_extraction_retries_nearby_timestamp(self):
+        attempts = []
+
+        def fake_extract_frame(video_path, destination, timestamp):
+            attempts.append(timestamp)
+            if timestamp == 2.55:
+                raise _VideoFrameCommandError("当前采样点解码失败")
+            destination.write_bytes(b"jpeg")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with (
+                patch("app.videos._probe_video_duration", return_value=5.2),
+                patch("app.videos._extract_frame", side_effect=fake_extract_frame),
+            ):
+                frames, selection = extract_video_frames(
+                    root / "video.mp4",
+                    root / "frames",
+                    max_frames=3,
+                )
+
+        self.assertEqual(len(frames), 3)
+        self.assertIn(2.55, attempts)
+        self.assertIn(2.05, attempts)
+        self.assertEqual(selection["fallback_frame_count"], 1)
+        self.assertEqual(selection["skipped_frame_count"], 0)
+        self.assertIn(2.05, selection["selected_timestamps"])
+
+    def test_video_frame_extraction_skips_one_isolated_bad_sample(self):
+        def fake_extract_frame(video_path, destination, timestamp):
+            if 1.5 <= timestamp <= 3.6:
+                raise _VideoFrameCommandError("局部视频数据损坏")
+            destination.write_bytes(b"jpeg")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with (
+                patch("app.videos._probe_video_duration", return_value=5.2),
+                patch("app.videos._extract_frame", side_effect=fake_extract_frame),
+            ):
+                frames, selection = extract_video_frames(
+                    root / "video.mp4",
+                    root / "frames",
+                    max_frames=3,
+                )
+
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(selection["skipped_frame_count"], 1)
+        self.assertEqual(selection["skipped_timestamps"], [2.55])
+
+    def test_video_frame_extraction_rejects_insufficient_coverage(self):
+        def fake_extract_frame(video_path, destination, timestamp):
+            if timestamp < 4.0:
+                raise _VideoFrameCommandError("视频大范围无法解码")
+            destination.write_bytes(b"jpeg")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with (
+                patch("app.videos._probe_video_duration", return_value=5.2),
+                patch("app.videos._extract_frame", side_effect=fake_extract_frame),
+            ):
+                with self.assertRaisesRegex(VideoFrameExtractionError, "仅成功抽取 1/3 帧"):
+                    extract_video_frames(
+                        root / "video.mp4",
+                        root / "frames",
+                        max_frames=3,
+                    )
 
 
 def _write_docx_with_inline_image(path: Path):

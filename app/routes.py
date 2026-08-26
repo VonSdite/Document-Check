@@ -3066,6 +3066,14 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
         _remove_directory(frame_dir)
         flash(f"视频抽帧失败：{exc}", "error")
         return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
+    if frame_selection.get("fallback_frame_count") or frame_selection.get("skipped_frame_count"):
+        current_app.logger.warning(
+            "视频抽帧启用容错 file=%s fallback=%s skipped=%s skipped_timestamps=%s",
+            original_filename,
+            frame_selection.get("fallback_frame_count", 0),
+            frame_selection.get("skipped_frame_count", 0),
+            frame_selection.get("skipped_timestamps", []),
+        )
     if not frames:
         _remove_uploaded_file(destination)
         _remove_directory(frame_dir)

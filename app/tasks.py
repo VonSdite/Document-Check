@@ -1680,6 +1680,9 @@ def _document_text_for_video_batch(document_text: str, frame_items: list[dict], 
             selection_lines.append(f"- 视频时长：{duration} 秒")
         if frame_count is not None:
             selection_lines.append(f"- 总抽帧数：{frame_count}")
+        skipped_frame_count = int(selection.get("skipped_frame_count") or 0)
+        if skipped_frame_count:
+            selection_lines.append(f"- 已跳过无法解码的采样点：{skipped_frame_count}")
         if selection.get("strategy"):
             selection_lines.append(f"- 抽帧策略：{selection.get('strategy')}")
 
