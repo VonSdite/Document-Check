@@ -12,7 +12,12 @@ from openpyxl import Workbook
 from app.common_terms import COMMON_TERMS_CHECK_CODE
 from app.db import get_db, init_db, now_text, set_setting
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
-from app.task_types import CONSISTENCY_TASK_TYPE, IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
+from app.task_types import (
+    CONSISTENCY_TASK_TYPE,
+    IMAGE_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+    VIDEO_TASK_TYPE,
+)
 from app.tasks import (
     TaskScheduler,
     cleanup_task_file_cache,
@@ -750,6 +755,67 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("110 V", verified_inputs[0])
         merged = json.loads(results[0]["result"])
         self.assertEqual(merged["items"][0]["category"], "参数冲突")
+
+    def test_comparison_tasks_keep_full_text_instead_of_single_document_chunks(self):
+        db = get_db()
+        created_at = now_text()
+        document_text = (
+            "# 文档A：中文手册.pdf\n"
+            + ("中文内容。" * 350)
+            + "\n\n# 文档B：English Manual.pdf\n"
+            + ("English content. " * 140)
+        )
+        self.assertGreater(len(document_text), 3000)
+        self.assertLess(len(document_text), 5000)
+
+        for task_type, check_code, check_name in (
+            (CONSISTENCY_TASK_TYPE, "consistency-compare", "多文档内容对照"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "language-consistency-cross-lingual",
+                "跨语种内容一致性对比",
+            ),
+        ):
+            with self.subTest(task_type=task_type):
+                cursor = db.execute(
+                    """
+                    INSERT INTO tasks(
+                        task_type, ip, original_filename, stored_filename, file_type, file_size,
+                        checks_json, model_name, api_base, request_timeout, max_input_chars,
+                        status, progress, created_at, updated_at
+                    )
+                    VALUES (
+                        ?, '127.0.0.1', 'comparison.txt', 'comparison.txt', 'txt', 1,
+                        ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                        'running', 0, ?, ?
+                    )
+                    """,
+                    (task_type, json.dumps([1]), created_at, created_at),
+                )
+                db.commit()
+                task = db.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                calls = []
+
+                def fake_run_check(**kwargs):
+                    calls.append(kwargs)
+                    return "完整对照结果"
+
+                with patch("app.tasks.run_check", side_effect=fake_run_check):
+                    results = _run_check_items_concurrently(
+                        self.app,
+                        task,
+                        [{"code": check_code, "name": check_name, "prompt": "执行完整对照"}],
+                        document_text,
+                        max_workers=1,
+                        stream_trace_enabled=False,
+                    )
+
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0]["document_text"], document_text)
+                self.assertNotIn("long_document_chunk:", calls[0]["document_text"])
+                self.assertIn("# 文档A：", calls[0]["document_text"])
+                self.assertIn("# 文档B：", calls[0]["document_text"])
+                self.assertEqual(results[0]["result"], "完整对照结果")
 
     def test_sensitive_terms_check_uses_local_dictionary_without_llm(self):
         terms_path = Path(self.temp_dir.name) / "sensitive_terms.xlsx"

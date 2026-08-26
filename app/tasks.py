@@ -818,7 +818,10 @@ def _run_check_items_concurrently(
         _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
     local_check_codes = {SENSITIVE_TERMS_CHECK_CODE, COMMON_TERMS_CHECK_CODE}
-    if any(item.get("code") not in local_check_codes for item in check_items):
+    task_type = _task_value(task, "task_type") or DOCUMENT_TASK_TYPE
+    if task_type == DOCUMENT_TASK_TYPE and any(
+        item.get("code") not in local_check_codes for item in check_items
+    ):
         long_chunks, document_outline, long_chunk_chars = _long_document_execution_plan(
             document_text,
             task["max_input_chars"],
