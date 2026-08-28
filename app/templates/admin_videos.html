@@ -8,21 +8,21 @@
 <section class="page-title">
   <div>
     <h1>视频检查</h1>
-    <p>提取视频关键帧，检查安装调测过程与画面内容。</p>
+    <p>一次可上传多个视频，每个视频独立创建检查任务。</p>
   </div>
 </section>
 
-<form method="post" enctype="multipart/form-data" class="panel create-panel" data-require-checks="true" data-check-required-message="请至少选择一个视频检查项。" data-prevent-double-submit="true" data-submitting-label="正在创建..." data-submitting-message="正在上传并抽取视频关键帧，请勿重复提交。">
+<form method="post" enctype="multipart/form-data" class="panel create-panel" data-require-checks="true" data-check-required-message="请至少选择一个视频检查项。" data-prevent-double-submit="true" data-submitting-label="正在创建..." data-submitting-message="正在逐个上传并抽取视频关键帧，请勿重复提交。">
   <div class="panel-head compact-head">
     <h2>新建任务</h2>
   </div>
 
   <div class="quick-form-grid">
-    <div class="form-field">
+    <div class="form-field multi-file-field">
       <span class="field-label">视频</span>
       <span class="field-with-help">
         <label class="file-upload-control">
-          <input class="file-input" name="video" type="file" accept=".mp4,.mov,.mkv,.webm,.avi,.m4v" required>
+          <input class="file-input" name="video" type="file" accept=".mp4,.mov,.mkv,.webm,.avi,.m4v" multiple required>
           <span class="file-name">未选择文件</span>
           <span class="file-clear" role="button" tabindex="0" aria-label="清除文件">×</span>
           <span class="file-button" aria-hidden="true">
@@ -32,8 +32,9 @@
             </svg>
           </span>
         </label>
-        <span class="help-tip" tabindex="0" data-tip="视频检查支持 mp4、mov、mkv、webm、avi、m4v，会先按时间轴抽取关键帧，再用多模态模型检查安装调测过程；单文件最大 {{ max_upload_mb }}MB。">?</span>
+        <span class="help-tip" tabindex="0" data-tip="支持一次选择多个 mp4、mov、mkv、webm、avi、m4v 视频，每个视频独立抽帧并创建任务；单次上传总大小上限为 {{ max_upload_mb }}MB。">?</span>
       </span>
+      <div class="selected-file-list" data-file-list hidden></div>
     </div>
     <label>
       多模态模型
@@ -49,7 +50,7 @@
     </label>
     <div class="submit-slot">
       <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
-      <div class="submit-progress" data-submit-progress hidden>正在上传并抽取视频关键帧，请勿重复提交。</div>
+      <div class="submit-progress" data-submit-progress hidden>正在逐个上传并抽取视频关键帧，请勿重复提交。</div>
     </div>
   </div>
 

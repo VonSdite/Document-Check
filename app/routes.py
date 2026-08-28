@@ -3020,12 +3020,9 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
 
 def create_video_task_for_identity(identity: UserIdentity, *, admin_created: bool):
     db = get_db()
-    upload = request.files.get("video")
-    if upload is None or not upload.filename:
-        flash("请选择要质检的视频。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
-    if not allowed_video_file(upload.filename):
-        flash("视频检查仅支持 mp4、mov、mkv、webm、avi、m4v 文件。", "error")
+    uploads = _selected_uploads("video")
+    if not uploads:
+        flash("请至少选择一个要质检的视频。", "error")
         return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
 
     check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
@@ -3043,17 +3040,56 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
         flash("请选择可用模型。", "error")
         return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
 
-    file_type = video_extension_of(upload.filename)
-    original_filename = _clean_upload_filename(upload.filename, file_type)
-    created_at = now_text()
-    stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
-    frame_dir = _image_output_dir_for_stored(stored_filename)
+    created_count = 0
+    failures = []
+    for upload in uploads:
+        filename = Path(str(upload.filename or "").replace("\\", "/")).name or "未命名视频"
+        error = _create_video_task_from_upload(
+            db,
+            upload,
+            identity,
+            model,
+            check_ids,
+            check_snapshots,
+        )
+        if error:
+            failures.append((filename, error))
+        else:
+            created_count += 1
+
+    if created_count:
+        flash(f"已创建 {created_count} 个视频检查任务。", "success")
+    if failures:
+        flash(_video_task_failure_summary(failures), "error")
+    return redirect(url_for(_task_list_endpoint(admin_created, VIDEO_TASK_TYPE)))
+
+
+def _create_video_task_from_upload(
+    db,
+    upload,
+    identity: UserIdentity,
+    model: dict,
+    check_ids: list[int],
+    check_snapshots: list[dict],
+) -> str | None:
+    upload_filename = Path(str(upload.filename or "").replace("\\", "/")).name or "未命名视频"
+    if not allowed_video_file(upload_filename):
+        return "不是支持的视频类型，仅支持 mp4、mov、mkv、webm、avi、m4v 文件。"
+
+    file_type = video_extension_of(upload_filename)
+    original_filename = _clean_upload_filename(upload_filename, file_type)
+    try:
+        created_at = now_text()
+        stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
+        frame_dir = _image_output_dir_for_stored(stored_filename)
+    except Exception:
+        current_app.logger.exception("准备视频检查上传路径失败 file=%s", original_filename)
+        return "视频上传准备失败，请稍后再试。"
     try:
         file_size = _save_uploaded_file(upload, destination)
     except Exception:
-        current_app.logger.exception("保存视频检查文件失败")
-        flash("视频上传失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
+        current_app.logger.exception("保存视频检查文件失败 file=%s", original_filename)
+        return "视频上传失败，请稍后再试。"
 
     try:
         frames, frame_selection = extract_video_frames(
@@ -3064,8 +3100,12 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
     except DocumentReadError as exc:
         _remove_uploaded_file(destination)
         _remove_directory(frame_dir)
-        flash(f"视频抽帧失败：{exc}", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
+        return f"视频抽帧失败：{exc}"
+    except Exception:
+        _remove_uploaded_file(destination)
+        _remove_directory(frame_dir)
+        current_app.logger.exception("视频抽帧异常 file=%s", original_filename)
+        return "视频抽帧失败，请稍后再试。"
     if frame_selection.get("fallback_frame_count") or frame_selection.get("skipped_frame_count"):
         current_app.logger.warning(
             "视频抽帧启用容错 file=%s fallback=%s skipped=%s skipped_timestamps=%s",
@@ -3077,34 +3117,32 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
     if not frames:
         _remove_uploaded_file(destination)
         _remove_directory(frame_dir)
-        flash("未能从视频中抽取可检查画面。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
+        return "未能从视频中抽取可检查画面。"
 
-    prepared_document_text = format_video_document_text(original_filename, frames, frame_selection)
-    if len(prepared_document_text) > model["max_input_chars"]:
-        _remove_uploaded_file(destination)
-        _remove_directory(frame_dir)
-        flash(f"视频帧上下文 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
-
-    document_meta = {
-        "source_video": {
-            "original_filename": original_filename,
-            "stored_filename": stored_filename,
-            "file_type": file_type,
-            "file_size": file_size,
-        },
-        "frame_selection": frame_selection,
-        "frames": [
-            {
-                **frame,
-                "relative_path": f"{frame_dir.name}/{frame['filename']}",
-            }
-            for frame in frames
-        ],
-    }
-    owner_name = identity.display_name or None
     try:
+        prepared_document_text = format_video_document_text(original_filename, frames, frame_selection)
+        if len(prepared_document_text) > model["max_input_chars"]:
+            _remove_uploaded_file(destination)
+            _remove_directory(frame_dir)
+            return f"视频帧上下文 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。"
+
+        document_meta = {
+            "source_video": {
+                "original_filename": original_filename,
+                "stored_filename": stored_filename,
+                "file_type": file_type,
+                "file_size": file_size,
+            },
+            "frame_selection": frame_selection,
+            "frames": [
+                {
+                    **frame,
+                    "relative_path": f"{frame_dir.name}/{frame['filename']}",
+                }
+                for frame in frames
+            ],
+        }
+        owner_name = identity.display_name or None
         db.execute(
             """
             INSERT INTO tasks(
@@ -3149,10 +3187,19 @@ def create_video_task_for_identity(identity: UserIdentity, *, admin_created: boo
         db.rollback()
         _remove_uploaded_file(destination)
         _remove_directory(frame_dir)
-        current_app.logger.exception("创建视频检查任务失败")
-        flash("创建视频检查任务失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
-    return redirect(url_for(_task_list_endpoint(admin_created, VIDEO_TASK_TYPE)))
+        current_app.logger.exception("创建视频检查任务失败 file=%s", original_filename)
+        return "创建视频检查任务失败，请稍后再试。"
+    return None
+
+
+def _video_task_failure_summary(failures: list[tuple[str, str]], max_items: int = 5) -> str:
+    details = []
+    for filename, error in failures[:max_items]:
+        compact_error = _compact_user_error(error, limit=240) or "处理失败"
+        details.append(f"“{filename}”：{compact_error}")
+    omitted_count = len(failures) - len(details)
+    suffix = f"；另有 {omitted_count} 个失败视频未展开" if omitted_count > 0 else ""
+    return f"{len(failures)} 个视频未创建：" + "；".join(details) + suffix
 
 
 def create_consistency_task_for_identity(identity: UserIdentity, *, admin_created: bool):

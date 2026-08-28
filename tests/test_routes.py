@@ -2050,6 +2050,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(any("内容完整性检查" in name for name in check_names))
         self.assertFalse(any("错别字检查" in name for name in check_names))
 
+    def test_video_task_forms_allow_multiple_uploads(self):
+        self._configure_provider()
+
+        for route in ("/videos", "/admin/videos"):
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                upload = _required_tag(soup.find("input", {"name": "video"}))
+                self.assertTrue(upload.has_attr("multiple"))
+                field = _required_tag(upload.find_parent(class_="multi-file-field"))
+                self.assertIsNotNone(field.select_one("[data-file-list]"))
+                self.assertIn("每个视频独立创建检查任务", soup.get_text(" ", strip=True))
+
     def test_create_task_saves_check_snapshot_and_extracted_text(self):
         model_id = self._configure_provider()
         with self.app.app_context():
@@ -2460,6 +2474,132 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_create_video_tasks_creates_one_task_per_uploaded_video(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+            ).fetchone()
+
+        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            frame_path = output_dir / "0001_t000001000.jpg"
+            frame_path.write_bytes(_TINY_PNG)
+            return (
+                [
+                    {
+                        "id": "frame-0001",
+                        "filename": frame_path.name,
+                        "mime_type": "image/jpeg",
+                        "position": "00:01.000",
+                        "source": source_filename,
+                        "size_bytes": frame_path.stat().st_size,
+                        "timestamp_seconds": 1.0,
+                    }
+                ],
+                {
+                    "duration_seconds": 8.0,
+                    "selected_timestamps": [1.0],
+                    "max_frames": max_frames,
+                    "frame_count": 1,
+                    "strategy": "uniform-sampling",
+                },
+            )
+
+        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+            response = self.client.post(
+                "/videos",
+                data={
+                    "video": [
+                        (io.BytesIO(b"video-one"), "install-01.mp4"),
+                        (io.BytesIO(b"video-two"), "install-02.mov"),
+                    ],
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                },
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("已创建 2 个视频检查任务", response.get_data(as_text=True))
+        with self.app.app_context():
+            tasks = get_db().execute(
+                "SELECT original_filename, file_type, document_meta_json FROM tasks ORDER BY id ASC"
+            ).fetchall()
+            upload_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
+            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            frame_files = list(image_root.rglob("*.jpg"))
+
+        self.assertEqual([task["original_filename"] for task in tasks], ["install-01.mp4", "install-02.mov"])
+        self.assertEqual([task["file_type"] for task in tasks], ["mp4", "mov"])
+        self.assertEqual(len(upload_files), 2)
+        self.assertEqual(len(frame_files), 2)
+        metas = [json.loads(task["document_meta_json"]) for task in tasks]
+        self.assertEqual(
+            [meta["source_video"]["original_filename"] for meta in metas],
+            ["install-01.mp4", "install-02.mov"],
+        )
+
+    def test_create_video_tasks_keeps_successes_when_one_video_fails(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            item = get_db().execute(
+                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+            ).fetchone()
+
+        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if source_filename == "broken.mp4":
+                raise DocumentReadError("视频局部数据损坏")
+            frame_path = output_dir / "0001_t000001000.jpg"
+            frame_path.write_bytes(_TINY_PNG)
+            return (
+                [
+                    {
+                        "id": "frame-0001",
+                        "filename": frame_path.name,
+                        "mime_type": "image/jpeg",
+                        "position": "00:01.000",
+                        "source": source_filename,
+                        "size_bytes": frame_path.stat().st_size,
+                        "timestamp_seconds": 1.0,
+                    }
+                ],
+                {"duration_seconds": 8.0, "frame_count": 1, "max_frames": max_frames},
+            )
+
+        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+            response = self.client.post(
+                "/videos",
+                data={
+                    "video": [
+                        (io.BytesIO(b"good-video"), "good.mp4"),
+                        (io.BytesIO(b"broken-video"), "broken.mp4"),
+                    ],
+                    "checks": [str(item["id"])],
+                    "model_id": model_id,
+                },
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("已创建 1 个视频检查任务", html)
+        self.assertIn("1 个视频未创建", html)
+        self.assertIn("broken.mp4", html)
+        self.assertIn("视频局部数据损坏", html)
+        with self.app.app_context():
+            tasks = get_db().execute("SELECT original_filename FROM tasks").fetchall()
+            upload_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
+            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            frame_files = list(image_root.rglob("*.jpg")) if image_root.exists() else []
+
+        self.assertEqual([task["original_filename"] for task in tasks], ["good.mp4"])
+        self.assertEqual(len(upload_files), 1)
+        self.assertEqual(len(frame_files), 1)
 
     def test_create_video_task_removes_files_when_database_insert_fails(self):
         model_id = self._configure_provider()
