@@ -88,6 +88,8 @@ TASK_FILE_CLEANUP_INTERVAL_SECONDS = 3600
 TASK_FILE_CLEANUP_BATCH_SIZE = 100
 TASK_LEASE_SECONDS = 90
 TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
+STREAM_SNAPSHOT_INTERVAL_SECONDS = 5.0
+STREAM_SNAPSHOT_MIN_CHAR_GROWTH = 256
 IMAGE_PAGE_CHECK_CODES = {
     "image-text-correspondence",
     "image-ui-step-consistency",
@@ -178,6 +180,12 @@ class TaskScheduler:
                 (now, now),
             )
             recovered_count = max(0, recovered.rowcount)
+            db.execute(
+                """
+                DELETE FROM task_live_results
+                WHERE task_id IN (SELECT id FROM tasks WHERE status != 'running')
+                """
+            )
 
             global_limit = max(1, _int_setting("global_concurrency", 3))
             user_limit = max(1, _int_setting("user_concurrency", 1))
@@ -371,6 +379,8 @@ class TaskScheduler:
                         claim_token,
                     ),
                 )
+                if completed.rowcount == 1:
+                    db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task_id,))
                 db.commit()
                 if completed.rowcount == 1:
                     if failed_results:
@@ -938,12 +948,16 @@ def _run_check_items_concurrently(
                 total,
             )
             last_stream_write = 0.0
+            last_stream_chars = 0
             def save_partial(content: str, summary: str, *, force: bool = False):
-                nonlocal last_stream_write
+                nonlocal last_stream_write, last_stream_chars
                 content = content.strip()
                 now = time.monotonic()
-                if not force and content and now - last_stream_write < 1.2:
-                    return
+                if not force and content and last_stream_write:
+                    if now - last_stream_write < STREAM_SNAPSHOT_INTERVAL_SECONDS:
+                        return
+                    if abs(len(content) - last_stream_chars) < STREAM_SNAPSHOT_MIN_CHAR_GROWTH:
+                        return
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
                 with result_lock:
@@ -958,6 +972,7 @@ def _run_check_items_concurrently(
                         partial_by_code.pop(item["code"], None)
 
                 last_stream_write = now
+                last_stream_chars = len(content)
                 if not content and not had_partial:
                     return
                 save_snapshot(db, summary, current_progress())
@@ -1232,13 +1247,17 @@ def _run_image_check_items_concurrently(
             )
             batch_results_by_code = {item["code"]: [] for item in items}
             last_stream_write = 0.0
+            last_stream_chars = 0
 
             def save_partial(current_batch: dict | None, content: str, summary: str, *, force: bool = False):
-                nonlocal last_stream_write
+                nonlocal last_stream_write, last_stream_chars
                 content = content.strip()
                 now = time.monotonic()
-                if not force and content and now - last_stream_write < 1.2:
-                    return
+                if not force and content and last_stream_write:
+                    if now - last_stream_write < STREAM_SNAPSHOT_INTERVAL_SECONDS:
+                        return
+                    if abs(len(content) - last_stream_chars) < STREAM_SNAPSHOT_MIN_CHAR_GROWTH:
+                        return
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
 
@@ -1263,6 +1282,7 @@ def _run_image_check_items_concurrently(
                             partial_by_code.pop(item["code"], None)
 
                 last_stream_write = now
+                last_stream_chars = len(content)
                 save_snapshot(db, summary, current_progress())
 
             network = outbound_network_config()
@@ -1537,13 +1557,17 @@ def _run_video_check_items_concurrently(
             for group_index, items in enumerate(check_groups, start=1):
                 batch_results_by_code = {item["code"]: [] for item in items}
                 last_stream_write = 0.0
+                last_stream_chars = 0
 
                 def save_partial(current_batch: dict | None, content: str, summary: str, *, force: bool = False):
-                    nonlocal last_stream_write
+                    nonlocal last_stream_write, last_stream_chars
                     content = content.strip()
                     now = time.monotonic()
-                    if not force and content and now - last_stream_write < 1.2:
-                        return
+                    if not force and content and last_stream_write:
+                        if now - last_stream_write < STREAM_SNAPSHOT_INTERVAL_SECONDS:
+                            return
+                        if abs(len(content) - last_stream_chars) < STREAM_SNAPSHOT_MIN_CHAR_GROWTH:
+                            return
                     if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                         raise TaskCanceled
 
@@ -1567,6 +1591,7 @@ def _run_video_check_items_concurrently(
                                 partial_by_code.pop(item["code"], None)
 
                     last_stream_write = now
+                    last_stream_chars = len(content)
                     save_snapshot(db, summary, current_progress())
 
                 app.logger.info(
@@ -3464,21 +3489,47 @@ def _save_intermediate_results(
     progress: int,
     claim_token: str | None = None,
 ):
+    updated_at = now_text()
     db.execute(
         """
         UPDATE tasks
-        SET result_json = ?,
-            summary = ?,
+        SET summary = ?,
             progress = MAX(progress, ?),
             updated_at = ?
         WHERE id = ? AND status = 'running'
           AND (? IS NULL OR claim_token = ?)
         """,
         (
+            summary,
+            progress,
+            updated_at,
+            task_id,
+            claim_token,
+            claim_token,
+        ),
+    )
+    db.execute(
+        """
+        INSERT INTO task_live_results(task_id, result_json, summary, progress, updated_at)
+        SELECT ?, ?, ?, ?, ?
+        WHERE EXISTS (
+            SELECT 1
+            FROM tasks
+            WHERE id = ? AND status = 'running'
+              AND (? IS NULL OR claim_token = ?)
+        )
+        ON CONFLICT(task_id) DO UPDATE SET
+            result_json = excluded.result_json,
+            summary = excluded.summary,
+            progress = MAX(task_live_results.progress, excluded.progress),
+            updated_at = excluded.updated_at
+        """,
+        (
+            task_id,
             json.dumps(results, ensure_ascii=False),
             summary,
             progress,
-            now_text(),
+            updated_at,
             task_id,
             claim_token,
             claim_token,
@@ -3522,7 +3573,7 @@ def _progress_heartbeat(
 
 
 def _mark_canceled(db, task_id: int, claim_token: str | None = None):
-    db.execute(
+    canceled = db.execute(
         """
         UPDATE tasks
         SET status = 'canceled',
@@ -3537,6 +3588,8 @@ def _mark_canceled(db, task_id: int, claim_token: str | None = None):
         """,
         (now_text(), now_text(), task_id, claim_token, claim_token),
     )
+    if canceled.rowcount == 1:
+        db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task_id,))
     db.commit()
 
 
@@ -3549,9 +3602,11 @@ def _mark_failed(
 ):
     existing = db.execute(
         """
-        SELECT result_json, summary
+        SELECT COALESCE(live.result_json, tasks.result_json) AS result_json,
+               COALESCE(live.summary, tasks.summary) AS summary
         FROM tasks
-        WHERE id = ? AND (? IS NULL OR claim_token = ?)
+        LEFT JOIN task_live_results live ON live.task_id = tasks.id
+        WHERE tasks.id = ? AND (? IS NULL OR tasks.claim_token = ?)
         """,
         (task_id, claim_token, claim_token),
     ).fetchone()
@@ -3560,7 +3615,7 @@ def _mark_failed(
     if results:
         result_json = json.dumps(results, ensure_ascii=False)
         summary = _build_summary(results)
-    db.execute(
+    failed = db.execute(
         """
         UPDATE tasks
         SET status = 'failed',
@@ -3586,6 +3641,8 @@ def _mark_failed(
             claim_token,
         ),
     )
+    if failed.rowcount == 1:
+        db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task_id,))
     db.commit()
 
 

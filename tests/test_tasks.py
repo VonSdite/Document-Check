@@ -33,8 +33,10 @@ from app.tasks import (
     _merge_video_batch_reports,
     _run_combined_multimodal_check_with_repair,
     _run_check_items_concurrently,
+    _save_intermediate_results,
     _split_combined_check_output,
     _split_combined_structured_output,
+    _mark_failed,
 )
 
 
@@ -289,6 +291,56 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIsNone(tasks[failed_task_id]["api_key"])
         self.assertEqual(tasks[canceled_task_id]["status"], "canceled")
         self.assertIsNone(tasks[canceled_task_id]["api_key"])
+
+    def test_intermediate_results_use_live_table_without_invalidating_report_cache(self):
+        task_id = self._insert_scheduler_task(status="running", claim_token="live-claim")
+        db = get_db()
+        db.execute(
+            """
+            INSERT INTO task_report_stats(task_id, source_updated_at, suppression_version, updated_at)
+            VALUES (?, '2026-08-29 10:00:00', '0:0:', '2026-08-29 10:00:00')
+            """,
+            (task_id,),
+        )
+        db.commit()
+        snapshot = [{"code": "typo", "name": "错别字检查", "result": "实时结果"}]
+
+        _save_intermediate_results(db, task_id, snapshot, "正在检查", 35, "live-claim")
+
+        task = db.execute(
+            "SELECT result_json, summary, progress FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        live = db.execute(
+            "SELECT result_json, summary, progress FROM task_live_results WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        cached = db.execute(
+            "SELECT task_id FROM task_report_stats WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertIsNone(task["result_json"])
+        self.assertEqual(task["summary"], "正在检查")
+        self.assertEqual(task["progress"], 35)
+        self.assertEqual(json.loads(live["result_json"]), snapshot)
+        self.assertEqual(live["summary"], "正在检查")
+        self.assertEqual(live["progress"], 35)
+        self.assertIsNotNone(cached)
+
+        _mark_failed(db, task_id, "模型服务中断", claim_token="live-claim")
+
+        failed = db.execute(
+            "SELECT status, result_json, summary FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        remaining_live = db.execute(
+            "SELECT task_id FROM task_live_results WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(json.loads(failed["result_json"]), snapshot)
+        self.assertEqual(failed["summary"], "正在检查")
+        self.assertIsNone(remaining_live)
 
     def test_task_uses_submission_config_snapshot_after_provider_changes(self):
         db = get_db()

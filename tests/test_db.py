@@ -124,6 +124,18 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("force_disable_thinking", model_columns)
         self.assertEqual(model_columns["force_disable_thinking"]["dflt_value"], "0")
 
+    def test_task_live_results_table_exists(self):
+        db = get_db()
+        columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(task_live_results)").fetchall()
+        }
+
+        self.assertEqual(
+            columns,
+            {"task_id", "result_json", "summary", "progress", "updated_at"},
+        )
+
     def test_init_db_clears_only_finished_task_api_key_snapshots(self):
         db = get_db()
         now = now_text()

@@ -3365,10 +3365,13 @@ def _get_task_or_404(task_id: int):
     task = get_db().execute(
         f"""
         SELECT t.*,
+               live.result_json AS live_result_json,
+               live.summary AS live_summary,
                {owner_name_expr} AS current_owner_name,
                {owner_name_expr} AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
+        LEFT JOIN task_live_results live ON live.task_id = t.id
         {ip_username_join}
         WHERE {' AND '.join(clauses)}
         """,
@@ -3376,7 +3379,7 @@ def _get_task_or_404(task_id: int):
     ).fetchone()
     if task is None:
         abort(404)
-    return task
+    return _task_with_live_result(task)
 
 
 def _get_user_task(task_id: int):
@@ -3384,17 +3387,32 @@ def _get_user_task(task_id: int):
     task = get_db().execute(
         """
         SELECT t.*,
+               live.result_json AS live_result_json,
+               live.summary AS live_summary,
                COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
                COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
+        LEFT JOIN task_live_results live ON live.task_id = t.id
         WHERE t.id = ? AND COALESCE(t.owner_subject, 'ip:' || t.ip) = ?
         """,
         (task_id, identity.subject),
     ).fetchone()
     if task is None:
         abort(404)
-    return task
+    return _task_with_live_result(task)
+
+
+def _task_with_live_result(task) -> dict:
+    value = dict(task)
+    if value.get("status") == "running":
+        if value.get("live_result_json") is not None:
+            value["result_json"] = value["live_result_json"]
+        if value.get("live_summary") is not None:
+            value["summary"] = value["live_summary"]
+    value.pop("live_result_json", None)
+    value.pop("live_summary", None)
+    return value
 
 
 def _get_user_task_or_local_admin(task_id: int):
@@ -3407,7 +3425,7 @@ def _cancel_task(task):
     if task["status"] in {"completed", "partial", "failed", "canceled"}:
         return
     db = get_db()
-    db.execute(
+    canceled = db.execute(
         """
         UPDATE tasks
         SET cancel_requested = 1,
@@ -3422,6 +3440,8 @@ def _cancel_task(task):
         """,
         (now_text(), now_text(), task["id"]),
     )
+    if canceled.rowcount == 1:
+        db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
     db.commit()
 
 

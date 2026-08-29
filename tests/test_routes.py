@@ -2744,6 +2744,30 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("0001_page001-image001.png", exported_html)
         self.assertNotIn("0001_page001-screenshot.png", exported_html)
 
+    def test_running_task_detail_uses_live_result_snapshot(self):
+        task_id = self._insert_task(status="running")
+        live_result = [
+            {
+                "code": "typo",
+                "name": "错别字检查",
+                "result": "这是后台实时检查结果",
+            }
+        ]
+        with self.app.app_context():
+            get_db().execute(
+                """
+                INSERT INTO task_live_results(task_id, result_json, summary, progress, updated_at)
+                VALUES (?, ?, '正在检查', 45, '2026-08-29 12:00:00')
+                """,
+                (task_id, json.dumps(live_result, ensure_ascii=False)),
+            )
+            get_db().commit()
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("这是后台实时检查结果", detail.get_data(as_text=True))
+
     def test_task_detail_renders_report_items_and_counts(self):
         with self.app.app_context():
             now = "2026-05-23 12:00:00"
