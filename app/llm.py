@@ -1,7 +1,10 @@
 import json
 import logging
+import queue
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Callable, Optional
 from urllib.parse import urlsplit
 
@@ -29,6 +32,8 @@ _REPEAT_WINDOW_SIZES = (16, 32, 64, 128, 256)
 _REPEAT_WINDOW_COUNT = 3
 _MAX_RETRIES = 2
 _CONTENT_CALLBACK_INTERVAL = 0.25
+_HTTP_SESSION_POOL_SIZE = 16
+_HTTP_CONNECTION_POOL_SIZE = 16
 _JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
 MULTIMODAL_OUTPUT_CONTRACT_STRUCTURED_REPORT = "structured_report_json"
 MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK = "multi_check_json"
@@ -178,6 +183,100 @@ class _StreamParseError(LLMError):
 
 class _StreamOutputLimitError(LLMError):
     pass
+
+
+class _HTTPSessionPool:
+    def __init__(self, proxy_mode: str, max_size: int = _HTTP_SESSION_POOL_SIZE):
+        self.proxy_mode = proxy_mode
+        self.max_size = max(1, int(max_size))
+        self.sessions: queue.LifoQueue = queue.LifoQueue(maxsize=self.max_size)
+        self.lock = threading.Lock()
+        self.created = 0
+
+    def acquire(self):
+        try:
+            return self.sessions.get_nowait()
+        except queue.Empty:
+            with self.lock:
+                if self.created < self.max_size:
+                    self.created += 1
+                    try:
+                        return _create_http_session(self.proxy_mode)
+                    except Exception:
+                        self.created -= 1
+                        raise
+            return self.sessions.get()
+
+    def release(self, session):
+        cookies = getattr(session, "cookies", None)
+        clear_cookies = getattr(cookies, "clear", None)
+        if callable(clear_cookies):
+            clear_cookies()
+        self.sessions.put(session)
+
+    def close(self):
+        while True:
+            try:
+                session = self.sessions.get_nowait()
+            except queue.Empty:
+                return
+            close = getattr(session, "close", None)
+            if callable(close):
+                close()
+
+
+_http_session_pools: dict[tuple[str, str, str], _HTTPSessionPool] = {}
+_http_session_pools_lock = threading.Lock()
+
+
+def _create_http_session(proxy_mode: str):
+    session = requests.Session()
+    session.trust_env = proxy_mode == "system"
+    mount = getattr(session, "mount", None)
+    if callable(mount):
+        for prefix in ("http://", "https://"):
+            mount(
+                prefix,
+                requests.adapters.HTTPAdapter(
+                    pool_connections=_HTTP_CONNECTION_POOL_SIZE,
+                    pool_maxsize=_HTTP_CONNECTION_POOL_SIZE,
+                    max_retries=0,
+                    pool_block=True,
+                ),
+            )
+    return session
+
+
+def _http_session_pool(endpoint: str, proxy_mode: str, proxy: Optional[str]) -> _HTTPSessionPool:
+    normalized_mode = str(proxy_mode or "direct").strip().lower() or "direct"
+    normalized_proxy = str(proxy or "").strip() if normalized_mode == "custom" else ""
+    parsed_endpoint = urlsplit(str(endpoint or ""))
+    endpoint_origin = f"{parsed_endpoint.scheme.lower()}://{parsed_endpoint.netloc.lower()}"
+    key = (endpoint_origin, normalized_mode, normalized_proxy)
+    with _http_session_pools_lock:
+        pool = _http_session_pools.get(key)
+        if pool is None:
+            pool = _HTTPSessionPool(normalized_mode)
+            _http_session_pools[key] = pool
+        return pool
+
+
+@contextmanager
+def _pooled_http_session(endpoint: str, proxy_mode: str, proxy: Optional[str]):
+    pool = _http_session_pool(endpoint, proxy_mode, proxy)
+    session = pool.acquire()
+    try:
+        yield session
+    finally:
+        pool.release(session)
+
+
+def _reset_http_session_pools():
+    with _http_session_pools_lock:
+        pools = list(_http_session_pools.values())
+        _http_session_pools.clear()
+    for pool in pools:
+        pool.close()
 
 
 def run_check(
@@ -709,8 +808,7 @@ def test_model_connection(
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     try:
-        with requests.Session() as session:
-            session.trust_env = proxy_mode == "system"
+        with _pooled_http_session(endpoint, proxy_mode, proxy) as session:
             request_kwargs = {
                 "headers": headers,
                 "timeout": request_timeout,
@@ -719,22 +817,22 @@ def test_model_connection(
             if proxy_mode == "custom":
                 if not proxy:
                     raise LLMError("自定义代理模式需要填写代理地址")
-                session.trust_env = False
                 request_kwargs["proxies"] = {"http": proxy, "https": proxy}
-            elif proxy_mode != "system":
-                session.trust_env = False
 
             response = session.post(endpoint, json=payload, **request_kwargs)
-            _force_utf8_response(response)
-            _raise_for_http_error(response)
             try:
-                data = response.json()
-            except ValueError:
-                return "模型服务已返回 200，但响应不是 JSON。"
-            service_error = _extract_service_error(data)
-            if service_error:
-                raise LLMError(f"模型服务返回错误：{service_error}")
-            return "模型连通性测试通过。"
+                _force_utf8_response(response)
+                _raise_for_http_error(response)
+                try:
+                    data = response.json()
+                except ValueError:
+                    return "模型服务已返回 200，但响应不是 JSON。"
+                service_error = _extract_service_error(data)
+                if service_error:
+                    raise LLMError(f"模型服务返回错误：{service_error}")
+                return "模型连通性测试通过。"
+            finally:
+                _close_response(response)
     except requests.ReadTimeout as exc:
         raise LLMError(f"模型服务测试超时：{request_timeout} 秒内没有返回结果") from exc
     except requests.RequestException as exc:
@@ -757,8 +855,7 @@ def _run_check_attempt(
     stream_trace_enabled: bool,
 ) -> str:
     try:
-        with requests.Session() as session:
-            session.trust_env = proxy_mode == "system"
+        with _pooled_http_session(endpoint, proxy_mode, proxy) as session:
             request_kwargs = {
                 "headers": headers,
                 "timeout": request_timeout,
@@ -767,10 +864,7 @@ def _run_check_attempt(
             if proxy_mode == "custom":
                 if not proxy:
                     raise LLMError("自定义代理模式需要填写代理地址")
-                session.trust_env = False
                 request_kwargs["proxies"] = {"http": proxy, "https": proxy}
-            elif proxy_mode != "system":
-                session.trust_env = False
 
             stream_payload = dict(payload)
             stream_payload["stream"] = True

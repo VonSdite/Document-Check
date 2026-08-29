@@ -44,6 +44,12 @@ class FakeSession:
 
 
 class LLMResponseParsingTest(unittest.TestCase):
+    def setUp(self):
+        llm._reset_http_session_pools()
+
+    def tearDown(self):
+        llm._reset_http_session_pools()
+
     def assert_all_thinking_disable_flags(self, payload):
         self.assertIs(payload["enable_thinking"], False)
         self.assertEqual(payload["thinking"], {"type": "disabled"})
@@ -67,6 +73,47 @@ class LLMResponseParsingTest(unittest.TestCase):
             llm._chat_completions_endpoint("http://example.test/v1/chat/completions/"),
             "http://example.test/v1/chat/completions",
         )
+
+    def test_reuses_http_session_between_model_requests(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"第一次"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"第二次"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session) as session_factory:
+            first = llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档一",
+            )
+            second = llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档二",
+            )
+
+        self.assertEqual(first, "第一次")
+        self.assertEqual(second, "第二次")
+        self.assertEqual(session_factory.call_count, 1)
+        self.assertEqual(len(fake_session.calls), 2)
 
     def test_document_check_prompt_warns_about_extracted_line_break_spaces(self):
         fake_session = FakeSession(

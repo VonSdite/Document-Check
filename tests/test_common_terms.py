@@ -1,13 +1,67 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
+from app import common_terms, sensitive_terms
 from app.common_terms import CommonTermRule, build_common_terms_report, load_common_terms
+from app.sensitive_terms import load_sensitive_terms
+from app.term_cache import clear_term_file_cache
 
 
 class CommonTermsTest(unittest.TestCase):
+    def setUp(self):
+        clear_term_file_cache()
+
+    def tearDown(self):
+        clear_term_file_cache()
+
+    def test_term_files_are_cached_until_file_signature_changes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            common_path = Path(temp_dir) / "common_terms.csv"
+            common_path.write_text(
+                "常用词,常见错误/不推荐用法\n登录,登陆\n",
+                encoding="utf-8",
+            )
+            sensitive_path = Path(temp_dir) / "sensitive_terms.csv"
+            sensitive_path.write_text(
+                "不规范用语,规范用语\n黑名单,阻止名单\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    common_terms,
+                    "_load_csv_terms",
+                    wraps=common_terms._load_csv_terms,
+                ) as common_loader,
+                patch.object(
+                    sensitive_terms,
+                    "_load_csv_terms",
+                    wraps=sensitive_terms._load_csv_terms,
+                ) as sensitive_loader,
+            ):
+                first_common = load_common_terms(common_path)
+                first_common.clear()
+                second_common = load_common_terms(common_path)
+                load_sensitive_terms(sensitive_path)
+                load_sensitive_terms(sensitive_path)
+
+                self.assertEqual(common_loader.call_count, 1)
+                self.assertEqual(sensitive_loader.call_count, 1)
+                self.assertEqual(len(second_common), 1)
+
+                common_path.write_text(
+                    "常用词,常见错误/不推荐用法\n登录,登陆\n账户,帐号\n",
+                    encoding="utf-8",
+                )
+                changed_common = load_common_terms(common_path)
+
+                self.assertEqual(common_loader.call_count, 2)
+                self.assertEqual(len(changed_common), 2)
+
     def test_loads_workbook_and_splits_multiple_discouraged_terms(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "common_terms.xlsx"

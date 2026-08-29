@@ -7,6 +7,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 import xlrd
 
+from .term_cache import load_cached_terms
 from .term_locations import DocumentLocationIndex, TERM_LOCATIONS_PER_ISSUE, excerpt_for
 
 
@@ -90,6 +91,10 @@ def sensitive_terms_file_candidates(
 
 
 def load_sensitive_terms(path: Path) -> list[SensitiveTermRule]:
+    return load_cached_terms("sensitive", path, _load_sensitive_terms_uncached)
+
+
+def _load_sensitive_terms_uncached(path: Path) -> list[SensitiveTermRule]:
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
         return _load_openpyxl_terms(path)

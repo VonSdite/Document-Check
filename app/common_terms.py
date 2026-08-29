@@ -7,6 +7,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 import xlrd
 
+from .term_cache import load_cached_terms
 from .term_locations import DocumentLocationIndex, TERM_LOCATIONS_PER_ISSUE, excerpt_for
 from .text_language import TEXT_LANGUAGE_CHINESE, estimate_text_language, text_language_label
 
@@ -136,6 +137,10 @@ def common_terms_file_candidates(
 
 
 def load_common_terms(path: Path) -> list[CommonTermRule]:
+    return load_cached_terms("common", path, _load_common_terms_uncached)
+
+
+def _load_common_terms_uncached(path: Path) -> list[CommonTermRule]:
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
         return _load_openpyxl_terms(path)
