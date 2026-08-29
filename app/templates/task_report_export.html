@@ -115,6 +115,9 @@
             <h2>{{ result.name }}</h2>
           </div>
         </div>
+        {% if result.error %}
+        <div class="error-box report-error">本检查项执行失败：{{ result.error }}</div>
+        {% endif %}
         {% if result.report_items %}
         {% if result.result_summary %}
         <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>

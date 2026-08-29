@@ -377,15 +377,25 @@ class TaskScheduler:
                 if _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
 
+                failed_results = _failed_check_results(results)
+                successful_results = [result for result in results if not _check_result_failed(result)]
+                if failed_results and not successful_results:
+                    error = _failed_check_items_error(failed_results)
+                    self.app.logger.warning("任务全部检查项失败 task_id=%s error=%s", task_id, error)
+                    _mark_failed(db, task_id, error, results, claim_token)
+                    return
+
+                final_status = "partial" if failed_results else "completed"
                 summary = _build_summary(results)
+                error = _failed_check_items_error(failed_results) if failed_results else None
                 completed = db.execute(
                     """
                     UPDATE tasks
-                    SET status = 'completed',
+                    SET status = ?,
                         progress = 100,
                         result_json = ?,
                         summary = ?,
-                        error = NULL,
+                        error = ?,
                         api_key = NULL,
                         claim_token = NULL,
                         lease_expires_at = NULL,
@@ -395,8 +405,10 @@ class TaskScheduler:
                       AND (? IS NULL OR claim_token = ?)
                     """,
                     (
+                        final_status,
                         json.dumps(results, ensure_ascii=False),
                         summary,
+                        error,
                         now_text(),
                         now_text(),
                         task_id,
@@ -406,7 +418,15 @@ class TaskScheduler:
                 )
                 db.commit()
                 if completed.rowcount == 1:
-                    self.app.logger.info("任务完成 task_id=%s checks=%s", task_id, len(results))
+                    if failed_results:
+                        self.app.logger.warning(
+                            "任务部分完成 task_id=%s succeeded=%s failed=%s",
+                            task_id,
+                            len(successful_results),
+                            len(failed_results),
+                        )
+                    else:
+                        self.app.logger.info("任务完成 task_id=%s checks=%s", task_id, len(results))
                 else:
                     self.app.logger.warning("任务执行权已失效，忽略完成结果 task_id=%s", task_id)
             except TaskCanceled:
@@ -899,56 +919,86 @@ def _run_check_items_concurrently(
                     return
                 save_snapshot(db, summary, current_progress())
 
-            structured_report = None
-            if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
-                structured_report = _run_sensitive_terms_check(app, document_text, issue_output_limit)
-                content = format_sensitive_terms_report(structured_report)
-            elif item["code"] == COMMON_TERMS_CHECK_CODE:
-                structured_report = _run_common_terms_check(app, document_text, issue_output_limit)
-                content = format_common_terms_report(structured_report)
-            elif long_chunks:
-                if item["code"] == LONG_DOCUMENT_CONSISTENCY_CODE:
-                    content = _run_long_document_consistency_check(
-                        task=task,
-                        item=item,
-                        chunks=long_chunks,
-                        outline=document_outline,
-                        chunk_chars=long_chunk_chars,
-                        issue_output_limit=issue_output_limit,
-                        save_partial=save_partial,
-                        ensure_active=ensure_active,
-                        stream_trace_enabled=stream_trace_enabled,
-                    )
+            try:
+                structured_report = None
+                if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
+                    structured_report = _run_sensitive_terms_check(app, document_text, issue_output_limit)
+                    content = format_sensitive_terms_report(structured_report)
+                elif item["code"] == COMMON_TERMS_CHECK_CODE:
+                    structured_report = _run_common_terms_check(app, document_text, issue_output_limit)
+                    content = format_common_terms_report(structured_report)
+                elif long_chunks:
+                    if item["code"] == LONG_DOCUMENT_CONSISTENCY_CODE:
+                        content = _run_long_document_consistency_check(
+                            task=task,
+                            item=item,
+                            chunks=long_chunks,
+                            outline=document_outline,
+                            chunk_chars=long_chunk_chars,
+                            issue_output_limit=issue_output_limit,
+                            save_partial=save_partial,
+                            ensure_active=ensure_active,
+                            stream_trace_enabled=stream_trace_enabled,
+                        )
+                    else:
+                        content = _run_long_document_chunk_check(
+                            task=task,
+                            item=item,
+                            chunks=long_chunks,
+                            outline=document_outline,
+                            issue_output_limit=issue_output_limit,
+                            save_partial=save_partial,
+                            ensure_active=ensure_active,
+                            stream_trace_enabled=stream_trace_enabled,
+                        )
                 else:
-                    content = _run_long_document_chunk_check(
-                        task=task,
-                        item=item,
-                        chunks=long_chunks,
-                        outline=document_outline,
+                    network = outbound_network_config()
+                    content = run_check(
+                        api_base=task["api_base"],
+                        api_key=task["api_key"],
+                        proxy_mode=network["proxy_mode"],
+                        proxy=network["proxy"],
+                        ssl_verify=network["ssl_verify"],
+                        request_timeout=task["request_timeout"],
+                        model_name=task["model_name"],
+                        force_disable_thinking=_task_flag(task, "force_disable_thinking"),
+                        check_name=item["name"],
+                        prompt=item["prompt"],
+                        document_text=document_text,
                         issue_output_limit=issue_output_limit,
-                        save_partial=save_partial,
-                        ensure_active=ensure_active,
+                        on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
+                        task_id=task_id,
                         stream_trace_enabled=stream_trace_enabled,
                     )
-            else:
-                network = outbound_network_config()
-                content = run_check(
-                    api_base=task["api_base"],
-                    api_key=task["api_key"],
-                    proxy_mode=network["proxy_mode"],
-                    proxy=network["proxy"],
-                    ssl_verify=network["ssl_verify"],
-                    request_timeout=task["request_timeout"],
-                    model_name=task["model_name"],
-                    force_disable_thinking=_task_flag(task, "force_disable_thinking"),
-                    check_name=item["name"],
-                    prompt=item["prompt"],
-                    document_text=document_text,
-                    issue_output_limit=issue_output_limit,
-                    on_content=lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
-                    task_id=task_id,
-                    stream_trace_enabled=stream_trace_enabled,
+            except (LLMError, RuntimeError) as exc:
+                progress = mark_unit_completed()
+                error = str(exc).strip() or exc.__class__.__name__
+                with result_lock:
+                    partial_result = partial_by_code.pop(item["code"], None)
+                    result = dict(partial_result or {})
+                    result.update(
+                        {
+                            "code": item["code"],
+                            "name": item["name"],
+                            "error": error,
+                            "issue_output_limit": issue_output_limit,
+                        }
+                    )
+                    result.setdefault("result", "")
+                    completed_by_code[item["code"]] = result
+                    completed_count = len(completed_by_code)
+                save_snapshot(
+                    db,
+                    f"{item['name']}检查失败，已完成 {completed_count}/{total} 个检查项，继续检查其他项目。",
+                    progress,
                 )
+                app.logger.warning(
+                    "任务检查项失败，继续其他检查 task_id=%s item=%s error=%s",
+                    task_id,
+                    item["name"],
+                    error,
+                )
+                return result
             progress = mark_unit_completed()
 
             if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
@@ -3019,7 +3069,7 @@ def cleanup_expired_task_files(app) -> int:
         """
         SELECT *
         FROM tasks
-        WHERE status IN ('completed', 'failed', 'canceled')
+        WHERE status IN ('completed', 'partial', 'failed', 'canceled')
           AND source_files_cleaned_at IS NULL
           AND COALESCE(finished_at, updated_at, created_at) < ?
         ORDER BY COALESCE(finished_at, updated_at, created_at) ASC, id ASC
@@ -3058,7 +3108,7 @@ def task_file_cache_snapshot(app) -> dict:
         SELECT id, task_type, original_filename, stored_filename, document_meta_json,
                created_at, updated_at, finished_at
         FROM tasks
-        WHERE status IN ('completed', 'failed', 'canceled')
+        WHERE status IN ('completed', 'partial', 'failed', 'canceled')
           AND source_files_cleaned_at IS NULL
         """
     ).fetchall()
@@ -3117,7 +3167,7 @@ def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
             SELECT *
             FROM tasks
             WHERE id IN ({placeholders})
-              AND status IN ('completed', 'failed', 'canceled')
+              AND status IN ('completed', 'partial', 'failed', 'canceled')
               AND source_files_cleaned_at IS NULL
             """,
             tuple(normalized_ids),
@@ -3485,9 +3535,9 @@ def _mark_failed(
     ).fetchone()
     result_json = existing["result_json"] if existing else None
     summary = existing["summary"] if existing else None
-    if not result_json and results:
+    if results:
         result_json = json.dumps(results, ensure_ascii=False)
-        summary = f"已完成 {len(results)} 个检查项，后续检查失败。"
+        summary = _build_summary(results)
     db.execute(
         """
         UPDATE tasks
@@ -3518,5 +3568,32 @@ def _mark_failed(
 
 
 def _build_summary(results: list[dict]) -> str:
+    failed = _failed_check_results(results)
+    succeeded = [result for result in results if not _check_result_failed(result)]
+    if failed and succeeded:
+        failed_names = "、".join(str(item.get("name") or item.get("code") or "未命名检查项") for item in failed)
+        return f"已完成 {len(succeeded)}/{len(results)} 个检查项，{len(failed)} 个检查项失败：{failed_names}"
+    if failed:
+        failed_names = "、".join(str(item.get("name") or item.get("code") or "未命名检查项") for item in failed)
+        return f"{len(failed)} 个检查项全部失败：{failed_names}"
     names = "、".join(item["name"] for item in results)
     return f"已完成 {len(results)} 个检查项：{names}"
+
+
+def _check_result_failed(result: dict) -> bool:
+    return bool(str(result.get("error") or "").strip())
+
+
+def _failed_check_results(results: list[dict]) -> list[dict]:
+    return [result for result in results if _check_result_failed(result)]
+
+
+def _failed_check_items_error(results: list[dict]) -> str:
+    parts = []
+    for result in results:
+        name = str(result.get("name") or result.get("code") or "未命名检查项")
+        error = str(result.get("error") or "检查失败").strip()
+        if len(error) > 300:
+            error = f"{error[:297]}..."
+        parts.append(f"{name}：{error}")
+    return f"{len(parts)} 个检查项失败：" + "；".join(parts)

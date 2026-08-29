@@ -102,7 +102,7 @@
       <div class="metric"><span>全部</span><strong data-task-stat="tasks">{{ totals.tasks }}</strong></div>
       <div class="metric"><span>排队</span><strong data-task-stat="queued">{{ totals.queued }}</strong></div>
       <div class="metric"><span>检查中</span><strong data-task-stat="running">{{ totals.running }}</strong></div>
-      <div class="metric"><span>已完成</span><strong data-task-stat="completed">{{ totals.completed }}</strong></div>
+      <div class="metric"><span>已完成 / 部分完成</span><strong><span data-task-stat="completed">{{ totals.completed }}</span> / <span data-task-stat="partial">{{ totals.partial }}</span></strong></div>
       <div class="metric"><span>用户数</span><strong>{{ totals.users }}</strong></div>
     </div>
   </section>

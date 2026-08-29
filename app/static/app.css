@@ -2321,6 +2321,11 @@ body.table-column-resize-active * {
   color: var(--primary-strong);
 }
 
+.status-partial {
+  background: #fff4dd;
+  color: #9a5b00;
+}
+
 .status-failed {
   background: #fde8e4;
   color: var(--danger);

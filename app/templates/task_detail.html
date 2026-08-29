@@ -17,7 +17,7 @@
     </svg>
     <span>返回列表</span>
   </a>
-  {% if task.status == "completed" %}
+  {% if task.status in ["completed", "partial"] %}
   <div class="report-export-actions" aria-label="导出报告">
     <a class="primary-button report-export-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">
       <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -162,6 +162,9 @@
         <h2>{{ result.name }}</h2>
       </div>
     </div>
+    {% if result.error %}
+    <div class="error-box report-error">本检查项执行失败：{{ result.error }}</div>
+    {% endif %}
     {% if result.report_items %}
     {% if result.result_summary %}
     <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>

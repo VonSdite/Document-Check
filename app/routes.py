@@ -90,10 +90,11 @@ STATUS_LABELS = {
     "queued": "排队中",
     "running": "检查中",
     "completed": "已完成",
+    "partial": "部分完成",
     "failed": "失败",
     "canceled": "已取消",
 }
-DELETABLE_TASK_STATUSES = {"completed", "failed", "canceled"}
+DELETABLE_TASK_STATUSES = {"completed", "partial", "failed", "canceled"}
 TASKS_PER_PAGE = 20
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 TASK_FILE_RETENTION_DAYS_DEFAULT = 0
@@ -919,7 +920,8 @@ def register_routes(app):
                 COUNT(*) AS tasks,
                 COALESCE(SUM(CASE WHEN t.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
                 COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS running,
-                COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed
+                COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+                COALESCE(SUM(CASE WHEN t.status = 'partial' THEN 1 ELSE 0 END), 0) AS partial
             FROM tasks t
             WHERE t.task_type = ? AND {mode_clause}
             """,
@@ -927,7 +929,10 @@ def register_routes(app):
         ).fetchone()
         return {
             "active": bool(counts["queued"] or counts["running"]),
-            "counts": {key: int(counts[key] or 0) for key in ("tasks", "queued", "running", "completed")},
+            "counts": {
+                key: int(counts[key] or 0)
+                for key in ("tasks", "queued", "running", "completed", "partial")
+            },
             "tasks": [
                 {
                     "id": row["id"],
@@ -2449,6 +2454,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
             COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
             COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+            COALESCE(SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END), 0) AS partial,
             COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
             COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0) AS canceled
         FROM tasks
@@ -2555,6 +2561,7 @@ def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
             COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
             COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
             COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+            COALESCE(SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END), 0) AS partial,
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users
         FROM tasks
         WHERE task_type = ? AND {mode_clause}
@@ -3719,7 +3726,7 @@ def _get_user_task_or_local_admin(task_id: int):
 
 
 def _cancel_task(task):
-    if task["status"] in {"completed", "failed", "canceled"}:
+    if task["status"] in {"completed", "partial", "failed", "canceled"}:
         return
     db = get_db()
     db.execute(
@@ -3733,7 +3740,7 @@ def _cancel_task(task):
             lease_expires_at = NULL,
             updated_at = ?,
             finished_at = ?
-        WHERE id = ? AND status NOT IN ('completed', 'failed', 'canceled')
+        WHERE id = ? AND status NOT IN ('completed', 'partial', 'failed', 'canceled')
         """,
         (now_text(), now_text(), task["id"]),
     )
@@ -5465,7 +5472,7 @@ def _export_task_report_excel(task):
 
 def _import_task_report_excel(task, detail_endpoint: str):
     redirect_response = redirect(url_for(detail_endpoint, task_id=task["id"]))
-    if task["status"] != "completed":
+    if task["status"] not in {"completed", "partial"}:
         flash("任务尚未完成，暂不能回填报告标注。", "error")
         return redirect_response
 
@@ -5894,7 +5901,15 @@ def _pagination(page: int, total: int, per_page: int) -> dict:
 
 
 def _task_stats_for_where(where: str, params: tuple) -> dict:
-    stats = {"total": 0, "queued": 0, "running": 0, "completed": 0, "failed": 0, "canceled": 0}
+    stats = {
+        "total": 0,
+        "queued": 0,
+        "running": 0,
+        "completed": 0,
+        "partial": 0,
+        "failed": 0,
+        "canceled": 0,
+    }
     rows = get_db().execute(
         f"SELECT status, COUNT(*) AS total FROM tasks WHERE {where} GROUP BY status",
         params,

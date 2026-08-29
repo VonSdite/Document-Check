@@ -488,11 +488,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self._insert_task(task_type=IMAGE_TASK_TYPE, status="failed"),
             self._insert_task(task_type=IMAGE_TASK_TYPE, status="canceled", created_at="2026-05-01 10:01:00"),
             self._insert_task(task_type=IMAGE_TASK_TYPE, status="completed", created_at="2026-05-01 10:02:00"),
+            self._insert_task(task_type=IMAGE_TASK_TYPE, status="partial", created_at="2026-05-01 10:03:00"),
         ]
         queued_task_id = self._insert_task(
             task_type=IMAGE_TASK_TYPE,
             status="queued",
-            created_at="2026-05-01 10:03:00",
+            created_at="2026-05-01 10:04:00",
         )
 
         response = self.client.post(
@@ -506,14 +507,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
             remaining_ids = {
                 row["id"]
                 for row in get_db().execute(
-                    "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?)",
+                    "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?, ?)",
                     (*deletable_task_ids, queued_task_id),
                 ).fetchall()
             }
         self.assertEqual(remaining_ids, {queued_task_id})
         with self.client.session_transaction() as session:
             messages = [message for _, message in session.get("_flashes", [])]
-        self.assertIn("已批量删除 3 个任务。", messages)
+        self.assertIn("已批量删除 4 个任务。", messages)
         self.assertIn("已跳过 1 个排队中或运行中的任务。", messages)
 
     def test_user_bulk_delete_rejects_another_users_task(self):
@@ -568,9 +569,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self._insert_task(task_type=task_type, status="failed"),
                 self._insert_task(task_type=task_type, status="completed", created_at="2026-05-01 10:01:00"),
                 self._insert_task(task_type=task_type, status="canceled", created_at="2026-05-01 10:02:00"),
+                self._insert_task(task_type=task_type, status="partial", created_at="2026-05-01 10:03:00"),
             }
-            self._insert_task(task_type=task_type, status="queued", created_at="2026-05-01 10:03:00")
-            self._insert_task(task_type=task_type, status="running", created_at="2026-05-01 10:04:00")
+            self._insert_task(task_type=task_type, status="queued", created_at="2026-05-01 10:04:00")
+            self._insert_task(task_type=task_type, status="running", created_at="2026-05-01 10:05:00")
             for list_url, action in (
                 (user_list_url, "/tasks/bulk-delete"),
                 (admin_list_url, "/admin/tasks/bulk-delete"),

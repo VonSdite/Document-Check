@@ -11,6 +11,7 @@ from openpyxl import Workbook
 
 from app.common_terms import COMMON_TERMS_CHECK_CODE
 from app.db import get_db, init_db, now_text, set_setting
+from app.llm import LLMError
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -81,6 +82,33 @@ class TaskExecutionTest(unittest.TestCase):
             )
             """,
             (owner_subject, provider_id, api_key, status, claim_token, lease_expires_at, now, now),
+        )
+        get_db().commit()
+        return int(cursor.lastrowid)
+
+    def _insert_running_document_task(self, check_items: list[dict], *, api_key: str = "task-secret") -> int:
+        now = now_text()
+        cursor = get_db().execute(
+            """
+            INSERT INTO tasks(
+                ip, owner_subject, original_filename, stored_filename, file_type, file_size,
+                document_text, checks_json, checks_snapshot_json, model_name, api_base, api_key,
+                request_timeout, max_input_chars, status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'ip:127.0.0.1', 'partial.txt', 'partial.txt', 'txt', 1,
+                'file: partial.txt\n\n测试正文', ?, ?, 'test-model',
+                'http://example.test/v1/chat/completions', ?, 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (
+                json.dumps([item["id"] for item in check_items]),
+                json.dumps(check_items, ensure_ascii=False),
+                api_key,
+                now,
+                now,
+            ),
         )
         get_db().commit()
         return int(cursor.lastrowid)
@@ -1109,6 +1137,65 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIsNone(updated["lease_expires_at"])
         self.assertEqual(calls[0]["document_text"], "file: missing.txt\n\n缓存文本")
         self.assertEqual(calls[0]["api_key"], "task-secret")
+
+    def test_run_task_continues_other_checks_and_marks_partial(self):
+        check_items = [
+            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
+            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
+            {"id": 3, "code": COMMON_TERMS_CHECK_CODE, "name": "常用词检查", "prompt": "本地检查"},
+        ]
+        task_id = self._insert_running_document_task(check_items)
+        calls = []
+
+        def fake_run_check(**kwargs):
+            calls.append(kwargs["check_name"])
+            if kwargs["check_name"] == "文档规范性检查":
+                raise LLMError("模型流式正文疑似重复输出")
+            return "易理解性检查完成"
+
+        with patch("app.tasks.run_check", side_effect=fake_run_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(calls, ["文档规范性检查", "易理解性检查"])
+        self.assertEqual(updated["status"], "partial")
+        self.assertEqual(updated["progress"], 100)
+        self.assertIsNone(updated["api_key"])
+        self.assertIn("已完成 2/3 个检查项", updated["summary"])
+        self.assertIn("文档规范性检查", updated["error"])
+        self.assertEqual(
+            [result["code"] for result in results],
+            ["compliance", "clarity", COMMON_TERMS_CHECK_CODE],
+        )
+        self.assertEqual(results[0]["error"], "模型流式正文疑似重复输出")
+        self.assertEqual(results[1]["result"], "易理解性检查完成")
+        self.assertIn("structured_report", results[2])
+
+    def test_run_task_marks_failed_when_all_checks_fail(self):
+        check_items = [
+            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
+            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
+        ]
+        task_id = self._insert_running_document_task(check_items)
+
+        with patch("app.tasks.run_check", side_effect=LLMError("模型服务不可用")):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(updated["status"], "failed")
+        self.assertIsNone(updated["api_key"])
+        self.assertIn("2 个检查项全部失败", updated["summary"])
+        self.assertIn("2 个检查项失败", updated["error"])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result["error"] == "模型服务不可用" for result in results))
 
     def test_consistency_task_uses_selected_check_snapshot(self):
         db = get_db()

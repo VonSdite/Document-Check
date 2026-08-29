@@ -296,7 +296,7 @@ def _clear_finished_task_api_keys(db):
         """
         UPDATE tasks
         SET api_key = NULL
-        WHERE status IN ('completed', 'failed', 'canceled')
+        WHERE status IN ('completed', 'partial', 'failed', 'canceled')
           AND api_key IS NOT NULL
         """
     )

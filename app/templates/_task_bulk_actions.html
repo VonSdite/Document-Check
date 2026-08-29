@@ -15,7 +15,7 @@
 {%- endmacro %}
 
 {% macro select_header(tasks) -%}
-{% set deletable_count = tasks|selectattr('status', 'in', ['completed', 'failed', 'canceled'])|list|length %}
+{% set deletable_count = tasks|selectattr('status', 'in', ['completed', 'partial', 'failed', 'canceled'])|list|length %}
 <th class="task-select-cell">
   <input
     class="task-select-checkbox"
@@ -29,7 +29,7 @@
 
 {% macro select_cell(task) -%}
 <td class="task-select-cell">
-  {% if task.status in ['completed', 'failed', 'canceled'] %}
+  {% if task.status in ['completed', 'partial', 'failed', 'canceled'] %}
   <input
     class="task-select-checkbox"
     type="checkbox"

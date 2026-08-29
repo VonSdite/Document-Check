@@ -141,6 +141,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
                 ("queued.txt", "queued.txt", "queued-secret", "queued", now, now),
                 ("running.txt", "running.txt", "running-secret", "running", now, now),
                 ("completed.txt", "completed.txt", "completed-secret", "completed", now, now),
+                ("partial.txt", "partial.txt", "partial-secret", "partial", now, now),
                 ("failed.txt", "failed.txt", "failed-secret", "failed", now, now),
                 ("canceled.txt", "canceled.txt", "canceled-secret", "canceled", now, now),
             ],
@@ -167,6 +168,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(task_keys["queued"], "queued-secret")
         self.assertEqual(task_keys["running"], "running-secret")
         self.assertIsNone(task_keys["completed"])
+        self.assertIsNone(task_keys["partial"])
         self.assertIsNone(task_keys["failed"])
         self.assertIsNone(task_keys["canceled"])
         provider = db.execute(
