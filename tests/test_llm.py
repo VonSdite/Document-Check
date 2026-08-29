@@ -98,6 +98,33 @@ class LLMResponseParsingTest(unittest.TestCase):
             llm._MAX_COMPLETION_TOKENS,
         )
 
+    def test_document_check_can_omit_output_token_limit(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                max_completion_tokens=None,
+            )
+
+        payload = fake_session.calls[0][1]["json"]
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertNotIn("max_tokens", payload)
+
     def test_document_check_prompt_clamps_issue_output_limit_to_hard_max(self):
         fake_session = FakeSession(
             [

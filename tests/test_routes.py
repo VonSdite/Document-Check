@@ -2133,7 +2133,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(task["document_text"].startswith(f"file: {filename}\n\n"))
         self.assertIn("[第1页]", task["document_text"])
 
-    def test_create_task_accepts_long_document_for_chunked_execution(self):
+    def test_create_task_rejects_document_over_model_input_limit(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
@@ -2147,13 +2147,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
+            follow_redirects=True,
         )
 
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("超过当前模型文本上限".encode("utf-8"), response.data)
         with self.app.app_context():
-            task = get_db().execute("SELECT status, length(document_text) AS text_len FROM tasks").fetchone()
-        self.assertEqual(task["status"], "queued")
-        self.assertGreater(task["text_len"], 80_000)
+            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
+        self.assertEqual(total, 0)
+        self.assertEqual(uploaded_files, [])
 
     def test_create_task_creates_one_task_per_uploaded_document(self):
         model_id = self._configure_provider()

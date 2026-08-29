@@ -194,6 +194,7 @@ def run_check(
     prompt: str,
     document_text: str,
     issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
+    max_completion_tokens: int | None = _MAX_COMPLETION_TOKENS,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -207,6 +208,11 @@ def run_check(
         headers["Authorization"] = f"Bearer {api_key}"
 
     issue_limit = _normalized_issue_output_limit(issue_output_limit)
+    output_token_limit = (
+        None
+        if max_completion_tokens is None
+        else max(1, int(max_completion_tokens))
+    )
     payload = {
         "model": model_name,
         "messages": [
@@ -225,8 +231,9 @@ def run_check(
             },
         ],
         "temperature": 0,
-        "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
+    if output_token_limit is not None:
+        payload["max_completion_tokens"] = output_token_limit
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
     )
@@ -244,7 +251,7 @@ def run_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
-        _MAX_COMPLETION_TOKENS,
+        output_token_limit if output_token_limit is not None else "-",
         _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(document_text),
@@ -628,8 +635,8 @@ def _run_payload_with_retries(
                 and _is_output_token_limit_unsupported_error(exc)
             ):
                 active_payload = dict(active_payload)
-                active_payload.pop("max_completion_tokens", None)
-                active_payload["max_tokens"] = _MAX_COMPLETION_TOKENS
+                fallback_token_limit = active_payload.pop("max_completion_tokens")
+                active_payload["max_tokens"] = fallback_token_limit
                 output_token_fallback_used = True
                 logger.warning(
                     "LLM 服务不支持 max_completion_tokens，已降级为 max_tokens request_id=%s task_id=%s attempt=%s error=%s",
