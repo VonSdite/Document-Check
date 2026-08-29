@@ -183,7 +183,12 @@ class TaskScheduler:
             db.execute(
                 """
                 DELETE FROM task_live_results
-                WHERE task_id IN (SELECT id FROM tasks WHERE status != 'running')
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM tasks
+                    WHERE tasks.id = task_live_results.task_id
+                      AND tasks.status = 'running'
+                )
                 """
             )
 
@@ -196,24 +201,32 @@ class TaskScheduler:
             if slots > 0:
                 queued = db.execute(
                     """
-                    SELECT id, ip, COALESCE(owner_subject, 'ip:' || ip) AS owner_subject
-                    FROM tasks
-                    WHERE status = 'queued'
-                    ORDER BY created_at ASC, id ASC
+                    WITH running_by_owner AS (
+                        SELECT owner_subject, COUNT(*) AS running_count
+                        FROM tasks
+                        WHERE status = 'running'
+                        GROUP BY owner_subject
+                    )
+                    SELECT queued.id,
+                           COALESCE(queued.owner_subject, 'ip:' || queued.ip) AS owner_subject,
+                           COALESCE(running_by_owner.running_count, 0) AS running_for_user
+                    FROM tasks AS queued
+                    LEFT JOIN running_by_owner
+                      ON running_by_owner.owner_subject = queued.owner_subject
+                    WHERE queued.status = 'queued'
+                    ORDER BY queued.created_at ASC, queued.id ASC
                     LIMIT 50
                     """
                 ).fetchall()
+                running_by_owner: dict[str, int] = {}
                 for task in queued:
                     if len(claimed_tasks) >= slots:
                         break
-                    running_for_user = db.execute(
-                        """
-                        SELECT COUNT(*) AS total
-                        FROM tasks
-                        WHERE status = 'running' AND COALESCE(owner_subject, 'ip:' || ip) = ?
-                        """,
-                        (task["owner_subject"],),
-                    ).fetchone()["total"]
+                    owner_subject = str(task["owner_subject"])
+                    running_for_user = running_by_owner.setdefault(
+                        owner_subject,
+                        int(task["running_for_user"] or 0),
+                    )
                     if running_for_user >= user_limit:
                         continue
 
@@ -233,6 +246,7 @@ class TaskScheduler:
                     )
                     if claimed.rowcount == 1:
                         claimed_tasks.append((task["id"], claim_token))
+                        running_by_owner[owner_subject] = running_for_user + 1
             db.commit()
         except Exception:
             db.rollback()

@@ -216,6 +216,14 @@ def init_db():
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_lease ON tasks(status, lease_expires_at)")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_id "
+        "ON tasks(status, created_at ASC, id ASC)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_owner "
+        "ON tasks(status, owner_subject)"
+    )
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_provider ON tasks(provider_id)")
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_type_owner_created "

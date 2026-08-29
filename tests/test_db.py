@@ -102,7 +102,36 @@ class CheckItemDefaultsTest(unittest.TestCase):
         }
         self.assertEqual(indexes["idx_tasks_submission_token"]["unique"], 1)
         self.assertIn("idx_tasks_status_lease", indexes)
+        self.assertIn("idx_tasks_status_created_id", indexes)
+        self.assertIn("idx_tasks_status_owner", indexes)
         self.assertIn("idx_tasks_provider", indexes)
+
+        queue_plan = " ".join(
+            row["detail"]
+            for row in db.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT id FROM tasks
+                WHERE status = 'queued'
+                ORDER BY created_at ASC, id ASC
+                LIMIT 50
+                """
+            ).fetchall()
+        )
+        owner_plan = " ".join(
+            row["detail"]
+            for row in db.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT owner_subject, COUNT(*)
+                FROM tasks
+                WHERE status = 'running'
+                GROUP BY owner_subject
+                """
+            ).fetchall()
+        )
+        self.assertIn("idx_tasks_status_created_id", queue_plan)
+        self.assertIn("idx_tasks_status_owner", owner_plan)
 
     def test_user_model_tables_exist(self):
         db = get_db()

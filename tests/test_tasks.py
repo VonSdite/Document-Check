@@ -205,6 +205,34 @@ class TaskExecutionTest(unittest.TestCase):
             [(first_task_id, "running"), (second_task_id, "queued")],
         )
 
+    def test_scheduler_batches_owner_counts_without_per_task_queries(self):
+        first_owner_task = self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
+        blocked_same_owner_task = self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
+        other_owner_task = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
+        set_setting("global_concurrency", 3)
+        set_setting("user_concurrency", 1)
+        statements = []
+        db = get_db()
+        db.set_trace_callback(statements.append)
+        try:
+            claimed = TaskScheduler(self.app)._claim_available_tasks()
+        finally:
+            db.set_trace_callback(None)
+
+        self.assertEqual([task_id for task_id, _claim in claimed], [first_owner_task, other_owner_task])
+        blocked = db.execute(
+            "SELECT status FROM tasks WHERE id = ?",
+            (blocked_same_owner_task,),
+        ).fetchone()
+        self.assertEqual(blocked["status"], "queued")
+        task_selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith(("SELECT", "WITH"))
+            and "FROM TASKS" in statement.upper()
+        ]
+        self.assertEqual(len(task_selects), 2)
+
     def test_scheduler_does_not_recover_active_lease(self):
         task_id = self._insert_scheduler_task(
             status="running",
