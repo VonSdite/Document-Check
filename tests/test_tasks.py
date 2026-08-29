@@ -15,6 +15,7 @@ from app.llm import LLMError
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.task_types import (
     CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
@@ -106,6 +107,48 @@ class TaskExecutionTest(unittest.TestCase):
                 json.dumps([item["id"] for item in check_items]),
                 json.dumps(check_items, ensure_ascii=False),
                 api_key,
+                now,
+                now,
+            ),
+        )
+        get_db().commit()
+        return int(cursor.lastrowid)
+
+    def _insert_running_preprocessing_task(
+        self,
+        *,
+        task_type: str,
+        original_filename: str,
+        stored_filename: str,
+        file_type: str,
+        check_item: dict,
+        document_meta: dict | None = None,
+        max_input_chars: int = 5000,
+    ) -> int:
+        now = now_text()
+        cursor = get_db().execute(
+            """
+            INSERT INTO tasks(
+                task_type, ip, owner_subject, original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                model_name, api_base, api_key, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                ?, '127.0.0.1', 'ip:127.0.0.1', ?, ?, ?, 1,
+                NULL, ?, ?, ?, 'test-model', 'http://example.test/v1/chat/completions',
+                'task-secret', 30, ?, 'running', 1, ?, ?
+            )
+            """,
+            (
+                task_type,
+                original_filename,
+                stored_filename,
+                file_type,
+                json.dumps(document_meta or {"preprocessing": {"status": "pending"}}, ensure_ascii=False),
+                json.dumps([check_item["id"]]),
+                json.dumps([check_item], ensure_ascii=False),
+                max_input_chars,
                 now,
                 now,
             ),
@@ -982,6 +1025,262 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIsNone(updated["lease_expires_at"])
         self.assertEqual(calls[0]["document_text"], "file: missing.txt\n\n缓存文本")
         self.assertEqual(calls[0]["api_key"], "task-secret")
+
+    def test_run_task_extracts_and_persists_document_text_in_worker(self):
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "queued.txt"
+        upload_path.write_text("后台解析正文", encoding="utf-8")
+        check_item = {"id": 1, "code": "typo", "name": "错别字检查", "prompt": "检查错别字"}
+        task_id = self._insert_running_preprocessing_task(
+            task_type=DOCUMENT_TASK_TYPE,
+            original_filename="queued.txt",
+            stored_filename="queued.txt",
+            file_type="txt",
+            check_item=check_item,
+        )
+        calls = []
+
+        def fake_run_check(**kwargs):
+            calls.append(kwargs)
+            return "完成"
+
+        with patch("app.tasks.run_check", side_effect=fake_run_check):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        meta = json.loads(updated["document_meta_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(updated["document_text"], "file: queued.txt\n\n后台解析正文")
+        self.assertEqual(meta["preprocessing"]["status"], "completed")
+        self.assertEqual(calls[0]["document_text"], updated["document_text"])
+
+    def test_run_task_marks_oversized_document_failed_after_worker_extraction(self):
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "long.txt"
+        upload_path.write_text("超长正文" * 20, encoding="utf-8")
+        check_item = {"id": 1, "code": "typo", "name": "错别字检查", "prompt": "检查错别字"}
+        task_id = self._insert_running_preprocessing_task(
+            task_type=DOCUMENT_TASK_TYPE,
+            original_filename="long.txt",
+            stored_filename="long.txt",
+            file_type="txt",
+            check_item=check_item,
+            max_input_chars=20,
+        )
+
+        with patch("app.tasks.run_check") as run_check_mock:
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, error, document_text FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        run_check_mock.assert_not_called()
+        self.assertEqual(updated["status"], "failed")
+        self.assertIn("超过当前模型文本上限", updated["error"])
+        self.assertIsNone(updated["document_text"])
+        self.assertTrue(upload_path.is_file())
+
+    def test_run_image_task_extracts_images_and_persists_metadata_in_worker(self):
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "diagram.pdf"
+        upload_path.write_bytes(b"pdf-bytes")
+        check_item = {
+            "id": 9,
+            "code": "image-small-language-text",
+            "name": "图片语种匹配检查",
+            "prompt": "检查图片文字语种是否和文档一致",
+        }
+        task_id = self._insert_running_preprocessing_task(
+            task_type=IMAGE_TASK_TYPE,
+            original_filename="diagram.pdf",
+            stored_filename="diagram.pdf",
+            file_type="pdf",
+            check_item=check_item,
+            document_meta={
+                "source_document": {
+                    "original_filename": "diagram.pdf",
+                    "stored_filename": "diagram.pdf",
+                    "file_type": "pdf",
+                    "file_size": len(b"pdf-bytes"),
+                },
+                "preprocessing": {"status": "pending"},
+            },
+        )
+
+        def fake_extract_images(_document_path, _file_type, output_dir, *, source_filename=""):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            image_path = output_dir / "0001_page001-image001.png"
+            image_path.write_bytes(b"png-bytes")
+            return [
+                {
+                    "id": "image-0001",
+                    "filename": image_path.name,
+                    "stored_filename": image_path.name,
+                    "mime_type": "image/png",
+                    "position": "page001-image001",
+                    "source": source_filename,
+                    "size_bytes": image_path.stat().st_size,
+                    "kind": "resource",
+                    "page_number": 1,
+                }
+            ]
+
+        with (
+            patch("app.tasks.extract_text", return_value="[第1页]\n图 1 是接线图。"),
+            patch("app.tasks.extract_images", side_effect=fake_extract_images),
+            patch(
+                "app.tasks.render_pdf_page_images",
+                return_value=([], {"total_pages": 1, "selected_pages": [], "omitted_pages": 1, "max_pages": 120}),
+            ),
+            patch("app.tasks.run_multimodal_document_check", return_value="未发现问题"),
+        ):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        meta = json.loads(updated["document_meta_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertIn("document_text:", updated["document_text"])
+        self.assertEqual(meta["preprocessing"]["status"], "completed")
+        self.assertEqual(len(meta["images"]), 1)
+        self.assertTrue((Path(self.app.config["IMAGE_FOLDER"]) / meta["images"][0]["relative_path"]).is_file())
+
+    def test_run_video_task_extracts_frames_and_persists_metadata_in_worker(self):
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "install.mp4"
+        upload_path.write_bytes(b"video-bytes")
+        check_item = {
+            "id": 10,
+            "code": "video-installation-sequence",
+            "name": "安装顺序检查",
+            "prompt": "检查安装顺序",
+        }
+        task_id = self._insert_running_preprocessing_task(
+            task_type=VIDEO_TASK_TYPE,
+            original_filename="install.mp4",
+            stored_filename="install.mp4",
+            file_type="mp4",
+            check_item=check_item,
+            document_meta={
+                "source_video": {
+                    "original_filename": "install.mp4",
+                    "stored_filename": "install.mp4",
+                    "file_type": "mp4",
+                    "file_size": len(b"video-bytes"),
+                },
+                "preprocessing": {"status": "pending"},
+            },
+        )
+
+        def fake_extract_video_frames(_video_path, output_dir, *, source_filename="", max_frames=16):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            frame_path = output_dir / "0001_t000001000.jpg"
+            frame_path.write_bytes(b"jpeg-bytes")
+            return (
+                [
+                    {
+                        "id": "frame-0001",
+                        "filename": frame_path.name,
+                        "stored_filename": frame_path.name,
+                        "mime_type": "image/jpeg",
+                        "position": "00:01.000",
+                        "source": source_filename,
+                        "size_bytes": frame_path.stat().st_size,
+                        "kind": "video_frame",
+                        "timestamp_seconds": 1.0,
+                    }
+                ],
+                {
+                    "duration_seconds": 8.0,
+                    "selected_timestamps": [1.0],
+                    "frame_count": 1,
+                    "max_frames": max_frames,
+                    "strategy": "uniform-sampling",
+                },
+            )
+
+        with (
+            patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames),
+            patch("app.tasks.run_multimodal_document_check", return_value="未发现问题"),
+        ):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        meta = json.loads(updated["document_meta_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertIn("video_frames:", updated["document_text"])
+        self.assertEqual(meta["preprocessing"]["status"], "completed")
+        self.assertEqual(meta["frames"][0]["position"], "00:01.000")
+        self.assertTrue((Path(self.app.config["IMAGE_FOLDER"]) / meta["frames"][0]["relative_path"]).is_file())
+
+    def test_run_language_consistency_task_builds_static_precheck_in_worker(self):
+        upload_folder = Path(self.app.config["UPLOAD_FOLDER"])
+        (upload_folder / "zh.txt").write_text("1. 安装要求\n设备电流为 10A。", encoding="utf-8")
+        (upload_folder / "en.txt").write_text(
+            "1. Installation requirements\nThe device current is 12A.",
+            encoding="utf-8",
+        )
+        check_item = {
+            "id": 11,
+            "code": "language-consistency-cross-lingual",
+            "name": "跨语种一致性检查",
+            "prompt": "检查两份文档是否一致",
+        }
+        task_id = self._insert_running_preprocessing_task(
+            task_type=LANGUAGE_CONSISTENCY_TASK_TYPE,
+            original_filename="跨语种检查：zh.txt / en.txt",
+            stored_filename="zh.txt",
+            file_type="双文档",
+            check_item=check_item,
+            document_meta={
+                "groups": [
+                    {
+                        "role": "document_a",
+                        "label": "文档A",
+                        "files": [
+                            {
+                                "original_filename": "zh.txt",
+                                "stored_filename": "zh.txt",
+                                "file_type": "txt",
+                                "file_size": 1,
+                            }
+                        ],
+                    },
+                    {
+                        "role": "document_b",
+                        "label": "文档B",
+                        "files": [
+                            {
+                                "original_filename": "en.txt",
+                                "stored_filename": "en.txt",
+                                "file_type": "txt",
+                                "file_size": 1,
+                            }
+                        ],
+                    },
+                ],
+                "preprocessing": {"status": "pending"},
+            },
+        )
+
+        with patch("app.tasks.run_check", return_value="完成"):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        meta = json.loads(updated["document_meta_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertIn("# 静态预检摘要", updated["document_text"])
+        self.assertIn("10a", meta["static_precheck"])
+        self.assertIn("12a", meta["static_precheck"])
+        self.assertEqual(meta["preprocessing"]["status"], "completed")
 
     def test_run_task_continues_other_checks_and_marks_partial(self):
         check_items = [

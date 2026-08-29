@@ -48,7 +48,7 @@ from .db import (
     set_ip_username,
     set_setting,
 )
-from .documents import DocumentReadError, allowed_file, extension_of, extract_text, format_document_text
+from .documents import allowed_file, extension_of
 from .file_cleanup import (
     describe_failures,
     remove_directory_tree,
@@ -57,13 +57,9 @@ from .file_cleanup import (
 )
 from .images import (
     DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES,
-    candidate_pdf_pages_for_image_check,
     default_image_folder,
-    extract_images,
-    format_image_document_text,
     image_items_from_meta,
     image_path_from_item,
-    render_pdf_page_images,
 )
 from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, MAX_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
 from .llm import LLMError, test_model_connection
@@ -82,8 +78,7 @@ from .task_types import (
     task_type_label,
 )
 from .tasks import cleanup_task_file_cache, task_file_cache_snapshot
-from .text_language import estimate_text_language, text_language_label
-from .videos import allowed_video_file, extract_video_frames, format_video_document_text, video_extension_of
+from .videos import allowed_video_file, video_extension_of
 
 
 STATUS_LABELS = {
@@ -344,21 +339,6 @@ REPORT_LEGACY_LABEL_FIELDS = {
     "建议处理方式": "suggestion",
     "建议补充的标题形式": "suggestion",
 }
-LANGUAGE_STATIC_TOKEN_RE = re.compile(
-    r"https?://[^\s<>\]\)\"']+"
-    r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
-    r"|\b\d{1,3}(?:\.\d{1,3}){3}\b"
-    r"|\bv?\d+(?:\.\d+){1,4}\b"
-    r"|\b\d{4}[-/年]\d{1,2}(?:[-/月]\d{1,2}日?)?\b"
-    r"|\b\d+(?:[.,]\d+)*(?:\s?(?:%|ms|s|m|mm|cm|km|kg|g|KB|MB|GB|TB|V|A|W|Hz|kHz|MHz|GHz|°C|℃))?\b",
-    re.IGNORECASE,
-)
-LANGUAGE_HEADING_RE = re.compile(
-    r"^\s*(?:#{1,6}\s+|第[一二三四五六七八九十百千万\d]+[章节篇部]\s*|"
-    r"(?:\d+|[A-Z])(?:[.\-、)]\d*){0,5}[.\-、)]?\s+|[一二三四五六七八九十]+[、.]\s*)\S"
-)
-
-
 def register_routes(app):
     app.add_template_global(STATUS_LABELS, "STATUS_LABELS")
     app.add_template_global(REPORT_ITEM_FIELDS, "REPORT_ITEM_FIELDS")
@@ -2704,14 +2684,6 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
             _prepare_document_task_row(upload, identity, model, check_ids, check_snapshots, saved_paths)
             for upload in uploads
         ]
-    except DocumentReadError as exc:
-        _remove_uploaded_files(saved_paths)
-        flash(f"文档读取失败：{exc}", "error")
-        return _back_to_task_form(admin_created)
-    except RuntimeError as exc:
-        _remove_uploaded_files(saved_paths)
-        flash(str(exc), "error")
-        return _back_to_task_form(admin_created)
     except Exception as exc:
         _remove_uploaded_files(saved_paths)
         current_app.logger.exception("准备单文档检查任务失败")
@@ -2724,11 +2696,11 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
                 api_base, api_key, request_timeout, max_input_chars, force_disable_thinking,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             rows,
         )
@@ -2763,18 +2735,6 @@ def _prepare_document_task_row(
     )
     file_size = _save_uploaded_file(upload, destination)
     saved_paths.append(destination)
-    try:
-        document_text = extract_text(destination, file_type).strip()
-    except DocumentReadError as exc:
-        raise DocumentReadError(f"“{original_filename}”：{exc}") from exc
-    if not document_text:
-        raise RuntimeError(f"“{original_filename}”未能提取到可检查文本。")
-    prepared_document_text = format_document_text(original_filename, document_text)
-    if len(prepared_document_text) > model["max_input_chars"]:
-        raise RuntimeError(
-            f"“{original_filename}”文档文本 {len(prepared_document_text)} 字，"
-            f"超过当前模型文本上限 {model['max_input_chars']} 字。"
-        )
     owner_name = identity.display_name or None
     return (
         DOCUMENT_TASK_TYPE,
@@ -2787,7 +2747,8 @@ def _prepare_document_task_row(
         stored_filename,
         file_type,
         file_size,
-        prepared_document_text,
+        None,
+        json.dumps({"preprocessing": {"status": "pending"}}, ensure_ascii=False),
         json.dumps(check_ids, ensure_ascii=False),
         json.dumps(check_snapshots, ensure_ascii=False),
         model["provider_id"],
@@ -2849,67 +2810,12 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
     original_filename = _clean_upload_filename(upload.filename, file_type)
     created_at = now_text()
     stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
-    image_dir = _image_output_dir_for_stored(stored_filename)
     try:
         file_size = _save_uploaded_file(upload, destination)
     except Exception:
         current_app.logger.exception("保存图片检查文档失败")
         flash("PDF 上传失败，请稍后再试。", "error")
         return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-
-    extracted_text = ""
-    text_error = ""
-    try:
-        extracted_text = extract_text(destination, file_type).strip()
-    except DocumentReadError as exc:
-        text_error = str(exc)
-        current_app.logger.warning(
-            "图片检查任务未能提取文档文本 file=%s error=%s",
-            original_filename,
-            exc,
-        )
-
-    image_error = ""
-    try:
-        images = extract_images(destination, file_type, image_dir, source_filename=original_filename)
-    except DocumentReadError as exc:
-        images = []
-        image_error = str(exc)
-        _remove_directory(image_dir)
-        current_app.logger.warning(
-            "图片检查任务未能提取 PDF 内嵌图片 file=%s error=%s",
-            original_filename,
-            exc,
-        )
-
-    try:
-        candidate_pages = candidate_pdf_pages_for_image_check(extracted_text, images)
-        page_images, page_selection = render_pdf_page_images(
-            destination,
-            image_dir,
-            source_filename=original_filename,
-            max_pages=_image_page_check_max_pages(),
-            candidate_pages=candidate_pages,
-        )
-    except DocumentReadError as exc:
-        _remove_uploaded_file(destination)
-        _remove_directory(image_dir)
-        flash(f"PDF 页面截图生成失败：{exc}", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-    if not images and not page_images:
-        _remove_uploaded_file(destination)
-        _remove_directory(image_dir)
-        flash("未能从 PDF 中生成可检查页面截图或提取到可检查图片。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-
-    prepared_document_text = format_image_document_text(
-        original_filename,
-        images,
-        document_text=extracted_text,
-        text_error=text_error,
-        page_images=page_images,
-        page_selection=page_selection,
-    )
 
     document_meta = {
         "source_document": {
@@ -2918,22 +2824,7 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
             "file_type": file_type,
             "file_size": file_size,
         },
-        "image_extraction_error": image_error,
-        "page_selection": page_selection,
-        "images": [
-            {
-                **image,
-                "relative_path": f"{image_dir.name}/{image['filename']}",
-            }
-            for image in images
-        ],
-        "page_images": [
-            {
-                **image,
-                "relative_path": f"{image_dir.name}/{image['filename']}",
-            }
-            for image in page_images
-        ],
+        "preprocessing": {"status": "pending"},
     }
     owner_name = identity.display_name or None
     try:
@@ -2960,7 +2851,7 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
                 stored_filename,
                 file_type,
                 file_size,
-                prepared_document_text,
+                None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
@@ -2980,7 +2871,6 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
     except Exception:
         db.rollback()
         _remove_uploaded_file(destination)
-        _remove_directory(image_dir)
         current_app.logger.exception("创建图片检查任务失败")
         flash("创建图片检查任务失败，请稍后再试。", "error")
         return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
@@ -3050,7 +2940,6 @@ def _create_video_task_from_upload(
     try:
         created_at = now_text()
         stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
-        frame_dir = _image_output_dir_for_stored(stored_filename)
     except Exception:
         current_app.logger.exception("准备视频检查上传路径失败 file=%s", original_filename)
         return "视频上传准备失败，请稍后再试。"
@@ -3061,40 +2950,6 @@ def _create_video_task_from_upload(
         return "视频上传失败，请稍后再试。"
 
     try:
-        frames, frame_selection = extract_video_frames(
-            destination,
-            frame_dir,
-            source_filename=original_filename,
-        )
-    except DocumentReadError as exc:
-        _remove_uploaded_file(destination)
-        _remove_directory(frame_dir)
-        return f"视频抽帧失败：{exc}"
-    except Exception:
-        _remove_uploaded_file(destination)
-        _remove_directory(frame_dir)
-        current_app.logger.exception("视频抽帧异常 file=%s", original_filename)
-        return "视频抽帧失败，请稍后再试。"
-    if frame_selection.get("fallback_frame_count") or frame_selection.get("skipped_frame_count"):
-        current_app.logger.warning(
-            "视频抽帧启用容错 file=%s fallback=%s skipped=%s skipped_timestamps=%s",
-            original_filename,
-            frame_selection.get("fallback_frame_count", 0),
-            frame_selection.get("skipped_frame_count", 0),
-            frame_selection.get("skipped_timestamps", []),
-        )
-    if not frames:
-        _remove_uploaded_file(destination)
-        _remove_directory(frame_dir)
-        return "未能从视频中抽取可检查画面。"
-
-    try:
-        prepared_document_text = format_video_document_text(original_filename, frames, frame_selection)
-        if len(prepared_document_text) > model["max_input_chars"]:
-            _remove_uploaded_file(destination)
-            _remove_directory(frame_dir)
-            return f"视频帧上下文 {len(prepared_document_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。"
-
         document_meta = {
             "source_video": {
                 "original_filename": original_filename,
@@ -3102,14 +2957,7 @@ def _create_video_task_from_upload(
                 "file_type": file_type,
                 "file_size": file_size,
             },
-            "frame_selection": frame_selection,
-            "frames": [
-                {
-                    **frame,
-                    "relative_path": f"{frame_dir.name}/{frame['filename']}",
-                }
-                for frame in frames
-            ],
+            "preprocessing": {"status": "pending"},
         }
         owner_name = identity.display_name or None
         db.execute(
@@ -3135,7 +2983,7 @@ def _create_video_task_from_upload(
                 stored_filename,
                 file_type,
                 file_size,
-                prepared_document_text,
+                None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
@@ -3155,7 +3003,6 @@ def _create_video_task_from_upload(
     except Exception:
         db.rollback()
         _remove_uploaded_file(destination)
-        _remove_directory(frame_dir)
         current_app.logger.exception("创建视频检查任务失败 file=%s", original_filename)
         return "创建视频检查任务失败，请稍后再试。"
     return None
@@ -3198,27 +3045,12 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
     created_at = now_text()
     saved_paths = []
     try:
-        master_files = _save_consistency_upload_group(master_uploads, identity.subject, created_at, "素材文档", saved_paths)
-        related_files = _save_consistency_upload_group(related_uploads, identity.subject, created_at, "资料", saved_paths)
-    except DocumentReadError as exc:
-        _remove_uploaded_files(saved_paths)
-        flash(f"文档读取失败：{exc}", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
+        master_files = _save_consistency_upload_group(master_uploads, identity.subject, created_at, saved_paths)
+        related_files = _save_consistency_upload_group(related_uploads, identity.subject, created_at, saved_paths)
     except Exception:
         _remove_uploaded_files(saved_paths)
         current_app.logger.exception("准备多文档对照任务失败")
         flash("文档上传失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-
-    validation_text = _compose_consistency_validation_text(
-        [
-            {"label": "素材文档", "files": master_files},
-            {"label": "资料", "files": related_files},
-        ]
-    )
-    if len(validation_text) > model["max_input_chars"]:
-        _remove_uploaded_files(saved_paths)
-        flash(f"文档文本 {len(validation_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
         return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
 
     document_meta = {
@@ -3233,7 +3065,8 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
                 "label": "资料",
                 "files": [_persisted_file_info(file_info) for file_info in related_files],
             },
-        ]
+        ],
+        "preprocessing": {"status": "pending"},
     }
     all_files = master_files + related_files
     first_file = all_files[0]
@@ -3265,7 +3098,7 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
                 first_file["stored_filename"],
                 "多文档",
                 file_size,
-                validation_text,
+                None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
@@ -3323,22 +3156,12 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
     created_at = now_text()
     saved_paths = []
     try:
-        file_a = _save_consistency_upload_group([document_a], identity.subject, created_at, "文档A", saved_paths)[0]
-        file_b = _save_consistency_upload_group([document_b], identity.subject, created_at, "文档B", saved_paths)[0]
-    except DocumentReadError as exc:
-        _remove_uploaded_files(saved_paths)
-        flash(f"文档读取失败：{exc}", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
+        file_a = _save_consistency_upload_group([document_a], identity.subject, created_at, saved_paths)[0]
+        file_b = _save_consistency_upload_group([document_b], identity.subject, created_at, saved_paths)[0]
     except Exception:
         _remove_uploaded_files(saved_paths)
         current_app.logger.exception("准备跨语种检查任务失败")
         flash("文档上传失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-
-    validation_text = _compose_language_consistency_validation_text(file_a, file_b)
-    if len(validation_text) > model["max_input_chars"]:
-        _remove_uploaded_files(saved_paths)
-        flash(f"文档文本 {len(validation_text)} 字，超过当前模型文本上限 {model['max_input_chars']} 字。", "error")
         return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
 
     document_meta = {
@@ -3354,7 +3177,7 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
                 "files": [_persisted_file_info(file_b)],
             },
         ],
-        "static_precheck": _language_consistency_static_summary(file_a, file_b),
+        "preprocessing": {"status": "pending"},
     }
     file_size = file_a["file_size"] + file_b["file_size"]
     original_filename = f"跨语种检查：{file_a['original_filename']} / {file_b['original_filename']}"
@@ -3385,7 +3208,7 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
                 file_a["stored_filename"],
                 "双文档",
                 file_size,
-                validation_text,
+                None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 json.dumps(check_snapshots, ensure_ascii=False),
@@ -3485,7 +3308,7 @@ def _validate_language_consistency_upload(upload, label: str) -> bool:
     return True
 
 
-def _save_consistency_upload_group(uploads: list, ip: str, created_at: str, label: str, saved_paths: list[Path]) -> list[dict]:
+def _save_consistency_upload_group(uploads: list, ip: str, created_at: str, saved_paths: list[Path]) -> list[dict]:
     files = []
     for upload in uploads:
         file_type = extension_of(upload.filename)
@@ -3493,122 +3316,15 @@ def _save_consistency_upload_group(uploads: list, ip: str, created_at: str, labe
         stored_filename, destination = _upload_destination(original_filename, ip, created_at, file_type)
         file_size = _save_uploaded_file(upload, destination)
         saved_paths.append(destination)
-        try:
-            text = extract_text(destination, file_type).strip()
-        except DocumentReadError as exc:
-            raise DocumentReadError(f"{label}“{original_filename}”：{exc}") from exc
-        if not text:
-            raise DocumentReadError(f"{label}“{original_filename}”未能提取到可检查文本")
         files.append(
             {
                 "original_filename": original_filename,
                 "stored_filename": stored_filename,
                 "file_type": file_type,
                 "file_size": file_size,
-                "text": text,
             }
         )
     return files
-
-
-def _compose_consistency_validation_text(groups: list[dict]) -> str:
-    sections = []
-    for group in groups:
-        group_parts = [f"# {group['label']}"]
-        for index, file_info in enumerate(group["files"], start=1):
-            group_parts.append(f"## {group['label']}{index}：{file_info['original_filename']}\n{file_info['text']}")
-        sections.append("\n\n".join(group_parts))
-    return "\n\n".join(sections).strip()
-
-
-def _compose_language_consistency_validation_text(file_a: dict, file_b: dict) -> str:
-    return "\n\n".join(
-        [
-            "# 静态预检摘要\n"
-            + _language_consistency_static_summary(file_a, file_b)
-            + "\n\n说明：静态预检仅提供优先核对线索，最终差异判断需结合两份文档正文。",
-            f"# 文档A：{file_a['original_filename']}\n{file_a['text']}",
-            f"# 文档B：{file_b['original_filename']}\n{file_b['text']}",
-        ]
-    ).strip()
-
-
-def _language_consistency_static_summary(file_a: dict, file_b: dict) -> str:
-    profile_a = _document_static_profile(file_a)
-    profile_b = _document_static_profile(file_b)
-    only_a = _limited_sorted(profile_a["tokens"] - profile_b["tokens"], 40)
-    only_b = _limited_sorted(profile_b["tokens"] - profile_a["tokens"], 40)
-    ratio = _safe_ratio(profile_b["nonspace_chars"], profile_a["nonspace_chars"])
-    lines = [
-        (
-            f"- 文档A：{file_a['original_filename']}；格式：{file_a['file_type']}；"
-            f"语种估计：{profile_a['language']}；非空白字符：{profile_a['nonspace_chars']}；"
-            f"段落：{profile_a['paragraphs']}；标题线索：{len(profile_a['headings'])}"
-        ),
-        (
-            f"- 文档B：{file_b['original_filename']}；格式：{file_b['file_type']}；"
-            f"语种估计：{profile_b['language']}；非空白字符：{profile_b['nonspace_chars']}；"
-            f"段落：{profile_b['paragraphs']}；标题线索：{len(profile_b['headings'])}"
-        ),
-        f"- 长度比例：文档B / 文档A = {ratio}",
-        f"- 文档A独有硬线索：{_format_preview_list(only_a)}",
-        f"- 文档B独有硬线索：{_format_preview_list(only_b)}",
-        f"- 文档A标题线索：{_format_preview_list(profile_a['headings'])}",
-        f"- 文档B标题线索：{_format_preview_list(profile_b['headings'])}",
-    ]
-    return "\n".join(lines)
-
-
-def _document_static_profile(file_info: dict) -> dict:
-    text = str(file_info.get("text") or "")
-    nonspace_text = re.sub(r"\s+", "", text)
-    paragraphs = [part for part in re.split(r"\n\s*\n+", text.strip()) if part.strip()]
-    tokens = {
-        _normalize_static_token(match.group(0))
-        for match in LANGUAGE_STATIC_TOKEN_RE.finditer(text)
-    }
-    tokens = {token for token in tokens if token}
-    return {
-        "language": text_language_label(estimate_text_language(text)),
-        "nonspace_chars": len(nonspace_text),
-        "paragraphs": len(paragraphs),
-        "tokens": tokens,
-        "headings": _extract_static_headings(text, 12),
-    }
-
-
-def _extract_static_headings(text: str, limit: int) -> list[str]:
-    headings = []
-    seen = set()
-    for line in text.splitlines():
-        value = re.sub(r"\s+", " ", line).strip()
-        if not value or len(value) > 120 or not LANGUAGE_HEADING_RE.match(value):
-            continue
-        if value in seen:
-            continue
-        seen.add(value)
-        headings.append(value)
-        if len(headings) >= limit:
-            break
-    return headings
-
-
-def _normalize_static_token(value: str) -> str:
-    return value.strip(" \t\r\n,.;:，。；：、()（）[]【】<>《》\"'“”‘’").lower()
-
-
-def _limited_sorted(values: set[str] | list[str], limit: int) -> list[str]:
-    return sorted(values, key=lambda value: (len(value), value))[:limit]
-
-
-def _format_preview_list(values: list[str]) -> str:
-    return "、".join(values) if values else "未发现"
-
-
-def _safe_ratio(numerator: int, denominator: int) -> str:
-    if denominator <= 0:
-        return "无法计算"
-    return f"{numerator / denominator:.2f}"
 
 
 def _persisted_file_info(file_info: dict) -> dict:
@@ -3961,16 +3677,6 @@ def _image_folder() -> Path:
     if configured:
         return Path(configured)
     return default_image_folder(current_app.config["UPLOAD_FOLDER"])
-
-
-def _image_output_dir_for_stored(stored_filename: str) -> Path:
-    folder = _image_folder()
-    stem = Path(stored_filename).stem
-    return folder / _safe_filename_part(stem, "task-images")
-
-
-def _image_page_check_max_pages() -> int:
-    return max(1, _int_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES))
 
 
 def _int_setting(key: str, default: int) -> int:

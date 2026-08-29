@@ -2095,7 +2095,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertIsNotNone(field.select_one("[data-file-list]"))
                 self.assertIn("每个视频独立创建检查任务", soup.get_text(" ", strip=True))
 
-    def test_create_task_saves_check_snapshot_and_extracted_text(self):
+    def test_create_task_saves_check_snapshot_and_defers_text_extraction(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute("SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'").fetchone()
@@ -2114,8 +2114,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
         snapshots = json.loads(task["checks_snapshot_json"])
+        meta = json.loads(task["document_meta_json"])
         self._assert_task_uses_provider_reference(task, model_id)
-        self.assertEqual(task["document_text"], "file: doc.txt\n\n测试文档")
+        self.assertIsNone(task["document_text"])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertEqual(
             snapshots,
             [
@@ -2159,10 +2161,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(stored_path.is_file())
         self.assertLessEqual(len(str(stored_path.resolve())), UPLOAD_PATH_SAFE_CHARS)
         self.assertEqual(task["original_filename"], filename)
-        self.assertTrue(task["document_text"].startswith(f"file: {filename}\n\n"))
-        self.assertIn("[第1页]", task["document_text"])
+        self.assertIsNone(task["document_text"])
 
-    def test_create_task_rejects_document_over_model_input_limit(self):
+    def test_create_task_defers_model_input_limit_check_to_worker(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
@@ -2180,12 +2181,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("超过当前模型文本上限".encode("utf-8"), response.data)
         with self.app.app_context():
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-        self.assertEqual(total, 0)
-        self.assertEqual(uploaded_files, [])
+        self.assertEqual(total, 1)
+        self.assertEqual(len(uploaded_files), 1)
 
     def test_create_task_creates_one_task_per_uploaded_document(self):
         model_id = self._configure_provider()
@@ -2222,13 +2222,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(tasks[0]["original_filename"], "doc-00.txt")
         self.assertEqual(tasks[-1]["original_filename"], "doc-20.txt")
         self.assertTrue(all(task["status"] == "queued" for task in tasks))
-        self.assertEqual(tasks[0]["document_text"], "file: doc-00.txt\n\ndocument 0")
-        self.assertEqual(tasks[-1]["document_text"], "file: doc-20.txt\n\ndocument 20")
+        self.assertTrue(all(task["document_text"] is None for task in tasks))
         self.assertEqual(len(uploaded_files), 21)
         snapshots = [json.loads(task["checks_snapshot_json"]) for task in tasks]
         self.assertTrue(all(snapshot[0]["code"] == item["code"] for snapshot in snapshots))
 
-    def test_create_task_rejects_entire_batch_when_one_document_has_no_text(self):
+    def test_create_task_queues_entire_batch_before_text_extraction(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
@@ -2250,15 +2249,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-        self.assertEqual(total, 0)
-        self.assertEqual(uploaded_files, [])
+        self.assertEqual(total, 2)
+        self.assertEqual(len(uploaded_files), 2)
 
-    def test_create_task_handles_unexpected_upload_preparation_error(self):
+    def test_create_task_does_not_parse_document_during_request(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
 
-        with patch("app.routes.extract_text", side_effect=ValueError("company parser failed")):
+        with patch("app.tasks.extract_text", side_effect=ValueError("company parser failed")) as extract_mock:
             response = self.client.post(
                 "/",
                 data={
@@ -2271,13 +2270,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("文档上传或读取失败", response.get_data(as_text=True))
-        self.assertIn("company parser failed", response.get_data(as_text=True))
+        extract_mock.assert_not_called()
         with self.app.app_context():
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-        self.assertEqual(total, 0)
-        self.assertEqual(uploaded_files, [])
+        self.assertEqual(total, 1)
+        self.assertEqual(len(uploaded_files), 1)
 
     def test_create_task_removes_partial_file_when_upload_save_fails(self):
         model_id = self._configure_provider()
@@ -2307,7 +2305,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
-    def test_create_image_task_saves_extracted_image_metadata(self):
+    def test_create_image_task_defers_image_extraction_to_worker(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
@@ -2333,12 +2331,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self._assert_task_uses_provider_reference(task, model_id)
         self.assertEqual(task["task_type"], IMAGE_TASK_TYPE)
         self.assertEqual(meta["source_document"]["file_type"], "pdf")
-        self.assertEqual(len(meta["page_images"]), 1)
-        self.assertIn("page001-screenshot", meta["page_images"][0]["filename"])
-        self.assertTrue((image_root / meta["page_images"][0]["relative_path"]).is_file())
-        self.assertIn("document_text:", task["document_text"])
-        self.assertIn("extracted_images:", task["document_text"])
-        self.assertIn("page_screenshots: 1", task["document_text"])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
+        self.assertIsNone(task["document_text"])
+        self.assertFalse(image_root.exists() and any(image_root.rglob("*")))
         self.assertEqual(
             snapshots,
             [
@@ -2379,19 +2374,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
         self.assertFalse(image_root.exists() and any(image_root.rglob("*")))
 
-    def test_create_image_task_removes_partial_embedded_images_before_page_fallback(self):
+    def test_create_image_task_does_not_extract_embedded_images_during_request(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
                 "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
             ).fetchone()
 
-        def fail_after_partial_image(_document_path, _file_type, output_dir, *, source_filename=""):
-            output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / "partial-embedded.png").write_bytes(_TINY_PNG)
-            raise DocumentReadError("embedded image stream is damaged")
-
-        with patch("app.routes.extract_images", side_effect=fail_after_partial_image):
+        with patch("app.tasks.extract_images", side_effect=AssertionError("不应在请求中提取")) as extract_mock:
             response = self.client.post(
                 "/images",
                 data={
@@ -2403,14 +2393,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
+        extract_mock.assert_not_called()
         with self.app.app_context():
             task = get_db().execute("SELECT document_meta_json FROM tasks").fetchone()
         image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
         meta = json.loads(task["document_meta_json"])
-        generated_files = [path for path in image_root.rglob("*") if path.is_file()]
-        self.assertEqual(meta["images"], [])
-        self.assertEqual(len(meta["page_images"]), 1)
-        self.assertEqual([path.name for path in generated_files], [meta["page_images"][0]["filename"]])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
+        self.assertFalse(image_root.exists() and any(image_root.rglob("*")))
 
     def test_create_image_task_rejects_non_pdf_document(self):
         model_id = self._configure_provider()
@@ -2434,42 +2423,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
         self.assertEqual(total, 0)
 
-    def test_create_video_task_saves_extracted_frame_metadata(self):
+    def test_create_video_task_defers_frame_extraction_to_worker(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'video-installation-sequence'"
             ).fetchone()
 
-        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
-            output_dir.mkdir(parents=True, exist_ok=True)
-            frame_path = output_dir / "0001_t000001000.jpg"
-            frame_path.write_bytes(_TINY_PNG)
-            return (
-                [
-                    {
-                        "id": "frame-0001",
-                        "filename": "0001_t000001000.jpg",
-                        "stored_filename": "0001_t000001000.jpg",
-                        "relative_path": "0001_t000001000.jpg",
-                        "mime_type": "image/jpeg",
-                        "position": "00:01.000",
-                        "source": source_filename,
-                        "size_bytes": frame_path.stat().st_size,
-                        "kind": "video_frame",
-                        "timestamp_seconds": 1.0,
-                    }
-                ],
-                {
-                    "duration_seconds": 8.0,
-                    "selected_timestamps": [1.0],
-                    "max_frames": max_frames,
-                    "frame_count": 1,
-                    "strategy": "uniform-sampling",
-                },
-            )
-
-        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+        with patch("app.tasks.extract_video_frames", side_effect=AssertionError("不应在请求中抽帧")) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -2481,6 +2442,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
+        extract_mock.assert_not_called()
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
             image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
@@ -2490,13 +2452,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(task["task_type"], VIDEO_TASK_TYPE)
         self.assertEqual(task["file_type"], "mp4")
         self.assertEqual(meta["source_video"]["file_type"], "mp4")
-        self.assertEqual(meta["frame_selection"]["frame_count"], 1)
-        self.assertEqual(len(meta["frames"]), 1)
-        self.assertEqual(meta["frames"][0]["position"], "00:01.000")
-        self.assertTrue((image_root / meta["frames"][0]["relative_path"]).is_file())
-        self.assertIn("video_context:", task["document_text"])
-        self.assertIn("video_frames:", task["document_text"])
-        self.assertIn("00:01.000", task["document_text"])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
+        self.assertIsNone(task["document_text"])
+        self.assertFalse(image_root.exists() and any(image_root.rglob("*")))
         self.assertEqual(
             snapshots,
             [
@@ -2541,7 +2499,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 },
             )
 
-        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+        with patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -2557,6 +2515,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        extract_mock.assert_not_called()
         self.assertIn("已创建 2 个视频检查任务", response.get_data(as_text=True))
         with self.app.app_context():
             tasks = get_db().execute(
@@ -2569,14 +2528,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual([task["original_filename"] for task in tasks], ["install-01.mp4", "install-02.mov"])
         self.assertEqual([task["file_type"] for task in tasks], ["mp4", "mov"])
         self.assertEqual(len(upload_files), 2)
-        self.assertEqual(len(frame_files), 2)
+        self.assertEqual(len(frame_files), 0)
         metas = [json.loads(task["document_meta_json"]) for task in tasks]
         self.assertEqual(
             [meta["source_video"]["original_filename"] for meta in metas],
             ["install-01.mp4", "install-02.mov"],
         )
 
-    def test_create_video_tasks_keeps_successes_when_one_video_fails(self):
+    def test_create_video_tasks_defer_invalid_video_detection_to_worker(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
@@ -2604,7 +2563,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {"duration_seconds": 8.0, "frame_count": 1, "max_frames": max_frames},
             )
 
-        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+        with patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -2620,20 +2579,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        extract_mock.assert_not_called()
         html = response.get_data(as_text=True)
-        self.assertIn("已创建 1 个视频检查任务", html)
-        self.assertIn("1 个视频未创建", html)
-        self.assertIn("broken.mp4", html)
-        self.assertIn("视频局部数据损坏", html)
+        self.assertIn("已创建 2 个视频检查任务", html)
         with self.app.app_context():
             tasks = get_db().execute("SELECT original_filename FROM tasks").fetchall()
             upload_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
             image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
             frame_files = list(image_root.rglob("*.jpg")) if image_root.exists() else []
 
-        self.assertEqual([task["original_filename"] for task in tasks], ["good.mp4"])
-        self.assertEqual(len(upload_files), 1)
-        self.assertEqual(len(frame_files), 1)
+        self.assertEqual([task["original_filename"] for task in tasks], ["good.mp4", "broken.mp4"])
+        self.assertEqual(len(upload_files), 2)
+        self.assertEqual(len(frame_files), 0)
 
     def test_create_video_task_removes_files_when_database_insert_fails(self):
         model_id = self._configure_provider()
@@ -2659,7 +2616,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {"frame_count": 1, "max_frames": max_frames},
             )
 
-        with patch("app.routes.extract_video_frames", side_effect=fake_extract_video_frames):
+        with patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -2672,6 +2629,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        extract_mock.assert_not_called()
         self.assertIn("创建视频检查任务失败", response.get_data(as_text=True))
         with self.app.app_context():
             total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
@@ -4896,7 +4854,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
-    def test_create_consistency_task_saves_combined_document_text(self):
+    def test_create_consistency_task_defers_combined_text_extraction(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
@@ -4920,10 +4878,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self._assert_task_uses_provider_reference(task, model_id)
         self.assertEqual(task["task_type"], "consistency_check")
         self.assertEqual(task["original_filename"], "素材文档：master.xlsx / 资料：related.txt")
-        self.assertIn("## 素材文档1：master.xlsx", task["document_text"])
-        self.assertIn("# 工作表：素材参数表", task["document_text"])
-        self.assertIn("素材参数 | 10A", task["document_text"])
-        self.assertIn("## 资料1：related.txt", task["document_text"])
+        self.assertIsNone(task["document_text"])
+        meta = json.loads(task["document_meta_json"])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertEqual(
             json.loads(task["checks_snapshot_json"]),
             [
@@ -5020,7 +4977,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
-    def test_create_language_consistency_task_saves_static_precheck(self):
+    def test_create_language_consistency_task_defers_static_precheck(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = get_db().execute(
@@ -5051,16 +5008,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(task["task_type"], LANGUAGE_CONSISTENCY_TASK_TYPE)
         self.assertEqual(task["file_type"], "双文档")
         self.assertIn("跨语种检查：zh.txt / en.txt", task["original_filename"])
-        self.assertIn("# 静态预检摘要", task["document_text"])
-        self.assertIn("文档A独有硬线索", task["document_text"])
-        self.assertIn("文档B独有硬线索", task["document_text"])
-        self.assertIn("10a", task["document_text"])
-        self.assertIn("12a", task["document_text"])
-        self.assertIn("# 文档A：zh.txt", task["document_text"])
-        self.assertIn("# 文档B：en.txt", task["document_text"])
+        self.assertIsNone(task["document_text"])
         meta = json.loads(task["document_meta_json"])
         self.assertEqual([group["role"] for group in meta["groups"]], ["document_a", "document_b"])
-        self.assertIn("文档A独有硬线索", meta["static_precheck"])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
+        self.assertNotIn("static_precheck", meta)
         self.assertEqual(
             json.loads(task["checks_snapshot_json"]),
             [
