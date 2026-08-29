@@ -475,26 +475,7 @@ def register_routes(app):
         identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
-        page = _page_arg()
-        total = get_db().execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
-            (identity.subject, DOCUMENT_TASK_TYPE),
-        ).fetchone()["total"]
-        page = _bounded_page(page, total, TASKS_PER_PAGE)
-        rows = get_db().execute(
-            """
-            SELECT t.*,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
-                   COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
-            FROM tasks t
-            WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (identity.subject, DOCUMENT_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
-        ).fetchall()
-        stats = _task_stats_for_where("COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?", (identity.subject, DOCUMENT_TASK_TYPE))
+        page, total, rows, stats = _user_task_list_data(identity, DOCUMENT_TASK_TYPE)
         return render_template(
             "user_tasks.html",
             ip=identity.ip,
@@ -504,6 +485,7 @@ def register_routes(app):
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(),
             models=get_enabled_models(identity.subject),
+            refresh_url=url_for("user_task_statuses", task_type=DOCUMENT_TASK_TYPE),
             active_nav=DOCUMENT_TASK_TYPE,
         )
 
@@ -530,26 +512,7 @@ def register_routes(app):
         if request.method == "POST":
             return create_consistency_task_for_identity(identity, admin_created=False)
 
-        page = _page_arg()
-        total = get_db().execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
-            (identity.subject, CONSISTENCY_TASK_TYPE),
-        ).fetchone()["total"]
-        page = _bounded_page(page, total, TASKS_PER_PAGE)
-        rows = get_db().execute(
-            """
-            SELECT t.*,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
-                   COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
-            FROM tasks t
-            WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (identity.subject, CONSISTENCY_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
-        ).fetchall()
-        stats = _task_stats_for_where("COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?", (identity.subject, CONSISTENCY_TASK_TYPE))
+        page, total, rows, stats = _user_task_list_data(identity, CONSISTENCY_TASK_TYPE)
         return render_template(
             "user_consistency.html",
             ip=identity.ip,
@@ -559,6 +522,7 @@ def register_routes(app):
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(identity.subject),
+            refresh_url=url_for("user_task_statuses", task_type=CONSISTENCY_TASK_TYPE),
             active_nav=CONSISTENCY_TASK_TYPE,
         )
 
@@ -573,29 +537,7 @@ def register_routes(app):
         if request.method == "POST":
             return create_language_consistency_task_for_identity(identity, admin_created=False)
 
-        page = _page_arg()
-        total = get_db().execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
-            (identity.subject, LANGUAGE_CONSISTENCY_TASK_TYPE),
-        ).fetchone()["total"]
-        page = _bounded_page(page, total, TASKS_PER_PAGE)
-        rows = get_db().execute(
-            """
-            SELECT t.*,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
-                   COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
-            FROM tasks t
-            WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (identity.subject, LANGUAGE_CONSISTENCY_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
-        ).fetchall()
-        stats = _task_stats_for_where(
-            "COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
-            (identity.subject, LANGUAGE_CONSISTENCY_TASK_TYPE),
-        )
+        page, total, rows, stats = _user_task_list_data(identity, LANGUAGE_CONSISTENCY_TASK_TYPE)
         return render_template(
             "user_language_consistency.html",
             ip=identity.ip,
@@ -606,6 +548,7 @@ def register_routes(app):
             check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(identity.subject),
             submission_token=uuid.uuid4().hex,
+            refresh_url=url_for("user_task_statuses", task_type=LANGUAGE_CONSISTENCY_TASK_TYPE),
             active_nav=LANGUAGE_CONSISTENCY_TASK_TYPE,
         )
 
@@ -620,26 +563,7 @@ def register_routes(app):
         if request.method == "POST":
             return create_image_task_for_identity(identity, admin_created=False)
 
-        page = _page_arg()
-        total = get_db().execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
-            (identity.subject, IMAGE_TASK_TYPE),
-        ).fetchone()["total"]
-        page = _bounded_page(page, total, TASKS_PER_PAGE)
-        rows = get_db().execute(
-            """
-            SELECT t.*,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
-                   COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
-            FROM tasks t
-            WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (identity.subject, IMAGE_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
-        ).fetchall()
-        stats = _task_stats_for_where("COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?", (identity.subject, IMAGE_TASK_TYPE))
+        page, total, rows, stats = _user_task_list_data(identity, IMAGE_TASK_TYPE)
         return render_template(
             "user_images.html",
             ip=identity.ip,
@@ -649,6 +573,7 @@ def register_routes(app):
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(IMAGE_TASK_TYPE),
             models=get_enabled_models(identity.subject),
+            refresh_url=url_for("user_task_statuses", task_type=IMAGE_TASK_TYPE),
             active_nav=IMAGE_TASK_TYPE,
         )
 
@@ -663,26 +588,7 @@ def register_routes(app):
         if request.method == "POST":
             return create_video_task_for_identity(identity, admin_created=False)
 
-        page = _page_arg()
-        total = get_db().execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
-            (identity.subject, VIDEO_TASK_TYPE),
-        ).fetchone()["total"]
-        page = _bounded_page(page, total, TASKS_PER_PAGE)
-        rows = get_db().execute(
-            """
-            SELECT t.*,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-                   COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
-                   COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
-            FROM tasks t
-            WHERE COALESCE(t.owner_subject, 'ip:' || t.ip) = ? AND t.task_type = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (identity.subject, VIDEO_TASK_TYPE, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
-        ).fetchall()
-        stats = _task_stats_for_where("COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?", (identity.subject, VIDEO_TASK_TYPE))
+        page, total, rows, stats = _user_task_list_data(identity, VIDEO_TASK_TYPE)
         return render_template(
             "user_videos.html",
             ip=identity.ip,
@@ -692,7 +598,20 @@ def register_routes(app):
             pagination=_pagination(page, total, TASKS_PER_PAGE),
             check_items=get_enabled_check_items(VIDEO_TASK_TYPE),
             models=get_enabled_models(identity.subject),
+            refresh_url=url_for("user_task_statuses", task_type=VIDEO_TASK_TYPE),
             active_nav=VIDEO_TASK_TYPE,
+        )
+
+    @app.get("/task-statuses")
+    def user_task_statuses():
+        identity = _current_user_identity()
+        task_type = _validated_task_status_type()
+        if task_type is None:
+            return {"error": "任务类型无效。"}, 400
+        return _task_status_payload(
+            task_type,
+            owner_clause="COALESCE(t.owner_subject, 'ip:' || t.ip) = ?",
+            owner_params=(identity.subject,),
         )
 
     @app.get("/tasks/<int:task_id>")
@@ -886,63 +805,11 @@ def register_routes(app):
     @app.get(f"{admin_prefix}/task-statuses")
     @admin_required
     def admin_task_statuses():
-        task_type = str(request.args.get("task_type") or DOCUMENT_TASK_TYPE)
-        allowed_task_types = {
-            DOCUMENT_TASK_TYPE,
-            CONSISTENCY_TASK_TYPE,
-            LANGUAGE_CONSISTENCY_TASK_TYPE,
-            IMAGE_TASK_TYPE,
-            VIDEO_TASK_TYPE,
-        }
-        if task_type not in allowed_task_types:
+        task_type = _validated_task_status_type()
+        if task_type is None:
             return {"error": "任务类型无效。"}, 400
-        task_ids = []
-        for value in str(request.args.get("ids") or "").split(","):
-            value = value.strip()
-            if value.isdigit():
-                task_ids.append(int(value))
-        task_ids = list(dict.fromkeys(task_ids))[:100]
         mode_clause, mode_params = _mode_subject_filter("t")
-        rows = []
-        if task_ids:
-            placeholders = ",".join("?" for _ in task_ids)
-            rows = get_db().execute(
-                f"""
-                SELECT t.id, t.status, t.progress
-                FROM tasks t
-                WHERE t.task_type = ? AND {mode_clause} AND t.id IN ({placeholders})
-                """,
-                (task_type, *mode_params, *task_ids),
-            ).fetchall()
-        counts = get_db().execute(
-            f"""
-            SELECT
-                COUNT(*) AS tasks,
-                COALESCE(SUM(CASE WHEN t.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
-                COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS running,
-                COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
-                COALESCE(SUM(CASE WHEN t.status = 'partial' THEN 1 ELSE 0 END), 0) AS partial
-            FROM tasks t
-            WHERE t.task_type = ? AND {mode_clause}
-            """,
-            (task_type, *mode_params),
-        ).fetchone()
-        return {
-            "active": bool(counts["queued"] or counts["running"]),
-            "counts": {
-                key: int(counts[key] or 0)
-                for key in ("tasks", "queued", "running", "completed", "partial")
-            },
-            "tasks": [
-                {
-                    "id": row["id"],
-                    "status": row["status"],
-                    "status_label": STATUS_LABELS.get(row["status"], row["status"]),
-                    "progress": int(row["progress"] or 0),
-                }
-                for row in rows
-            ],
-        }
+        return _task_status_payload(task_type, owner_clause=mode_clause, owner_params=mode_params)
 
     @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
     @admin_required
@@ -1774,6 +1641,96 @@ def _render_admin_tasks_page():
         totals_task_type=DOCUMENT_TASK_TYPE,
         check_items=get_enabled_check_items(),
     )
+
+
+def _user_task_list_data(identity: UserIdentity, task_type: str):
+    page = _page_arg()
+    owner_clause = "COALESCE(t.owner_subject, 'ip:' || t.ip) = ?"
+    params = (identity.subject, task_type)
+    total = get_db().execute(
+        f"SELECT COUNT(*) AS total FROM tasks t WHERE {owner_clause} AND t.task_type = ?",
+        params,
+    ).fetchone()["total"]
+    page = _bounded_page(page, total, TASKS_PER_PAGE)
+    rows = get_db().execute(
+        f"""
+        SELECT t.id, t.task_type, t.ip,
+               t.original_filename, t.stored_filename, t.file_type, t.file_size,
+               t.provider_name, t.model_name, t.status, t.progress,
+               t.created_at, t.document_meta_json, t.source_files_cleaned_at
+        FROM tasks t
+        WHERE {owner_clause} AND t.task_type = ?
+        ORDER BY t.created_at DESC, t.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*params, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
+    ).fetchall()
+    stats = _task_stats_for_where(
+        "COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
+        params,
+    )
+    return page, total, rows, stats
+
+
+def _validated_task_status_type() -> str | None:
+    task_type = str(request.args.get("task_type") or DOCUMENT_TASK_TYPE)
+    allowed_task_types = {
+        DOCUMENT_TASK_TYPE,
+        CONSISTENCY_TASK_TYPE,
+        LANGUAGE_CONSISTENCY_TASK_TYPE,
+        IMAGE_TASK_TYPE,
+        VIDEO_TASK_TYPE,
+    }
+    return task_type if task_type in allowed_task_types else None
+
+
+def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tuple):
+    task_ids = []
+    for value in str(request.args.get("ids") or "").split(","):
+        value = value.strip()
+        if value.isdigit():
+            task_ids.append(int(value))
+    task_ids = list(dict.fromkeys(task_ids))[:100]
+    rows = []
+    if task_ids:
+        placeholders = ",".join("?" for _ in task_ids)
+        rows = get_db().execute(
+            f"""
+            SELECT t.id, t.status, t.progress
+            FROM tasks t
+            WHERE t.task_type = ? AND {owner_clause} AND t.id IN ({placeholders})
+            """,
+            (task_type, *owner_params, *task_ids),
+        ).fetchall()
+    counts = get_db().execute(
+        f"""
+        SELECT
+            COUNT(*) AS tasks,
+            COALESCE(SUM(CASE WHEN t.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
+            COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+            COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+            COALESCE(SUM(CASE WHEN t.status = 'partial' THEN 1 ELSE 0 END), 0) AS partial
+        FROM tasks t
+        WHERE t.task_type = ? AND {owner_clause}
+        """,
+        (task_type, *owner_params),
+    ).fetchone()
+    return {
+        "active": bool(counts["queued"] or counts["running"]),
+        "counts": {
+            key: int(counts[key] or 0)
+            for key in ("tasks", "queued", "running", "completed", "partial")
+        },
+        "tasks": [
+            {
+                "id": row["id"],
+                "status": row["status"],
+                "status_label": STATUS_LABELS.get(row["status"], row["status"]),
+                "progress": int(row["progress"] or 0),
+            }
+            for row in rows
+        ],
+    }
 
 
 def _render_admin_consistency_page():

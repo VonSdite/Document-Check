@@ -1430,6 +1430,35 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("/admin/task-statuses?task_type=document_check", str(stats.get("data-refresh-url")))
         self.assertEqual(task_row.get("data-task-status"), "running")
 
+    def test_user_task_status_endpoint_only_returns_current_owner_tasks(self):
+        own_task_id = self._insert_task(status="running", owner_subject="ip:127.0.0.1", owner_source="ip")
+        other_task_id = self._insert_task(
+            ip="10.0.0.2",
+            status="running",
+            owner_subject="ip:10.0.0.2",
+            owner_source="ip",
+        )
+
+        response = self.client.get(
+            f"/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={own_task_id},{other_task_id}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual([task["id"] for task in payload["tasks"]], [own_task_id])
+        self.assertEqual(payload["counts"]["tasks"], 1)
+
+    def test_user_task_page_exposes_lightweight_refresh_metadata(self):
+        task_id = self._insert_task(status="running", owner_subject="ip:127.0.0.1", owner_source="ip")
+
+        response = self.client.get("/")
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+
+        stats = _required_tag(soup.select_one('[data-refresh-region="stats"]'))
+        task_row = _required_tag(soup.select_one(f'[data-task-id="{task_id}"]'))
+        self.assertIn("/task-statuses?task_type=document_check", str(stats.get("data-refresh-url")))
+        self.assertEqual(task_row.get("data-task-status"), "running")
+
     def test_admin_overview_filters_tasks_by_auth_mode(self):
         self._insert_task(
             ip="10.0.0.1",

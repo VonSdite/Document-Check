@@ -71,7 +71,7 @@
   </div>
 </form>
 
-<section class="metric-grid" data-refresh-region="stats" data-refresh-active="{{ '1' if stats.queued or stats.running else '0' }}">
+<section class="metric-grid" data-refresh-region="stats" data-refresh-active="{{ '1' if stats.queued or stats.running else '0' }}" data-refresh-url="{{ refresh_url }}">
   <div class="metric"><span>全部</span><strong>{{ stats.total }}</strong></div>
   <div class="metric"><span>排队</span><strong>{{ stats.queued }}</strong></div>
   <div class="metric"><span>检查中</span><strong>{{ stats.running }}</strong></div>
@@ -107,7 +107,7 @@
       <tbody>
         {% for task in tasks %}
         {% set source_files_available = task_source_files_available(task) %}
-        <tr>
+        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}">
           {{ task_bulk.select_cell(task) }}
           <td class="task-file-cell">
             <div class="task-file-line">
