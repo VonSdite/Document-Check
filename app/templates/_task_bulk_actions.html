@@ -5,23 +5,23 @@
   method="post"
   action="{{ url_for('admin_bulk_delete_tasks' if mode == 'admin' else 'user_bulk_delete_tasks') }}"
   data-bulk-delete-form
-  data-confirm="确认删除选中的任务？删除后不可恢复。"
+  data-confirm="确认删除选中的任务？排队中的任务将先取消，删除后不可恢复。"
 >
   <input type="hidden" name="next" value="{{ current_relative_url() }}">
-  <button class="small-button danger" type="submit" data-bulk-delete-button disabled>
+  <button class="small-button danger" type="submit" data-bulk-delete-button title="可删除排队中和已结束的任务；正在运行的任务需先取消" disabled>
     批量删除<span data-bulk-delete-count></span>
   </button>
 </form>
 {%- endmacro %}
 
 {% macro select_header(tasks) -%}
-{% set deletable_count = tasks|selectattr('status', 'in', ['completed', 'partial', 'failed', 'canceled'])|list|length %}
+{% set deletable_count = tasks|selectattr('status', 'in', ['queued', 'completed', 'partial', 'failed', 'canceled'])|list|length %}
 <th class="task-select-cell">
   <input
     class="task-select-checkbox"
     type="checkbox"
     data-bulk-task-toggle
-    aria-label="选择本页全部可删除任务"
+    aria-label="选择本页全部可批量删除任务"
     {{ 'disabled' if not deletable_count else '' }}
   >
 </th>
@@ -29,7 +29,7 @@
 
 {% macro select_cell(task) -%}
 <td class="task-select-cell">
-  {% if task.status in ['completed', 'partial', 'failed', 'canceled'] %}
+  {% if task.status in ['queued', 'completed', 'partial', 'failed', 'canceled'] %}
   <input
     class="task-select-checkbox"
     type="checkbox"
@@ -37,7 +37,8 @@
     value="{{ task.id }}"
     form="bulk-delete-tasks"
     data-bulk-task
-    aria-label="选择任务：{{ task.original_filename }}"
+    data-task-status="{{ task.status }}"
+    aria-label="选择任务：{{ task.original_filename }}{{ '（排队任务将先取消）' if task.status == 'queued' else '' }}"
   >
   {% endif %}
 </td>

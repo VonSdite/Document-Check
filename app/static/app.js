@@ -2695,7 +2695,9 @@ let taskListFocusInside = false;
 
 function updateBulkTaskControls() {
   const checkboxes = Array.from(document.querySelectorAll("[data-bulk-task]"));
-  const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+  const selected = checkboxes.filter((checkbox) => checkbox.checked);
+  const selectedCount = selected.length;
+  const queuedCount = selected.filter((checkbox) => checkbox.dataset.taskStatus === "queued").length;
   const toggle = document.querySelector("[data-bulk-task-toggle]");
   const form = document.querySelector("[data-bulk-delete-form]");
   const button = document.querySelector("[data-bulk-delete-button]");
@@ -2713,7 +2715,8 @@ function updateBulkTaskControls() {
     count.textContent = selectedCount ? ` (${selectedCount})` : "";
   }
   if (form instanceof HTMLFormElement) {
-    form.dataset.confirm = `确认删除选中的 ${selectedCount} 个任务？删除后不可恢复。`;
+    const queuedMessage = queuedCount ? `其中 ${queuedCount} 个排队任务将先取消，` : "";
+    form.dataset.confirm = `确认删除选中的 ${selectedCount} 个任务？${queuedMessage}删除后不可恢复。`;
   }
 }
 

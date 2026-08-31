@@ -24,6 +24,7 @@ from app.formatting import render_markdown
 from app.routes import (
     UPLOAD_PATH_SAFE_CHARS,
     _consistency_task_title,
+    _delete_queued_task,
     _find_enabled_model,
     _parse_result_json,
     _prepare_task_results,
@@ -483,7 +484,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(complete_download.data)) as archive:
             self.assertEqual(len(archive.namelist()), 2)
 
-    def test_user_bulk_delete_removes_selected_history_tasks(self):
+    def test_user_bulk_delete_removes_queued_and_history_tasks(self):
         deletable_task_ids = [
             self._insert_task(task_type=IMAGE_TASK_TYPE, status="failed"),
             self._insert_task(task_type=IMAGE_TASK_TYPE, status="canceled", created_at="2026-05-01 10:01:00"),
@@ -495,10 +496,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
             status="queued",
             created_at="2026-05-01 10:04:00",
         )
+        running_task_id = self._insert_task(
+            task_type=IMAGE_TASK_TYPE,
+            status="running",
+            created_at="2026-05-01 10:05:00",
+        )
 
         response = self.client.post(
             "/tasks/bulk-delete",
-            data={"task_ids": [*deletable_task_ids, queued_task_id], "next": "/images?page=2"},
+            data={"task_ids": [*deletable_task_ids, queued_task_id, running_task_id], "next": "/images?page=2"},
         )
 
         self.assertEqual(response.status_code, 302)
@@ -507,15 +513,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
             remaining_ids = {
                 row["id"]
                 for row in get_db().execute(
-                    "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?, ?)",
-                    (*deletable_task_ids, queued_task_id),
+                    "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?, ?, ?)",
+                    (*deletable_task_ids, queued_task_id, running_task_id),
                 ).fetchall()
             }
-        self.assertEqual(remaining_ids, {queued_task_id})
+        self.assertEqual(remaining_ids, {running_task_id})
         with self.client.session_transaction() as session:
             messages = [message for _, message in session.get("_flashes", [])]
-        self.assertIn("已批量删除 4 个任务。", messages)
-        self.assertIn("已跳过 1 个排队中或运行中的任务。", messages)
+        self.assertIn("已批量删除 5 个任务，其中 1 个排队任务已取消。", messages)
+        self.assertIn("已跳过 1 个状态已变化或正在运行的任务，请先取消后再删除。", messages)
 
     def test_user_bulk_delete_rejects_another_users_task(self):
         task_id = self._insert_task(
@@ -534,6 +540,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             task = get_db().execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
         self.assertIsNotNone(task)
+
+    def test_queued_bulk_delete_does_not_remove_task_claimed_by_worker(self):
+        task_id = self._insert_task(status="queued")
+        with self.app.app_context():
+            db = get_db()
+            queued_snapshot = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            db.execute(
+                "UPDATE tasks SET status = 'running', claim_token = 'worker-claim' WHERE id = ?",
+                (task_id,),
+            )
+            db.commit()
+
+            deleted = _delete_queued_task(queued_snapshot)
+            task = db.execute(
+                "SELECT status, claim_token FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+
+        self.assertIsNone(deleted)
+        self.assertIsNotNone(task)
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["claim_token"], "worker-claim")
 
     def test_admin_bulk_delete_removes_selected_canceled_task(self):
         canceled_task_id = self._insert_task(
@@ -555,7 +583,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task = get_db().execute("SELECT id FROM tasks WHERE id = ?", (canceled_task_id,)).fetchone()
         self.assertIsNone(task)
 
-    def test_all_task_lists_expose_bulk_selection_for_history_tasks(self):
+    def test_all_task_lists_expose_bulk_selection_for_queued_and_history_tasks(self):
         task_routes = (
             (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
             (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
@@ -571,7 +599,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self._insert_task(task_type=task_type, status="canceled", created_at="2026-05-01 10:02:00"),
                 self._insert_task(task_type=task_type, status="partial", created_at="2026-05-01 10:03:00"),
             }
-            self._insert_task(task_type=task_type, status="queued", created_at="2026-05-01 10:04:00")
+            queued_task_id = self._insert_task(
+                task_type=task_type,
+                status="queued",
+                created_at="2026-05-01 10:04:00",
+            )
+            deletable_task_ids.add(queued_task_id)
             self._insert_task(task_type=task_type, status="running", created_at="2026-05-01 10:05:00")
             for list_url, action in (
                 (user_list_url, "/tasks/bulk-delete"),
@@ -591,6 +624,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     self.assertIsNone(toggle.get("disabled"))
                     self.assertIsNotNone(button.get("disabled"))
                     self.assertEqual(button.get_text(" ", strip=True), "批量删除")
+                    self.assertIn("排队中和已结束", str(button.get("title")))
+                    queued_checkbox = _required_tag(soup.select_one(f'[data-bulk-task][value="{queued_task_id}"]'))
+                    self.assertEqual(queued_checkbox.get("data-task-status"), "queued")
+                    self.assertIn("排队任务将先取消", str(queued_checkbox.get("aria-label")))
 
     def test_task_pages_use_consistent_navigation_and_heading_hierarchy(self):
         task_pages = (

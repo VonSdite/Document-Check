@@ -90,6 +90,7 @@ STATUS_LABELS = {
     "canceled": "已取消",
 }
 DELETABLE_TASK_STATUSES = {"completed", "partial", "failed", "canceled"}
+BULK_DELETABLE_TASK_STATUSES = DELETABLE_TASK_STATUSES | {"queued"}
 DEFAULT_TASKS_PER_PAGE = 20
 TASKS_PER_PAGE_OPTIONS = (DEFAULT_TASKS_PER_PAGE, 50, 100)
 MAX_BULK_DELETE_TASKS = max(TASKS_PER_PAGE_OPTIONS)
@@ -3476,6 +3477,34 @@ def _delete_task(task):
     return True
 
 
+def _delete_queued_task(task) -> bool | None:
+    db = get_db()
+    canceled = db.execute(
+        """
+        UPDATE tasks
+        SET cancel_requested = 1,
+            status = 'canceled',
+            progress = 0,
+            api_key = NULL,
+            claim_token = NULL,
+            lease_expires_at = NULL,
+            updated_at = ?,
+            finished_at = ?
+        WHERE id = ? AND status = 'queued'
+        """,
+        (now_text(), now_text(), task["id"]),
+    )
+    if canceled.rowcount != 1:
+        db.rollback()
+        return None
+    db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
+    db.commit()
+
+    canceled_task = dict(task)
+    canceled_task["status"] = "canceled"
+    return _delete_task(canceled_task)
+
+
 def _bulk_delete_tasks(task_loader, *, admin_created: bool):
     raw_task_ids = request.form.getlist("task_ids")
     if len(raw_task_ids) > MAX_BULK_DELETE_TASKS:
@@ -3498,14 +3527,30 @@ def _bulk_delete_tasks(task_loader, *, admin_created: bool):
     tasks = [task_loader(task_id) for task_id in task_ids]
     fallback_endpoint = _task_list_endpoint(admin_created, tasks[0]["task_type"])
     redirect_url = _task_action_redirect(fallback_endpoint)
-    deletable_tasks = [task for task in tasks if task["status"] in DELETABLE_TASK_STATUSES]
-    skipped_count = len(tasks) - len(deletable_tasks)
-    deleted_count = sum(1 for task in deletable_tasks if _delete_task(task))
+    deleted_count = 0
+    queued_deleted_count = 0
+    skipped_count = 0
+    for task in tasks:
+        if task["status"] not in BULK_DELETABLE_TASK_STATUSES:
+            skipped_count += 1
+            continue
+        if task["status"] == "queued":
+            deleted = _delete_queued_task(task)
+            if deleted is None:
+                skipped_count += 1
+                continue
+            if deleted:
+                deleted_count += 1
+                queued_deleted_count += 1
+            continue
+        if _delete_task(task):
+            deleted_count += 1
 
     if deleted_count:
-        flash(f"已批量删除 {deleted_count} 个任务。", "success")
+        queued_message = f"，其中 {queued_deleted_count} 个排队任务已取消" if queued_deleted_count else ""
+        flash(f"已批量删除 {deleted_count} 个任务{queued_message}。", "success")
     if skipped_count:
-        flash(f"已跳过 {skipped_count} 个排队中或运行中的任务。", "error")
+        flash(f"已跳过 {skipped_count} 个状态已变化或正在运行的任务，请先取消后再删除。", "error")
     return redirect(redirect_url)
 
 
