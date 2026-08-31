@@ -609,6 +609,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 navigation = _required_tag(soup.find("nav", {"aria-label": "主导航"}))
                 active_link = _required_tag(navigation.select_one("a.active"))
                 create_panel = _required_tag(soup.select_one(".create-panel"))
+                metric_grid = _required_tag(soup.select_one(".metric-grid.five"))
                 task_panels = [
                     panel
                     for panel in soup.select("section.panel")
@@ -619,6 +620,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertEqual(active_link.get_text(strip=True), nav_label)
                 self.assertEqual(active_link.get("title"), nav_title)
                 self.assertEqual(_required_tag(create_panel.find("h2")).get_text(strip=True), "新建任务")
+                self.assertEqual(len(metric_grid.select(":scope > .metric")), 5)
                 self.assertEqual(len(task_panels), 1)
                 self.assertEqual(_required_tag(task_panels[0].find("h2")).get_text(strip=True), "任务记录")
 
