@@ -767,7 +767,7 @@ body.table-column-resize-active * {
   padding: 16px 18px;
 }
 
-.metric span {
+.metric > span {
   display: block;
   color: var(--muted);
   font-size: 13px;
@@ -779,6 +779,7 @@ body.table-column-resize-active * {
   margin-top: 8px;
   font-size: 28px;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .overview-grid {
