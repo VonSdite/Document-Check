@@ -2235,6 +2235,34 @@ body.table-column-resize-active * {
   flex-wrap: wrap;
 }
 
+.pagination-summary,
+.page-size-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-size-form {
+  margin: 0;
+}
+
+.page-size-form label {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.page-size-form select {
+  min-height: 32px;
+  padding: 5px 28px 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background-color: #fff;
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .page-jump-form {
   display: inline-flex;
   align-items: center;

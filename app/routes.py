@@ -90,7 +90,9 @@ STATUS_LABELS = {
     "canceled": "已取消",
 }
 DELETABLE_TASK_STATUSES = {"completed", "partial", "failed", "canceled"}
-TASKS_PER_PAGE = 20
+DEFAULT_TASKS_PER_PAGE = 20
+TASKS_PER_PAGE_OPTIONS = (DEFAULT_TASKS_PER_PAGE, 50, 100)
+MAX_BULK_DELETE_TASKS = max(TASKS_PER_PAGE_OPTIONS)
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 TASK_FILE_RETENTION_DAYS_DEFAULT = 0
 ISSUE_OUTPUT_LIMIT_DEFAULT = DEFAULT_ISSUE_OUTPUT_LIMIT
@@ -455,14 +457,14 @@ def register_routes(app):
         identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
-        page, total, rows, stats = _user_task_list_data(identity, DOCUMENT_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(identity, DOCUMENT_TASK_TYPE)
         return render_template(
             "user_tasks.html",
             ip=identity.ip,
             identity=identity,
             tasks=rows,
             stats=stats,
-            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            pagination=_pagination(page, total, per_page),
             check_items=get_enabled_check_items(),
             models=get_enabled_models(identity.subject),
             refresh_url=url_for("user_task_statuses", task_type=DOCUMENT_TASK_TYPE),
@@ -492,14 +494,14 @@ def register_routes(app):
         if request.method == "POST":
             return create_consistency_task_for_identity(identity, admin_created=False)
 
-        page, total, rows, stats = _user_task_list_data(identity, CONSISTENCY_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(identity, CONSISTENCY_TASK_TYPE)
         return render_template(
             "user_consistency.html",
             ip=identity.ip,
             identity=identity,
             tasks=rows,
             stats=stats,
-            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            pagination=_pagination(page, total, per_page),
             check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(identity.subject),
             refresh_url=url_for("user_task_statuses", task_type=CONSISTENCY_TASK_TYPE),
@@ -517,14 +519,14 @@ def register_routes(app):
         if request.method == "POST":
             return create_language_consistency_task_for_identity(identity, admin_created=False)
 
-        page, total, rows, stats = _user_task_list_data(identity, LANGUAGE_CONSISTENCY_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(identity, LANGUAGE_CONSISTENCY_TASK_TYPE)
         return render_template(
             "user_language_consistency.html",
             ip=identity.ip,
             identity=identity,
             tasks=rows,
             stats=stats,
-            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            pagination=_pagination(page, total, per_page),
             check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(identity.subject),
             submission_token=uuid.uuid4().hex,
@@ -543,14 +545,14 @@ def register_routes(app):
         if request.method == "POST":
             return create_image_task_for_identity(identity, admin_created=False)
 
-        page, total, rows, stats = _user_task_list_data(identity, IMAGE_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(identity, IMAGE_TASK_TYPE)
         return render_template(
             "user_images.html",
             ip=identity.ip,
             identity=identity,
             tasks=rows,
             stats=stats,
-            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            pagination=_pagination(page, total, per_page),
             check_items=get_enabled_check_items(IMAGE_TASK_TYPE),
             models=get_enabled_models(identity.subject),
             refresh_url=url_for("user_task_statuses", task_type=IMAGE_TASK_TYPE),
@@ -568,14 +570,14 @@ def register_routes(app):
         if request.method == "POST":
             return create_video_task_for_identity(identity, admin_created=False)
 
-        page, total, rows, stats = _user_task_list_data(identity, VIDEO_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(identity, VIDEO_TASK_TYPE)
         return render_template(
             "user_videos.html",
             ip=identity.ip,
             identity=identity,
             tasks=rows,
             stats=stats,
-            pagination=_pagination(page, total, TASKS_PER_PAGE),
+            pagination=_pagination(page, total, per_page),
             check_items=get_enabled_check_items(VIDEO_TASK_TYPE),
             models=get_enabled_models(identity.subject),
             refresh_url=url_for("user_task_statuses", task_type=VIDEO_TASK_TYPE),
@@ -1625,13 +1627,14 @@ def _render_admin_tasks_page():
 
 def _user_task_list_data(identity: UserIdentity, task_type: str):
     page = _page_arg()
+    per_page = _per_page_arg()
     owner_clause = "COALESCE(t.owner_subject, 'ip:' || t.ip) = ?"
     params = (identity.subject, task_type)
     total = get_db().execute(
         f"SELECT COUNT(*) AS total FROM tasks t WHERE {owner_clause} AND t.task_type = ?",
         params,
     ).fetchone()["total"]
-    page = _bounded_page(page, total, TASKS_PER_PAGE)
+    page = _bounded_page(page, total, per_page)
     rows = get_db().execute(
         f"""
         SELECT t.id, t.task_type, t.ip,
@@ -1643,13 +1646,13 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ? OFFSET ?
         """,
-        (*params, TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE),
+        (*params, per_page, (page - 1) * per_page),
     ).fetchall()
     stats = _task_stats_for_where(
         "COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
         params,
     )
-    return page, total, rows, stats
+    return page, per_page, total, rows, stats
 
 
 def _validated_task_status_type() -> str | None:
@@ -1754,6 +1757,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     status = request.args.get("status", "")
     owner = request.args.get("owner", request.args.get("ip", "")).strip()
     page = _page_arg()
+    per_page = _per_page_arg()
     params = []
     clauses = []
     join_ip_usernames = _auth_mode() == "ip"
@@ -1798,7 +1802,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         """,
         tuple(params),
     ).fetchone()["total"]
-    page = _bounded_page(page, total, TASKS_PER_PAGE)
+    page = _bounded_page(page, total, per_page)
     rows = get_db().execute(
         f"""
         SELECT
@@ -1818,7 +1822,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ? OFFSET ?
         """,
-        tuple(params + [TASKS_PER_PAGE, (page - 1) * TASKS_PER_PAGE]),
+        tuple(params + [per_page, (page - 1) * per_page]),
     ).fetchall()
     return render_template(
         template_name,
@@ -1826,7 +1830,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         status=status,
         owner=owner,
         ip=owner,
-        pagination=_pagination(page, total, TASKS_PER_PAGE),
+        pagination=_pagination(page, total, per_page),
         totals=_admin_totals(totals_task_type),
         global_concurrency=get_setting("global_concurrency", 3),
         user_concurrency=get_setting("user_concurrency", 1),
@@ -3474,8 +3478,8 @@ def _delete_task(task):
 
 def _bulk_delete_tasks(task_loader, *, admin_created: bool):
     raw_task_ids = request.form.getlist("task_ids")
-    if len(raw_task_ids) > TASKS_PER_PAGE:
-        flash(f"每次最多批量删除 {TASKS_PER_PAGE} 个任务。", "error")
+    if len(raw_task_ids) > MAX_BULK_DELETE_TASKS:
+        flash(f"每次最多批量删除 {MAX_BULK_DELETE_TASKS} 个任务。", "error")
         return redirect(_task_action_redirect("admin_tasks" if admin_created else "user_tasks"))
 
     task_ids = []
@@ -5567,6 +5571,14 @@ def _page_arg() -> int:
     return max(1, page)
 
 
+def _per_page_arg() -> int:
+    try:
+        per_page = int(request.args.get("per_page", str(DEFAULT_TASKS_PER_PAGE)))
+    except ValueError:
+        return DEFAULT_TASKS_PER_PAGE
+    return per_page if per_page in TASKS_PER_PAGE_OPTIONS else DEFAULT_TASKS_PER_PAGE
+
+
 def _bounded_page(page: int, total: int, per_page: int) -> int:
     pages = max(1, (total + per_page - 1) // per_page)
     return min(max(1, page), pages)
@@ -5578,6 +5590,7 @@ def _pagination(page: int, total: int, per_page: int) -> dict:
         "page": page,
         "pages": pages,
         "per_page": per_page,
+        "per_page_options": TASKS_PER_PAGE_OPTIONS,
         "total": total,
         "has_prev": page > 1,
         "has_next": page < pages,

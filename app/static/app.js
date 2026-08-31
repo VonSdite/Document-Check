@@ -2651,6 +2651,10 @@ if (taskCacheRoot) {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input instanceof HTMLSelectElement && input.matches("[data-page-size-select]")) {
+    input.form?.requestSubmit();
+    return;
+  }
   if (input instanceof HTMLSelectElement && input.name === "proxy_mode") {
     const form = input.closest(".settings-network-form");
     if (form) {
@@ -2761,7 +2765,7 @@ function taskListInteractiveTarget(target) {
     return null;
   }
   return target.closest(
-    '[data-refresh-region="task-list"] a, [data-refresh-region="task-list"] button, [data-refresh-region="task-list"] form, [data-refresh-region="task-list"] input',
+    '[data-refresh-region="task-list"] a, [data-refresh-region="task-list"] button, [data-refresh-region="task-list"] form, [data-refresh-region="task-list"] input, [data-refresh-region="task-list"] select',
   );
 }
 

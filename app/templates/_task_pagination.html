@@ -1,0 +1,49 @@
+{% macro render(endpoint, pagination, status=none, owner=none) -%}
+{% set has_filters = status is not none or owner is not none %}
+<nav class="pagination" aria-label="任务分页">
+  <div class="pagination-summary">
+    <span>共 {{ pagination.total }} 条</span>
+    <form class="page-size-form" method="get" action="{{ url_for(endpoint) }}">
+      {% if has_filters %}
+      <input type="hidden" name="status" value="{{ status }}">
+      <input type="hidden" name="owner" value="{{ owner }}">
+      {% endif %}
+      <input type="hidden" name="page" value="1">
+      <label>
+        每页
+        <select name="per_page" aria-label="每页条数" data-page-size-select>
+          {% for option in pagination.per_page_options %}
+          <option value="{{ option }}" {{ 'selected' if option == pagination.per_page else '' }}>{{ option }}</option>
+          {% endfor %}
+        </select>
+        条
+      </label>
+    </form>
+  </div>
+  <div class="pagination-controls">
+    {% if has_filters %}
+    <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for(endpoint, status=status, owner=owner, page=pagination.prev_page, per_page=pagination.per_page) }}">上一页</a>
+    {% else %}
+    <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for(endpoint, page=pagination.prev_page, per_page=pagination.per_page) }}">上一页</a>
+    {% endif %}
+    <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
+    <form class="page-jump-form" method="get" action="{{ url_for(endpoint) }}">
+      {% if has_filters %}
+      <input type="hidden" name="status" value="{{ status }}">
+      <input type="hidden" name="owner" value="{{ owner }}">
+      {% endif %}
+      <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+      <label>
+        跳至
+        <input name="page" type="number" min="1" max="{{ pagination.pages }}" value="{{ pagination.page }}" inputmode="numeric" aria-label="跳转页码">
+      </label>
+      <button class="page-link" type="submit">跳转</button>
+    </form>
+    {% if has_filters %}
+    <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for(endpoint, status=status, owner=owner, page=pagination.next_page, per_page=pagination.per_page) }}">下一页</a>
+    {% else %}
+    <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for(endpoint, page=pagination.next_page, per_page=pagination.per_page) }}">下一页</a>
+    {% endif %}
+  </div>
+</nav>
+{%- endmacro %}

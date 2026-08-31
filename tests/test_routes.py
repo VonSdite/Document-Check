@@ -4038,6 +4038,81 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(page_input.get("value"), "2")
         self.assertIsNotNone(form.select_one('button[type="submit"]'))
 
+    def test_user_task_list_accepts_50_and_100_items_per_page(self):
+        for index in range(75):
+            self._insert_task(created_at=f"2026-05-01 10:00:{index:03d}")
+
+        second_page_response = self.client.get("/?page=2&per_page=50")
+
+        self.assertEqual(second_page_response.status_code, 200)
+        second_page_soup = BeautifulSoup(second_page_response.get_data(as_text=True), "html.parser")
+        self.assertEqual(len(second_page_soup.select("tr[data-task-id]")), 25)
+        page_size_select = _required_tag(second_page_soup.select_one('select[name="per_page"]'))
+        self.assertEqual(
+            [option.get("value") for option in page_size_select.select("option")],
+            ["20", "50", "100"],
+        )
+        self.assertEqual(_required_tag(page_size_select.select_one("option[selected]")).get("value"), "50")
+        jump_form = _required_tag(second_page_soup.select_one(".page-jump-form"))
+        self.assertEqual(_required_tag(jump_form.select_one('input[name="per_page"]')).get("value"), "50")
+        previous_link = _required_tag(second_page_soup.select_one(".pagination-controls a:first-of-type"))
+        self.assertEqual(parse_qs(urlparse(str(previous_link.get("href"))).query), {"page": ["1"], "per_page": ["50"]})
+
+        hundred_item_response = self.client.get("/?per_page=100")
+
+        self.assertEqual(hundred_item_response.status_code, 200)
+        hundred_item_soup = BeautifulSoup(hundred_item_response.get_data(as_text=True), "html.parser")
+        self.assertEqual(len(hundred_item_soup.select("tr[data-task-id]")), 75)
+        self.assertEqual(
+            _required_tag(hundred_item_soup.select_one('select[name="per_page"] option[selected]')).get("value"),
+            "100",
+        )
+
+    def test_task_list_rejects_unsupported_page_size(self):
+        for index in range(25):
+            self._insert_task(created_at=f"2026-05-01 10:00:{index:03d}")
+
+        response = self.client.get("/?per_page=999")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        self.assertEqual(len(soup.select("tr[data-task-id]")), 20)
+        self.assertEqual(
+            _required_tag(soup.select_one('select[name="per_page"] option[selected]')).get("value"),
+            "20",
+        )
+
+    def test_all_task_lists_offer_page_size_choices(self):
+        task_routes = (
+            (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
+            (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
+            (LANGUAGE_CONSISTENCY_TASK_TYPE, "/language-consistency", "/admin/language-consistency"),
+            (IMAGE_TASK_TYPE, "/images", "/admin/images"),
+            (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
+        )
+
+        for task_type, user_list_url, admin_list_url in task_routes:
+            self._insert_task(task_type=task_type)
+            for list_url in (user_list_url, admin_list_url):
+                with self.subTest(task_type=task_type, list_url=list_url):
+                    response = self.client.get(f"{list_url}?per_page=50")
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    page_size_form = _required_tag(soup.select_one(".pagination .page-size-form"))
+                    page_size_select = _required_tag(page_size_form.select_one('select[name="per_page"]'))
+                    self.assertEqual(
+                        [option.get("value") for option in page_size_select.select("option")],
+                        ["20", "50", "100"],
+                    )
+                    self.assertEqual(
+                        _required_tag(page_size_select.select_one("option[selected]")).get("value"),
+                        "50",
+                    )
+                    self.assertEqual(
+                        _required_tag(page_size_form.select_one('input[name="page"]')).get("value"),
+                        "1",
+                    )
+
     def test_user_cancel_preserves_proxy_prefix_and_page(self):
         oldest_task_id = None
         for index in range(21):
@@ -4125,7 +4200,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         for index in range(21):
             self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
 
-        response = self.client.get("/admin/tasks?status=completed&owner=127.0.0.1&page=2")
+        response = self.client.get("/admin/tasks?status=completed&owner=127.0.0.1&page=2&per_page=20")
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
@@ -4139,6 +4214,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(page_input.get("max"), "2")
         self.assertEqual(status_input.get("value"), "completed")
         self.assertEqual(owner_input.get("value"), "127.0.0.1")
+        self.assertEqual(_required_tag(form.select_one('input[name="per_page"]')).get("value"), "20")
+        page_size_form = _required_tag(soup.select_one(".pagination .page-size-form"))
+        self.assertEqual(
+            _required_tag(page_size_form.select_one('input[name="status"]')).get("value"),
+            "completed",
+        )
+        self.assertEqual(
+            _required_tag(page_size_form.select_one('input[name="owner"]')).get("value"),
+            "127.0.0.1",
+        )
+        filter_form = _required_tag(soup.select_one(".filter-bar"))
+        self.assertEqual(_required_tag(filter_form.select_one('input[name="per_page"]')).get("value"), "20")
 
     def test_admin_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):

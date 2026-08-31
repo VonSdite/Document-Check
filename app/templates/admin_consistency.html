@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_task_bulk_actions.html" as task_bulk %}
+{% import "_task_pagination.html" as task_pagination %}
 
 {% block title %}多文档对照检查 - 文档智能门禁{% endblock %}
 
@@ -138,6 +139,7 @@
     </div>
   </div>
   <form method="get" class="filter-bar">
+    <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
     <label>
       状态
       <select name="status">
@@ -219,16 +221,7 @@
       </tbody>
     </table>
   </div>
-  {% if pagination.pages > 1 %}
-  <nav class="pagination" aria-label="任务分页">
-    <span>共 {{ pagination.total }} 条，每页 {{ pagination.per_page }} 条</span>
-    <div>
-      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('admin_consistency', status=status, owner=owner, page=pagination.prev_page) }}">上一页</a>
-      <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
-      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('admin_consistency', status=status, owner=owner, page=pagination.next_page) }}">下一页</a>
-    </div>
-  </nav>
-  {% endif %}
+  {{ task_pagination.render('admin_consistency', pagination, status, owner) }}
   {% else %}
   <div class="empty-state compact">
     <h3>没有匹配任务</h3>
