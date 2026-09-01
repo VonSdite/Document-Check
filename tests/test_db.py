@@ -388,13 +388,13 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertEqual(item["name"], "全文一致性检查")
         self.assertIn("技术文档全文一致性审查专家", item["prompt"])
-        self.assertIn("只能判断文内可对照的一致性", item["prompt"])
+        self.assertIn("文内可对照内容和系统同时提供的权威材料", item["prompt"])
         self.assertIn("约束强度冲突", item["prompt"])
-        self.assertIn("issue 必须提供两处可以直接对照的证据", item["prompt"])
+        self.assertIn("issue 必须提供两处可直接对照的证据", item["prompt"])
         self.assertIn("结构与内容一致性", item["prompt"])
         self.assertIn("编号或交叉引用错误", item["prompt"])
-        self.assertIn("不得使用“通常”“应该”“意味着”", item["prompt"])
-        self.assertIn("可以输出 suggestion，并明确列出待确认条件", item["prompt"])
+        self.assertIn("不能作为报告证据", item["prompt"])
+        self.assertIn("suggestion 也必须具备两处直接证据", item["prompt"])
         self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
 
     def test_default_compliance_prompt_covers_language_and_document_structure(self):
@@ -408,8 +408,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("结构与层级规范", item["prompt"])
         self.assertIn("图表、步骤与交叉引用规范", item["prompt"])
         self.assertIn("发布与交付规范", item["prompt"])
-        self.assertIn("空格和换行不属于可靠证据", item["prompt"])
-        self.assertIn("不得报告“多余空格”“缺少空格”“空格不统一”", item["prompt"])
+        self.assertIn("去除抽取产生的空格与换行后仍然成立", item["prompt"])
+        self.assertIn("仅由空格位置、断词、分页或表格单元格拼接产生的差异不满足证据门槛", item["prompt"])
         self.assertNotIn("中英文及数字间空格的明确格式问题", item["prompt"])
         self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
 
@@ -424,13 +424,13 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         self.assertEqual(understandability["name"], "易理解性检查")
         self.assertIn("内容已经提供，但表达方式导致客户难以准确理解", understandability["prompt"])
-        self.assertIn("信息完全没有提供属于内容完整性检查", understandability["prompt"])
-        self.assertIn("表格、参数矩阵、规格清单和字段值序列不属于本检查范围", understandability["prompt"])
-        self.assertIn("证据主要由表头、字段、型号、数值或单位序列构成时，删除该候选", understandability["prompt"])
+        self.assertIn("信息完全缺失归入内容完整性检查", understandability["prompt"])
+        self.assertIn("PDF中连续出现的表头、型号、字段、数值或单位序列", understandability["prompt"])
+        self.assertIn("对应关系无法建立时不满足证据门槛", understandability["prompt"])
         self.assertNotIn("表格文字难理解", understandability["prompt"])
         self.assertEqual(completeness["name"], "内容完整性检查")
-        self.assertIn("完整性判断必须保守", completeness["prompt"])
-        self.assertIn("不能因为没有看到某个常见章节就直接判为缺失", completeness["prompt"])
+        self.assertIn("必要性证据门槛", completeness["prompt"])
+        self.assertIn("通用写作经验和常见章节结构不能单独证明信息必需", completeness["prompt"])
         self.assertIn("位置优先使用文档文本中明确出现的章节号", completeness["prompt"])
 
     def test_default_check_items_are_grouped_by_task_type(self):
@@ -505,7 +505,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
             "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "compliance"),
         ).fetchone()
-        self.assertIn("不要把解析造成的变化判为原文问题", compliance_item["prompt"])
+        self.assertIn("仅由空格位置、断词、分页或表格单元格拼接产生的差异不满足证据门槛", compliance_item["prompt"])
         self.assertIn("位置优先使用文档文本中明确出现的章节号", compliance_item["prompt"])
         self.assertIn("页码仅作为章节位置的辅助信息", compliance_item["prompt"])
         sensitive_terms_item = db.execute(
@@ -667,7 +667,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"])
-        self.assertIn("空格和换行不属于可靠证据", row["prompt"])
+        self.assertIn("去除抽取产生的空格与换行后仍然成立", row["prompt"])
 
     def test_seed_defaults_migrates_current_language_only_compliance_prompt_to_structure_version(self):
         db = get_db()
@@ -726,6 +726,51 @@ class CheckItemDefaultsTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
 
+    def test_seed_defaults_migrates_previous_current_document_prompts(self):
+        db = get_db()
+        previous_prompts = {
+            "compliance": """你是资深客户资料规范审查专家兼技术文档编辑。
+结构与层级规范：从抽取文本能够直接确认的标题缺失。
+发布与交付规范：TODO、TBD、XXX。""",
+            "understandability": """本检查只审查能够识别为连续正文、完整操作句或边界明确的列表项。
+表格、参数矩阵、规格清单和字段值序列不属于本检查范围。
+问题类型建议使用：主体不明确。""",
+            "consistency": """你是严谨的技术文档全文一致性审查专家。
+issue 必须提供两处可以直接对照的证据。
+问题类型建议使用：结构与内容不一致。""",
+            "completeness": """你是严谨的技术文档内容完整性审查专家。
+完整性判断必须保守。
+问题类型建议使用：适用范围缺失。""",
+        }
+        for code, prompt in previous_prompts.items():
+            db.execute("UPDATE check_items SET prompt = ? WHERE code = ?", (prompt, code))
+        db.commit()
+
+        seed_defaults()
+
+        rows = db.execute(
+            "SELECT code, prompt FROM check_items WHERE code IN ('compliance', 'understandability', 'consistency', 'completeness')"
+        ).fetchall()
+        migrated = {row["code"]: row["prompt"] for row in rows}
+        for code in previous_prompts:
+            self.assertEqual(migrated[code], DEFAULT_CHECK_ITEMS_BY_CODE[code]["prompt"])
+
+    def test_seed_defaults_keeps_custom_completeness_prompt(self):
+        db = get_db()
+        custom_prompt = "自定义完整性提示词：只检查步骤缺失。"
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'completeness'",
+            (custom_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT prompt FROM check_items WHERE code = 'completeness'"
+        ).fetchone()
+        self.assertEqual(row["prompt"], custom_prompt)
+
     def test_seed_defaults_migrates_expanded_compliance_prompt_used_by_existing_tool(self):
         db = get_db()
         expanded_prompt = """你是资深技术文档规范审查专家，熟悉面向客户资料的语言规范、结构规范、合规要求、品牌表达、客户可读性和交付质量要求。
@@ -765,7 +810,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
         self.assertEqual(row["name"], "全文一致性检查")
         self.assertIn("约束强度冲突", row["prompt"])
-        self.assertIn("只能判断文内可对照的一致性", row["prompt"])
+        self.assertIn("文内可对照内容和系统同时提供的权威材料", row["prompt"])
 
     def test_seed_defaults_keeps_custom_consistency_prompt(self):
         db = get_db()
@@ -796,7 +841,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
         row = db.execute("SELECT prompt FROM check_items WHERE code = 'consistency'").fetchone()
         self.assertEqual(row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"])
-        self.assertIn("可以输出 suggestion，并明确列出待确认条件", row["prompt"])
+        self.assertIn("suggestion 也必须具备两处直接证据", row["prompt"])
 
     def test_seed_defaults_migrates_strict_correctness_prompt_to_consistency_version(self):
         db = get_db()

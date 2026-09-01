@@ -60,53 +60,59 @@ _THINKING_DISABLE_ADAPTERS = frozenset(
 )
 _STRUCTURED_REPORT_OUTPUT_CONTRACT = """结构化输出要求：
 1. 只输出一个 JSON 对象，不要使用 Markdown、代码块、表格或解释性前后缀。
-2. JSON 对象格式必须为：{"summary":"...", "items":[{"status":"issue|suggestion|non_issue","severity":"critical|high|medium|low","confidence":"high|medium|low","category":"...","location":"...","excerpt":"...","description":"...","impact":"...","suggestion":"..."}]}。
-3. status 规则：能从证据明确判定的问题填 "issue"；证据不足、需人工确认、疑似、建议补充或不确定项填 "suggestion"；明确不是问题或无需修改填 "non_issue"。
+2. JSON 对象格式必须为：{"summary":"...", "items":[{"status":"issue|suggestion","severity":"critical|high|medium|low","confidence":"high|medium|low","category":"...","location":"...","excerpt":"...","description":"...","impact":"...","suggestion":"..."}]}。
+3. status 只允许 "issue" 或 "suggestion"，按统一三级判定规则选择；不得输出 "non_issue"，明确不是问题或无需修改的候选不要写入 items。
 4. severity 规则：critical 表示可能导致安全、合规、重大业务或系统失效；high 表示明显影响正确性、交付或关键操作；medium 表示局部错误或一致性问题；low 表示轻微规范、表达或低影响问题。
 5. confidence 规则：high 表示文档中存在可直接对照的明确证据；medium 表示证据较充分但仍需少量人工确认；low 表示证据有限、疑似或需要业务判断。
-6. items 必须先按 status 从 issue、suggestion、non_issue 排序，同类条目再按 confidence 从 high、medium、low 排序，同置信度按 severity 从 critical、high、medium、low 排序。
+6. items 必须先按 status 从 issue、suggestion 排序，同类条目再按 confidence 从 high、medium、low 排序，同置信度按 severity 从 critical、high、medium、low 排序。
 7. 输出前合并重复问题；同一问题在多个位置重复出现时合并为一条，并在 location 中汇总位置，不要按每个出现位置重复生成。
-8. 每个 items 元素只描述一个问题、建议或非问题；没有发现问题时 items 为空数组，summary 写简短结论。
+8. 每个 items 元素只描述一个问题或建议；没有发现问题时 items 为空数组，summary 写简短结论。
 9. 所有字段使用中文字符串；未知或不适用字段填空字符串；不要输出 null。"""
 _MULTI_CHECK_REPORT_OUTPUT_CONTRACT = """多检查项结构化输出要求：
 1. 只输出一个 JSON 对象，不要使用 Markdown、代码块、表格或解释性前后缀。
-2. JSON 对象格式必须为：{"results":[{"code":"检查项编码","summary":"...","items":[{"status":"issue|suggestion|non_issue","severity":"critical|high|medium|low","confidence":"high|medium|low","category":"...","location":"...","excerpt":"...","description":"...","impact":"...","suggestion":"..."}]}]}。
+2. JSON 对象格式必须为：{"results":[{"code":"检查项编码","summary":"...","items":[{"status":"issue|suggestion","severity":"critical|high|medium|low","confidence":"high|medium|low","category":"...","location":"...","excerpt":"...","description":"...","impact":"...","suggestion":"..."}]}]}。
 3. results 必须覆盖用户要求的每个检查项 code，每个 code 恰好出现一次，不要返回未知 code，也不要用检查项名称替代 code。
-4. status 规则：能从证据明确判定的问题填 "issue"；证据不足、需人工确认、疑似、建议补充或不确定项填 "suggestion"；明确不是问题或无需修改填 "non_issue"。
+4. status 只允许 "issue" 或 "suggestion"，按统一三级判定规则选择；不得输出 "non_issue"，明确不是问题或无需修改的候选不要写入 items。
 5. severity 规则：critical 表示可能导致安全、合规、重大业务或系统失效；high 表示明显影响正确性、交付或关键操作；medium 表示局部错误或一致性问题；low 表示轻微规范、表达或低影响问题。
 6. confidence 规则：high 表示存在可直接对照的明确证据；medium 表示证据较充分但仍需少量人工确认；low 表示证据有限或需要业务判断。
-7. items 必须先按 status 从 issue、suggestion、non_issue 排序，同类条目再按 confidence 从 high、medium、low 排序，同置信度按 severity 从 critical、high、medium、low 排序。
-8. 每个 items 元素只描述一个问题、建议或非问题；没有发现问题时 items 为空数组，summary 写简短结论。
+7. items 必须先按 status 从 issue、suggestion 排序，同类条目再按 confidence 从 high、medium、low 排序，同置信度按 severity 从 critical、high、medium、low 排序。
+8. 每个 items 元素只描述一个问题或建议；没有发现问题时 items 为空数组，summary 写简短结论。
 9. 所有字段使用中文字符串；未知或不适用字段填空字符串；不要输出 null。"""
+_REPORT_DECISION_RULES = """统一三级判定规则：
+1. 明确问题：只有候选存在可定位、可引用的直接证据，能够说明为什么需要修改，并且判定不依赖未提供的外部事实，也不能被解析伪影、适用条件差异或上下文合理解释时，才输出为 "issue"。
+2. 待确认建议：只有候选已经存在具体、可引用的风险线索，问题很可能成立，但仍缺少一个可由人工核实的条件时，才输出为 "suggestion"；description 必须同时写明已确认的证据和待确认的条件。不得把泛泛的优化意见、个人偏好或没有证据的猜测输出为 "suggestion"。
+3. 不输出：候选已确认不构成问题或无需修改、缺少直接证据、主要依赖外部常识或猜测、属于解析伪影、超出当前检查范围，或者已经被上下文合理解释时，不生成 items 条目。
+4. 同一候选只能采用一种处理结果：满足明确问题条件则输出 "issue"；否则，满足待确认建议条件才输出 "suggestion"；两者都不满足则不输出。"""
 _EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据提供的文档内容，不补全文档外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
-3. 优先输出明确问题；不确定请标注“需人工确认”。
-4. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
-5. 输出明确问题或建议时，每条只描述一个问题或建议。
-6. 没有发现问题时不要编造条目。
-7. {issue_output_limit_instruction}
+3. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
+4. 输出明确问题或建议时，每条只描述一个问题或建议。
+5. {issue_output_limit_instruction}
+
+{report_decision_rules}
 
 {structured_report_output_contract}"""
 _IMAGE_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据当前图片和提供的图片位置信息进行检查，不补全图片外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
-3. 优先输出明确问题；不确定请标注“需人工确认”。
-4. 输出明确问题或建议时，每条只描述一个问题或建议。
-5. 没有发现问题时不要编造条目。
-6. {issue_output_limit_instruction}
+3. 输出明确问题或建议时，每条只描述一个问题或建议。
+4. {issue_output_limit_instruction}
+
+{report_decision_rules}
 
 {structured_report_output_contract}"""
 _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 可以综合文档文本、图片清单、图片位置和本次提供的图片内容进行检查，尤其关注图文是否对应。
 2. 只依据提供的文档上下文和图片内容，不补全文档外信息。
 3. 不输出思考过程、推理链、草稿或分析计划。
-4. 优先输出明确问题；不确定请标注“需人工确认”。
-5. 输出问题时尽量引用图片名称、图片位置或文档中的文字线索。
-6. 判断图文不对应时，必须同时给出明确文档线索和图片可见证据。
-7. 不要仅凭文件名、页码、图片顺序或未提供的上下文断言图片插入错位；证据不足时写“需人工确认”。
-8. 输出明确问题或建议时，请使用可拆分的编号条目，每条只描述一个问题或建议。
-9. {issue_output_limit_instruction}
+4. 输出问题时尽量引用图片名称、图片位置或文档中的文字线索。
+5. 判断图文不对应时，必须同时给出明确文档线索和图片可见证据。
+6. 不要仅凭文件名、页码、图片顺序或未提供的上下文断言图片插入错位。
+7. 输出明确问题或建议时，每条只描述一个问题或建议。
+8. {issue_output_limit_instruction}
+
+{report_decision_rules}
 
 {structured_report_output_contract}"""
 
@@ -129,6 +135,7 @@ def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
         issue_output_limit_instruction=_issue_output_limit_instruction(
             issue_output_limit, "单次回复"
         ),
+        report_decision_rules=_REPORT_DECISION_RULES,
         structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
@@ -138,6 +145,7 @@ def _image_execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> 
         issue_output_limit_instruction=_issue_output_limit_instruction(
             issue_output_limit, "单张图片回复"
         ),
+        report_decision_rules=_REPORT_DECISION_RULES,
         structured_report_output_contract=_STRUCTURED_REPORT_OUTPUT_CONTRACT,
     )
 
@@ -156,6 +164,7 @@ def _multimodal_document_execution_boundary(
         issue_output_limit_instruction=_issue_output_limit_instruction(
             issue_output_limit, "单次回复"
         ),
+        report_decision_rules=_REPORT_DECISION_RULES,
         structured_report_output_contract=structured_report_output_contract,
     )
 

@@ -1388,6 +1388,59 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ).fetchone()
         self.assertIsNone(cached)
 
+    def test_report_preparation_change_invalidates_cached_report_totals(self):
+        task_id = self._insert_task()
+        report = [
+            {
+                "code": "compliance",
+                "result": json.dumps(
+                    {
+                        "summary": "检查完成",
+                        "items": [
+                            {
+                                "status": "non_issue",
+                                "category": "非问题",
+                                "description": "当前表述无需修改",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json = ?, updated_at = '2026-05-01 10:01:00' WHERE id = ?",
+                (json.dumps(report, ensure_ascii=False), task_id),
+            )
+            get_db().execute(
+                """
+                INSERT INTO task_report_stats(
+                    task_id, source_updated_at, suppression_version,
+                    non_issue_count, updated_at
+                )
+                VALUES (?, '2026-05-01 10:01:00', '0:0:', 1, '2026-05-01 10:01:00')
+                """,
+                (task_id,),
+            )
+            get_db().commit()
+
+        response = self.client.get("/admin/tasks")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-admin-report-count="non_issue"]')).get_text(strip=True),
+            "0",
+        )
+        with self.app.app_context():
+            cached = get_db().execute(
+                "SELECT non_issue_count, suppression_version FROM task_report_stats WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(cached["non_issue_count"], 0)
+        self.assertTrue(cached["suppression_version"].startswith("2|"))
+
     def test_suppression_rule_change_refreshes_cached_report_totals(self):
         task_id = self._insert_task()
         report = [
@@ -3563,7 +3616,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("覆盖图片", first_row_text)
         self.assertNotIn("总体判断", first_row_text)
 
-    def test_language_consistency_no_action_items_are_non_issues(self):
+    def test_language_consistency_model_no_action_items_are_omitted(self):
         with self.app.app_context():
             now = "2026-05-23 12:45:00"
             structured_report = {
@@ -3617,14 +3670,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         rows = soup.select("tr[data-report-item]")
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 1)
         self.assertIn("额定功率不一致", rows[0].get_text(" ", strip=True))
         self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
-        self.assertIn("无需修改", rows[1].get_text(" ", strip=True))
-        self.assertEqual(_required_tag(rows[1].select_one("[data-report-item-type]")).get("data-saved-value"), "non_issue")
         self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "50.0%")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "0")
+        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "100.0%")
 
     def test_task_detail_parses_double_encoded_structured_json_report(self):
         with self.app.app_context():
@@ -3871,7 +3922,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("低风险问题", second_row)
         page_text = soup.get_text(" ", strip=True)
         self.assertIn("已合并 1 条重复问题", page_text)
-        self.assertIn("硬限制保留前 2 条，省略 2 条", page_text)
+        self.assertIn("硬限制保留前 2 条，省略 1 条", page_text)
         self.assertNotIn("安全约束前后矛盾", " ".join(row.get_text(" ", strip=True) for row in rows))
         self.assertNotIn("该项不是问题", " ".join(row.get_text(" ", strip=True) for row in rows))
 
@@ -3917,7 +3968,37 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(len(report_items), 30)
         self.assertTrue(all(item["type"] == "issue" for item in report_items))
         self.assertEqual(prepared[0]["report_limit"]["limit"], 30)
-        self.assertEqual(prepared[0]["report_limit"]["omitted_count"], 3)
+        self.assertEqual(prepared[0]["report_limit"]["omitted_count"], 2)
+
+    def test_human_non_issue_classification_is_preserved(self):
+        raw_item = {
+            "status": "issue",
+            "category": "参数问题",
+            "description": "参数前后不一致",
+        }
+        initial = _prepare_task_results(
+            [
+                {
+                    "code": "consistency",
+                    "result": json.dumps({"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False),
+                }
+            ]
+        )
+        item_id = initial[0]["report_items"][0]["id"]
+
+        prepared = _prepare_task_results(
+            [
+                {
+                    "code": "consistency",
+                    "result": json.dumps({"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False),
+                    "item_classifications": {item_id: "non_issue"},
+                }
+            ]
+        )
+
+        self.assertEqual(len(prepared[0]["report_items"]), 1)
+        self.assertEqual(prepared[0]["report_items"][0]["type"], "non_issue")
+        self.assertEqual(prepared[0]["report_counts"]["non_issue"], 1)
 
     def test_task_detail_repairs_duplicate_status_json_value(self):
         with self.app.app_context():
@@ -4054,8 +4135,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="issue"]')).get_text(strip=True), "1")
         self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="suggestion"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="non_issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="total"]')).get_text(strip=True), "3")
+        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="non_issue"]')).get_text(strip=True), "0")
+        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="total"]')).get_text(strip=True), "2")
 
     def test_user_task_list_pagination_allows_page_jump(self):
         for index in range(21):

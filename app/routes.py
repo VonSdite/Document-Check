@@ -150,6 +150,7 @@ REPORT_REJECTION_REASON_HINTS = {
 }
 REPORT_SUPPRESSION_REJECTION_REASONS = {"model_hallucination", "false_positive", "not_applicable"}
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
+REPORT_STATS_PREPARATION_VERSION = "2"
 REPORT_SUPPRESSION_DESCRIPTION_REPLACEMENTS = (
     ("不统一", "不一致"),
     ("不相同", "不一致"),
@@ -2559,12 +2560,13 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
     ).fetchall()
     task_types = {str(row["task_type"] or DOCUMENT_TASK_TYPE) for row in rows}
     suppression_versions = _report_suppression_versions(task_types)
+    empty_version = _empty_report_suppression_version()
     stale_ids = []
     for row in rows:
         task_type = str(row["task_type"] or DOCUMENT_TASK_TYPE)
         if (
             row["source_updated_at"] == row["updated_at"]
-            and row["suppression_version"] == suppression_versions.get(task_type, "0:0:")
+            and row["suppression_version"] == suppression_versions.get(task_type, empty_version)
         ):
             _add_report_counts(totals, row)
         else:
@@ -2598,7 +2600,7 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
                     (
                         row["id"],
                         row["updated_at"] or "",
-                        suppression_versions.get(task_type, "0:0:"),
+                        suppression_versions.get(task_type, empty_version),
                         *[int(item_totals.get(key) or 0) for key in REPORT_COUNT_KEYS],
                         now_text(),
                     )
@@ -2631,7 +2633,7 @@ def _admin_report_item_totals_for_where(where_clause: str, params: tuple) -> dic
 
 
 def _report_suppression_versions(task_types: set[str]) -> dict[str, str]:
-    versions = {task_type: "0:0:" for task_type in task_types}
+    versions = {task_type: _empty_report_suppression_version() for task_type in task_types}
     if not task_types:
         return versions
     placeholders = ",".join("?" for _ in task_types)
@@ -2645,8 +2647,15 @@ def _report_suppression_versions(task_types: set[str]) -> dict[str, str]:
         tuple(sorted(task_types)),
     ).fetchall()
     for row in rows:
-        versions[str(row["task_type"])] = f"{int(row['total'] or 0)}:{int(row['id_sum'] or 0)}:{row['latest'] or ''}"
+        versions[str(row["task_type"])] = (
+            f"{REPORT_STATS_PREPARATION_VERSION}|"
+            f"{int(row['total'] or 0)}:{int(row['id_sum'] or 0)}:{row['latest'] or ''}"
+        )
     return versions
+
+
+def _empty_report_suppression_version() -> str:
+    return f"{REPORT_STATS_PREPARATION_VERSION}|0:0:"
 
 
 def _add_report_counts(target: dict, source) -> None:
@@ -3955,6 +3964,15 @@ def _prepare_task_results(
         result_code = str(item.get("code") or "")
         structured_report = _result_structured_report(item)
         report_items = _result_report_items(item, structured_report)
+        classifications = item.get("item_classifications")
+        if not isinstance(classifications, dict):
+            classifications = {}
+        report_items = [
+            report_item
+            for report_item in report_items
+            if report_item.get("type") != "non_issue"
+            or _normalize_report_item_type(classifications.get(report_item.get("id"))) is not None
+        ]
         original_report_item_count = len(report_items)
         report_items = _deduplicate_report_items(report_items)
         report_items.sort(key=_report_item_priority_key)
@@ -3973,9 +3991,6 @@ def _prepare_task_results(
             original_count=original_report_item_count,
             duplicate_count=duplicate_count,
         )
-        classifications = item.get("item_classifications")
-        if not isinstance(classifications, dict):
-            classifications = {}
         acceptances = item.get("item_acceptances")
         if not isinstance(acceptances, dict):
             acceptances = {}
