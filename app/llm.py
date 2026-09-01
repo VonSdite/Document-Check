@@ -35,6 +35,8 @@ _CONTENT_CALLBACK_INTERVAL = 0.25
 _HTTP_SESSION_POOL_SIZE = 16
 _HTTP_CONNECTION_POOL_SIZE = 16
 _JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
+_DEFAULT_REASONING_EFFORT = "high"
+_DISABLED_REASONING_EFFORT = "low"
 MULTIMODAL_OUTPUT_CONTRACT_STRUCTURED_REPORT = "structured_report_json"
 MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK = "multi_check_json"
 _DINGPAN_THINKING_HOST = "dingpan.digitalpower.huawei.com"
@@ -339,6 +341,7 @@ def run_check(
             },
         ],
         "temperature": 0,
+        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
     }
     if output_token_limit is not None:
         payload["max_completion_tokens"] = output_token_limit
@@ -444,6 +447,7 @@ def run_image_check(
             },
         ],
         "temperature": 0,
+        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
         "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
     _apply_json_object_response_format(
@@ -574,6 +578,7 @@ def run_multimodal_document_check(
             },
         ],
         "temperature": 0,
+        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
         "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
     _apply_json_object_response_format(
@@ -811,6 +816,7 @@ def test_model_connection(
         "model": model_name,
         "messages": [{"role": "user", "content": "请只回复 OK。"}],
         "temperature": 0,
+        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
         "max_tokens": 16,
     }
     if force_disable_thinking:
@@ -966,7 +972,7 @@ def _disable_thinking_in_payload(
 ):
     payload["enable_thinking"] = False
     payload["thinking"] = {"type": "disabled"}
-    payload["reasoning_effort"] = "none"
+    payload["reasoning_effort"] = _DISABLED_REASONING_EFFORT
     payload["chat_template_kwargs"] = {
         "enable_thinking": False,
         "thinking": False,
