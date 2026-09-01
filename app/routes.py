@@ -62,7 +62,7 @@ from .images import (
     image_path_from_item,
 )
 from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, MAX_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
-from .llm import LLMError, test_model_connection
+from .llm import LLMError, normalize_reasoning_effort, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
 from .network import outbound_network_config
 from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
@@ -723,6 +723,7 @@ def register_routes(app):
                 ssl_verify=network["ssl_verify"],
                 request_timeout=min(provider_data["request_timeout"], MODEL_TEST_TIMEOUT_MAX),
                 model_name=model_name,
+                reasoning_effort=normalize_reasoning_effort(data.get("reasoning_effort")),
                 force_disable_thinking=_form_bool(data.get("force_disable_thinking")),
             )
         except LLMError as exc:
@@ -2089,7 +2090,7 @@ def _load_user_model_providers(owner_subject: str) -> list[dict]:
 def _load_user_model_configs(provider_id: int) -> list[dict]:
     rows = get_db().execute(
         """
-        SELECT model_name, force_disable_thinking
+        SELECT model_name, force_disable_thinking, reasoning_effort
         FROM user_model_configs
         WHERE provider_id = ?
         ORDER BY sort_order ASC, id ASC
@@ -2100,6 +2101,7 @@ def _load_user_model_configs(provider_id: int) -> list[dict]:
         {
             "model_name": row["model_name"],
             "force_disable_thinking": bool(row["force_disable_thinking"]),
+            "reasoning_effort": normalize_reasoning_effort(row["reasoning_effort"]) or "",
         }
         for row in rows
     ]
@@ -2192,14 +2194,16 @@ def _replace_user_model_configs(provider_id: int, model_configs: list[dict], upd
         db.execute(
             """
             INSERT INTO user_model_configs(
-                provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at
+                provider_id, model_name, force_disable_thinking, reasoning_effort,
+                sort_order, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 provider_id,
                 model_config["model_name"],
                 1 if model_config["force_disable_thinking"] else 0,
+                normalize_reasoning_effort(model_config.get("reasoning_effort")),
                 index * 10,
                 updated_at,
                 updated_at,
@@ -2227,13 +2231,16 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
             if isinstance(item, dict):
                 model_name = str(item.get("model_name") or item.get("id") or "").strip()
                 force_disable_thinking = _form_bool(item.get("force_disable_thinking", False))
+                reasoning_effort = normalize_reasoning_effort(item.get("reasoning_effort")) or ""
             else:
                 model_name = str(item or "").strip()
                 force_disable_thinking = False
+                reasoning_effort = ""
             configs.append(
                 {
                     "model_name": model_name,
                     "force_disable_thinking": force_disable_thinking,
+                    "reasoning_effort": reasoning_effort,
                 }
             )
 
@@ -2242,6 +2249,7 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
             {
                 "model_name": line.strip(),
                 "force_disable_thinking": False,
+                "reasoning_effort": "",
             }
             for line in str(models_text or "").splitlines()
             if line.strip()
@@ -2260,6 +2268,7 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
             {
                 "model_name": model_name,
                 "force_disable_thinking": force_disable_thinking,
+                "reasoning_effort": normalize_reasoning_effort(config.get("reasoning_effort")) or "",
             }
         )
     return result
@@ -2270,6 +2279,7 @@ def _provider_model_options(provider: dict) -> list[dict]:
         {
             "model_name": _model_config_name(model_config),
             "force_disable_thinking": _model_config_force_disable_thinking(model_config),
+            "reasoning_effort": _model_config_reasoning_effort(model_config),
             "enabled": True,
         }
         for model_config in provider["models"]
@@ -2289,6 +2299,12 @@ def _model_config_force_disable_thinking(model_config) -> bool:
     return _form_bool(model_config.get("force_disable_thinking", False))
 
 
+def _model_config_reasoning_effort(model_config) -> str:
+    if not isinstance(model_config, dict):
+        return ""
+    return normalize_reasoning_effort(model_config.get("reasoning_effort")) or ""
+
+
 def get_enabled_models(owner_subject: str | None = None):
     if owner_subject is None:
         owner_subject = current_identity().subject
@@ -2306,15 +2322,18 @@ def _model_option(provider: dict, model_name) -> dict:
         model_config = model_name
         model_name = str(model_config.get("model_name") or model_config.get("id") or "").strip()
         force_disable_thinking = bool(model_config.get("force_disable_thinking"))
+        reasoning_effort = _model_config_reasoning_effort(model_config)
     else:
         model_name = str(model_name or "").strip()
         force_disable_thinking = False
+        reasoning_effort = ""
     return {
         "id": f"{provider['id']}:{1 if force_disable_thinking else 0}:{model_name}",
         "provider_id": provider["id"],
         "provider_name": provider["name"],
         "model_name": model_name,
         "force_disable_thinking": force_disable_thinking,
+        "reasoning_effort": reasoning_effort,
         "api_base": provider["api_base"],
         "api_key": provider["api_key"],
         "request_timeout": provider["request_timeout"],
@@ -2711,10 +2730,10 @@ def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
-                api_base, api_key, request_timeout, max_input_chars, force_disable_thinking,
+                api_base, api_key, request_timeout, max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             rows,
         )
@@ -2773,6 +2792,7 @@ def _prepare_document_task_row(
         model["request_timeout"],
         model["max_input_chars"],
         1 if model["force_disable_thinking"] else 0,
+        model["reasoning_effort"] or None,
         created_at,
         created_at,
     )
@@ -2849,10 +2869,10 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking,
+                max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 IMAGE_TASK_TYPE,
@@ -2877,6 +2897,7 @@ def create_image_task_for_identity(identity: UserIdentity, *, admin_created: boo
                 model["request_timeout"],
                 model["max_input_chars"],
                 1 if model["force_disable_thinking"] else 0,
+                model["reasoning_effort"] or None,
                 created_at,
                 created_at,
             ),
@@ -2981,10 +3002,10 @@ def _create_video_task_from_upload(
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking,
+                max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 VIDEO_TASK_TYPE,
@@ -3009,6 +3030,7 @@ def _create_video_task_from_upload(
                 model["request_timeout"],
                 model["max_input_chars"],
                 1 if model["force_disable_thinking"] else 0,
+                model["reasoning_effort"] or None,
                 created_at,
                 created_at,
             ),
@@ -3096,10 +3118,10 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking,
+                max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 CONSISTENCY_TASK_TYPE,
@@ -3124,6 +3146,7 @@ def create_consistency_task_for_identity(identity: UserIdentity, *, admin_create
                 model["request_timeout"],
                 model["max_input_chars"],
                 1 if model["force_disable_thinking"] else 0,
+                model["reasoning_effort"] or None,
                 created_at,
                 created_at,
             ),
@@ -3205,10 +3228,10 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking,
+                max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 LANGUAGE_CONSISTENCY_TASK_TYPE,
@@ -3234,6 +3257,7 @@ def create_language_consistency_task_for_identity(identity: UserIdentity, *, adm
                 model["request_timeout"],
                 model["max_input_chars"],
                 1 if model["force_disable_thinking"] else 0,
+                model["reasoning_effort"] or None,
                 created_at,
                 created_at,
             ),

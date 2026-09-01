@@ -35,8 +35,7 @@ _CONTENT_CALLBACK_INTERVAL = 0.25
 _HTTP_SESSION_POOL_SIZE = 16
 _HTTP_CONNECTION_POOL_SIZE = 16
 _JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
-_DEFAULT_REASONING_EFFORT = "high"
-_DISABLED_REASONING_EFFORT = "low"
+REASONING_EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
 MULTIMODAL_OUTPUT_CONTRACT_STRUCTURED_REPORT = "structured_report_json"
 MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK = "multi_check_json"
 _DINGPAN_THINKING_HOST = "dingpan.digitalpower.huawei.com"
@@ -299,6 +298,7 @@ def run_check(
     ssl_verify: bool = False,
     request_timeout: int = 3600,
     model_name: str,
+    reasoning_effort: str | None = None,
     force_disable_thinking: bool = False,
     check_name: str,
     prompt: str,
@@ -341,8 +341,8 @@ def run_check(
             },
         ],
         "temperature": 0,
-        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
     }
+    _apply_reasoning_effort(payload, reasoning_effort)
     if output_token_limit is not None:
         payload["max_completion_tokens"] = output_token_limit
     _apply_json_object_response_format(
@@ -393,6 +393,7 @@ def run_image_check(
     ssl_verify: bool = False,
     request_timeout: int = 3600,
     model_name: str,
+    reasoning_effort: str | None = None,
     force_disable_thinking: bool = False,
     check_name: str,
     prompt: str,
@@ -447,9 +448,9 @@ def run_image_check(
             },
         ],
         "temperature": 0,
-        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
         "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
+    _apply_reasoning_effort(payload, reasoning_effort)
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
     )
@@ -500,6 +501,7 @@ def run_multimodal_document_check(
     ssl_verify: bool = False,
     request_timeout: int = 3600,
     model_name: str,
+    reasoning_effort: str | None = None,
     force_disable_thinking: bool = False,
     check_name: str,
     prompt: str,
@@ -578,9 +580,9 @@ def run_multimodal_document_check(
             },
         ],
         "temperature": 0,
-        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
         "max_completion_tokens": _MAX_COMPLETION_TOKENS,
     }
+    _apply_reasoning_effort(payload, reasoning_effort)
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
     )
@@ -806,6 +808,7 @@ def test_model_connection(
     ssl_verify: bool = False,
     request_timeout: int = 30,
     model_name: str,
+    reasoning_effort: str | None = None,
     force_disable_thinking: bool = False,
 ) -> str:
     endpoint = _chat_completions_endpoint(api_base)
@@ -816,9 +819,9 @@ def test_model_connection(
         "model": model_name,
         "messages": [{"role": "user", "content": "请只回复 OK。"}],
         "temperature": 0,
-        "reasoning_effort": _DEFAULT_REASONING_EFFORT,
         "max_tokens": 16,
     }
+    _apply_reasoning_effort(payload, reasoning_effort)
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
@@ -970,13 +973,24 @@ def _chat_completions_endpoint(api_base: str) -> str:
 def _disable_thinking_in_payload(
     payload: dict, *, api_base: str = "", model_name: str = ""
 ):
+    payload.pop("reasoning_effort", None)
     payload["enable_thinking"] = False
     payload["thinking"] = {"type": "disabled"}
-    payload["reasoning_effort"] = _DISABLED_REASONING_EFFORT
     payload["chat_template_kwargs"] = {
         "enable_thinking": False,
         "thinking": False,
     }
+
+
+def normalize_reasoning_effort(value) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in REASONING_EFFORT_VALUES else None
+
+
+def _apply_reasoning_effort(payload: dict, value) -> None:
+    normalized = normalize_reasoning_effort(value)
+    if normalized:
+        payload["reasoning_effort"] = normalized
 
 
 def _thinking_disabled_in_payload(payload: dict) -> bool:

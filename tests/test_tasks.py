@@ -710,11 +710,11 @@ class TaskExecutionTest(unittest.TestCase):
             INSERT INTO tasks(
                 ip, original_filename, stored_filename, file_type, file_size,
                 checks_json, model_name, api_base, request_timeout, max_input_chars,
-                status, progress, created_at, updated_at
+                reasoning_effort, status, progress, created_at, updated_at
             )
             VALUES (
                 '127.0.0.1', 'long.txt', 'long.txt', 'txt', 1,
-                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 200000,
+                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 200000, 'high',
                 'running', 0, ?, ?
             )
             """,
@@ -747,6 +747,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["prompt"], "检查错别字")
         self.assertEqual(calls[0]["document_text"], document_text)
         self.assertEqual(calls[0]["issue_output_limit"], 30)
+        self.assertEqual(calls[0]["reasoning_effort"], "high")
         self.assertIsNone(calls[0]["max_completion_tokens"])
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["result"], "最终结果")
@@ -1549,11 +1550,11 @@ class TaskExecutionTest(unittest.TestCase):
             INSERT INTO tasks(
                 task_type, ip, original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
-                status, progress, created_at, updated_at
+                reasoning_effort, status, progress, created_at, updated_at
             )
             VALUES (
                 ?, '127.0.0.1', '图纸.pdf', '图纸.pdf', 'pdf', 1,
-                ?, ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000,
+                ?, ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000, 'xhigh',
                 'running', 0, ?, ?
             )
             """,
@@ -1600,6 +1601,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("图 1 是电源接线图", calls[0]["document_text"])
         self.assertEqual(calls[0]["batch_index"], 1)
         self.assertEqual(calls[0]["batch_count"], 1)
+        self.assertEqual(calls[0]["reasoning_effort"], "xhigh")
         self.assertEqual(calls[0]["issue_output_limit"], 30)
         self.assertEqual(calls[0]["image_items"][0]["index"], 2)
         self.assertEqual(calls[0]["image_items"][0]["name"], "0001_page001-image001.png")
@@ -2019,11 +2021,11 @@ class TaskExecutionTest(unittest.TestCase):
             INSERT INTO tasks(
                 task_type, ip, original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json, model_name, api_base, request_timeout, max_input_chars,
-                status, progress, created_at, updated_at
+                reasoning_effort, status, progress, created_at, updated_at
             )
             VALUES (
                 ?, '127.0.0.1', '安装.mp4', '安装.mp4', 'mp4', 10,
-                ?, ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000,
+                ?, ?, ?, ?, 'qwen-vl', 'http://example.test/v1/chat/completions', 30, 5000, 'max',
                 'running', 0, ?, ?
             )
             """,
@@ -2074,6 +2076,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("硬件产品安装调测视频质检", calls[0]["prompt"])
         self.assertIn("视频时间点", calls[0]["prompt"])
         self.assertIn("current_batch_video_frames", calls[0]["document_text"])
+        self.assertEqual(calls[0]["reasoning_effort"], "max")
         self.assertEqual(calls[0]["image_items"][0]["position"], "00:01.000")
         self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/jpeg;base64,"))
         self.assertEqual([item["code"] for item in results], ["video-installation-sequence"])

@@ -161,6 +161,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self,
         owner_subject: str = "ip:127.0.0.1",
         api_key: str = "provider-secret",
+        reasoning_effort: str | None = None,
     ) -> str:
         with self.app.app_context():
             now = "2026-05-01 09:00:00"
@@ -178,15 +179,23 @@ class AdminSettingsRouteTest(unittest.TestCase):
             provider_id = cursor.lastrowid
             get_db().execute(
                 """
-                INSERT INTO user_model_configs(provider_id, model_name, force_disable_thinking, sort_order, created_at, updated_at)
-                VALUES (?, 'model-a', 0, 10, ?, ?)
+                INSERT INTO user_model_configs(
+                    provider_id, model_name, force_disable_thinking, reasoning_effort,
+                    sort_order, created_at, updated_at
+                )
+                VALUES (?, 'model-a', 0, ?, 10, ?, ?)
                 """,
-                (provider_id, now, now),
+                (provider_id, reasoning_effort, now, now),
             )
             get_db().commit()
         return f"{provider_id}:0:model-a"
 
-    def _assert_task_uses_provider_reference(self, task, model_id: str):
+    def _assert_task_uses_provider_reference(
+        self,
+        task,
+        model_id: str,
+        expected_reasoning_effort: str | None = None,
+    ):
         self.assertEqual(task["provider_id"], int(model_id.split(":", 1)[0]))
         self.assertEqual(task["provider_name"], "测试提供商")
         self.assertEqual(task["model_name"], "model-a")
@@ -194,6 +203,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(task["api_key"], "provider-secret")
         self.assertEqual(task["request_timeout"], 30)
         self.assertEqual(task["max_input_chars"], 80000)
+        self.assertEqual(task["reasoning_effort"], expected_reasoning_effort)
 
     def _reject_task_inserts(self):
         with self.app.app_context():
@@ -1707,7 +1717,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(platform_response.status_code, 404)
         self.assertEqual(local_response.status_code, 404)
 
-    def test_user_models_saves_model_force_disable_thinking(self):
+    def test_user_models_saves_model_thinking_configuration(self):
         response = self.client.post(
             "/models",
             data={
@@ -1719,8 +1729,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "is_active": "on",
                 "model_configs": json.dumps(
                     [
-                        {"model_name": "model-a", "force_disable_thinking": True},
-                        {"model_name": "model-b", "force_disable_thinking": False},
+                        {
+                            "model_name": "model-a",
+                            "force_disable_thinking": True,
+                            "reasoning_effort": "high",
+                        },
+                        {
+                            "model_name": "model-b",
+                            "force_disable_thinking": False,
+                            "reasoning_effort": "invalid",
+                        },
                     ],
                     ensure_ascii=False,
                 ),
@@ -1731,7 +1749,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             models = get_db().execute(
                 """
-                SELECT m.model_name, m.force_disable_thinking
+                SELECT m.model_name, m.force_disable_thinking, m.reasoning_effort
                 FROM user_model_configs m
                 JOIN user_model_providers p ON p.id = m.provider_id
                 WHERE p.owner_subject = ?
@@ -1740,10 +1758,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 ("ip:127.0.0.1",),
             ).fetchall()
         self.assertEqual(
-            [(row["model_name"], bool(row["force_disable_thinking"])) for row in models],
             [
-                ("model-a", True),
-                ("model-b", False),
+                (row["model_name"], bool(row["force_disable_thinking"]), row["reasoning_effort"])
+                for row in models
+            ],
+            [
+                ("model-a", True, "high"),
+                ("model-b", False, None),
             ],
         )
 
@@ -1806,9 +1827,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             row = get_db().execute(
-                "SELECT force_disable_thinking FROM user_model_configs WHERE model_name = 'legacy-model'"
+                "SELECT force_disable_thinking, reasoning_effort FROM user_model_configs WHERE model_name = 'legacy-model'"
             ).fetchone()
         self.assertEqual(row["force_disable_thinking"], 0)
+        self.assertIsNone(row["reasoning_effort"])
 
     def test_user_models_allows_same_name_for_distinct_thinking_modes(self):
         response = self.client.post(
@@ -1822,8 +1844,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "is_active": "on",
                 "model_configs": json.dumps(
                     [
-                        {"model_name": "same-model", "force_disable_thinking": False},
-                        {"model_name": "same-model", "force_disable_thinking": True},
+                        {
+                            "model_name": "same-model",
+                            "force_disable_thinking": False,
+                            "reasoning_effort": "xhigh",
+                        },
+                        {
+                            "model_name": "same-model",
+                            "force_disable_thinking": True,
+                            "reasoning_effort": "low",
+                        },
                         {"model_name": "same-model", "force_disable_thinking": False},
                     ],
                     ensure_ascii=False,
@@ -1859,6 +1889,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             assert thinking_disabled_model is not None
             self.assertFalse(thinking_enabled_model["force_disable_thinking"])
             self.assertTrue(thinking_disabled_model["force_disable_thinking"])
+            self.assertEqual(thinking_enabled_model["reasoning_effort"], "xhigh")
+            self.assertEqual(thinking_disabled_model["reasoning_effort"], "low")
 
     def test_user_model_test_endpoint_uses_submitted_model_config(self):
         self.app.config["NETWORK"] = {
@@ -1874,6 +1906,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "api_key": "sk-test",
                     "request_timeout": "30",
                     "model_name": "model-a",
+                    "reasoning_effort": "high",
                     "force_disable_thinking": True,
                 },
             )
@@ -1888,6 +1921,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ssl_verify=True,
             request_timeout=30,
             model_name="model-a",
+            reasoning_effort="high",
             force_disable_thinking=True,
         )
 
@@ -2188,7 +2222,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertIn("每个视频独立创建检查任务", soup.get_text(" ", strip=True))
 
     def test_create_task_saves_check_snapshot_and_defers_text_extraction(self):
-        model_id = self._configure_provider()
+        model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = get_db().execute("SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'").fetchone()
 
@@ -2207,7 +2241,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task = get_db().execute("SELECT * FROM tasks").fetchone()
         snapshots = json.loads(task["checks_snapshot_json"])
         meta = json.loads(task["document_meta_json"])
-        self._assert_task_uses_provider_reference(task, model_id)
+        self._assert_task_uses_provider_reference(task, model_id, "high")
         self.assertIsNone(task["document_text"])
         self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertEqual(
@@ -2398,7 +2432,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_image_task_defers_image_extraction_to_worker(self):
-        model_id = self._configure_provider()
+        model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'image-small-language-text'"
@@ -2420,7 +2454,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
         meta = json.loads(task["document_meta_json"])
         snapshots = json.loads(task["checks_snapshot_json"])
-        self._assert_task_uses_provider_reference(task, model_id)
+        self._assert_task_uses_provider_reference(task, model_id, "high")
         self.assertEqual(task["task_type"], IMAGE_TASK_TYPE)
         self.assertEqual(meta["source_document"]["file_type"], "pdf")
         self.assertEqual(meta["preprocessing"]["status"], "pending")
@@ -2516,7 +2550,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
 
     def test_create_video_task_defers_frame_extraction_to_worker(self):
-        model_id = self._configure_provider()
+        model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'video-installation-sequence'"
@@ -2540,7 +2574,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
         meta = json.loads(task["document_meta_json"])
         snapshots = json.loads(task["checks_snapshot_json"])
-        self._assert_task_uses_provider_reference(task, model_id)
+        self._assert_task_uses_provider_reference(task, model_id, "high")
         self.assertEqual(task["task_type"], VIDEO_TASK_TYPE)
         self.assertEqual(task["file_type"], "mp4")
         self.assertEqual(meta["source_video"]["file_type"], "mp4")
@@ -5086,7 +5120,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_consistency_task_defers_combined_text_extraction(self):
-        model_id = self._configure_provider()
+        model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'consistency-cross-document'"
@@ -5106,7 +5140,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
-        self._assert_task_uses_provider_reference(task, model_id)
+        self._assert_task_uses_provider_reference(task, model_id, "high")
         self.assertEqual(task["task_type"], "consistency_check")
         self.assertEqual(task["original_filename"], "素材文档：master.xlsx / 资料：related.txt")
         self.assertIsNone(task["document_text"])
@@ -5209,7 +5243,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_language_consistency_task_defers_static_precheck(self):
-        model_id = self._configure_provider()
+        model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = get_db().execute(
                 "SELECT id, code, name, prompt FROM check_items WHERE code = 'language-consistency-cross-lingual'"
@@ -5235,7 +5269,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
-        self._assert_task_uses_provider_reference(task, model_id)
+        self._assert_task_uses_provider_reference(task, model_id, "high")
         self.assertEqual(task["task_type"], LANGUAGE_CONSISTENCY_TASK_TYPE)
         self.assertEqual(task["file_type"], "双文档")
         self.assertIn("跨语种检查：zh.txt / en.txt", task["original_filename"])

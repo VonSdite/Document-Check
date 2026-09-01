@@ -1378,6 +1378,11 @@ function modelConfigName(item) {
   return String(item || "").trim();
 }
 
+function normalizeReasoningEffort(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["low", "medium", "high", "xhigh", "max"].includes(normalized) ? normalized : "";
+}
+
 function normalizeModelConfigs(value) {
   const source = Array.isArray(value) ? value : [];
   const models = [];
@@ -1385,6 +1390,7 @@ function normalizeModelConfigs(value) {
   source.forEach((item) => {
     const modelName = modelConfigName(item);
     const forceDisableThinking = Boolean(item?.force_disable_thinking);
+    const reasoningEffort = normalizeReasoningEffort(item?.reasoning_effort);
     const key = modelConfigKey(modelName, forceDisableThinking);
     if (!modelName || seen.has(key)) {
       return;
@@ -1393,6 +1399,7 @@ function normalizeModelConfigs(value) {
     models.push({
       model_name: modelName,
       force_disable_thinking: forceDisableThinking,
+      reasoning_effort: reasoningEffort,
     });
   });
   return models;
@@ -1415,9 +1422,11 @@ function collectModelConfigs(form) {
     Array.from(form.querySelectorAll("[data-model-row]")).map((row) => {
       const input = row.querySelector("[data-model-name]");
       const checkbox = row.querySelector("[data-model-thinking]");
+      const reasoningSelect = row.querySelector("[data-model-reasoning-effort]");
       return {
         model_name: input instanceof HTMLInputElement ? input.value : "",
         force_disable_thinking: checkbox instanceof HTMLInputElement && checkbox.checked,
+        reasoning_effort: reasoningSelect instanceof HTMLSelectElement ? reasoningSelect.value : "",
       };
     }),
   );
@@ -1448,7 +1457,7 @@ function appendModelAddRow(body, { empty = false } = {}) {
   const row = document.createElement("tr");
   row.className = `model-editor-add-row${empty ? " is-empty" : ""}`;
   const cell = document.createElement("td");
-  cell.colSpan = 3;
+  cell.colSpan = 4;
   const button = document.createElement("button");
   button.className = "model-editor-add-button";
   button.type = "button";
@@ -1477,6 +1486,7 @@ function renderModelRows(form, configs) {
   const rows = (Array.isArray(configs) ? configs : []).map((item) => ({
     model_name: modelConfigName(item),
     force_disable_thinking: Boolean(item?.force_disable_thinking),
+    reasoning_effort: normalizeReasoningEffort(item?.reasoning_effort),
   }));
 
   if (!rows.length) {
@@ -1510,6 +1520,26 @@ function renderModelRows(form, configs) {
     testStatus.setAttribute("aria-live", "polite");
     nameCell.append(nameLine, testStatus);
 
+    const reasoningCell = document.createElement("td");
+    const reasoningSelect = document.createElement("select");
+    reasoningSelect.className = "model-reasoning-select";
+    reasoningSelect.dataset.modelReasoningEffort = "1";
+    [
+      ["", "自动（不传）"],
+      ["low", "low"],
+      ["medium", "medium"],
+      ["high", "high"],
+      ["xhigh", "xhigh"],
+      ["max", "max"],
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = value === model.reasoning_effort;
+      reasoningSelect.appendChild(option);
+    });
+    reasoningCell.appendChild(reasoningSelect);
+
     const thinkingCell = document.createElement("td");
     const thinkingLabel = document.createElement("label");
     thinkingLabel.className = "model-thinking-toggle";
@@ -1531,7 +1561,7 @@ function renderModelRows(form, configs) {
     deleteButton.textContent = "删除";
     actionCell.appendChild(deleteButton);
 
-    row.append(nameCell, thinkingCell, actionCell);
+    row.append(nameCell, reasoningCell, thinkingCell, actionCell);
     body.appendChild(row);
   });
   appendModelAddRow(body);
@@ -1543,7 +1573,10 @@ document.querySelectorAll(".provider-modal-form").forEach((form) => {
 });
 
 function addModelRow(form) {
-  renderModelRows(form, [...collectModelConfigs(form), { model_name: "", force_disable_thinking: false }]);
+  renderModelRows(form, [
+    ...collectModelConfigs(form),
+    { model_name: "", force_disable_thinking: false, reasoning_effort: "" },
+  ]);
   const inputs = form.querySelectorAll("[data-model-name]");
   const lastInput = inputs[inputs.length - 1];
   window.setTimeout(() => lastInput?.focus());
@@ -1622,6 +1655,7 @@ async function fetchModelsForForm(form, button) {
 async function testModelForRow(form, row, button) {
   const nameInput = row.querySelector("[data-model-name]");
   const thinkingInput = row.querySelector("[data-model-thinking]");
+  const reasoningInput = row.querySelector("[data-model-reasoning-effort]");
   const modelName = nameInput instanceof HTMLInputElement ? nameInput.value.trim() : "";
   const apiBase = form.elements.api_base?.value?.trim() || "";
   const apiKey = form.elements.api_key?.value?.trim() || "";
@@ -1653,6 +1687,7 @@ async function testModelForRow(form, row, button) {
         api_key: apiKey,
         request_timeout: requestTimeout,
         model_name: modelName,
+        reasoning_effort: reasoningInput instanceof HTMLSelectElement ? reasoningInput.value : "",
         force_disable_thinking: thinkingInput instanceof HTMLInputElement && thinkingInput.checked,
       }),
     });
@@ -1783,7 +1818,10 @@ function applyFetchedModelsSelection() {
       return;
     }
     seen.add(key);
-    nextModels.push(currentThinkingEnabledByName.get(modelName) || { model_name: modelName, force_disable_thinking: false });
+    nextModels.push(
+      currentThinkingEnabledByName.get(modelName)
+      || { model_name: modelName, force_disable_thinking: false, reasoning_effort: "" },
+    );
   });
 
   renderModelRows(activeFetchModelForm, nextModels);
@@ -1879,7 +1917,11 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   const input = event.target;
   const form = input.closest?.(".provider-modal-form");
-  if (form && input.matches?.("[data-model-thinking]")) {
+  if (form && input.matches?.("[data-model-thinking], [data-model-reasoning-effort]")) {
+    const row = input.closest("[data-model-row]");
+    if (row) {
+      setModelTestStatus(row, "", "");
+    }
     writeModelConfigs(form);
     return;
   }

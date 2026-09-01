@@ -80,6 +80,7 @@ def init_db():
             request_timeout INTEGER NOT NULL DEFAULT 3600,
             max_input_chars INTEGER NOT NULL DEFAULT 80000,
             force_disable_thinking INTEGER NOT NULL DEFAULT 0,
+            reasoning_effort TEXT,
             status TEXT NOT NULL DEFAULT 'queued',
             progress INTEGER NOT NULL DEFAULT 0,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
@@ -113,6 +114,7 @@ def init_db():
             provider_id INTEGER NOT NULL,
             model_name TEXT NOT NULL,
             force_disable_thinking INTEGER NOT NULL DEFAULT 0,
+            reasoning_effort TEXT,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -205,6 +207,8 @@ def init_db():
     _ensure_column(db, "tasks", "checks_snapshot_json", "TEXT")
     _ensure_column(db, "tasks", "provider_id", "INTEGER")
     _ensure_column(db, "tasks", "force_disable_thinking", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(db, "tasks", "reasoning_effort", "TEXT")
+    _ensure_column(db, "user_model_configs", "reasoning_effort", "TEXT")
     _ensure_column(db, "tasks", "owner_subject", "TEXT")
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")
     _ensure_column(db, "tasks", "owner_source", "TEXT")

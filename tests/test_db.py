@@ -88,6 +88,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("document_meta_json", columns)
         self.assertIn("checks_snapshot_json", columns)
         self.assertIn("provider_id", columns)
+        self.assertIn("reasoning_effort", columns)
         self.assertIn("owner_subject", columns)
         self.assertIn("owner_name_snapshot", columns)
         self.assertIn("owner_source", columns)
@@ -152,6 +153,26 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("model_name", model_columns)
         self.assertIn("force_disable_thinking", model_columns)
         self.assertEqual(model_columns["force_disable_thinking"]["dflt_value"], "0")
+        self.assertIn("reasoning_effort", model_columns)
+        self.assertIsNone(model_columns["reasoning_effort"]["dflt_value"])
+
+    def test_init_db_adds_reasoning_effort_to_existing_tables(self):
+        db = get_db()
+        db.execute("ALTER TABLE tasks DROP COLUMN reasoning_effort")
+        db.execute("ALTER TABLE user_model_configs DROP COLUMN reasoning_effort")
+        db.commit()
+
+        init_db()
+
+        task_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        model_columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(user_model_configs)").fetchall()
+        }
+        self.assertIn("reasoning_effort", task_columns)
+        self.assertIn("reasoning_effort", model_columns)
 
     def test_task_live_results_table_exists(self):
         db = get_db()

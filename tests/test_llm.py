@@ -53,7 +53,7 @@ class LLMResponseParsingTest(unittest.TestCase):
     def assert_all_thinking_disable_flags(self, payload):
         self.assertIs(payload["enable_thinking"], False)
         self.assertEqual(payload["thinking"], {"type": "disabled"})
-        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertNotIn("reasoning_effort", payload)
         self.assertEqual(
             payload["chat_template_kwargs"],
             {
@@ -74,7 +74,7 @@ class LLMResponseParsingTest(unittest.TestCase):
             "http://example.test/v1/chat/completions",
         )
 
-    def test_model_connection_defaults_reasoning_effort_to_high(self):
+    def test_model_connection_omits_reasoning_effort_by_default(self):
         fake_session = FakeSession(
             [
                 FakeResponse(
@@ -89,6 +89,27 @@ class LLMResponseParsingTest(unittest.TestCase):
                 api_base="http://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="test-model",
+            )
+
+        self.assertEqual(result, "模型连通性测试通过。")
+        self.assertNotIn("reasoning_effort", fake_session.calls[0][1]["json"])
+
+    def test_model_connection_sends_configured_reasoning_effort(self):
+        fake_session = FakeSession(
+            [
+                FakeResponse(
+                    data={"choices": [{"message": {"content": "OK"}}]},
+                    headers={"content-type": "application/json"},
+                )
+            ]
+        )
+
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            result = llm.test_model_connection(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                reasoning_effort="high",
             )
 
         self.assertEqual(result, "模型连通性测试通过。")
@@ -134,8 +155,8 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(second, "第二次")
         self.assertEqual(session_factory.call_count, 1)
         self.assertEqual(len(fake_session.calls), 2)
-        self.assertEqual(fake_session.calls[0][1]["json"]["reasoning_effort"], "high")
-        self.assertEqual(fake_session.calls[1][1]["json"]["reasoning_effort"], "high")
+        self.assertNotIn("reasoning_effort", fake_session.calls[0][1]["json"])
+        self.assertNotIn("reasoning_effort", fake_session.calls[1][1]["json"])
 
     def test_document_check_prompt_warns_about_extracted_line_break_spaces(self):
         fake_session = FakeSession(
@@ -154,6 +175,7 @@ class LLMResponseParsingTest(unittest.TestCase):
                 api_base="http://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="test-model",
+                reasoning_effort="high",
                 check_name="规范性",
                 prompt="检查多余空格",
                 document_text="第一行\n第二行",
@@ -166,6 +188,7 @@ class LLMResponseParsingTest(unittest.TestCase):
             fake_session.calls[0][1]["json"]["max_completion_tokens"],
             llm._MAX_COMPLETION_TOKENS,
         )
+        self.assertEqual(fake_session.calls[0][1]["json"]["reasoning_effort"], "high")
 
     def test_document_check_can_omit_output_token_limit(self):
         fake_session = FakeSession(
@@ -711,7 +734,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(len(fake_session.calls), 2)
         first_payload = fake_session.calls[0][1]["json"]
         second_payload = fake_session.calls[1][1]["json"]
-        self.assertEqual(first_payload["reasoning_effort"], "high")
+        self.assertNotIn("reasoning_effort", first_payload)
         self.assertNotIn("enable_thinking", first_payload)
         self.assertNotIn("chat_template_kwargs", first_payload)
         self.assertNotIn("thinking", first_payload)
@@ -798,8 +821,8 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertNotIn("chat_template_kwargs", fake_session.calls[1][1]["json"])
         self.assertNotIn("thinking", fake_session.calls[0][1]["json"])
         self.assertNotIn("thinking", fake_session.calls[1][1]["json"])
-        self.assertEqual(fake_session.calls[0][1]["json"]["reasoning_effort"], "high")
-        self.assertEqual(fake_session.calls[1][1]["json"]["reasoning_effort"], "high")
+        self.assertNotIn("reasoning_effort", fake_session.calls[0][1]["json"])
+        self.assertNotIn("reasoning_effort", fake_session.calls[1][1]["json"])
 
     def test_retries_stream_when_stream_frame_is_malformed(self):
         fake_session = FakeSession(
@@ -891,6 +914,7 @@ class LLMResponseParsingTest(unittest.TestCase):
                 api_base="https://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="test-model",
+                reasoning_effort="high",
                 force_disable_thinking=True,
                 check_name="规范性",
                 prompt="检查",
@@ -905,7 +929,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         )
         self.assertIs(payload["enable_thinking"], False)
         self.assertEqual(payload["thinking"], {"type": "disabled"})
-        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertNotIn("reasoning_effort", payload)
 
     def test_force_disable_thinking_adds_all_payload_flags_for_deepseek(self):
         fake_session = FakeSession(
@@ -985,7 +1009,6 @@ class LLMResponseParsingTest(unittest.TestCase):
                     {
                         "enable_thinking": False,
                         "thinking": {"type": "disabled"},
-                        "reasoning_effort": "low",
                         "chat_template_kwargs": {
                             "enable_thinking": False,
                             "thinking": False,
@@ -1020,7 +1043,6 @@ class LLMResponseParsingTest(unittest.TestCase):
                         "keep": True,
                         "enable_thinking": False,
                         "thinking": {"type": "disabled"},
-                        "reasoning_effort": "low",
                         "chat_template_kwargs": {
                             "enable_thinking": False,
                             "thinking": False,
@@ -1147,6 +1169,7 @@ class LLMResponseParsingTest(unittest.TestCase):
                 api_base="https://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="qwen-vl",
+                reasoning_effort="high",
                 check_name="图片语种匹配检查",
                 prompt="检查图片文字语种是否和文档一致",
                 image_name="0001_page001-image001.png",
@@ -1179,6 +1202,7 @@ class LLMResponseParsingTest(unittest.TestCase):
                 api_base="https://example.test/v1/chat/completions",
                 api_key="key",
                 model_name="qwen-vl",
+                reasoning_effort="high",
                 check_name="图文对应检查",
                 prompt="检查图文对应",
                 document_text="file: 图纸.pdf\n\n正文提到图 1 是电源接线图",

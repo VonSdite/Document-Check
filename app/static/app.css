@@ -3487,12 +3487,18 @@ body.table-column-resize-active * {
 
 .model-editor-table th:nth-child(2),
 .model-editor-table td:nth-child(2) {
-  width: 150px;
+  width: 132px;
   text-align: center;
 }
 
 .model-editor-table th:nth-child(3),
 .model-editor-table td:nth-child(3) {
+  width: 150px;
+  text-align: center;
+}
+
+.model-editor-table th:nth-child(4),
+.model-editor-table td:nth-child(4) {
   width: 74px;
   padding-left: 6px;
 }
@@ -3606,6 +3612,13 @@ body.table-column-resize-active * {
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.model-reasoning-select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-size: 12px;
 }
 
 .fetch-model-body {
