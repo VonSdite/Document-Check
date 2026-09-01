@@ -399,18 +399,32 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
     def test_default_compliance_prompt_covers_language_and_document_structure(self):
         db = get_db()
-        item = db.execute("SELECT prompt FROM check_items WHERE code = 'compliance'").fetchone()
+        item = db.execute(
+            "SELECT description, prompt FROM check_items WHERE code = 'compliance'"
+        ).fetchone()
 
+        self.assertEqual(
+            item["description"],
+            "检查语言文字、术语命名、日期数字与单位、结构层级、编号和交叉引用规范。",
+        )
         self.assertIn("语言文字规范", item["prompt"])
         self.assertIn("错别字", item["prompt"])
+        self.assertIn("术语与命名书写", item["prompt"])
+        self.assertIn("日期、数字、单位和标点符号", item["prompt"])
         self.assertIn("位置优先使用文档文本中明确出现的章节号", item["prompt"])
         self.assertIn("页码仅作为章节位置的辅助信息", item["prompt"])
         self.assertIn("结构与层级规范", item["prompt"])
-        self.assertIn("图表、步骤与交叉引用规范", item["prompt"])
-        self.assertIn("发布与交付规范", item["prompt"])
+        self.assertIn("编号与交叉引用规范", item["prompt"])
         self.assertIn("去除抽取产生的空格与换行后仍然成立", item["prompt"])
         self.assertIn("仅由空格位置、断词、分页或表格单元格拼接产生的差异不满足证据门槛", item["prompt"])
         self.assertNotIn("中英文及数字间空格的明确格式问题", item["prompt"])
+        self.assertNotIn("客户资料表达", item["prompt"])
+        self.assertNotIn("发布与交付规范", item["prompt"])
+        self.assertNotIn("技术信息与安全提示呈现", item["prompt"])
+        self.assertNotIn("TODO", item["prompt"])
+        self.assertNotIn("责备客户", item["prompt"])
+        self.assertNotIn("版权", item["prompt"])
+        self.assertNotIn("保密级别", item["prompt"])
         self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
 
     def test_default_understandability_and_completeness_prompts_have_disjoint_boundaries(self):
@@ -730,8 +744,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
         db = get_db()
         previous_prompts = {
             "compliance": """你是资深客户资料规范审查专家兼技术文档编辑。
-结构与层级规范：从抽取文本能够直接确认的标题缺失。
-发布与交付规范：TODO、TBD、XXX。""",
+解析证据门槛：候选在去除抽取产生的空格与换行后仍然成立。
+8. 发布与交付规范：TODO、TBD、XXX、“待补充”。""",
             "understandability": """本检查只审查能够识别为连续正文、完整操作句或边界明确的列表项。
 表格、参数矩阵、规格清单和字段值序列不属于本检查范围。
 问题类型建议使用：主体不明确。""",
