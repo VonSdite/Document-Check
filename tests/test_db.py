@@ -467,6 +467,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("必要性证据门槛", completeness["prompt"])
         self.assertIn("通用写作经验和常见章节结构不能单独证明信息必需", completeness["prompt"])
         self.assertIn("位置优先使用文档文本中明确出现的章节号", completeness["prompt"])
+        self.assertIn("只要引用处或全文其他位置已经提供对应超链接", completeness["prompt"])
+        self.assertIn("不得再以“未提供该指南的获取方式或附录”", completeness["prompt"])
+        self.assertIn("不得要求再把资料正文复制到当前文档或作为附录提供", completeness["prompt"])
 
     def test_default_check_items_are_grouped_by_task_type(self):
         db = get_db()
@@ -805,6 +808,29 @@ issue 必须提供两处可以直接对照的证据。
             "SELECT prompt FROM check_items WHERE code = 'completeness'"
         ).fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
+
+    def test_seed_defaults_migrates_previous_stock_completeness_prompt(self):
+        db = get_db()
+        previous_prompt = """你是严谨的技术文档内容完整性审查专家。
+必要性证据门槛：每个候选必须至少有一种明确触发依据。
+通用写作经验和常见章节结构不能单独证明信息必需。
+链接实际可访问性不作为本检查的缺失依据。"""
+        db.execute(
+            "UPDATE check_items SET prompt = ? WHERE code = 'completeness'",
+            (previous_prompt,),
+        )
+        db.commit()
+
+        seed_defaults()
+
+        row = db.execute(
+            "SELECT prompt FROM check_items WHERE code = 'completeness'"
+        ).fetchone()
+        self.assertEqual(
+            row["prompt"],
+            DEFAULT_CHECK_ITEMS_BY_CODE["completeness"]["prompt"],
+        )
+        self.assertIn("超链接证据规则", row["prompt"])
 
     def test_seed_defaults_migrates_expanded_compliance_prompt_used_by_existing_tool(self):
         db = get_db()

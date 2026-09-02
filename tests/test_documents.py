@@ -7,6 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
+from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from openpyxl import Workbook
 
 from app.documents import (
@@ -59,6 +63,36 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertTrue(allowed_file("素材.xlsm"))
         self.assertTrue(allowed_file("素材.xls"))
 
+    def test_extracts_docx_hyperlink_targets_from_paragraph_and_table(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "指南.docx"
+            document = Document()
+            paragraph = document.add_paragraph("操作步骤请参见")
+            _add_docx_hyperlink(
+                paragraph,
+                "安装指南",
+                "https://docs.example.com/install",
+            )
+            table = document.add_table(rows=1, cols=1)
+            cell_paragraph = table.cell(0, 0).paragraphs[0]
+            _add_docx_hyperlink(
+                cell_paragraph,
+                "维护指南",
+                "https://docs.example.com/maintenance",
+            )
+            document.save(path)
+
+            text = extract_text(path, "docx")
+
+        self.assertIn(
+            "操作步骤请参见安装指南（超链接：https://docs.example.com/install）",
+            text,
+        )
+        self.assertIn(
+            "维护指南（超链接：https://docs.example.com/maintenance）",
+            text,
+        )
+
     def test_extracts_xlsx_workbook_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "素材.xlsx"
@@ -70,6 +104,8 @@ class DocumentFormattingTest(unittest.TestCase):
             sheet.append(["额定电流", 10, "A"])
             sheet.append(["空列示例", None, "保留位置"])
             sheet["D5"] = "=SUM(1,2)"
+            sheet["A6"] = "安装指南"
+            sheet["A6"].hyperlink = "https://docs.example.com/install"
             workbook.save(path)
             workbook.close()
 
@@ -80,6 +116,25 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("额定电流 | 10 | A", text)
         self.assertIn("空列示例 |  | 保留位置", text)
         self.assertIn(" |  |  | =SUM(1,2)", text)
+        self.assertIn(
+            "安装指南（超链接：https://docs.example.com/install）",
+            text,
+        )
+
+    def test_extracts_html_hyperlink_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "指南.html"
+            path.write_text(
+                '<p>具体步骤参见<a href="https://docs.example.com/guide">操作指南</a>。</p>',
+                encoding="utf-8",
+            )
+
+            text = extract_text(path, "html")
+
+        self.assertIn(
+            "操作指南（超链接：https://docs.example.com/guide）",
+            text,
+        )
 
     def test_pdf_extraction_removes_overlapping_space_but_keeps_visible_space(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -103,6 +158,27 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("DANGER", text)
         self.assertNotIn("D ANGER", text)
         self.assertIn("NORMAL SPACE", text)
+
+    def test_extracts_pdf_link_annotation_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "guide.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "Installation Guide", fontsize=12)
+            page.insert_link(
+                {
+                    "kind": fitz.LINK_URI,
+                    "from": fitz.Rect(72, 58, 170, 76),
+                    "uri": "https://docs.example.com/install",
+                }
+            )
+            document.save(path)
+            document.close()
+
+            text = extract_text(path, "pdf")
+
+        self.assertIn("[超链接]", text)
+        self.assertIn("https://docs.example.com/install", text)
 
     def test_pdf_page_selection_prefers_pymupdf_when_pypdf_is_corrupted(self):
         pypdf_text = "标题 \ufffd\ufffd\ufffd\ufffd\ufffd 正文"
@@ -449,6 +525,18 @@ def _write_docx_with_inline_image(path: Path):
 </w:document>""",
         )
         archive.writestr("word/media/image1.png", _TINY_PNG)
+
+
+def _add_docx_hyperlink(paragraph, label: str, target: str):
+    relationship_id = paragraph.part.relate_to(target, RT.HYPERLINK, is_external=True)
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), relationship_id)
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = label
+    run.append(text)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
 
 
 if __name__ == "__main__":

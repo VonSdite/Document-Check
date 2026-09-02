@@ -1,16 +1,26 @@
 import re
 import unicodedata
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 from bs4 import BeautifulSoup
 from docx import Document
+from docx.oxml.ns import qn
 import fitz
 from openpyxl import load_workbook
+from openpyxl.utils.cell import range_boundaries
 from pypdf import PdfReader
 import xlrd
 
 
 ALLOWED_EXTENSIONS = {"docx", "pdf", "txt", "md", "html", "xlsx", "xlsm", "xls"}
+_HYPERLINK_FIELD_PATTERN = re.compile(
+    r"\bHYPERLINK\s+(?:(\\l)\s+)?(?:\"([^\"]+)\"|(\S+))",
+    re.IGNORECASE,
+)
+_SPREADSHEETML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_OFFICE_RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
 class DocumentReadError(Exception):
@@ -58,15 +68,122 @@ def _extract_docx(path: Path) -> str:
     document = Document(str(path))
     parts = []
     for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
+        text = _docx_paragraph_text(paragraph)
         if text:
             parts.append(text)
     for table in document.tables:
         for row in table.rows:
-            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            cells = []
+            for cell in row.cells:
+                cell_text = "\n".join(
+                    text
+                    for paragraph in cell.paragraphs
+                    if (text := _docx_paragraph_text(paragraph))
+                ).strip()
+                if cell_text:
+                    cells.append(cell_text)
             if cells:
                 parts.append(" | ".join(cells))
     return "\n".join(parts)
+
+
+def _docx_paragraph_text(paragraph) -> str:
+    text = _docx_element_text(paragraph._p, paragraph.part).strip()
+    for target in _docx_complex_field_hyperlinks(paragraph._p):
+        if target not in text:
+            text += f"（超链接：{target}）"
+    return text
+
+
+def _docx_element_text(element, part) -> str:
+    if element.tag == qn("w:hyperlink"):
+        label = _docx_plain_element_text(element)
+        target = _docx_hyperlink_target(element, part)
+        return _format_hyperlink_text(label, target)
+    if element.tag == qn("w:fldSimple"):
+        label = _docx_plain_element_text(element)
+        target = _docx_field_hyperlink_target(element.get(qn("w:instr")))
+        return _format_hyperlink_text(label, target)
+    if element.tag == qn("w:t"):
+        return element.text or ""
+    if element.tag == qn("w:tab"):
+        return "\t"
+    if element.tag in {qn("w:br"), qn("w:cr")}:
+        return "\n"
+    if element.tag == qn("w:noBreakHyphen"):
+        return "-"
+    if element.tag in {qn("w:instrText"), qn("w:delText")}:
+        return ""
+    return "".join(_docx_element_text(child, part) for child in element)
+
+
+def _docx_plain_element_text(element) -> str:
+    if element.tag == qn("w:t"):
+        return element.text or ""
+    if element.tag == qn("w:tab"):
+        return "\t"
+    if element.tag in {qn("w:br"), qn("w:cr")}:
+        return "\n"
+    if element.tag == qn("w:noBreakHyphen"):
+        return "-"
+    if element.tag in {qn("w:instrText"), qn("w:delText")}:
+        return ""
+    return "".join(_docx_plain_element_text(child) for child in element)
+
+
+def _docx_hyperlink_target(element, part) -> str:
+    relationship_id = element.get(qn("r:id"))
+    if relationship_id:
+        try:
+            return _clean_hyperlink_target(part.rels[relationship_id].target_ref)
+        except (AttributeError, KeyError):
+            pass
+    anchor = _clean_hyperlink_target(element.get(qn("w:anchor")))
+    return f"#{anchor}" if anchor else ""
+
+
+def _docx_complex_field_hyperlinks(element) -> list[str]:
+    instruction = "".join(
+        node.text or "" for node in element.iter(qn("w:instrText"))
+    )
+    return _hyperlink_targets_from_field_instruction(instruction)
+
+
+def _docx_field_hyperlink_target(instruction) -> str:
+    targets = _hyperlink_targets_from_field_instruction(instruction)
+    return targets[0] if targets else ""
+
+
+def _hyperlink_targets_from_field_instruction(instruction) -> list[str]:
+    targets = []
+    for match in _HYPERLINK_FIELD_PATTERN.finditer(str(instruction or "")):
+        target = _clean_hyperlink_target(match.group(2) or match.group(3))
+        if match.group(1) and target:
+            target = f"#{target.lstrip('#')}"
+        if target and target not in targets:
+            targets.append(target)
+    return targets
+
+
+def _format_hyperlink_text(label, target) -> str:
+    label = str(label or "").strip()
+    target = _clean_hyperlink_target(target)
+    if not target:
+        return label
+    if label == target:
+        return label
+    if not label:
+        return f"超链接：{target}"
+    return f"{label}（超链接：{target}）"
+
+
+def _clean_hyperlink_target(target) -> str:
+    if isinstance(target, bytes):
+        target = target.decode("utf-8", errors="replace")
+    value = re.sub(r"[\r\n\t]+", " ", str(target or "")).strip()
+    if value.lower().startswith(("javascript:", "data:")):
+        return ""
+    return value[:4096]
 
 
 def _extract_pdf(path: Path) -> str:
@@ -80,12 +197,17 @@ def _extract_pdf(path: Path) -> str:
         for index, page in enumerate(reader.pages, start=1):
             pypdf_text = page.extract_text() or ""
             if layout_document is not None and index <= layout_document.page_count:
-                pymupdf_text, raw_page = _extract_pymupdf_page_text(layout_document[index - 1])
+                layout_page = layout_document[index - 1]
+                pymupdf_text, raw_page = _extract_pymupdf_page_text(layout_page)
                 pypdf_text = _normalize_pdf_overlapping_spaces(pypdf_text, raw_page)
                 pymupdf_text = _normalize_pdf_overlapping_spaces(pymupdf_text, raw_page)
                 text = _select_pdf_page_text(pypdf_text, pymupdf_text)
+                hyperlinks = _extract_pymupdf_page_hyperlinks(layout_page)
             else:
                 text = pypdf_text
+                hyperlinks = _extract_pypdf_page_hyperlinks(page)
+            if hyperlinks:
+                text = _append_hyperlinks(text, hyperlinks)
             if text.strip():
                 pages.append(f"[第{index}页]\n{text.strip()}")
         return "\n\n".join(pages)
@@ -102,6 +224,58 @@ def _extract_pymupdf_page_text(page) -> tuple[str, dict]:
         return text, raw_page
     except Exception:
         return "", {}
+
+
+def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str]]:
+    hyperlinks = []
+    try:
+        links = page.get_links()
+    except Exception:
+        return hyperlinks
+    for link in links:
+        target = _clean_hyperlink_target(link.get("uri") or link.get("file"))
+        if not target:
+            continue
+        label = ""
+        link_rect = link.get("from")
+        if link_rect:
+            try:
+                label = page.get_textbox(link_rect).strip()
+            except Exception:
+                pass
+        item = (label, target)
+        if item not in hyperlinks:
+            hyperlinks.append(item)
+    return hyperlinks
+
+
+def _extract_pypdf_page_hyperlinks(page) -> list[tuple[str, str]]:
+    hyperlinks = []
+    try:
+        annotations = page.get("/Annots") or []
+    except Exception:
+        return hyperlinks
+    for annotation_ref in annotations:
+        try:
+            annotation = annotation_ref.get_object()
+            if annotation.get("/Subtype") != "/Link":
+                continue
+            action = annotation.get("/A") or {}
+            target = _clean_hyperlink_target(action.get("/URI"))
+        except Exception:
+            continue
+        item = ("", target)
+        if target and item not in hyperlinks:
+            hyperlinks.append(item)
+    return hyperlinks
+
+
+def _append_hyperlinks(text: str, hyperlinks: list[tuple[str, str]]) -> str:
+    annotations = [
+        f"[超链接] {_format_hyperlink_text(label, target)}"
+        for label, target in hyperlinks
+    ]
+    return "\n".join(part for part in (str(text or "").strip(), *annotations) if part)
 
 
 def _select_pdf_page_text(pypdf_text: str, pymupdf_text: str) -> str:
@@ -272,6 +446,10 @@ def _extract_html(path: Path) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
+    for anchor in soup.find_all("a"):
+        label = anchor.get_text(" ", strip=True)
+        target = _clean_hyperlink_target(anchor.get("href"))
+        anchor.replace_with(_format_hyperlink_text(label, target))
     return soup.get_text("\n", strip=True)
 
 
@@ -281,9 +459,17 @@ def _extract_openpyxl_workbook(path: Path) -> str:
     try:
         parts = []
         formula_sheets = {sheet.title: sheet for sheet in formula_workbook.worksheets}
+        try:
+            hyperlinks = _extract_xlsx_hyperlinks(path, formula_workbook)
+        except (ET.ParseError, KeyError, OSError, zipfile.BadZipFile):
+            hyperlinks = {}
         for sheet in value_workbook.worksheets:
             formula_sheet = formula_sheets.get(sheet.title)
-            rows = _openpyxl_sheet_rows_text(sheet, formula_sheet)
+            rows = _openpyxl_sheet_rows_text(
+                sheet,
+                formula_sheet,
+                hyperlinks.get(sheet.title, []),
+            )
             if rows:
                 parts.append(f"# 工作表：{sheet.title}\n" + "\n".join(rows))
         return "\n\n".join(parts)
@@ -299,7 +485,20 @@ def _extract_xls(path: Path) -> str:
         for sheet in workbook.sheets():
             rows = []
             for row_index in range(sheet.nrows):
-                values = [sheet.cell_value(row_index, column_index) for column_index in range(sheet.ncols)]
+                values = []
+                for column_index in range(sheet.ncols):
+                    value = sheet.cell_value(row_index, column_index)
+                    hyperlink = sheet.hyperlink_map.get((row_index, column_index))
+                    if hyperlink is not None:
+                        target = _clean_hyperlink_target(hyperlink.url_or_path)
+                        textmark = _clean_hyperlink_target(hyperlink.textmark)
+                        if textmark:
+                            target = f"{target}#{textmark}" if target else f"#{textmark}"
+                        value = _format_hyperlink_text(
+                            value or hyperlink.desc,
+                            target,
+                        )
+                    values.append(value)
                 row_text = _spreadsheet_row_text(values)
                 if row_text:
                     rows.append(row_text)
@@ -310,7 +509,7 @@ def _extract_xls(path: Path) -> str:
         workbook.release_resources()
 
 
-def _openpyxl_sheet_rows_text(sheet, formula_sheet) -> list[str]:
+def _openpyxl_sheet_rows_text(sheet, formula_sheet, hyperlinks) -> list[str]:
     rows = []
     max_row = max(sheet.max_row or 0, getattr(formula_sheet, "max_row", 0) or 0)
     max_column = max(sheet.max_column or 0, getattr(formula_sheet, "max_column", 0) or 0)
@@ -318,15 +517,105 @@ def _openpyxl_sheet_rows_text(sheet, formula_sheet) -> list[str]:
         values = []
         for column_index in range(1, max_column + 1):
             value = sheet.cell(row_index, column_index).value
+            formula_value = None
             if value is None and formula_sheet is not None:
                 formula_value = formula_sheet.cell(row_index, column_index).value
                 if isinstance(formula_value, str) and formula_value.startswith("="):
                     value = formula_value
+            elif formula_sheet is not None:
+                formula_value = formula_sheet.cell(row_index, column_index).value
+            hyperlink = _xlsx_hyperlink_at(hyperlinks, row_index, column_index)
+            formula_target = _xlsx_formula_hyperlink_target(formula_value)
+            target = formula_target or (hyperlink[0] if hyperlink else "")
+            if target:
+                display = hyperlink[1] if hyperlink else ""
+                value = _format_hyperlink_text(value or display, target)
             values.append(value)
         row_text = _spreadsheet_row_text(values)
         if row_text:
             rows.append(row_text)
     return rows
+
+
+def _extract_xlsx_hyperlinks(path: Path, workbook) -> dict[str, list[tuple]]:
+    result = {}
+    with zipfile.ZipFile(path) as archive:
+        archive_names = set(archive.namelist())
+        for sheet in workbook.worksheets:
+            sheet_path = str(getattr(sheet, "_worksheet_path", "")).replace("\\", "/")
+            if not sheet_path or sheet_path not in archive_names:
+                continue
+            relationships = _xlsx_sheet_relationships(
+                archive,
+                archive_names,
+                sheet_path,
+            )
+            items = []
+            with archive.open(sheet_path) as source:
+                for _event, element in ET.iterparse(source, events=("end",)):
+                    if element.tag != f"{{{_SPREADSHEETML_NAMESPACE}}}hyperlink":
+                        element.clear()
+                        continue
+                    cell_range = str(element.get("ref") or "").strip()
+                    relationship_id = element.get(
+                        f"{{{_OFFICE_RELATIONSHIP_NAMESPACE}}}id"
+                    )
+                    target = _clean_hyperlink_target(
+                        relationships.get(relationship_id, "")
+                    )
+                    if not target:
+                        location = _clean_hyperlink_target(element.get("location"))
+                        target = f"#{location}" if location else ""
+                    try:
+                        bounds = range_boundaries(cell_range)
+                    except ValueError:
+                        bounds = None
+                    if target and bounds:
+                        items.append((*bounds, target, element.get("display") or ""))
+                    element.clear()
+            if items:
+                result[sheet.title] = items
+    return result
+
+
+def _xlsx_sheet_relationships(
+    archive: zipfile.ZipFile,
+    archive_names: set[str],
+    sheet_path: str,
+) -> dict[str, str]:
+    sheet_name = sheet_path.rsplit("/", 1)[-1]
+    sheet_dir = sheet_path.rsplit("/", 1)[0]
+    relationship_path = f"{sheet_dir}/_rels/{sheet_name}.rels"
+    if relationship_path not in archive_names:
+        return {}
+    relationships = {}
+    with archive.open(relationship_path) as source:
+        for _event, element in ET.iterparse(source, events=("end",)):
+            if element.tag.rsplit("}", 1)[-1] == "Relationship":
+                relationship_id = element.get("Id")
+                target = _clean_hyperlink_target(element.get("Target"))
+                if relationship_id and target:
+                    relationships[relationship_id] = target
+            element.clear()
+    return relationships
+
+
+def _xlsx_hyperlink_at(hyperlinks, row_index: int, column_index: int):
+    for min_column, min_row, max_column, max_row, target, display in hyperlinks:
+        if min_row <= row_index <= max_row and min_column <= column_index <= max_column:
+            return target, display
+    return None
+
+
+def _xlsx_formula_hyperlink_target(formula) -> str:
+    match = re.match(
+        r'^=HYPERLINK\(\s*"((?:[^"]|"")*)"',
+        str(formula or ""),
+        re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return _clean_hyperlink_target(match.group(1).replace('""', '"'))
 
 
 def _spreadsheet_rows_text(rows) -> list[str]:
