@@ -54,6 +54,7 @@ from .llm import (
     run_multimodal_document_check,
 )
 from .network import outbound_network_config
+from .report_guardrails import sanitize_text_check_result
 from .sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
     build_sensitive_terms_invalid_report,
@@ -1046,6 +1047,14 @@ def _run_check_items_concurrently(
                     if task_type == DOCUMENT_TASK_TYPE:
                         run_check_kwargs["max_completion_tokens"] = None
                     content = run_check(**run_check_kwargs)
+                    content, filtered_visual_missing_count = sanitize_text_check_result(content)
+                    if filtered_visual_missing_count:
+                        app.logger.info(
+                            "已过滤缺少文本证据的视觉对象缺失结论 task_id=%s item=%s count=%s",
+                            task_id,
+                            item["name"],
+                            filtered_visual_missing_count,
+                        )
             except (LLMError, RuntimeError) as exc:
                 progress = mark_unit_completed()
                 error = str(exc).strip() or exc.__class__.__name__

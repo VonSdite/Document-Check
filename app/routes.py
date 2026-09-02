@@ -65,6 +65,7 @@ from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, MAX_ISSUE_OUTPUT_LIMIT, normaliz
 from .llm import LLMError, normalize_reasoning_effort, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
 from .network import outbound_network_config
+from .report_guardrails import guarded_report_summary, is_unsupported_visual_missing_item
 from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
 from .task_types import (
     CONSISTENCY_MAX_DATA_FILES,
@@ -3988,6 +3989,15 @@ def _prepare_task_results(
         result_code = str(item.get("code") or "")
         structured_report = _result_structured_report(item)
         report_items = _result_report_items(item, structured_report)
+        filtered_visual_missing_count = 0
+        if task_type in {DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
+            retained_report_items = []
+            for report_item in report_items:
+                if is_unsupported_visual_missing_item(report_item):
+                    filtered_visual_missing_count += 1
+                else:
+                    retained_report_items.append(report_item)
+            report_items = retained_report_items
         classifications = item.get("item_classifications")
         if not isinstance(classifications, dict):
             classifications = {}
@@ -4027,7 +4037,11 @@ def _prepare_task_results(
             report_item["media_summary"] = _media_report_item_text(report_item)
         for display_index, report_item in enumerate(report_items, start=1):
             report_item["index"] = display_index
-        item["result_summary"] = _result_report_summary(item, structured_report)
+        item["result_summary"] = (
+            guarded_report_summary(report_items)
+            if filtered_visual_missing_count
+            else _result_report_summary(item, structured_report)
+        )
         item["report_items"] = report_items
         item["report_limit"] = report_limit
         item["suppressed_report_items"] = suppressed_items

@@ -182,8 +182,12 @@ class LLMResponseParsingTest(unittest.TestCase):
             )
 
         user_content = fake_session.calls[0][1]["json"]["messages"][1]["content"]
+        system_content = fake_session.calls[0][1]["json"]["messages"][0]["content"]
         self.assertIn("解析换行/分页造成的空白", user_content)
         self.assertIn("不要把解析换行/分页造成的空白判为“多余空格”", user_content)
+        self.assertIn("不代表原文的全部视觉内容", system_content)
+        self.assertIn("不得仅因抽取文本中未出现这些对象", user_content)
+        self.assertIn("“见图”“见表”等引用本身不能证明", user_content)
         self.assertEqual(
             fake_session.calls[0][1]["json"]["max_completion_tokens"],
             llm._MAX_COMPLETION_TOKENS,

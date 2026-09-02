@@ -4004,6 +4004,47 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(prepared[0]["report_limit"]["limit"], 30)
         self.assertEqual(prepared[0]["report_limit"]["omitted_count"], 2)
 
+    def test_text_report_filters_unsupported_visual_missing_claims_only(self):
+        raw_items = [
+            {
+                "status": "issue",
+                "category": "图片缺失",
+                "excerpt": "操作步骤如图 3 所示。",
+                "description": "未提供对应图片。",
+            },
+            {
+                "status": "issue",
+                "category": "单位缺失",
+                "excerpt": "电流 | 10",
+                "description": "表格中的电流参数没有单位。",
+            },
+        ]
+        results = [
+            {
+                "code": "completeness",
+                "name": "内容完整性检查",
+                "result": json.dumps({"summary": "发现 2 个问题", "items": raw_items}, ensure_ascii=False),
+            }
+        ]
+
+        text_prepared = _prepare_task_results(
+            results,
+            task_type=DOCUMENT_TASK_TYPE,
+            suppression_rules={},
+        )
+        image_prepared = _prepare_task_results(
+            results,
+            task_type=IMAGE_TASK_TYPE,
+            suppression_rules={},
+        )
+
+        self.assertEqual(
+            [item["category"] for item in text_prepared[0]["report_items"]],
+            ["单位缺失"],
+        )
+        self.assertEqual(text_prepared[0]["result_summary"], "检查完成，保留 1 条明确问题。")
+        self.assertEqual(len(image_prepared[0]["report_items"]), 2)
+
     def test_human_non_issue_classification_is_preserved(self):
         raw_item = {
             "status": "issue",

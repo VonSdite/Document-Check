@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import requests
 
 from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
+from .report_guardrails import TEXT_EXTRACTION_LIMITATION
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -88,8 +89,9 @@ _EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 1. 只依据提供的文档内容，不补全文档外信息。
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
-4. 输出明确问题或建议时，每条只描述一个问题或建议。
-5. {issue_output_limit_instruction}
+4. {text_extraction_limitation}只有原文摘录明确包含 TODO、TBD、待插入、待补充等占位内容时，才可以仅依据文本报告相应视觉对象缺失；“见图”“见表”等引用本身不能证明对象在原文中不存在。解析覆盖情况不明确时，不得把视觉对象缺失输出为问题或建议。
+5. 输出明确问题或建议时，每条只描述一个问题或建议。
+6. {issue_output_limit_instruction}
 
 {report_decision_rules}
 
@@ -133,6 +135,7 @@ def _issue_output_limit_instruction(value, subject: str) -> str:
 
 def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _EXECUTION_BOUNDARY_TEMPLATE.format(
+        text_extraction_limitation=TEXT_EXTRACTION_LIMITATION,
         issue_output_limit_instruction=_issue_output_limit_instruction(
             issue_output_limit, "单次回复"
         ),
@@ -328,7 +331,10 @@ def run_check(
         "messages": [
             {
                 "role": "system",
-                "content": "你是文档智能门禁系统中的审查助手。请严格基于用户提供的文档内容进行检查，输出中文结果。",
+                "content": (
+                    "你是文档智能门禁系统中的审查助手。请严格基于用户提供的文档内容进行检查，"
+                    f"输出中文结果。{TEXT_EXTRACTION_LIMITATION}"
+                ),
             },
             {
                 "role": "user",
