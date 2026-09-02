@@ -16,6 +16,7 @@ from openpyxl import Workbook
 from app.documents import (
     _select_pdf_page_text,
     allowed_file,
+    extract_document,
     extract_text,
     format_document_text,
 )
@@ -82,7 +83,7 @@ class DocumentFormattingTest(unittest.TestCase):
             )
             document.save(path)
 
-            text = extract_text(path, "docx")
+            text, hyperlinks = extract_document(path, "docx")
 
         self.assertIn(
             "操作步骤请参见安装指南（超链接：https://docs.example.com/install）",
@@ -92,6 +93,10 @@ class DocumentFormattingTest(unittest.TestCase):
             "维护指南（超链接：https://docs.example.com/maintenance）",
             text,
         )
+        self.assertEqual(len(hyperlinks), 2)
+        self.assertEqual(hyperlinks[0]["display_text"], "安装指南")
+        self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/install")
+        self.assertEqual(hyperlinks[0]["location"], "第1段")
 
     def test_extracts_xlsx_workbook_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -109,7 +114,7 @@ class DocumentFormattingTest(unittest.TestCase):
             workbook.save(path)
             workbook.close()
 
-            text = extract_text(path, "xlsx")
+            text, hyperlinks = extract_document(path, "xlsx")
 
         self.assertIn("# 工作表：参数表", text)
         self.assertIn("项目 | 参数 | 单位", text)
@@ -120,6 +125,8 @@ class DocumentFormattingTest(unittest.TestCase):
             "安装指南（超链接：https://docs.example.com/install）",
             text,
         )
+        self.assertEqual(hyperlinks[0]["location"], "工作表“参数表”!A6")
+        self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/install")
 
     def test_extracts_html_hyperlink_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -129,12 +136,42 @@ class DocumentFormattingTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            text = extract_text(path, "html")
+            text, hyperlinks = extract_document(path, "html")
 
         self.assertIn(
             "操作指南（超链接：https://docs.example.com/guide）",
             text,
         )
+        self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/guide")
+
+    def test_extracts_html_internal_link_state_and_unsafe_scheme(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "links.html"
+            path.write_text(
+                """<a href="#existing">已有位置</a>
+<a href="#missing">缺失位置</a>
+<a href="javascript:alert(1)">不安全链接</a>
+<h2 id="existing">目标章节</h2>""",
+                encoding="utf-8",
+            )
+
+            _text, hyperlinks = extract_document(path, "html")
+
+        self.assertTrue(hyperlinks[0]["internal_target_exists"])
+        self.assertFalse(hyperlinks[1]["internal_target_exists"])
+        self.assertEqual(hyperlinks[2]["target"], "javascript:alert(1)")
+
+    def test_extracts_markdown_hyperlinks_without_changing_source_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "guide.md"
+            source = "请参见[安装指南](https://docs.example.com/install)。"
+            path.write_text(source, encoding="utf-8")
+
+            text, hyperlinks = extract_document(path, "md")
+
+        self.assertEqual(text, source)
+        self.assertEqual(hyperlinks[0]["display_text"], "安装指南")
+        self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/install")
 
     def test_pdf_extraction_removes_overlapping_space_but_keeps_visible_space(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -175,10 +212,12 @@ class DocumentFormattingTest(unittest.TestCase):
             document.save(path)
             document.close()
 
-            text = extract_text(path, "pdf")
+            text, hyperlinks = extract_document(path, "pdf")
 
         self.assertIn("[超链接]", text)
         self.assertIn("https://docs.example.com/install", text)
+        self.assertEqual(hyperlinks[0]["location"], "第1页")
+        self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/install")
 
     def test_pdf_page_selection_prefers_pymupdf_when_pypdf_is_corrupted(self):
         pypdf_text = "标题 \ufffd\ufffd\ufffd\ufffd\ufffd 正文"

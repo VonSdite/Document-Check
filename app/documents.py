@@ -8,8 +8,9 @@ from bs4 import BeautifulSoup
 from docx import Document
 from docx.oxml.ns import qn
 import fitz
+import mistune
 from openpyxl import load_workbook
-from openpyxl.utils.cell import range_boundaries
+from openpyxl.utils.cell import get_column_letter, range_boundaries
 from pypdf import PdfReader
 import xlrd
 
@@ -36,19 +37,34 @@ def extension_of(filename: str) -> str:
 
 
 def extract_text(path: Path, file_type: str) -> str:
+    text, _hyperlinks = extract_document(path, file_type)
+    return text
+
+
+def extract_document(path: Path, file_type: str) -> tuple[str, list[dict]]:
+    hyperlinks = []
     try:
         if file_type == "docx":
-            return _extract_docx(path)
+            text = _extract_docx(path, hyperlinks)
+            return text, hyperlinks
         if file_type == "pdf":
-            return _extract_pdf(path)
-        if file_type in {"txt", "md"}:
-            return _read_text(path)
+            text = _extract_pdf(path, hyperlinks)
+            return text, hyperlinks
+        if file_type == "txt":
+            return _read_text(path), hyperlinks
+        if file_type == "md":
+            text = _read_text(path)
+            _extract_markdown_hyperlinks(text, hyperlinks)
+            return text, hyperlinks
         if file_type == "html":
-            return _extract_html(path)
+            text = _extract_html(path, hyperlinks)
+            return text, hyperlinks
         if file_type in {"xlsx", "xlsm"}:
-            return _extract_openpyxl_workbook(path)
+            text = _extract_openpyxl_workbook(path, hyperlinks)
+            return text, hyperlinks
         if file_type == "xls":
-            return _extract_xls(path)
+            text = _extract_xls(path, hyperlinks)
+            return text, hyperlinks
     except Exception as exc:
         raise DocumentReadError(str(exc)) from exc
     raise DocumentReadError(f"不支持的文件类型：{file_type}")
@@ -64,21 +80,39 @@ def format_document_text(filename: str, text: str) -> str:
     return f"file: {name}\n\n{text}"
 
 
-def _extract_docx(path: Path) -> str:
+def _extract_docx(path: Path, hyperlinks: list[dict] | None = None) -> str:
     document = Document(str(path))
+    internal_targets = {
+        str(node.get(qn("w:name")) or "").strip()
+        for node in document.element.iter(qn("w:bookmarkStart"))
+        if str(node.get(qn("w:name")) or "").strip()
+    }
     parts = []
-    for paragraph in document.paragraphs:
-        text = _docx_paragraph_text(paragraph)
+    for paragraph_index, paragraph in enumerate(document.paragraphs, start=1):
+        text = _docx_paragraph_text(
+            paragraph,
+            hyperlinks,
+            location=f"第{paragraph_index}段",
+            internal_targets=internal_targets,
+        )
         if text:
             parts.append(text)
-    for table in document.tables:
-        for row in table.rows:
+    for table_index, table in enumerate(document.tables, start=1):
+        for row_index, row in enumerate(table.rows, start=1):
             cells = []
-            for cell in row.cells:
+            for column_index, cell in enumerate(row.cells, start=1):
+                location = f"表格{table_index} > 第{row_index}行 > 第{column_index}列"
                 cell_text = "\n".join(
                     text
                     for paragraph in cell.paragraphs
-                    if (text := _docx_paragraph_text(paragraph))
+                    if (
+                        text := _docx_paragraph_text(
+                            paragraph,
+                            hyperlinks,
+                            location=location,
+                            internal_targets=internal_targets,
+                        )
+                    )
                 ).strip()
                 if cell_text:
                     cells.append(cell_text)
@@ -87,22 +121,69 @@ def _extract_docx(path: Path) -> str:
     return "\n".join(parts)
 
 
-def _docx_paragraph_text(paragraph) -> str:
-    text = _docx_element_text(paragraph._p, paragraph.part).strip()
+def _docx_paragraph_text(
+    paragraph,
+    hyperlinks: list[dict] | None = None,
+    *,
+    location: str = "",
+    internal_targets: set[str] | None = None,
+) -> str:
+    text = _docx_element_text(
+        paragraph._p,
+        paragraph.part,
+        hyperlinks,
+        location,
+        internal_targets or set(),
+    ).strip()
     for target in _docx_complex_field_hyperlinks(paragraph._p):
+        _record_hyperlink(
+            hyperlinks,
+            "",
+            target,
+            location,
+            internal_target_exists=(
+                target.lstrip("#") in (internal_targets or set())
+                if target.startswith("#")
+                else None
+            ),
+        )
         if target not in text:
             text += f"（超链接：{target}）"
     return text
 
 
-def _docx_element_text(element, part) -> str:
+def _docx_element_text(
+    element,
+    part,
+    hyperlinks: list[dict] | None,
+    location: str,
+    internal_targets: set[str],
+) -> str:
     if element.tag == qn("w:hyperlink"):
         label = _docx_plain_element_text(element)
         target = _docx_hyperlink_target(element, part)
+        _record_hyperlink(
+            hyperlinks,
+            label,
+            target,
+            location,
+            internal_target_exists=(
+                target.lstrip("#") in internal_targets if target.startswith("#") else None
+            ),
+        )
         return _format_hyperlink_text(label, target)
     if element.tag == qn("w:fldSimple"):
         label = _docx_plain_element_text(element)
         target = _docx_field_hyperlink_target(element.get(qn("w:instr")))
+        _record_hyperlink(
+            hyperlinks,
+            label,
+            target,
+            location,
+            internal_target_exists=(
+                target.lstrip("#") in internal_targets if target.startswith("#") else None
+            ),
+        )
         return _format_hyperlink_text(label, target)
     if element.tag == qn("w:t"):
         return element.text or ""
@@ -114,7 +195,10 @@ def _docx_element_text(element, part) -> str:
         return "-"
     if element.tag in {qn("w:instrText"), qn("w:delText")}:
         return ""
-    return "".join(_docx_element_text(child, part) for child in element)
+    return "".join(
+        _docx_element_text(child, part, hyperlinks, location, internal_targets)
+        for child in element
+    )
 
 
 def _docx_plain_element_text(element) -> str:
@@ -181,12 +265,30 @@ def _clean_hyperlink_target(target) -> str:
     if isinstance(target, bytes):
         target = target.decode("utf-8", errors="replace")
     value = re.sub(r"[\r\n\t]+", " ", str(target or "")).strip()
-    if value.lower().startswith(("javascript:", "data:")):
-        return ""
     return value[:4096]
 
 
-def _extract_pdf(path: Path) -> str:
+def _record_hyperlink(
+    hyperlinks: list[dict] | None,
+    display_text,
+    target,
+    location: str,
+    *,
+    internal_target_exists: bool | None = None,
+) -> None:
+    if hyperlinks is None:
+        return
+    item = {
+        "display_text": str(display_text or "").strip(),
+        "target": _clean_hyperlink_target(target),
+        "location": str(location or "").strip(),
+    }
+    if isinstance(internal_target_exists, bool):
+        item["internal_target_exists"] = internal_target_exists
+    hyperlinks.append(item)
+
+
+def _extract_pdf(path: Path, extracted_hyperlinks: list[dict] | None = None) -> str:
     reader = PdfReader(str(path))
     try:
         layout_document = fitz.open(str(path))
@@ -208,6 +310,14 @@ def _extract_pdf(path: Path) -> str:
                 hyperlinks = _extract_pypdf_page_hyperlinks(page)
             if hyperlinks:
                 text = _append_hyperlinks(text, hyperlinks)
+                for label, target, internal_target_exists in hyperlinks:
+                    _record_hyperlink(
+                        extracted_hyperlinks,
+                        label,
+                        target,
+                        f"第{index}页",
+                        internal_target_exists=internal_target_exists,
+                    )
             if text.strip():
                 pages.append(f"[第{index}页]\n{text.strip()}")
         return "\n\n".join(pages)
@@ -226,7 +336,7 @@ def _extract_pymupdf_page_text(page) -> tuple[str, dict]:
         return "", {}
 
 
-def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str]]:
+def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str, bool | None]]:
     hyperlinks = []
     try:
         links = page.get_links()
@@ -234,8 +344,14 @@ def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str]]:
         return hyperlinks
     for link in links:
         target = _clean_hyperlink_target(link.get("uri") or link.get("file"))
-        if not target:
-            continue
+        internal_target_exists = None
+        if not target and link.get("kind") == fitz.LINK_GOTO:
+            page_index = link.get("page")
+            if isinstance(page_index, int):
+                target = f"#page={page_index + 1}"
+                internal_target_exists = 0 <= page_index < page.parent.page_count
+        if not target and link.get("nameddest"):
+            target = f"#{_clean_hyperlink_target(link.get('nameddest')).lstrip('#')}"
         label = ""
         link_rect = link.get("from")
         if link_rect:
@@ -243,13 +359,13 @@ def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str]]:
                 label = page.get_textbox(link_rect).strip()
             except Exception:
                 pass
-        item = (label, target)
+        item = (label, target, internal_target_exists)
         if item not in hyperlinks:
             hyperlinks.append(item)
     return hyperlinks
 
 
-def _extract_pypdf_page_hyperlinks(page) -> list[tuple[str, str]]:
+def _extract_pypdf_page_hyperlinks(page) -> list[tuple[str, str, bool | None]]:
     hyperlinks = []
     try:
         annotations = page.get("/Annots") or []
@@ -264,16 +380,19 @@ def _extract_pypdf_page_hyperlinks(page) -> list[tuple[str, str]]:
             target = _clean_hyperlink_target(action.get("/URI"))
         except Exception:
             continue
-        item = ("", target)
+        item = ("", target, None)
         if target and item not in hyperlinks:
             hyperlinks.append(item)
     return hyperlinks
 
 
-def _append_hyperlinks(text: str, hyperlinks: list[tuple[str, str]]) -> str:
+def _append_hyperlinks(
+    text: str,
+    hyperlinks: list[tuple[str, str, bool | None]],
+) -> str:
     annotations = [
         f"[超链接] {_format_hyperlink_text(label, target)}"
-        for label, target in hyperlinks
+        for label, target, _internal_target_exists in hyperlinks
     ]
     return "\n".join(part for part in (str(text or "").strip(), *annotations) if part)
 
@@ -441,19 +560,55 @@ def _read_text(path: Path) -> str:
     raise DocumentReadError("无法识别文本编码，请使用 UTF-8 文档")
 
 
-def _extract_html(path: Path) -> str:
+def _extract_markdown_hyperlinks(text: str, hyperlinks: list[dict]) -> None:
+    rendered = mistune.html(text)
+    soup = BeautifulSoup(rendered, "html.parser")
+    for index, anchor in enumerate(soup.find_all("a"), start=1):
+        if not anchor.has_attr("href"):
+            continue
+        target = _clean_hyperlink_target(anchor.get("href"))
+        _record_hyperlink(
+            hyperlinks,
+            anchor.get_text(" ", strip=True),
+            target,
+            f"Markdown 链接{index}",
+        )
+
+
+def _extract_html(path: Path, hyperlinks: list[dict] | None = None) -> str:
     html = _read_text(path)
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
-    for anchor in soup.find_all("a"):
+    internal_targets = {
+        str(tag.get("id") or tag.get("name") or "").strip()
+        for tag in soup.find_all(attrs={"id": True}) + soup.find_all(attrs={"name": True})
+        if str(tag.get("id") or tag.get("name") or "").strip()
+    }
+    for index, anchor in enumerate(soup.find_all("a"), start=1):
+        if not anchor.has_attr("href"):
+            continue
         label = anchor.get_text(" ", strip=True)
         target = _clean_hyperlink_target(anchor.get("href"))
+        _record_hyperlink(
+            hyperlinks,
+            label,
+            target,
+            f"HTML 链接{index}",
+            internal_target_exists=(
+                target == "#" or target.lstrip("#") in internal_targets
+                if target.startswith("#")
+                else None
+            ),
+        )
         anchor.replace_with(_format_hyperlink_text(label, target))
     return soup.get_text("\n", strip=True)
 
 
-def _extract_openpyxl_workbook(path: Path) -> str:
+def _extract_openpyxl_workbook(
+    path: Path,
+    extracted_hyperlinks: list[dict] | None = None,
+) -> str:
     value_workbook = load_workbook(path, read_only=True, data_only=True)
     formula_workbook = load_workbook(path, read_only=True, data_only=False)
     try:
@@ -469,6 +624,8 @@ def _extract_openpyxl_workbook(path: Path) -> str:
                 sheet,
                 formula_sheet,
                 hyperlinks.get(sheet.title, []),
+                extracted_hyperlinks,
+                set(formula_sheets),
             )
             if rows:
                 parts.append(f"# 工作表：{sheet.title}\n" + "\n".join(rows))
@@ -478,7 +635,7 @@ def _extract_openpyxl_workbook(path: Path) -> str:
         formula_workbook.close()
 
 
-def _extract_xls(path: Path) -> str:
+def _extract_xls(path: Path, hyperlinks: list[dict] | None = None) -> str:
     workbook = xlrd.open_workbook(str(path), on_demand=True)
     try:
         parts = []
@@ -494,9 +651,24 @@ def _extract_xls(path: Path) -> str:
                         textmark = _clean_hyperlink_target(hyperlink.textmark)
                         if textmark:
                             target = f"{target}#{textmark}" if target else f"#{textmark}"
-                        value = _format_hyperlink_text(
-                            value or hyperlink.desc,
+                        label = value or hyperlink.desc
+                        value = _format_hyperlink_text(label, target)
+                        _record_hyperlink(
+                            hyperlinks,
+                            label,
                             target,
+                            (
+                                f"工作表“{sheet.name}”!"
+                                f"{get_column_letter(column_index + 1)}{row_index + 1}"
+                            ),
+                            internal_target_exists=(
+                                _spreadsheet_internal_target_exists(
+                                    target,
+                                    set(workbook.sheet_names()),
+                                )
+                                if target.startswith("#")
+                                else None
+                            ),
                         )
                     values.append(value)
                 row_text = _spreadsheet_row_text(values)
@@ -509,7 +681,13 @@ def _extract_xls(path: Path) -> str:
         workbook.release_resources()
 
 
-def _openpyxl_sheet_rows_text(sheet, formula_sheet, hyperlinks) -> list[str]:
+def _openpyxl_sheet_rows_text(
+    sheet,
+    formula_sheet,
+    hyperlinks,
+    extracted_hyperlinks: list[dict] | None = None,
+    workbook_titles: set[str] | None = None,
+) -> list[str]:
     rows = []
     max_row = max(sheet.max_row or 0, getattr(formula_sheet, "max_row", 0) or 0)
     max_column = max(sheet.max_column or 0, getattr(formula_sheet, "max_column", 0) or 0)
@@ -529,7 +707,25 @@ def _openpyxl_sheet_rows_text(sheet, formula_sheet, hyperlinks) -> list[str]:
             target = formula_target or (hyperlink[0] if hyperlink else "")
             if target:
                 display = hyperlink[1] if hyperlink else ""
-                value = _format_hyperlink_text(value or display, target)
+                label = value or display
+                value = _format_hyperlink_text(label, target)
+                _record_hyperlink(
+                    extracted_hyperlinks,
+                    label,
+                    target,
+                    (
+                        f"工作表“{sheet.title}”!"
+                        f"{get_column_letter(column_index)}{row_index}"
+                    ),
+                    internal_target_exists=(
+                        _spreadsheet_internal_target_exists(
+                            target,
+                            workbook_titles or set(),
+                        )
+                        if target.startswith("#")
+                        else None
+                    ),
+                )
             values.append(value)
         row_text = _spreadsheet_row_text(values)
         if row_text:
@@ -616,6 +812,16 @@ def _xlsx_formula_hyperlink_target(formula) -> str:
     if not match:
         return ""
     return _clean_hyperlink_target(match.group(1).replace('""', '"'))
+
+
+def _spreadsheet_internal_target_exists(target: str, workbook_titles: set[str]) -> bool:
+    location = str(target or "").lstrip("#").strip()
+    if not location:
+        return False
+    sheet_name = location.split("!", 1)[0].strip().strip("'").replace("''", "'")
+    if "!" not in location:
+        return True
+    return sheet_name in workbook_titles
 
 
 def _spreadsheet_rows_text(rows) -> list[str]:

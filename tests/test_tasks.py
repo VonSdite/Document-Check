@@ -13,6 +13,7 @@ from app.common_terms import COMMON_TERMS_CHECK_CODE
 from app.db import get_db, init_db, now_text, set_setting
 from app.llm import LLMError
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
+from app.hyperlinks import HYPERLINK_CHECK_CODE
 from app.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -919,6 +920,59 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(len(report["items"]), 3)
         self.assertTrue(all(item["type"] == "issue" for item in report["items"]))
 
+    def test_hyperlink_check_uses_local_rules_without_llm(self):
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                checks_json, model_name, api_base, request_timeout, max_input_chars,
+                document_meta_json, status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'doc.txt', 'doc.txt', 'txt', 1,
+                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                ?, 'running', 0, ?, ?
+            )
+            """,
+            (
+                json.dumps([1]),
+                json.dumps(
+                    {
+                        "hyperlinks": [
+                            {
+                                "display_text": "安装指南",
+                                "target": "javascript:alert(1)",
+                                "location": "第1段",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                created_at,
+                created_at,
+            ),
+        )
+        db.commit()
+        task = db.execute("SELECT * FROM tasks").fetchone()
+        check_items = [{"code": HYPERLINK_CHECK_CODE, "name": "超链接有效性检查", "prompt": "本地规则"}]
+
+        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+            results = _run_check_items_concurrently(
+                self.app,
+                task,
+                check_items,
+                "file: doc.txt\n\n请参见安装指南",
+                document_meta=json.loads(task["document_meta_json"]),
+                max_workers=1,
+                stream_trace_enabled=False,
+            )
+
+        report = results[0]["structured_report"]
+        self.assertEqual(report["items"][0]["category"], "超链接格式错误")
+        self.assertIn("javascript", report["items"][0]["excerpt"])
+
     def test_passes_force_disable_thinking_to_llm(self):
         db = get_db()
         created_at = now_text()
@@ -1136,6 +1190,43 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(updated["document_text"], "file: queued.txt\n\n后台解析正文")
         self.assertEqual(meta["preprocessing"]["status"], "completed")
         self.assertEqual(calls[0]["document_text"], updated["document_text"])
+
+    def test_run_task_persists_hyperlinks_and_executes_rule_check(self):
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "links.html"
+        upload_path.write_text(
+            '<p>请参见<a href="javascript:alert(1)">安装指南</a></p>',
+            encoding="utf-8",
+        )
+        check_item = {
+            "id": 1,
+            "code": HYPERLINK_CHECK_CODE,
+            "name": "超链接有效性检查",
+            "prompt": "本地规则",
+        }
+        task_id = self._insert_running_preprocessing_task(
+            task_type=DOCUMENT_TASK_TYPE,
+            original_filename="links.html",
+            stored_filename="links.html",
+            file_type="html",
+            check_item=check_item,
+        )
+
+        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, document_meta_json, result_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        meta = json.loads(updated["document_meta_json"])
+        results = json.loads(updated["result_json"])
+        self.assertEqual(updated["status"], "completed")
+        self.assertEqual(meta["hyperlinks"][0]["target"], "javascript:alert(1)")
+        self.assertEqual(meta["hyperlinks"][0]["source"], "links.html")
+        self.assertEqual(
+            results[0]["structured_report"]["items"][0]["category"],
+            "超链接格式错误",
+        )
 
     def test_run_task_marks_oversized_document_failed_after_worker_extraction(self):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "long.txt"

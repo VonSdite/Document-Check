@@ -19,7 +19,7 @@ from .common_terms import (
     load_common_terms,
 )
 from .db import get_bool_setting, get_db, get_setting, now_text
-from .documents import DocumentReadError, extract_text, format_document_text
+from .documents import DocumentReadError, extract_document, extract_text, format_document_text
 from .file_cleanup import (
     describe_failures,
     remove_directory_tree,
@@ -38,6 +38,12 @@ from .images import (
     page_numbers_from_image_item,
     page_sections_from_document_text,
     render_pdf_page_images,
+)
+from .hyperlinks import (
+    HYPERLINK_CHECK_CODE,
+    build_hyperlink_report,
+    format_hyperlink_report,
+    hyperlinks_from_meta,
 )
 from .language_consistency import compose_language_consistency_text
 from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
@@ -348,6 +354,7 @@ class TaskScheduler:
                         task,
                         check_items,
                         document_text,
+                        document_meta=_document_meta(document_meta_raw),
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                     )
@@ -436,15 +443,24 @@ def _prepare_task_inputs(app, db, task, task_type: str, claim_token: str | None)
     document_meta_raw = _task_value(task, "document_meta_json")
     if not document_text:
         upload_path = _task_upload_path(app, task)
-        extracted_text = extract_text(upload_path, task["file_type"]).strip()
+        extracted_text, hyperlinks = extract_document(
+            upload_path,
+            task["file_type"],
+        )
+        extracted_text = extracted_text.strip()
         if not extracted_text:
             raise RuntimeError("未能从文档中提取到可检查文本")
         document_text = format_document_text(task["original_filename"], extracted_text)
+        document_meta = _document_meta(document_meta_raw)
+        document_meta["hyperlinks"] = [
+            {**item, "source": task["original_filename"]}
+            for item in hyperlinks
+        ]
         document_text, document_meta_raw = _persist_preprocessed_inputs(
             db,
             task,
             document_text,
-            _document_meta(document_meta_raw),
+            document_meta,
             claim_token,
         )
     _validate_model_input(document_text, task["max_input_chars"])
@@ -891,6 +907,7 @@ def _run_check_items_concurrently(
     check_items: list[dict],
     document_text: str,
     *,
+    document_meta: dict | None = None,
     max_workers: int,
     stream_trace_enabled: bool,
 ) -> list[dict]:
@@ -999,6 +1016,13 @@ def _run_check_items_concurrently(
                 elif item["code"] == COMMON_TERMS_CHECK_CODE:
                     structured_report = _run_common_terms_check(app, document_text, issue_output_limit)
                     content = format_common_terms_report(structured_report)
+                elif item["code"] == HYPERLINK_CHECK_CODE:
+                    structured_report = build_hyperlink_report(
+                        hyperlinks_from_meta(document_meta or {}),
+                        issue_limit=issue_output_limit,
+                        network=outbound_network_config(),
+                    )
+                    content = format_hyperlink_report(structured_report)
                 else:
                     network = outbound_network_config()
                     run_check_kwargs = {

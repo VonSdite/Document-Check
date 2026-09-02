@@ -416,6 +416,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("编号或交叉引用错误", item["prompt"])
         self.assertIn("不能作为报告证据", item["prompt"])
         self.assertIn("suggestion 也必须具备两处直接证据", item["prompt"])
+        self.assertIn("本检查不得报告链接失效", item["prompt"])
         self.assertIn("问题类型、位置、原文摘录、问题描述、影响说明、修改建议", item["prompt"])
 
     def test_default_compliance_prompt_covers_language_and_document_structure(self):
@@ -470,6 +471,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("只要引用处或全文其他位置已经提供对应超链接", completeness["prompt"])
         self.assertIn("不得再以“未提供该指南的获取方式或附录”", completeness["prompt"])
         self.assertIn("不得要求再把资料正文复制到当前文档或作为附录提供", completeness["prompt"])
+        self.assertIn("由独立的“超链接有效性检查”规则处理", completeness["prompt"])
 
     def test_default_check_items_are_grouped_by_task_type(self):
         db = get_db()
@@ -505,6 +507,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("typo", document_codes)
         self.assertIn("understandability", document_codes)
         self.assertIn("completeness", document_codes)
+        self.assertIn("hyperlink-validity", document_codes)
         self.assertIn("sensitive-terms", document_codes)
         self.assertIn("common-terms", document_codes)
         self.assertEqual(consistency_codes, ["consistency-cross-document"])
@@ -524,6 +527,13 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("video-installation-sequence", default_check_item_codes(VIDEO_TASK_TYPE))
         self.assertIn("sensitive-terms", default_check_item_codes(DOCUMENT_TASK_TYPE))
         self.assertIn("common-terms", default_check_item_codes(DOCUMENT_TASK_TYPE))
+        hyperlink_item = db.execute(
+            "SELECT name, description, prompt FROM check_items WHERE code = 'hyperlink-validity'"
+        ).fetchone()
+        self.assertEqual(hyperlink_item["name"], "超链接有效性检查")
+        self.assertIn("不调用大模型", hyperlink_item["prompt"])
+        self.assertIn("HTTP 404/410", hyperlink_item["prompt"])
+        self.assertIn("回环、私网、链路本地或保留地址", hyperlink_item["prompt"])
         typo_state = db.execute(
             "SELECT enabled, description FROM check_items WHERE code = 'typo'"
         ).fetchone()
