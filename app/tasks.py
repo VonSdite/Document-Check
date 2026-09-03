@@ -54,7 +54,7 @@ from .llm import (
     run_multimodal_document_check,
 )
 from .network import outbound_network_config
-from .report_guardrails import sanitize_text_check_result
+from .report_guardrails import build_pdf_table_evidence_index, sanitize_text_check_result
 from .sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
     build_sensitive_terms_invalid_report,
@@ -961,6 +961,7 @@ def _run_check_items_concurrently(
             return 5 + int(completed_units / total_units * 85)
 
     issue_output_limit = _issue_output_limit()
+    pdf_table_evidence = build_pdf_table_evidence_index(document_text)
 
     def run_item(index: int, item: dict) -> dict:
         with app.app_context():
@@ -1047,13 +1048,16 @@ def _run_check_items_concurrently(
                     if task_type == DOCUMENT_TASK_TYPE:
                         run_check_kwargs["max_completion_tokens"] = None
                     content = run_check(**run_check_kwargs)
-                    content, filtered_visual_missing_count = sanitize_text_check_result(content)
-                    if filtered_visual_missing_count:
+                    content, filtered_unsupported_count = sanitize_text_check_result(
+                        content,
+                        pdf_table_evidence=pdf_table_evidence,
+                    )
+                    if filtered_unsupported_count:
                         app.logger.info(
-                            "已过滤缺少文本证据的视觉对象缺失结论 task_id=%s item=%s count=%s",
+                            "已过滤证据不足的视觉对象或表格数据缺失结论 task_id=%s item=%s count=%s",
                             task_id,
                             item["name"],
-                            filtered_visual_missing_count,
+                            filtered_unsupported_count,
                         )
             except (LLMError, RuntimeError) as exc:
                 progress = mark_unit_completed()

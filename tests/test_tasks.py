@@ -754,6 +754,64 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(results[0]["result"], "最终结果")
         self.assertEqual(results[0]["issue_output_limit"], 30)
 
+    def test_document_check_filters_pdf_table_missing_claim_against_cell_structure(self):
+        db = get_db()
+        created_at = now_text()
+        db.execute(
+            """
+            INSERT INTO tasks(
+                ip, original_filename, stored_filename, file_type, file_size,
+                checks_json, model_name, api_base, request_timeout, max_input_chars,
+                status, progress, created_at, updated_at
+            )
+            VALUES (
+                '127.0.0.1', 'table.pdf', 'table.pdf', 'pdf', 1,
+                ?, 'test-model', 'http://example.test/v1/chat/completions', 30, 5000,
+                'running', 0, ?, ?
+            )
+            """,
+            (json.dumps([1]), created_at, created_at),
+        )
+        db.commit()
+        task = db.execute("SELECT * FROM tasks").fetchone()
+        document_text = """
+<table id="page001-table001" data-confidence="high">
+  <tr><td data-cell="A1:B1" colspan="2">合并表头</td></tr>
+  <tr><td data-cell="A2" data-empty="true">[空单元格]</td><td>10 A</td></tr>
+</table>
+"""
+        model_result = {
+            "summary": "发现 2 个问题",
+            "items": [
+                {
+                    "status": "issue",
+                    "category": "表格数据缺失",
+                    "location": "page001-table001 > B1",
+                    "description": "B1 单元格数据为空。",
+                },
+                {
+                    "status": "issue",
+                    "category": "表格数据缺失",
+                    "location": "page001-table001 > A2",
+                    "description": "A2 单元格数据为空。",
+                },
+            ],
+        }
+
+        with patch("app.tasks.run_check", return_value=json.dumps(model_result, ensure_ascii=False)):
+            results = _run_check_items_concurrently(
+                self.app,
+                task,
+                [{"code": "completeness", "name": "内容完整性检查", "prompt": "检查完整性"}],
+                document_text,
+                max_workers=1,
+                stream_trace_enabled=False,
+            )
+
+        sanitized = json.loads(results[0]["result"])
+        self.assertEqual(len(sanitized["items"]), 1)
+        self.assertEqual(sanitized["items"][0]["location"], "page001-table001 > A2")
+
     def test_comparison_tasks_keep_full_text_instead_of_single_document_chunks(self):
         db = get_db()
         created_at = now_text()

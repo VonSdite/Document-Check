@@ -1,3 +1,5 @@
+import html
+import logging
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -22,6 +24,11 @@ _HYPERLINK_FIELD_PATTERN = re.compile(
 )
 _SPREADSHEETML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _OFFICE_RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_PDF_TABLE_COORDINATE_TOLERANCE = 2.0
+_PDF_TABLE_MIN_TEXT_COVERAGE = 0.85
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 class DocumentReadError(Exception):
@@ -304,6 +311,15 @@ def _extract_pdf(path: Path, extracted_hyperlinks: list[dict] | None = None) -> 
                 pypdf_text = _normalize_pdf_overlapping_spaces(pypdf_text, raw_page)
                 pymupdf_text = _normalize_pdf_overlapping_spaces(pymupdf_text, raw_page)
                 text = _select_pdf_page_text(pypdf_text, pymupdf_text)
+                if text == pymupdf_text:
+                    structured_text = _extract_pymupdf_page_with_tables(
+                        layout_page,
+                        index,
+                        raw_page,
+                        pymupdf_text,
+                    )
+                    if structured_text:
+                        text = structured_text
                 hyperlinks = _extract_pymupdf_page_hyperlinks(layout_page)
             else:
                 text = pypdf_text
@@ -334,6 +350,384 @@ def _extract_pymupdf_page_text(page) -> tuple[str, dict]:
         return text, raw_page
     except Exception:
         return "", {}
+
+
+def _extract_pymupdf_page_with_tables(
+    page,
+    page_number: int,
+    raw_page: dict,
+    source_text: str,
+) -> str:
+    try:
+        table_finder = page.find_tables(strategy="lines_strict")
+        candidate_tables = list(table_finder.tables)
+        if not candidate_tables:
+            table_finder = page.find_tables(strategy="lines")
+            candidate_tables = list(table_finder.tables)
+        drawings = page.get_drawings()
+        image_bboxes = [
+            tuple(float(value) for value in image.get("bbox"))
+            for image in page.get_image_info()
+            if image.get("bbox")
+        ]
+    except Exception as exc:
+        logger.debug("PDF 表格检测失败 page=%s error=%s", page_number, exc)
+        return ""
+
+    table_models = []
+    for table_index, table in enumerate(candidate_tables, start=1):
+        try:
+            model = _pdf_table_model(
+                page,
+                table,
+                page_number=page_number,
+                table_index=table_index,
+                drawings=drawings,
+                image_bboxes=image_bboxes,
+            )
+        except Exception as exc:
+            logger.debug(
+                "PDF 单个表格结构化失败 page=%s table=%s error=%s",
+                page_number,
+                table_index,
+                exc,
+            )
+            continue
+        if model is not None:
+            table_models.append(model)
+    if not table_models:
+        return ""
+
+    table_rects = [model["bbox"] for model in table_models]
+    elements = _pdf_page_text_elements(raw_page, table_rects)
+    for model in table_models:
+        elements.append(
+            {
+                "bbox": model["bbox"],
+                "content": _format_pdf_table_html(model),
+                "plain_text": "\n".join(cell["text"] for cell in model["cells"] if cell["text"]),
+                "kind": "table",
+                "source_order": model["table_index"],
+            }
+        )
+    elements.sort(key=_pdf_page_element_sort_key)
+    plain_text = "\n".join(element["plain_text"] for element in elements if element["plain_text"])
+    source_chars = _pdf_text_quality(source_text)["useful_chars"]
+    structured_chars = _pdf_text_quality(plain_text)["useful_chars"]
+    if source_chars and structured_chars < source_chars * _PDF_TABLE_MIN_TEXT_COVERAGE:
+        logger.debug(
+            "PDF 表格结构化结果文本覆盖不足 page=%s source_chars=%s structured_chars=%s",
+            page_number,
+            source_chars,
+            structured_chars,
+        )
+        return ""
+    return "\n".join(element["content"] for element in elements if element["content"]).strip()
+
+
+def _pdf_table_model(
+    page,
+    table,
+    *,
+    page_number: int,
+    table_index: int,
+    drawings: list[dict],
+    image_bboxes: list[tuple[float, ...]],
+) -> dict | None:
+    try:
+        row_count = int(table.row_count)
+        column_count = int(table.col_count)
+        rows = list(table.rows)
+        extracted_rows = table.extract()
+        table_bbox = tuple(float(value) for value in table.bbox)
+    except Exception:
+        return None
+    if row_count < 2 or column_count < 2 or len(rows) != row_count:
+        return None
+
+    row_boundaries = _cluster_pdf_coordinates(
+        [
+            coordinate
+            for row in rows
+            for coordinate in (float(row.bbox[1]), float(row.bbox[3]))
+        ]
+    )
+    column_boundaries = _cluster_pdf_coordinates(
+        [
+            coordinate
+            for row in rows
+            for cell_bbox in row.cells
+            if cell_bbox is not None
+            for coordinate in (float(cell_bbox[0]), float(cell_bbox[2]))
+        ]
+    )
+    if len(row_boundaries) != row_count + 1 or len(column_boundaries) != column_count + 1:
+        return None
+
+    cells = []
+    covered_positions = set()
+    for row_index, row in enumerate(rows):
+        if len(row.cells) != column_count:
+            return None
+        for column_index, cell_bbox in enumerate(row.cells):
+            if cell_bbox is None:
+                continue
+            bbox = tuple(float(value) for value in cell_bbox)
+            start_row = _pdf_coordinate_index(row_boundaries, bbox[1])
+            end_row = _pdf_coordinate_index(row_boundaries, bbox[3])
+            start_column = _pdf_coordinate_index(column_boundaries, bbox[0])
+            end_column = _pdf_coordinate_index(column_boundaries, bbox[2])
+            if (
+                start_row != row_index
+                or start_column != column_index
+                or end_row is None
+                or end_column is None
+                or end_row <= row_index
+                or end_column <= column_index
+            ):
+                return None
+            rowspan = end_row - row_index
+            colspan = end_column - column_index
+            for covered_row in range(row_index, end_row):
+                for covered_column in range(column_index, end_column):
+                    covered_positions.add((covered_row, covered_column))
+            cell_text = ""
+            extracted_row = (
+                extracted_rows[row_index]
+                if isinstance(extracted_rows, (list, tuple)) and row_index < len(extracted_rows)
+                else ()
+            )
+            if isinstance(extracted_row, (list, tuple)) and column_index < len(extracted_row):
+                cell_text = str(extracted_row[column_index] or "").strip()
+            if not cell_text:
+                try:
+                    cell_text = str(page.get_textbox(fitz.Rect(bbox)) or "").strip()
+                except Exception:
+                    cell_text = ""
+            has_nontext_content = _pdf_cell_has_nontext_content(
+                bbox,
+                image_bboxes=image_bboxes,
+                drawings=drawings,
+            )
+            cells.append(
+                {
+                    "row": row_index,
+                    "column": column_index,
+                    "rowspan": rowspan,
+                    "colspan": colspan,
+                    "bbox": bbox,
+                    "text": cell_text,
+                    "has_nontext_content": has_nontext_content,
+                }
+            )
+
+    unresolved_positions = [
+        (row_index, column_index)
+        for row_index, row in enumerate(rows)
+        for column_index, cell_bbox in enumerate(row.cells)
+        if cell_bbox is None and (row_index, column_index) not in covered_positions
+    ]
+    if not cells or not any(cell["text"] for cell in cells):
+        return None
+    vector_edge_count = _pdf_table_vector_edge_count(drawings, table_bbox)
+    if unresolved_positions:
+        confidence = "low"
+    elif vector_edge_count >= max(4, row_count + column_count):
+        confidence = "high"
+    else:
+        confidence = "medium"
+    return {
+        "id": f"page{page_number:03d}-table{table_index:03d}",
+        "page_number": page_number,
+        "table_index": table_index,
+        "bbox": table_bbox,
+        "row_count": row_count,
+        "column_count": column_count,
+        "cells": cells,
+        "confidence": confidence,
+        "unresolved_positions": unresolved_positions,
+        "vector_edge_count": vector_edge_count,
+    }
+
+
+def _cluster_pdf_coordinates(values, tolerance: float = _PDF_TABLE_COORDINATE_TOLERANCE) -> list[float]:
+    groups = []
+    for value in sorted(float(item) for item in values):
+        if not groups or abs(value - sum(groups[-1]) / len(groups[-1])) > tolerance:
+            groups.append([value])
+        else:
+            groups[-1].append(value)
+    return [sum(group) / len(group) for group in groups]
+
+
+def _pdf_coordinate_index(boundaries: list[float], value: float) -> int | None:
+    if not boundaries:
+        return None
+    index = min(range(len(boundaries)), key=lambda candidate: abs(boundaries[candidate] - value))
+    if abs(boundaries[index] - value) > _PDF_TABLE_COORDINATE_TOLERANCE:
+        return None
+    return index
+
+
+def _pdf_table_vector_edge_count(drawings: list[dict], table_bbox: tuple[float, ...]) -> int:
+    table_rect = fitz.Rect(table_bbox)
+    count = 0
+    for drawing in drawings:
+        drawing_rect = drawing.get("rect")
+        if drawing_rect is not None and not fitz.Rect(drawing_rect).intersects(table_rect):
+            continue
+        for item in drawing.get("items", []):
+            if not item:
+                continue
+            if item[0] == "l":
+                count += 1
+            elif item[0] == "re":
+                count += 4
+    return count
+
+
+def _pdf_cell_has_nontext_content(
+    cell_bbox: tuple[float, ...],
+    *,
+    image_bboxes: list[tuple[float, ...]],
+    drawings: list[dict],
+) -> bool:
+    cell_rect = fitz.Rect(cell_bbox)
+    for image_bbox in image_bboxes:
+        image_rect = fitz.Rect(image_bbox)
+        if _pdf_rect_contains_center(cell_bbox, image_bbox) and image_rect.get_area() >= 4:
+            return True
+    inset = max(1.0, min(cell_rect.width, cell_rect.height) * 0.04)
+    interior = fitz.Rect(
+        cell_rect.x0 + inset,
+        cell_rect.y0 + inset,
+        cell_rect.x1 - inset,
+        cell_rect.y1 - inset,
+    )
+    if interior.is_empty:
+        return False
+    for drawing in drawings:
+        drawing_rect_value = drawing.get("rect")
+        if drawing_rect_value is None:
+            continue
+        drawing_rect = fitz.Rect(drawing_rect_value)
+        if (
+            drawing_rect.width >= 2
+            and drawing_rect.height >= 2
+            and _pdf_rect_contains_center(tuple(interior), tuple(drawing_rect))
+        ):
+            return True
+    return False
+
+
+def _pdf_page_text_elements(raw_page: dict, table_rects: list[tuple[float, ...]]) -> list[dict]:
+    elements = []
+    source_order = 0
+    for block in raw_page.get("blocks", []):
+        if block.get("type", 0) != 0:
+            continue
+        for line in block.get("lines", []):
+            source_order += 1
+            _source, text = _pdf_line_text_variants(line)
+            text = text.strip()
+            bbox = line.get("bbox")
+            if not text or not bbox:
+                continue
+            normalized_bbox = tuple(float(value) for value in bbox)
+            if any(_pdf_rect_contains_center(table_rect, normalized_bbox) for table_rect in table_rects):
+                continue
+            elements.append(
+                {
+                    "bbox": normalized_bbox,
+                    "content": text,
+                    "plain_text": text,
+                    "kind": "text",
+                    "source_order": source_order,
+                }
+            )
+    return elements
+
+
+def _pdf_rect_contains_center(container_bbox: tuple[float, ...], item_bbox: tuple[float, ...]) -> bool:
+    center_x = (item_bbox[0] + item_bbox[2]) / 2
+    center_y = (item_bbox[1] + item_bbox[3]) / 2
+    return (
+        container_bbox[0] - _PDF_TABLE_COORDINATE_TOLERANCE
+        <= center_x
+        <= container_bbox[2] + _PDF_TABLE_COORDINATE_TOLERANCE
+        and container_bbox[1] - _PDF_TABLE_COORDINATE_TOLERANCE
+        <= center_y
+        <= container_bbox[3] + _PDF_TABLE_COORDINATE_TOLERANCE
+    )
+
+
+def _pdf_page_element_sort_key(element: dict) -> tuple:
+    bbox = element["bbox"]
+    return (
+        round(float(bbox[1]), 1),
+        round(float(bbox[0]), 1),
+        1 if element["kind"] == "table" else 0,
+        int(element["source_order"]),
+    )
+
+
+def _format_pdf_table_html(model: dict) -> str:
+    cells_by_row = {}
+    for cell in model["cells"]:
+        cells_by_row.setdefault(cell["row"], []).append(cell)
+    lines = [
+        (
+            f'[PDF结构化表格 {model["id"]} 开始；'
+            f'{model["row_count"]}行×{model["column_count"]}列；'
+            f'置信度={model["confidence"]}]'
+        ),
+        f'<table id="{model["id"]}" data-confidence="{model["confidence"]}">',
+    ]
+    for row_index in range(model["row_count"]):
+        lines.append("  <tr>")
+        for cell in sorted(cells_by_row.get(row_index, []), key=lambda item: item["column"]):
+            cell_ref = _pdf_cell_reference(cell)
+            attributes = []
+            if cell["rowspan"] > 1:
+                attributes.append(f'rowspan="{cell["rowspan"]}"')
+            if cell["colspan"] > 1:
+                attributes.append(f'colspan="{cell["colspan"]}"')
+            if attributes or not cell["text"]:
+                attributes.insert(0, f'data-cell="{cell_ref}"')
+            value = html.escape(cell["text"])
+            if not value:
+                if cell["has_nontext_content"]:
+                    attributes.append('data-non-text="true"')
+                    value = "[非文本图形或图标]"
+                else:
+                    attributes.append('data-empty="true"')
+                    value = "[空单元格]"
+            attribute_text = f" {' '.join(attributes)}" if attributes else ""
+            lines.append(f"    <td{attribute_text}>{value}</td>")
+        lines.append("  </tr>")
+    if model["unresolved_positions"]:
+        positions = ",".join(
+            f"{get_column_letter(column + 1)}{row + 1}"
+            for row, column in model["unresolved_positions"]
+        )
+        lines.append(f"  <!-- 未能可靠还原的网格位置：{positions} -->")
+    lines.extend(
+        [
+            "</table>",
+            f'[PDF结构化表格 {model["id"]} 结束]',
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _pdf_cell_reference(cell: dict) -> str:
+    start_column = get_column_letter(cell["column"] + 1)
+    start_row = cell["row"] + 1
+    end_column = get_column_letter(cell["column"] + cell["colspan"])
+    end_row = cell["row"] + cell["rowspan"]
+    start = f"{start_column}{start_row}"
+    end = f"{end_column}{end_row}"
+    return start if start == end else f"{start}:{end}"
 
 
 def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str, bool | None]]:

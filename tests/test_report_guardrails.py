@@ -2,6 +2,7 @@ import json
 import unittest
 
 from app.report_guardrails import (
+    build_pdf_table_evidence_index,
     filter_unsupported_visual_missing_items,
     is_unsupported_visual_missing_item,
     sanitize_text_check_result,
@@ -107,6 +108,67 @@ class ReportGuardrailTest(unittest.TestCase):
 
         self.assertEqual(sanitized, content)
         self.assertEqual(removed_count, 0)
+
+    def test_pdf_table_evidence_filters_merged_nontext_and_unlocated_missing_claims(self):
+        document_text = """
+<table id="page001-table001" data-confidence="high">
+  <tr>
+    <td data-cell="A1:B1" colspan="2">合并表头</td>
+    <td>说明</td>
+  </tr>
+  <tr>
+    <td data-cell="A2" data-empty="true">[空单元格]</td>
+    <td>10 A</td>
+    <td data-cell="C2" data-non-text="true">[非文本图形或图标]</td>
+  </tr>
+</table>
+"""
+        evidence = build_pdf_table_evidence_index(document_text)
+        items = [
+            {
+                "status": "issue",
+                "category": "表格数据缺失",
+                "location": "page001-table001 > B1",
+                "description": "B1 单元格数据为空。",
+            },
+            {
+                "status": "issue",
+                "category": "表格数据缺失",
+                "location": "page001-table001 > A2",
+                "description": "A2 单元格数据为空。",
+            },
+            {
+                "status": "issue",
+                "category": "表格数据缺失",
+                "location": "page001-table001 > C2",
+                "description": "C2 单元格数据为空。",
+            },
+            {
+                "status": "issue",
+                "category": "表格数据缺失",
+                "location": "page001-table001",
+                "description": "表格中存在数据缺失。",
+            },
+            {
+                "status": "issue",
+                "category": "参数值缺失",
+                "location": "第3章",
+                "description": "正文中的参数值缺失。",
+            },
+        ]
+
+        filtered, removed_count = filter_unsupported_visual_missing_items(
+            items,
+            pdf_table_evidence=evidence,
+        )
+
+        self.assertEqual(evidence["page001-table001"]["cells"]["B1"]["kind"], "merged")
+        self.assertEqual(evidence["page001-table001"]["cells"]["C2"]["kind"], "nontext")
+        self.assertEqual(removed_count, 3)
+        self.assertEqual(
+            [item["location"] for item in filtered],
+            ["page001-table001 > A2", "第3章"],
+        )
 
 
 if __name__ == "__main__":

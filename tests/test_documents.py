@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import fitz
 from docx import Document
@@ -14,6 +14,7 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from openpyxl import Workbook
 
 from app.documents import (
+    _extract_pymupdf_page_with_tables,
     _select_pdf_page_text,
     allowed_file,
     extract_document,
@@ -218,6 +219,124 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("https://docs.example.com/install", text)
         self.assertEqual(hyperlinks[0]["location"], "第1页")
         self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/install")
+
+    def test_extracts_pdf_table_in_reading_order_with_merged_and_empty_cells(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "merged-table.pdf"
+            document = fitz.open()
+            page = document.new_page(width=420, height=300)
+            page.insert_text((50, 60), "Before table")
+            lines = (
+                (50, 100, 350, 100),
+                (50, 140, 350, 140),
+                (150, 180, 350, 180),
+                (50, 220, 350, 220),
+                (50, 100, 50, 220),
+                (350, 100, 350, 220),
+                (150, 140, 150, 220),
+                (250, 100, 250, 220),
+            )
+            for x0, y0, x1, y1 in lines:
+                page.draw_line(fitz.Point(x0, y0), fitz.Point(x1, y1))
+            for x, y, value in (
+                (100, 125, "Merged header"),
+                (285, 125, "Column C"),
+                (80, 165, "Merged group"),
+                (185, 165, "Value 1"),
+                (285, 165, "Value 2"),
+                (185, 205, "Value 3"),
+            ):
+                page.insert_text((x, y), value)
+            page.insert_text((50, 260), "After table")
+            document.save(path)
+            document.close()
+
+            text = extract_text(path, "pdf")
+
+        self.assertLess(text.index("Before table"), text.index("[PDF结构化表格"))
+        self.assertLess(text.index("[PDF结构化表格"), text.index("After table"))
+        self.assertIn(
+            '<td data-cell="A1:B1" colspan="2">Merged header</td>',
+            text,
+        )
+        self.assertIn(
+            '<td data-cell="A2:A3" rowspan="2">Merged group</td>',
+            text,
+        )
+        self.assertIn(
+            '<td data-cell="C3" data-empty="true">[空单元格]</td>',
+            text,
+        )
+        self.assertEqual(text.count("Merged header"), 1)
+        self.assertEqual(text.count("Merged group"), 1)
+
+    def test_distinguishes_nontext_pdf_table_cell_from_empty_cell(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "table-with-icon.pdf"
+            document = fitz.open()
+            page = document.new_page(width=300, height=200)
+            for x0, y0, x1, y1 in (
+                (50, 50, 250, 50),
+                (50, 100, 250, 100),
+                (50, 150, 250, 150),
+                (50, 50, 50, 150),
+                (150, 50, 150, 150),
+                (250, 50, 250, 150),
+            ):
+                page.draw_line(fitz.Point(x0, y0), fitz.Point(x1, y1))
+            page.insert_text((80, 80), "Icon")
+            page.insert_text((180, 80), "Description")
+            page.insert_image(fitz.Rect(80, 115, 100, 135), stream=_TINY_PNG)
+            document.save(path)
+            document.close()
+
+            text = extract_text(path, "pdf")
+
+        self.assertIn(
+            '<td data-cell="A2" data-non-text="true">[非文本图形或图标]</td>',
+            text,
+        )
+        self.assertIn(
+            '<td data-cell="B2" data-empty="true">[空单元格]</td>',
+            text,
+        )
+
+    def test_pdf_table_extraction_skips_one_malformed_candidate(self):
+        page = MagicMock()
+        page.find_tables.return_value.tables = [object(), object()]
+        page.get_drawings.return_value = []
+        page.get_image_info.return_value = []
+        valid_model = {
+            "id": "page001-table002",
+            "page_number": 1,
+            "table_index": 2,
+            "bbox": (50.0, 50.0, 250.0, 150.0),
+            "row_count": 2,
+            "column_count": 2,
+            "cells": [
+                {
+                    "row": 0,
+                    "column": 0,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "bbox": (50.0, 50.0, 150.0, 100.0),
+                    "text": "项目",
+                    "has_nontext_content": False,
+                }
+            ],
+            "confidence": "high",
+            "unresolved_positions": [],
+            "vector_edge_count": 6,
+        }
+
+        with patch(
+            "app.documents._pdf_table_model",
+            side_effect=(RuntimeError("malformed table"), valid_model),
+        ):
+            text = _extract_pymupdf_page_with_tables(page, 1, {}, "")
+
+        self.assertIn("page001-table002", text)
+        self.assertIn("项目", text)
 
     def test_pdf_page_selection_prefers_pymupdf_when_pypdf_is_corrupted(self):
         pypdf_text = "标题 \ufffd\ufffd\ufffd\ufffd\ufffd 正文"

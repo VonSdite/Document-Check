@@ -1,3 +1,4 @@
+import html
 import json
 import re
 
@@ -66,6 +67,28 @@ _DECISION_FIELDS = (
     "fix",
     "修改建议",
 )
+_PDF_TABLE_PATTERN = re.compile(
+    r'<table\s+id="(?P<id>page\d+-table\d+)"\s+data-confidence="(?P<confidence>[^"]+)">'
+    r"(?P<body>.*?)</table>",
+    re.IGNORECASE | re.DOTALL,
+)
+_PDF_TABLE_ROW_PATTERN = re.compile(r"<tr>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
+_PDF_TABLE_CELL_PATTERN = re.compile(r"<td(?P<attributes>[^>]*)>(?P<content>.*?)</td>", re.IGNORECASE | re.DOTALL)
+_PDF_TABLE_ATTRIBUTE_PATTERN = re.compile(r'([\w-]+)="([^"]*)"')
+_PDF_TABLE_ID_PATTERN = re.compile(r"\bpage\d+-table\d+\b", re.IGNORECASE)
+_PDF_CELL_REFERENCE_PATTERN = re.compile(r"\b([A-Z]{1,3})([1-9]\d*)\b", re.IGNORECASE)
+_TABLE_DATA_MISSING_PATTERNS = (
+    re.compile(
+        r"(?:数据|参数值?|数值|内容|字段值?|单元格)(?:存在)?"
+        r"(?:缺失|缺少|遗漏|为空|空白|未填写|未提供)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:缺失|缺少|遗漏|未填写|未提供)[^，。；：;:\n]{0,16}"
+        r"(?:数据|参数值?|数值|内容|字段值?|单元格)",
+        re.IGNORECASE,
+    ),
+)
 
 
 def is_unsupported_visual_missing_item(item: dict) -> bool:
@@ -79,18 +102,29 @@ def is_unsupported_visual_missing_item(item: dict) -> bool:
     return any(pattern.search(decision_text) for pattern in _MISSING_VISUAL_PATTERNS)
 
 
-def filter_unsupported_visual_missing_items(items: list) -> tuple[list, int]:
+def filter_unsupported_visual_missing_items(
+    items: list,
+    *,
+    pdf_table_evidence: dict | None = None,
+) -> tuple[list, int]:
     filtered = []
     removed_count = 0
     for item in items:
-        if isinstance(item, dict) and is_unsupported_visual_missing_item(item):
+        if isinstance(item, dict) and (
+            is_unsupported_visual_missing_item(item)
+            or is_unsupported_pdf_table_data_missing_item(item, pdf_table_evidence or {})
+        ):
             removed_count += 1
             continue
         filtered.append(item)
     return filtered, removed_count
 
 
-def sanitize_text_check_result(content: str) -> tuple[str, int]:
+def sanitize_text_check_result(
+    content: str,
+    *,
+    pdf_table_evidence: dict | None = None,
+) -> tuple[str, int]:
     """在文本检查的最终 JSON 写入报告前过滤无依据的视觉对象缺失结论。"""
     text = str(content or "")
     payload = _load_report_payload(text)
@@ -100,12 +134,89 @@ def sanitize_text_check_result(content: str) -> tuple[str, int]:
     if not item_key:
         return text, 0
 
-    filtered_items, removed_count = filter_unsupported_visual_missing_items(payload[item_key])
+    filtered_items, removed_count = filter_unsupported_visual_missing_items(
+        payload[item_key],
+        pdf_table_evidence=pdf_table_evidence,
+    )
     if not removed_count:
         return text, 0
     payload[item_key] = filtered_items
     payload["summary"] = guarded_report_summary(filtered_items)
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")), removed_count
+
+
+def build_pdf_table_evidence_index(document_text: str) -> dict:
+    text = str(document_text or "")
+    if "<table" not in text or "page" not in text:
+        return {}
+    tables = {}
+    for table_match in _PDF_TABLE_PATTERN.finditer(text):
+        table_id = table_match.group("id").lower()
+        cell_map = {}
+        for row_index, row_match in enumerate(_PDF_TABLE_ROW_PATTERN.finditer(table_match.group("body")), start=1):
+            column_index = 1
+            for cell_match in _PDF_TABLE_CELL_PATTERN.finditer(row_match.group(1)):
+                while _pdf_cell_name(row_index, column_index) in cell_map:
+                    column_index += 1
+                attributes = dict(_PDF_TABLE_ATTRIBUTE_PATTERN.findall(cell_match.group("attributes")))
+                rowspan = _positive_int(attributes.get("rowspan"), 1)
+                colspan = _positive_int(attributes.get("colspan"), 1)
+                anchor = _pdf_cell_name(row_index, column_index)
+                if "data-non-text" in attributes:
+                    kind = "nontext"
+                elif "data-empty" in attributes:
+                    kind = "empty"
+                else:
+                    kind = "text"
+                content = re.sub(r"<[^>]+>", "", cell_match.group("content"))
+                for covered_row in range(row_index, row_index + rowspan):
+                    for covered_column in range(column_index, column_index + colspan):
+                        cell_name = _pdf_cell_name(covered_row, covered_column)
+                        cell_map[cell_name] = {
+                            "kind": kind if cell_name == anchor else "merged",
+                            "anchor": anchor,
+                            "text": html.unescape(content).strip() if cell_name == anchor else "",
+                        }
+                column_index += colspan
+        tables[table_id] = {
+            "confidence": table_match.group("confidence").strip().lower(),
+            "cells": cell_map,
+        }
+    return tables
+
+
+def is_unsupported_pdf_table_data_missing_item(item: dict, pdf_table_evidence: dict) -> bool:
+    if not isinstance(item, dict) or not pdf_table_evidence:
+        return False
+    excerpt = "\n".join(str(item.get(field) or "") for field in _EXCERPT_FIELDS)
+    if _EXPLICIT_PLACEHOLDER_PATTERN.search(excerpt):
+        return False
+    decision_text = "\n".join(str(item.get(field) or "") for field in _DECISION_FIELDS)
+    evidence_text = "\n".join(
+        (str(item.get("location") or ""), excerpt, decision_text)
+    )
+    location_text = str(item.get("location") or "")
+    if not any(pattern.search(decision_text) for pattern in _TABLE_DATA_MISSING_PATTERNS):
+        return False
+    table_ids = {value.lower() for value in _PDF_TABLE_ID_PATTERN.findall(location_text)}
+    if not table_ids and not re.search(r"表格|单元格|行|列", evidence_text):
+        return False
+    if len(table_ids) != 1:
+        return True
+    table = pdf_table_evidence.get(next(iter(table_ids)))
+    if not table or table.get("confidence") != "high":
+        return True
+    cell_names = {
+        f"{column.upper()}{row}"
+        for column, row in _PDF_CELL_REFERENCE_PATTERN.findall(location_text)
+    }
+    if not cell_names:
+        return True
+    for cell_name in cell_names:
+        cell = table["cells"].get(cell_name)
+        if not cell or cell.get("kind") != "empty":
+            return True
+    return False
 
 
 def guarded_report_summary(items: list) -> str:
@@ -149,3 +260,19 @@ def _load_report_payload(text: str):
         except (TypeError, json.JSONDecodeError):
             continue
     return None
+
+
+def _positive_int(value, default: int) -> int:
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _pdf_cell_name(row: int, column: int) -> str:
+    letters = []
+    value = max(1, int(column))
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        letters.append(chr(ord("A") + remainder))
+    return "".join(reversed(letters)) + str(max(1, int(row)))
