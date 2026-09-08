@@ -129,8 +129,8 @@
       </select>
     </label>
     <label>
-      用户
-      <input name="owner" value="{{ owner }}" placeholder="按用户、账号或 IP 过滤">
+      关键词
+      <input name="keyword" value="{{ keyword }}" placeholder="按文档名称、用户、账号或 IP 搜索">
     </label>
     <button class="secondary-button" type="submit">筛选</button>
   </form>
@@ -200,7 +200,7 @@
       </tbody>
     </table>
   </div>
-  {{ task_pagination.render('admin_tasks', pagination, status, owner) }}
+  {{ task_pagination.render('admin_tasks', pagination, status, keyword) }}
   {% else %}
   <div class="empty-state compact">
     <h3>没有匹配任务</h3>

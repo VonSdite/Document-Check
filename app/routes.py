@@ -1764,7 +1764,10 @@ def _render_admin_videos_page():
 def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_type: str, check_items):
     identity = _console_user_identity()
     status = request.args.get("status", "")
-    owner = request.args.get("owner", request.args.get("ip", "")).strip()
+    keyword = request.args.get("keyword")
+    if keyword is None:
+        keyword = request.args.get("owner", request.args.get("ip", ""))
+    keyword = keyword.strip()
     page = _page_arg()
     per_page = _per_page_arg()
     params = []
@@ -1783,22 +1786,24 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     if status:
         clauses.append("t.status = ?")
         params.append(status)
-    if owner:
+    if keyword:
         owner_name_filter = "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
         clauses.append(
             f"""
             (
-                COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ?
+                COALESCE(t.original_filename, '') LIKE ?
+                OR COALESCE(t.document_meta_json, '') LIKE ?
+                OR COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ?
                 OR t.ip LIKE ?
                 OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ?
                 {owner_name_filter}
             )
             """
         )
-        owner_like = f"%{owner}%"
-        params.extend([owner_like, owner_like, owner_like])
+        keyword_like = f"%{keyword}%"
+        params.extend([keyword_like, keyword_like, keyword_like, keyword_like, keyword_like])
         if join_ip_usernames:
-            params.append(owner_like)
+            params.append(keyword_like)
     clauses.append("t.task_type = ?")
     params.append(task_type)
     where = f"WHERE {' AND '.join(clauses)}"
@@ -1837,8 +1842,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         template_name,
         tasks=rows,
         status=status,
-        owner=owner,
-        ip=owner,
+        keyword=keyword,
         pagination=_pagination(page, total, per_page),
         totals=_admin_totals(totals_task_type),
         global_concurrency=get_setting("global_concurrency", 3),

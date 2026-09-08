@@ -1,12 +1,12 @@
-{% macro render(endpoint, pagination, status=none, owner=none) -%}
-{% set has_filters = status is not none or owner is not none %}
+{% macro render(endpoint, pagination, status=none, keyword=none) -%}
+{% set has_filters = status is not none or keyword is not none %}
 <nav class="pagination" aria-label="任务分页">
   <div class="pagination-summary">
     <span>共 {{ pagination.total }} 条</span>
     <form class="page-size-form" method="get" action="{{ url_for(endpoint) }}">
       {% if has_filters %}
       <input type="hidden" name="status" value="{{ status }}">
-      <input type="hidden" name="owner" value="{{ owner }}">
+      <input type="hidden" name="keyword" value="{{ keyword }}">
       {% endif %}
       <input type="hidden" name="page" value="1">
       <label>
@@ -22,7 +22,7 @@
   </div>
   <div class="pagination-controls">
     {% if has_filters %}
-    <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for(endpoint, status=status, owner=owner, page=pagination.prev_page, per_page=pagination.per_page) }}">上一页</a>
+    <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for(endpoint, status=status, keyword=keyword, page=pagination.prev_page, per_page=pagination.per_page) }}">上一页</a>
     {% else %}
     <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for(endpoint, page=pagination.prev_page, per_page=pagination.per_page) }}">上一页</a>
     {% endif %}
@@ -30,7 +30,7 @@
     <form class="page-jump-form" method="get" action="{{ url_for(endpoint) }}">
       {% if has_filters %}
       <input type="hidden" name="status" value="{{ status }}">
-      <input type="hidden" name="owner" value="{{ owner }}">
+      <input type="hidden" name="keyword" value="{{ keyword }}">
       {% endif %}
       <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
       <label>
@@ -40,7 +40,7 @@
       <button class="page-link" type="submit">跳转</button>
     </form>
     {% if has_filters %}
-    <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for(endpoint, status=status, owner=owner, page=pagination.next_page, per_page=pagination.per_page) }}">下一页</a>
+    <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for(endpoint, status=status, keyword=keyword, page=pagination.next_page, per_page=pagination.per_page) }}">下一页</a>
     {% else %}
     <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for(endpoint, page=pagination.next_page, per_page=pagination.per_page) }}">下一页</a>
     {% endif %}

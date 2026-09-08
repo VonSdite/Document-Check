@@ -224,6 +224,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         *,
         task_type: str = DOCUMENT_TASK_TYPE,
         ip: str = "127.0.0.1",
+        original_filename: str = "测试文档.txt",
         status: str = "completed",
         created_at: str = "2026-05-01 10:00:00",
         username_snapshot: str | None = None,
@@ -239,7 +240,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     original_filename, stored_filename, file_type,
                     file_size, checks_json, model_name, api_base, status, progress, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, '测试文档.txt', 'stored.txt', 'txt', 12, '[]', 'model-a', 'https://example.test/v1/chat/completions', ?, 100, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'stored.txt', 'txt', 12, '[]', 'model-a', 'https://example.test/v1/chat/completions', ?, 100, ?, ?)
                 """,
                 (
                     task_type,
@@ -248,6 +249,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     owner_subject,
                     owner_name_snapshot,
                     owner_source,
+                    original_filename,
                     status,
                     created_at,
                     created_at,
@@ -4443,13 +4445,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         form = _required_tag(soup.select_one(".pagination .page-jump-form"))
         page_input = _required_tag(form.select_one('input[name="page"]'))
         status_input = _required_tag(form.select_one('input[name="status"]'))
-        owner_input = _required_tag(form.select_one('input[name="owner"]'))
+        keyword_input = _required_tag(form.select_one('input[name="keyword"]'))
         self.assertEqual(form.get("method"), "get")
         self.assertEqual(form.get("action"), "/admin/tasks")
         self.assertEqual(page_input.get("value"), "2")
         self.assertEqual(page_input.get("max"), "2")
         self.assertEqual(status_input.get("value"), "completed")
-        self.assertEqual(owner_input.get("value"), "127.0.0.1")
+        self.assertEqual(keyword_input.get("value"), "127.0.0.1")
         self.assertEqual(_required_tag(form.select_one('input[name="per_page"]')).get("value"), "20")
         page_size_form = _required_tag(soup.select_one(".pagination .page-size-form"))
         self.assertEqual(
@@ -4457,11 +4459,71 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "completed",
         )
         self.assertEqual(
-            _required_tag(page_size_form.select_one('input[name="owner"]')).get("value"),
+            _required_tag(page_size_form.select_one('input[name="keyword"]')).get("value"),
             "127.0.0.1",
         )
         filter_form = _required_tag(soup.select_one(".filter-bar"))
         self.assertEqual(_required_tag(filter_form.select_one('input[name="per_page"]')).get("value"), "20")
+
+    def test_admin_task_lists_fuzzy_search_document_name_by_keyword(self):
+        task_routes = (
+            (DOCUMENT_TASK_TYPE, "/admin/tasks"),
+            (CONSISTENCY_TASK_TYPE, "/admin/consistency"),
+            (LANGUAGE_CONSISTENCY_TASK_TYPE, "/admin/language-consistency"),
+            (IMAGE_TASK_TYPE, "/admin/images"),
+            (VIDEO_TASK_TYPE, "/admin/videos"),
+        )
+
+        for task_type, route in task_routes:
+            matching_filename = f"SUN2000 {task_type} 用户手册.pdf"
+            self._insert_task(task_type=task_type, original_filename=matching_filename)
+            self._insert_task(
+                task_type=task_type,
+                original_filename=f"其他文档 {task_type}.pdf",
+                created_at="2026-05-01 10:01:00",
+            )
+
+            with self.subTest(task_type=task_type):
+                response = self.client.get(route, query_string={"keyword": "2000"})
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                keyword_input = _required_tag(soup.select_one('.filter-bar input[name="keyword"]'))
+                keyword_label = _required_tag(keyword_input.find_parent("label"))
+                filenames = [link.get_text(strip=True) for link in soup.select("a.task-report-link")]
+
+                self.assertEqual(keyword_label.get_text(" ", strip=True), "关键词")
+                self.assertEqual(keyword_input.get("value"), "2000")
+                self.assertEqual(
+                    keyword_input.get("placeholder"),
+                    "按文档名称、用户、账号或 IP 搜索",
+                )
+                self.assertEqual(filenames, [matching_filename])
+
+    def test_admin_task_list_searches_all_document_names_in_metadata(self):
+        document_meta = {
+            "groups": [
+                {
+                    "label": "素材文档",
+                    "files": [
+                        {"original_filename": "需求说明.docx"},
+                        {"original_filename": "SUN2000 隐藏参数表.xlsx"},
+                    ],
+                }
+            ]
+        }
+        task_id = self._insert_cache_task(
+            original_filename="多文档对照检查：素材2个",
+            stored_filename="stored.docx",
+            task_type=CONSISTENCY_TASK_TYPE,
+            document_meta_json=json.dumps(document_meta, ensure_ascii=False),
+        )
+
+        response = self.client.get("/admin/consistency", query_string={"keyword": "隐藏参数"})
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        report_link = _required_tag(soup.select_one("a.task-report-link"))
+        self.assertEqual(report_link.get("href"), f"/admin/tasks/{task_id}")
 
     def test_admin_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):
