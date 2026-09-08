@@ -3437,6 +3437,29 @@ body.table-column-resize-active * {
   margin-bottom: 16px;
 }
 
+.task-filter-bar {
+  grid-template-columns: minmax(150px, 180px) minmax(150px, 180px) minmax(280px, 1fr) auto;
+}
+
+.task-filter-bar > button {
+  white-space: nowrap;
+}
+
+@media (max-width: 840px) {
+  .task-filter-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-filter-bar label:nth-of-type(3),
+  .task-filter-bar > button {
+    grid-column: 1 / -1;
+  }
+
+  .task-filter-bar > button {
+    width: 100%;
+  }
+}
+
 .overview-filter {
   display: grid;
   grid-template-columns: repeat(2, minmax(180px, 240px)) auto;

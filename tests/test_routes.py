@@ -629,6 +629,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     headers = [header.get_text(" ", strip=True) for header in soup.select("table thead th")]
                     self.assertIn("检查状态", headers)
                     self.assertIn("标注进度", headers)
+                    if list_url.startswith("/admin"):
+                        self.assertIsNotNone(soup.select_one(".filter-bar.task-filter-bar"))
                     form = _required_tag(soup.select_one("[data-bulk-delete-form]"))
                     checkboxes = soup.select("[data-bulk-task]")
                     toggle = _required_tag(soup.select_one("[data-bulk-task-toggle]"))
