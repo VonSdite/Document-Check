@@ -103,7 +103,8 @@
           {{ task_bulk.select_header(tasks) }}
           <th>文档</th>
           <th>模型</th>
-          <th>状态</th>
+          <th>检查状态</th>
+          <th>标注进度</th>
           <th>创建时间</th>
           <th class="right">操作</th>
         </tr>
@@ -111,7 +112,7 @@
       <tbody>
         {% for task in tasks %}
         {% set source_files_available = task_source_files_available(task) %}
-        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}">
+        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}" data-task-review-key="{{ task.review_key }}">
           {{ task_bulk.select_cell(task) }}
           <td class="task-file-cell">
             <div class="task-file-line">
@@ -127,10 +128,11 @@
             <div class="subline">{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB{% if not source_files_available %}<span class="source-file-status source-file-status-missing">原文件已清理或缺失</span>{% endif %}</div>
           </td>
           <td class="task-model-cell">{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
-          <td>
+          <td class="task-status-cell">
             <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
             {% if task.status == "running" %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
           </td>
+          {% include "_task_review_progress.html" %}
           <td>{{ task.created_at }}</td>
           <td class="right">
             <div class="task-actions">

@@ -2981,7 +2981,7 @@ function replaceRefreshRegion(documentFragment, name) {
   }
 }
 
-async function refreshTaskPageRegions() {
+async function refreshTaskPageRegions(force = false) {
   const url = new URL(window.location.href);
   url.searchParams.set("_refresh", Date.now().toString());
   const response = await fetch(url.toString(), {
@@ -2992,7 +2992,7 @@ async function refreshTaskPageRegions() {
     return;
   }
   const html = await response.text();
-  if (autoRefreshSuspended()) {
+  if (!force && autoRefreshSuspended()) {
     return;
   }
   const nextDocument = new DOMParser().parseFromString(html, "text/html");
@@ -3000,7 +3000,7 @@ async function refreshTaskPageRegions() {
   replaceRefreshRegion(nextDocument, "task-list");
 }
 
-async function refreshTaskStatuses(refreshUrl) {
+async function refreshTaskStatuses(refreshUrl, forcePageRefresh = false) {
   const taskRows = Array.from(document.querySelectorAll("[data-task-id][data-task-status]"));
   const url = new URL(refreshUrl, window.location.origin);
   url.searchParams.set("ids", taskRows.map((row) => row.dataset.taskId).filter(Boolean).join(","));
@@ -3025,12 +3025,15 @@ async function refreshTaskStatuses(refreshUrl) {
     }
   }
   const returnedById = new Map((data.tasks || []).map((task) => [String(task.id), task]));
-  const statusChanged =
+  const taskChanged =
     wasActive !== Boolean(data.active)
     || returnedById.size !== taskRows.length
-    || taskRows.some((row) => returnedById.get(row.dataset.taskId)?.status !== row.dataset.taskStatus);
-  if (statusChanged) {
-    await refreshTaskPageRegions();
+    || taskRows.some((row) => {
+      const task = returnedById.get(row.dataset.taskId);
+      return task?.status !== row.dataset.taskStatus || task?.review_key !== row.dataset.taskReviewKey;
+    });
+  if (taskChanged) {
+    await refreshTaskPageRegions(forcePageRefresh);
     return;
   }
   for (const row of taskRows) {
@@ -3041,6 +3044,32 @@ async function refreshTaskStatuses(refreshUrl) {
     }
   }
 }
+
+let lastTaskListFocusRefresh = 0;
+
+async function refreshTaskListAfterReturn() {
+  const stats = document.querySelector('[data-refresh-region="stats"]');
+  const refreshUrl = stats?.dataset.refreshUrl;
+  const now = Date.now();
+  if (!refreshUrl || document.hidden || autoRefreshPending || now - lastTaskListFocusRefresh < 1000) {
+    return;
+  }
+  lastTaskListFocusRefresh = now;
+  autoRefreshPending = true;
+  try {
+    await refreshTaskStatuses(refreshUrl, true);
+    applyAutoRefreshState();
+  } finally {
+    autoRefreshPending = false;
+  }
+}
+
+window.addEventListener("focus", refreshTaskListAfterReturn);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    refreshTaskListAfterReturn();
+  }
+});
 
 async function refreshTaskRegions() {
   if (autoRefreshPending || document.hidden || autoRefreshSuspended() || !hasActiveRefreshTasks()) {

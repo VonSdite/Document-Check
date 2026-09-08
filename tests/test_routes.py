@@ -626,6 +626,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     response = self.client.get(list_url)
                     self.assertEqual(response.status_code, 200)
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    headers = [header.get_text(" ", strip=True) for header in soup.select("table thead th")]
+                    self.assertIn("检查状态", headers)
+                    self.assertIn("标注进度", headers)
                     form = _required_tag(soup.select_one("[data-bulk-delete-form]"))
                     checkboxes = soup.select("[data-bulk-task]")
                     toggle = _required_tag(soup.select_one("[data-bulk-task-toggle]"))
@@ -1550,7 +1553,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 (task_id,),
             ).fetchone()
         self.assertEqual(cached["non_issue_count"], 0)
-        self.assertTrue(cached["suppression_version"].startswith("2|"))
+        self.assertTrue(cached["suppression_version"].startswith("3|"))
 
     def test_suppression_rule_change_refreshes_cached_report_totals(self):
         task_id = self._insert_task()
@@ -1621,7 +1624,138 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["active"])
-        self.assertEqual(payload["tasks"], [{"id": task_id, "progress": 100, "status": "running", "status_label": "检查中"}])
+        self.assertEqual(
+            payload["tasks"],
+            [
+                {
+                    "id": task_id,
+                    "pending_review_item_count": 0,
+                    "progress": 100,
+                    "report_item_count": 0,
+                    "review_key": "unavailable:0:0",
+                    "review_status": "unavailable",
+                    "review_status_label": "—",
+                    "reviewed_item_count": 0,
+                    "status": "running",
+                    "status_label": "检查中",
+                }
+            ],
+        )
+
+    def test_task_list_tracks_and_filters_report_review_progress(self):
+        task_id = self._insert_task(original_filename="待标注文档.txt")
+        empty_task_id = self._insert_task(
+            original_filename="无条目文档.txt",
+            created_at="2026-05-01 09:59:00",
+        )
+        report = [
+            {
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "result": json.dumps(
+                    {
+                        "summary": "发现两条待复核内容",
+                        "items": [
+                            {
+                                "status": "issue",
+                                "category": "参数错误",
+                                "description": "参数值前后不一致",
+                                "suggestion": "统一参数值",
+                            },
+                            {
+                                "status": "suggestion",
+                                "category": "表达建议",
+                                "description": "表述可以更清晰",
+                                "suggestion": "补充说明",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json = ?, updated_at = '2026-05-01 10:01:00' WHERE id = ?",
+                (json.dumps(report, ensure_ascii=False), task_id),
+            )
+            get_db().commit()
+
+        pending_page = self.client.get("/admin/tasks?review_status=pending")
+        pending_soup = BeautifulSoup(pending_page.get_data(as_text=True), "html.parser")
+        pending_row = _required_tag(pending_soup.select_one(f'[data-task-id="{task_id}"]'))
+        self.assertEqual(pending_row.get("data-task-review-key"), "pending:0:2")
+        self.assertIn("未标注 0/2", pending_row.get_text(" ", strip=True))
+        self.assertIsNone(pending_soup.select_one(f'[data-task-id="{empty_task_id}"]'))
+
+        empty_page = self.client.get("/admin/tasks?review_status=empty")
+        empty_soup = BeautifulSoup(empty_page.get_data(as_text=True), "html.parser")
+        self.assertIsNotNone(empty_soup.select_one(f'[data-task-id="{empty_task_id}"]'))
+        self.assertIsNone(empty_soup.select_one(f'[data-task-id="{task_id}"]'))
+
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        detail_soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        report_rows = detail_soup.select("[data-report-item]")
+        self.assertEqual(len(report_rows), 2)
+        first_row = _required_tag(report_rows[0])
+        second_row = _required_tag(report_rows[1])
+
+        first_review = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": first_row["data-result-code"],
+                "item_id": first_row["data-item-id"],
+                "item_type": first_row["data-item-type"],
+                "acceptance_status": "accepted",
+            },
+        )
+        self.assertEqual(first_review.status_code, 200)
+        self.assertEqual(first_review.get_json()["totals"]["reviewed"], 1)
+        self.assertEqual(first_review.get_json()["totals"]["pending_review"], 1)
+
+        with patch("app.routes._parse_result_json", side_effect=AssertionError("轻量接口不应解析报告正文")):
+            status_response = self.client.get(
+                f"/admin/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={task_id}"
+            )
+        status_task = status_response.get_json()["tasks"][0]
+        self.assertEqual(status_task["review_status"], "in_progress")
+        self.assertEqual(status_task["review_key"], "in_progress:1:2")
+
+        in_progress_page = self.client.get("/admin/tasks?review_status=in_progress")
+        in_progress_soup = BeautifulSoup(in_progress_page.get_data(as_text=True), "html.parser")
+        in_progress_row = _required_tag(in_progress_soup.select_one(f'[data-task-id="{task_id}"]'))
+        self.assertIn("标注中 1/2", in_progress_row.get_text(" ", strip=True))
+        self.assertIn("review_status=in_progress", in_progress_page.get_data(as_text=True))
+
+        second_review = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": second_row["data-result-code"],
+                "item_id": second_row["data-item-id"],
+                "item_type": second_row["data-item-type"],
+                "acceptance_status": "rejected",
+                "rejection_reason": "evidence_insufficient",
+            },
+        )
+        self.assertEqual(second_review.status_code, 200)
+        self.assertEqual(second_review.get_json()["totals"]["reviewed"], 2)
+        self.assertEqual(second_review.get_json()["totals"]["pending_review"], 0)
+
+        completed_page = self.client.get("/admin/tasks?review_status=completed")
+        completed_soup = BeautifulSoup(completed_page.get_data(as_text=True), "html.parser")
+        completed_row = _required_tag(completed_soup.select_one(f'[data-task-id="{task_id}"]'))
+        self.assertEqual(completed_row.get("data-task-review-key"), "completed:2:2")
+        self.assertIn("已标注 2/2", completed_row.get_text(" ", strip=True))
+        with self.app.app_context():
+            cached = get_db().execute(
+                """
+                SELECT reviewed_item_count, pending_review_item_count
+                FROM task_report_stats WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(cached["reviewed_item_count"], 2)
+        self.assertEqual(cached["pending_review_item_count"], 0)
 
     def test_admin_task_page_exposes_lightweight_refresh_metadata(self):
         task_id = self._insert_task(status="running")
@@ -1632,6 +1766,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         task_row = _required_tag(soup.select_one(f'[data-task-id="{task_id}"]'))
         self.assertIn("/admin/task-statuses?task_type=document_check", str(stats.get("data-refresh-url")))
         self.assertEqual(task_row.get("data-task-status"), "running")
+        self.assertEqual(task_row.get("data-task-review-key"), "unavailable:0:0")
 
     def test_user_task_status_endpoint_only_returns_current_owner_tasks(self):
         own_task_id = self._insert_task(status="running", owner_subject="ip:127.0.0.1", owner_source="ip")
@@ -3249,6 +3384,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "SELECT reason FROM report_suppression_rules WHERE source_task_id = ? AND source_item_id = ?",
                 (task_id, item_id),
             ).fetchone()
+            cached = get_db().execute(
+                """
+                SELECT reviewed_item_count, pending_review_item_count
+                FROM task_report_stats WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
         self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
         self.assertEqual(
             stored[0]["item_acceptances"][item_id],
@@ -3259,6 +3401,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             },
         )
         self.assertEqual(candidate["reason"], "模型误报")
+        self.assertEqual(cached["reviewed_item_count"], 1)
+        self.assertEqual(cached["pending_review_item_count"], 1)
 
     def test_task_report_excel_import_rejects_invalid_rows_without_partial_update(self):
         task_id = self._insert_report_task()

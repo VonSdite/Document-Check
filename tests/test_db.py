@@ -324,6 +324,16 @@ class CheckItemDefaultsTest(unittest.TestCase):
         }
         self.assertIn(("tasks", "task_id", "id", "CASCADE"), foreign_keys)
 
+    def test_task_report_stats_tracks_all_item_review_progress(self):
+        db = get_db()
+        columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(task_report_stats)").fetchall()
+        }
+
+        self.assertIn("reviewed_item_count", columns)
+        self.assertIn("pending_review_item_count", columns)
+
     def test_init_db_removes_historical_orphaned_report_suppression_hits(self):
         db = get_db()
         now = now_text()

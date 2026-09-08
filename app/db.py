@@ -171,6 +171,8 @@ def init_db():
             rejected_issue_count INTEGER NOT NULL DEFAULT 0,
             pending_issue_acceptance_count INTEGER NOT NULL DEFAULT 0,
             suppressed_count INTEGER NOT NULL DEFAULT 0,
+            reviewed_item_count INTEGER NOT NULL DEFAULT 0,
+            pending_review_item_count INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
         );
@@ -216,6 +218,8 @@ def init_db():
     _ensure_column(db, "tasks", "claim_token", "TEXT")
     _ensure_column(db, "tasks", "lease_expires_at", "TEXT")
     _ensure_column(db, "tasks", "source_files_cleaned_at", "TEXT")
+    _ensure_column(db, "task_report_stats", "reviewed_item_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(db, "task_report_stats", "pending_review_item_count", "INTEGER NOT NULL DEFAULT 0")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)")

@@ -1,0 +1,11 @@
+<td class="task-review-cell">
+  <span class="task-review-status task-review-status-{{ task.review_status }}" title="{% if task.review_status == 'unavailable' %}任务检查完成后可开始标注{% elif task.review_status == 'empty' %}报告没有可标注条目{% else %}已标注 {{ task.reviewed_item_count }} 条，待标注 {{ task.pending_review_item_count }} 条，共 {{ task.report_item_count }} 条{% endif %}">
+    <span>{{ task.review_status_label }}</span>
+    {% if task.review_status not in ['unavailable', 'empty'] %}
+    <strong>{{ task.reviewed_item_count }}/{{ task.report_item_count }}</strong>
+    {% endif %}
+  </span>
+  {% if task.review_status in ['pending', 'in_progress', 'completed'] %}
+  <div class="task-review-progress" aria-hidden="true"><span style="width: {{ ((task.reviewed_item_count / task.report_item_count) * 100)|round(0)|int if task.report_item_count else 0 }}%"></span></div>
+  {% endif %}
+</td>

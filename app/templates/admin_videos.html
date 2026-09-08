@@ -126,6 +126,15 @@
       </select>
     </label>
     <label>
+      标注状态
+      <select name="review_status">
+        <option value="">全部</option>
+        {% for key, label in review_status_filters.items() %}
+        <option value="{{ key }}" {{ "selected" if key == review_status else "" }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
       关键词
       <input name="keyword" value="{{ keyword }}" placeholder="按文档名称、用户、账号或 IP 搜索">
     </label>
@@ -142,7 +151,8 @@
           <th>视频</th>
           <th>归属</th>
           <th>模型</th>
-          <th>状态</th>
+          <th>检查状态</th>
+          <th>标注进度</th>
           <th>创建时间</th>
           <th class="right">操作</th>
         </tr>
@@ -150,7 +160,7 @@
       <tbody>
         {% for task in tasks %}
         {% set source_files_available = task_source_files_available(task) %}
-        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}">
+        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}" data-task-review-key="{{ task.review_key }}">
           {{ task_bulk.select_cell(task) }}
           <td class="task-file-cell">
             <div class="task-file-line">
@@ -175,6 +185,7 @@
             <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
             {% if task.status == "running" %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
           </td>
+          {% include "_task_review_progress.html" %}
           <td class="task-time-cell">{{ task.created_at }}</td>
           <td class="right">
             <div class="task-actions">
@@ -197,7 +208,7 @@
       </tbody>
     </table>
   </div>
-  {{ task_pagination.render('admin_videos', pagination, status, keyword) }}
+  {{ task_pagination.render('admin_videos', pagination, status, keyword, review_status) }}
   {% else %}
   <div class="empty-state compact">
     <h3>没有匹配任务</h3>

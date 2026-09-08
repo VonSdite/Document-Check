@@ -2035,12 +2035,12 @@ body.table-column-resize-active * {
 }
 
 .task-table {
-  min-width: 980px;
+  min-width: 1080px;
   table-layout: fixed;
 }
 
 .admin-task-table {
-  min-width: 1120px;
+  min-width: 1240px;
   table-layout: fixed;
 }
 
@@ -2055,7 +2055,7 @@ body.table-column-resize-active * {
 }
 
 .task-table th:nth-child(2) {
-  width: 54%;
+  width: 44%;
 }
 
 .task-table th:nth-child(3) {
@@ -2063,19 +2063,23 @@ body.table-column-resize-active * {
 }
 
 .task-table th:nth-child(4) {
-  width: 11%;
+  width: 96px;
 }
 
 .task-table th:nth-child(5) {
-  width: 13%;
+  width: 134px;
 }
 
 .task-table th:nth-child(6) {
+  width: 132px;
+}
+
+.task-table th:nth-child(7) {
   width: 118px;
 }
 
 .admin-task-table th:nth-child(2) {
-  width: 50%;
+  width: 38%;
 }
 
 .admin-task-table th:nth-child(3) {
@@ -2091,10 +2095,14 @@ body.table-column-resize-active * {
 }
 
 .admin-task-table th:nth-child(6) {
-  width: 132px;
+  width: 134px;
 }
 
 .admin-task-table th:nth-child(7) {
+  width: 132px;
+}
+
+.admin-task-table th:nth-child(8) {
   width: 118px;
 }
 
@@ -2235,6 +2243,63 @@ body.table-column-resize-active * {
 
 .task-status-cell {
   white-space: nowrap;
+}
+
+.task-review-cell {
+  white-space: nowrap;
+}
+
+.task-review-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.task-review-status strong {
+  font-size: 11px;
+}
+
+.task-review-status-pending,
+.task-review-status-unavailable,
+.task-review-status-empty {
+  color: #5d6864;
+  background: #eceff1;
+}
+
+.task-review-status-in_progress {
+  color: #8a5a05;
+  background: #fff6df;
+}
+
+.task-review-status-completed {
+  color: #166534;
+  background: #e8f7ed;
+}
+
+.task-review-progress {
+  width: 100%;
+  max-width: 112px;
+  height: 5px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6edf5;
+}
+
+.task-review-progress span {
+  display: block;
+  max-width: 100%;
+  height: 100%;
+  background: #d89a20;
+}
+
+.task-review-status-completed + .task-review-progress span {
+  background: #2f9e5b;
 }
 
 .task-actions {
