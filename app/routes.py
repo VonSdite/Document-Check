@@ -1049,7 +1049,7 @@ def register_routes(app):
                 operation = request.form.get("operation", "")
                 if not rule_id.isdigit():
                     flash("误报忽略规则不存在。", "error")
-                    return redirect(url_for("admin_settings"))
+                    return _report_suppression_rules_redirect()
                 if operation == "enable":
                     db.execute(
                         "UPDATE report_suppression_rules SET enabled = 1, updated_at = ? WHERE id = ?",
@@ -1057,7 +1057,7 @@ def register_routes(app):
                     )
                     db.commit()
                     flash("误报忽略规则已启用。", "success")
-                    return redirect(url_for("admin_settings"))
+                    return _report_suppression_rules_redirect()
                 if operation == "disable":
                     db.execute(
                         "UPDATE report_suppression_rules SET enabled = 0, updated_at = ? WHERE id = ?",
@@ -1065,14 +1065,14 @@ def register_routes(app):
                     )
                     db.commit()
                     flash("误报忽略规则已停用。", "success")
-                    return redirect(url_for("admin_settings"))
+                    return _report_suppression_rules_redirect()
                 if operation == "delete":
                     db.execute("DELETE FROM report_suppression_rules WHERE id = ?", (int(rule_id),))
                     db.commit()
                     flash("误报忽略规则已删除。", "success")
-                    return redirect(url_for("admin_settings"))
+                    return _report_suppression_rules_redirect()
                 flash("未知误报忽略规则操作。", "error")
-                return redirect(url_for("admin_settings"))
+                return _report_suppression_rules_redirect()
 
             if action == "create_check_item":
                 task_type = _check_item_task_type(request.form.get("task_type"))
@@ -1203,6 +1203,7 @@ def register_routes(app):
         image_check_items = _check_items_for_task_type(db, IMAGE_TASK_TYPE)
         video_check_items = _check_items_for_task_type(db, VIDEO_TASK_TYPE)
         settings_tab = _settings_tab()
+        report_suppression_keyword, report_suppression_status = _report_suppression_filter_values(request.args)
         return render_template(
             "admin_settings.html",
             check_item_groups=[
@@ -1280,6 +1281,8 @@ def register_routes(app):
             ip_username_management_enabled=_ip_username_management_enabled(),
             ip_username_rows=_ip_username_rows() if _ip_username_management_enabled() else [],
             report_suppression_rules=_report_suppression_rule_rows(),
+            report_suppression_keyword=report_suppression_keyword,
+            report_suppression_status=report_suppression_status,
         )
 
 
@@ -1291,6 +1294,24 @@ def _identity_label(identity: UserIdentity) -> str:
 
 def _wants_json_response() -> bool:
     return request.headers.get("X-Requested-With") == "fetch" or request.accept_mimetypes.best == "application/json"
+
+
+def _report_suppression_filter_values(values) -> tuple[str, str]:
+    keyword = str(values.get("rule_keyword") or "").strip()[:200]
+    status = str(values.get("rule_status") or "").strip()
+    if status not in {"candidate", "enabled"}:
+        status = ""
+    return keyword, status
+
+
+def _report_suppression_rules_redirect():
+    keyword, status = _report_suppression_filter_values(request.form)
+    url_values = {"_anchor": "report-suppression-rules"}
+    if keyword:
+        url_values["rule_keyword"] = keyword
+    if status:
+        url_values["rule_status"] = status
+    return redirect(url_for("admin_settings", **url_values))
 
 
 def _report_suppression_rule_rows() -> list[dict]:

@@ -750,6 +750,137 @@ document.addEventListener("submit", (event) => {
   }
 });
 
+function normalizeReportSuppressionText(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function reportSuppressionSearchText(row) {
+  if (row.dataset.reportSuppressionSearchText !== undefined) {
+    return row.dataset.reportSuppressionSearchText;
+  }
+  const value = Array.from(row.querySelectorAll("[data-report-suppression-search-part]"))
+    .map((part) => part.textContent || "")
+    .join(" ");
+  row.dataset.reportSuppressionSearchText = normalizeReportSuppressionText(value);
+  return row.dataset.reportSuppressionSearchText;
+}
+
+function syncReportSuppressionActionForms(container, keyword, status) {
+  container.querySelectorAll("[data-report-suppression-keyword-field]").forEach((field) => {
+    field.value = keyword;
+  });
+  container.querySelectorAll("[data-report-suppression-status-field]").forEach((field) => {
+    field.value = status;
+  });
+}
+
+function updateReportSuppressionFilterUrl(keyword, status) {
+  const url = new URL(window.location.href);
+  if (keyword) {
+    url.searchParams.set("rule_keyword", keyword);
+  } else {
+    url.searchParams.delete("rule_keyword");
+  }
+  if (status) {
+    url.searchParams.set("rule_status", status);
+  } else {
+    url.searchParams.delete("rule_status");
+  }
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function applyReportSuppressionFilters(container, updateUrl = false) {
+  const search = container.querySelector("[data-report-suppression-search]");
+  const statusSelect = container.querySelector("[data-report-suppression-status]");
+  if (!(search instanceof HTMLInputElement) || !(statusSelect instanceof HTMLSelectElement)) {
+    return;
+  }
+
+  const keyword = search.value.trim();
+  const status = statusSelect.value;
+  const terms = normalizeReportSuppressionText(keyword).split(" ").filter(Boolean);
+  const rows = Array.from(container.querySelectorAll("[data-report-suppression-row]"));
+  let visibleCount = 0;
+
+  rows.forEach((row) => {
+    const matchesKeyword = terms.every((term) => reportSuppressionSearchText(row).includes(term));
+    const matchesStatus = !status || row.dataset.ruleStatus === status;
+    const visible = matchesKeyword && matchesStatus;
+    row.hidden = !visible;
+    if (visible) {
+      visibleCount += 1;
+    }
+  });
+
+  const filtered = Boolean(keyword || status);
+  const summary = container.querySelector("[data-report-suppression-summary]");
+  const clear = container.querySelector("[data-report-suppression-clear]");
+  const empty = container.querySelector("[data-report-suppression-empty]");
+  if (summary) {
+    summary.textContent = filtered
+      ? `显示 ${visibleCount} 条，共 ${rows.length} 条规则`
+      : `共 ${rows.length} 条规则`;
+  }
+  if (clear instanceof HTMLButtonElement) {
+    clear.hidden = !filtered;
+  }
+  if (empty instanceof HTMLTableRowElement) {
+    empty.hidden = visibleCount > 0;
+  }
+
+  syncReportSuppressionActionForms(container, keyword, status);
+  if (updateUrl) {
+    updateReportSuppressionFilterUrl(keyword, status);
+  }
+}
+
+document.addEventListener("input", (event) => {
+  const search = event.target.closest?.("[data-report-suppression-search]");
+  if (!(search instanceof HTMLInputElement)) {
+    return;
+  }
+  const container = search.closest("[data-report-suppression-rules]");
+  if (container) {
+    applyReportSuppressionFilters(container, true);
+  }
+});
+
+document.addEventListener("change", (event) => {
+  const select = event.target.closest?.("[data-report-suppression-status]");
+  if (!(select instanceof HTMLSelectElement)) {
+    return;
+  }
+  const container = select.closest("[data-report-suppression-rules]");
+  if (container) {
+    applyReportSuppressionFilters(container, true);
+  }
+});
+
+document.addEventListener("click", (event) => {
+  const clear = event.target.closest("[data-report-suppression-clear]");
+  if (!(clear instanceof HTMLButtonElement)) {
+    return;
+  }
+  const container = clear.closest("[data-report-suppression-rules]");
+  const search = container?.querySelector("[data-report-suppression-search]");
+  const status = container?.querySelector("[data-report-suppression-status]");
+  if (!(container instanceof HTMLElement) || !(search instanceof HTMLInputElement) || !(status instanceof HTMLSelectElement)) {
+    return;
+  }
+  search.value = "";
+  status.value = "";
+  applyReportSuppressionFilters(container, true);
+  search.focus();
+});
+
+document.querySelectorAll("[data-report-suppression-rules]").forEach((container) => {
+  applyReportSuppressionFilters(container);
+});
+
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-confirm-click]");
   if (!target) {

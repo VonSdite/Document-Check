@@ -917,6 +917,105 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIsNotNone(proxy_field)
         self.assertIsNone(proxy_input.get("required"))
 
+    def test_admin_settings_renders_searchable_report_suppression_rules(self):
+        with self.app.app_context():
+            db = get_db()
+            for index, (enabled, category, location, description, reason) in enumerate(
+                [
+                    (0, "参数错误", "第5章", "功率参数前后不一致", "模型误报"),
+                    (1, "格式问题", "封面", "封面日期格式需要核对", "不适用"),
+                ],
+                start=1,
+            ):
+                db.execute(
+                    """
+                    INSERT INTO report_suppression_rules(
+                        task_type, check_code, fingerprint, item_json, reason,
+                        enabled, created_at, updated_at
+                    )
+                    VALUES (?, 'consistency', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        DOCUMENT_TASK_TYPE,
+                        f"search-rule-{index}",
+                        json.dumps(
+                            {"category": category, "location": location, "description": description},
+                            ensure_ascii=False,
+                        ),
+                        reason,
+                        enabled,
+                        "2026-09-08 10:00:00",
+                        f"2026-09-08 10:0{index}:00",
+                    ),
+                )
+            db.commit()
+
+        response = self.client.get("/admin/settings?rule_keyword=功率+参数&rule_status=candidate")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        section = _required_tag(soup.select_one("[data-report-suppression-rules]"))
+        search = _required_tag(section.select_one("[data-report-suppression-search]"))
+        status = _required_tag(section.select_one("[data-report-suppression-status]"))
+        self.assertEqual(search.get("value"), "功率 参数")
+        self.assertEqual(_required_tag(status.select_one("option[selected]")).get("value"), "candidate")
+        rows = section.select("[data-report-suppression-row]")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row.get("data-rule-status") for row in rows}, {"candidate", "enabled"})
+        searchable_text = " ".join(
+            part.get_text(" ", strip=True)
+            for row in rows
+            for part in row.select("[data-report-suppression-search-part]")
+        )
+        self.assertIn("功率参数前后不一致", searchable_text)
+        self.assertIn("格式问题", searchable_text)
+        self.assertIsNotNone(section.select_one("[data-report-suppression-empty]"))
+        self.assertTrue(
+            all(field.get("value") == "功率 参数" for field in section.select("[data-report-suppression-keyword-field]"))
+        )
+        self.assertTrue(
+            all(field.get("value") == "candidate" for field in section.select("[data-report-suppression-status-field]"))
+        )
+
+    def test_report_suppression_action_keeps_filters_and_section_anchor(self):
+        with self.app.app_context():
+            cursor = get_db().execute(
+                """
+                INSERT INTO report_suppression_rules(
+                    task_type, check_code, fingerprint, item_json, reason,
+                    enabled, created_at, updated_at
+                )
+                VALUES (?, 'compliance', 'persisted-filter-rule', ?, '模型误报', 0, ?, ?)
+                """,
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps({"description": "保留搜索条件"}, ensure_ascii=False),
+                    "2026-09-08 10:00:00",
+                    "2026-09-08 10:00:00",
+                ),
+            )
+            get_db().commit()
+            rule_id = cursor.lastrowid
+
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "report_suppression_rule",
+                "rule_id": str(rule_id),
+                "operation": "enable",
+                "rule_keyword": "保留 搜索",
+                "rule_status": "candidate",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        location = urlparse(response.headers["Location"])
+        self.assertEqual(parse_qs(location.query), {"rule_keyword": ["保留 搜索"], "rule_status": ["candidate"]})
+        self.assertEqual(location.fragment, "report-suppression-rules")
+        with self.app.app_context():
+            rule = get_db().execute("SELECT enabled FROM report_suppression_rules WHERE id = ?", (rule_id,)).fetchone()
+            self.assertEqual(rule["enabled"], 1)
+
     def test_admin_settings_puts_network_and_diagnostics_last(self):
         response = self.client.get("/admin/settings")
 

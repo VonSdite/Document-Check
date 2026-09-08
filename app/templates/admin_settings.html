@@ -173,7 +173,7 @@
   </div>
 </dialog>
 
-<section class="panel settings-section">
+<section class="panel settings-section" id="report-suppression-rules" data-report-suppression-rules>
   <div class="settings-section-head">
     <div>
       <h2 class="title-with-help">误报忽略规则
@@ -183,8 +183,30 @@
     </div>
   </div>
   {% if report_suppression_rules %}
+  <div class="report-suppression-toolbar">
+    <label class="form-field report-suppression-search">搜索规则
+      <input
+        type="search"
+        value="{{ report_suppression_keyword }}"
+        placeholder="输入问题描述、检查项、类型、位置或原因"
+        maxlength="200"
+        autocomplete="off"
+        aria-controls="report-suppression-rule-rows"
+        data-report-suppression-search
+      >
+    </label>
+    <label class="form-field">状态
+      <select aria-controls="report-suppression-rule-rows" data-report-suppression-status>
+        <option value=""{{ ' selected' if not report_suppression_status else '' }}>全部状态</option>
+        <option value="candidate"{{ ' selected' if report_suppression_status == 'candidate' else '' }}>候选</option>
+        <option value="enabled"{{ ' selected' if report_suppression_status == 'enabled' else '' }}>已启用</option>
+      </select>
+    </label>
+    <button class="secondary-button report-suppression-clear" type="button" data-report-suppression-clear hidden>清空筛选</button>
+    <div class="report-suppression-summary" aria-live="polite" data-report-suppression-summary>共 {{ report_suppression_rules|length }} 条规则</div>
+  </div>
   <div class="table-wrap">
-    <table class="settings-ip-table">
+    <table class="settings-ip-table report-suppression-table">
       <thead>
         <tr>
           <th>状态</th>
@@ -197,18 +219,18 @@
           <th class="right">操作</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="report-suppression-rule-rows">
         {% for rule in report_suppression_rules %}
-        <tr>
+        <tr data-report-suppression-row data-rule-status="{{ 'enabled' if rule.enabled else 'candidate' }}">
           <td><span class="status-pill {{ 'status-completed' if rule.enabled else 'status-queued' }}">{{ "已启用" if rule.enabled else "候选" }}</span></td>
-          <td>
+          <td data-report-suppression-search-part>
             {{ rule.check_name }}
             <div class="subline">{{ rule.task_type_label }}</div>
           </td>
-          <td>{{ rule.item.category or '-' }}</td>
-          <td>{{ rule.item.location or '-' }}</td>
-          <td>{{ rule.item.description or rule.item.text or '-' }}</td>
-          <td>{{ rule.reason or '-' }}</td>
+          <td data-report-suppression-search-part>{{ rule.item.category or '-' }}</td>
+          <td data-report-suppression-search-part>{{ rule.item.location or '-' }}</td>
+          <td data-report-suppression-search-part>{{ rule.item.description or rule.item.text or '-' }}</td>
+          <td data-report-suppression-search-part>{{ rule.reason or '-' }}</td>
           <td>
             {{ rule.hit_count }}
             {% if rule.last_hit_at %}<div class="subline">{{ rule.last_hit_at }}</div>{% endif %}
@@ -218,6 +240,8 @@
               <form method="post">
                 <input type="hidden" name="action" value="report_suppression_rule">
                 <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                <input type="hidden" name="rule_keyword" value="{{ report_suppression_keyword }}" data-report-suppression-keyword-field>
+                <input type="hidden" name="rule_status" value="{{ report_suppression_status }}" data-report-suppression-status-field>
                 {% if rule.enabled %}
                 <button class="small-button" type="submit" name="operation" value="disable">停用</button>
                 {% else %}
@@ -227,12 +251,20 @@
               <form method="post" data-confirm="确认删除该误报忽略规则？历史报告不会被删除。">
                 <input type="hidden" name="action" value="report_suppression_rule">
                 <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                <input type="hidden" name="rule_keyword" value="{{ report_suppression_keyword }}" data-report-suppression-keyword-field>
+                <input type="hidden" name="rule_status" value="{{ report_suppression_status }}" data-report-suppression-status-field>
                 <button class="small-button danger" type="submit" name="operation" value="delete">删除</button>
               </form>
             </div>
           </td>
         </tr>
         {% endfor %}
+        <tr class="report-suppression-empty-row" data-report-suppression-empty hidden>
+          <td colspan="8">
+            <strong>未找到匹配的误报规则</strong>
+            <span>请尝试更换关键词或状态。</span>
+          </td>
+        </tr>
       </tbody>
     </table>
   </div>
