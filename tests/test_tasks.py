@@ -775,9 +775,9 @@ class TaskExecutionTest(unittest.TestCase):
         db.commit()
         task = db.execute("SELECT * FROM tasks").fetchone()
         document_text = """
-<table id="page001-table001" data-confidence="high">
-  <tr><td data-cell="A1:B1" colspan="2">合并表头</td></tr>
-  <tr><td data-cell="A2" data-empty="true">[空单元格]</td><td>10 A</td></tr>
+<table id="page001-table001" data-confidence="high" data-view="normalized">
+  <tr><td data-cell="A1" data-original-range="A1:B1" data-original-colspan="2">合并表头</td><td data-cell="B1" data-original-range="A1:B1" data-inherited-from="A1">合并表头</td></tr>
+  <tr><td data-cell="A2" data-empty="true">[空单元格]</td><td data-cell="B2">10 A</td></tr>
 </table>
 """
         model_result = {

@@ -113,13 +113,19 @@ class ReportGuardrailTest(unittest.TestCase):
         document_text = """
 <table id="page001-table001" data-confidence="high">
   <tr>
-    <td data-cell="A1:B1" colspan="2">合并表头</td>
-    <td>说明</td>
+    <td data-cell="A1" data-original-range="A1:B1" data-original-colspan="2">合并表头</td>
+    <td data-cell="B1" data-original-range="A1:B1" data-inherited-from="A1">合并表头</td>
+    <td data-cell="C1">说明</td>
   </tr>
   <tr>
     <td data-cell="A2" data-empty="true">[空单元格]</td>
-    <td>10 A</td>
+    <td data-cell="B2">10 A</td>
     <td data-cell="C2" data-non-text="true">[非文本图形或图标]</td>
+  </tr>
+  <tr>
+    <td data-cell="A3" data-original-range="A3:B3" data-original-colspan="2" data-empty="true">[空单元格]</td>
+    <td data-cell="B3" data-original-range="A3:B3" data-inherited-from="A3">[合并覆盖，继承自A3]</td>
+    <td data-cell="C3">备注</td>
   </tr>
 </table>
 """
@@ -151,6 +157,18 @@ class ReportGuardrailTest(unittest.TestCase):
             },
             {
                 "status": "issue",
+                "category": "表格数据缺失",
+                "location": "page001-table001 > B3",
+                "description": "B3 单元格数据为空。",
+            },
+            {
+                "status": "issue",
+                "category": "表格数据缺失",
+                "location": "page001-table001 > A3:B3",
+                "description": "A3:B3 原始合并单元格为空。",
+            },
+            {
+                "status": "issue",
                 "category": "参数值缺失",
                 "location": "第3章",
                 "description": "正文中的参数值缺失。",
@@ -164,10 +182,11 @@ class ReportGuardrailTest(unittest.TestCase):
 
         self.assertEqual(evidence["page001-table001"]["cells"]["B1"]["kind"], "merged")
         self.assertEqual(evidence["page001-table001"]["cells"]["C2"]["kind"], "nontext")
-        self.assertEqual(removed_count, 3)
+        self.assertEqual(evidence["page001-table001"]["cells"]["B3"]["anchor"], "A3")
+        self.assertEqual(removed_count, 4)
         self.assertEqual(
             [item["location"] for item in filtered],
-            ["page001-table001 > A2", "第3章"],
+            ["page001-table001 > A2", "page001-table001 > A3:B3", "第3章"],
         )
 
 

@@ -188,7 +188,8 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("不代表原文的全部视觉内容", system_content)
         self.assertIn("不得仅因抽取文本中未出现这些对象", user_content)
         self.assertIn("“见图”“见表”等引用本身不能证明", user_content)
-        self.assertIn("HTML 的 rowspan、colspan 和 data-cell 表示合并范围", user_content)
+        self.assertIn("data-original-range 记录原始合并范围", user_content)
+        self.assertIn("data-inherited-from 表示该位置的值继承自", user_content)
         self.assertIn("置信度为 medium 或 low 时不得报告数据缺失", user_content)
         self.assertEqual(
             fake_session.calls[0][1]["json"]["max_completion_tokens"],

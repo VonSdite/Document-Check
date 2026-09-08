@@ -256,19 +256,35 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertLess(text.index("Before table"), text.index("[PDF结构化表格"))
         self.assertLess(text.index("[PDF结构化表格"), text.index("After table"))
         self.assertIn(
-            '<td data-cell="A1:B1" colspan="2">Merged header</td>',
+            '<table id="page001-table001" data-confidence="medium" data-view="normalized">',
             text,
         )
         self.assertIn(
-            '<td data-cell="A2:A3" rowspan="2">Merged group</td>',
+            '<td data-cell="A1" data-original-range="A1:B1" '
+            'data-original-colspan="2">Merged header</td>',
+            text,
+        )
+        self.assertIn(
+            '<td data-cell="B1" data-original-range="A1:B1" '
+            'data-inherited-from="A1">Merged header</td>',
+            text,
+        )
+        self.assertIn(
+            '<td data-cell="A2" data-original-range="A2:A3" '
+            'data-original-rowspan="2">Merged group</td>',
+            text,
+        )
+        self.assertIn(
+            '<td data-cell="A3" data-original-range="A2:A3" '
+            'data-inherited-from="A2">Merged group</td>',
             text,
         )
         self.assertIn(
             '<td data-cell="C3" data-empty="true">[空单元格]</td>',
             text,
         )
-        self.assertEqual(text.count("Merged header"), 1)
-        self.assertEqual(text.count("Merged group"), 1)
+        self.assertEqual(text.count("Merged header"), 2)
+        self.assertEqual(text.count("Merged group"), 2)
 
     def test_distinguishes_nontext_pdf_table_cell_from_empty_cell(self):
         with tempfile.TemporaryDirectory() as temp_dir:

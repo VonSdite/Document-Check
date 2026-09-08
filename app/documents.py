@@ -672,38 +672,68 @@ def _pdf_page_element_sort_key(element: dict) -> tuple:
 
 
 def _format_pdf_table_html(model: dict) -> str:
-    cells_by_row = {}
+    normalized_cells = {}
     for cell in model["cells"]:
-        cells_by_row.setdefault(cell["row"], []).append(cell)
+        anchor = _pdf_cell_anchor_reference(cell)
+        original_range = _pdf_cell_reference(cell)
+        for row_index in range(cell["row"], cell["row"] + cell["rowspan"]):
+            for column_index in range(cell["column"], cell["column"] + cell["colspan"]):
+                inherited = (row_index, column_index) != (cell["row"], cell["column"])
+                normalized_cells[(row_index, column_index)] = {
+                    "cell": cell,
+                    "anchor": anchor,
+                    "original_range": original_range,
+                    "inherited": inherited,
+                }
     lines = [
         (
             f'[PDF结构化表格 {model["id"]} 开始；'
             f'{model["row_count"]}行×{model["column_count"]}列；'
-            f'置信度={model["confidence"]}]'
+            f'置信度={model["confidence"]}；视图=归一化；'
+            f'合并继承位置通过 data-inherited-from 标记]'
         ),
-        f'<table id="{model["id"]}" data-confidence="{model["confidence"]}">',
+        (
+            f'<table id="{model["id"]}" data-confidence="{model["confidence"]}" '
+            'data-view="normalized">'
+        ),
     ]
     for row_index in range(model["row_count"]):
         lines.append("  <tr>")
-        for cell in sorted(cells_by_row.get(row_index, []), key=lambda item: item["column"]):
-            cell_ref = _pdf_cell_reference(cell)
-            attributes = []
-            if cell["rowspan"] > 1:
-                attributes.append(f'rowspan="{cell["rowspan"]}"')
-            if cell["colspan"] > 1:
-                attributes.append(f'colspan="{cell["colspan"]}"')
-            if attributes or not cell["text"]:
-                attributes.insert(0, f'data-cell="{cell_ref}"')
-            value = html.escape(cell["text"])
-            if not value:
-                if cell["has_nontext_content"]:
-                    attributes.append('data-non-text="true"')
-                    value = "[非文本图形或图标]"
+        for column_index in range(model["column_count"]):
+            cell_ref = _pdf_position_reference(row_index, column_index)
+            normalized = normalized_cells.get((row_index, column_index))
+            if normalized is None:
+                lines.append(
+                    f'    <td data-cell="{cell_ref}" data-unresolved="true">'
+                    "[未能可靠还原的单元格]</td>"
+                )
+                continue
+            cell = normalized["cell"]
+            attributes = [f'data-cell="{cell_ref}"']
+            if cell["rowspan"] > 1 or cell["colspan"] > 1:
+                attributes.append(f'data-original-range="{normalized["original_range"]}"')
+            if normalized["inherited"]:
+                attributes.append(f'data-inherited-from="{normalized["anchor"]}"')
+                if cell["text"]:
+                    value = html.escape(cell["text"])
+                elif cell["has_nontext_content"]:
+                    value = f'[合并覆盖，继承自{normalized["anchor"]}的非文本内容]'
                 else:
-                    attributes.append('data-empty="true"')
-                    value = "[空单元格]"
-            attribute_text = f" {' '.join(attributes)}" if attributes else ""
-            lines.append(f"    <td{attribute_text}>{value}</td>")
+                    value = f'[合并覆盖，继承自{normalized["anchor"]}]'
+            else:
+                if cell["rowspan"] > 1:
+                    attributes.append(f'data-original-rowspan="{cell["rowspan"]}"')
+                if cell["colspan"] > 1:
+                    attributes.append(f'data-original-colspan="{cell["colspan"]}"')
+                value = html.escape(cell["text"])
+                if not value:
+                    if cell["has_nontext_content"]:
+                        attributes.append('data-non-text="true"')
+                        value = "[非文本图形或图标]"
+                    else:
+                        attributes.append('data-empty="true"')
+                        value = "[空单元格]"
+            lines.append(f"    <td {' '.join(attributes)}>{value}</td>")
         lines.append("  </tr>")
     if model["unresolved_positions"]:
         positions = ",".join(
@@ -721,13 +751,20 @@ def _format_pdf_table_html(model: dict) -> str:
 
 
 def _pdf_cell_reference(cell: dict) -> str:
-    start_column = get_column_letter(cell["column"] + 1)
-    start_row = cell["row"] + 1
-    end_column = get_column_letter(cell["column"] + cell["colspan"])
-    end_row = cell["row"] + cell["rowspan"]
-    start = f"{start_column}{start_row}"
-    end = f"{end_column}{end_row}"
+    start = _pdf_cell_anchor_reference(cell)
+    end = _pdf_position_reference(
+        cell["row"] + cell["rowspan"] - 1,
+        cell["column"] + cell["colspan"] - 1,
+    )
     return start if start == end else f"{start}:{end}"
+
+
+def _pdf_cell_anchor_reference(cell: dict) -> str:
+    return _pdf_position_reference(cell["row"], cell["column"])
+
+
+def _pdf_position_reference(row: int, column: int) -> str:
+    return f"{get_column_letter(column + 1)}{row + 1}"
 
 
 def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str, bool | None]]:

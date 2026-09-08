@@ -68,8 +68,7 @@ _DECISION_FIELDS = (
     "修改建议",
 )
 _PDF_TABLE_PATTERN = re.compile(
-    r'<table\s+id="(?P<id>page\d+-table\d+)"\s+data-confidence="(?P<confidence>[^"]+)">'
-    r"(?P<body>.*?)</table>",
+    r"<table\b(?P<attributes>[^>]*)>(?P<body>.*?)</table>",
     re.IGNORECASE | re.DOTALL,
 )
 _PDF_TABLE_ROW_PATTERN = re.compile(r"<tr>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
@@ -151,18 +150,36 @@ def build_pdf_table_evidence_index(document_text: str) -> dict:
         return {}
     tables = {}
     for table_match in _PDF_TABLE_PATTERN.finditer(text):
-        table_id = table_match.group("id").lower()
+        table_attributes = {
+            name.lower(): value
+            for name, value in _PDF_TABLE_ATTRIBUTE_PATTERN.findall(
+                table_match.group("attributes")
+            )
+        }
+        table_id = table_attributes.get("id", "").strip().lower()
+        if not _PDF_TABLE_ID_PATTERN.fullmatch(table_id):
+            continue
         cell_map = {}
-        for row_index, row_match in enumerate(_PDF_TABLE_ROW_PATTERN.finditer(table_match.group("body")), start=1):
+        row_matches = _PDF_TABLE_ROW_PATTERN.finditer(table_match.group("body"))
+        for row_index, row_match in enumerate(row_matches, start=1):
             column_index = 1
             for cell_match in _PDF_TABLE_CELL_PATTERN.finditer(row_match.group(1)):
                 while _pdf_cell_name(row_index, column_index) in cell_map:
                     column_index += 1
-                attributes = dict(_PDF_TABLE_ATTRIBUTE_PATTERN.findall(cell_match.group("attributes")))
+                attributes = {
+                    name.lower(): value
+                    for name, value in _PDF_TABLE_ATTRIBUTE_PATTERN.findall(
+                        cell_match.group("attributes")
+                    )
+                }
                 rowspan = _positive_int(attributes.get("rowspan"), 1)
                 colspan = _positive_int(attributes.get("colspan"), 1)
                 anchor = _pdf_cell_name(row_index, column_index)
-                if "data-non-text" in attributes:
+                inherited_from = _normalized_pdf_cell_name(attributes.get("data-inherited-from"))
+                if inherited_from:
+                    kind = "merged"
+                    anchor = inherited_from
+                elif "data-non-text" in attributes:
                     kind = "nontext"
                 elif "data-empty" in attributes:
                     kind = "empty"
@@ -179,7 +196,7 @@ def build_pdf_table_evidence_index(document_text: str) -> dict:
                         }
                 column_index += colspan
         tables[table_id] = {
-            "confidence": table_match.group("confidence").strip().lower(),
+            "confidence": table_attributes.get("data-confidence", "").strip().lower(),
             "cells": cell_map,
         }
     return tables
@@ -214,8 +231,17 @@ def is_unsupported_pdf_table_data_missing_item(item: dict, pdf_table_evidence: d
         return True
     for cell_name in cell_names:
         cell = table["cells"].get(cell_name)
-        if not cell or cell.get("kind") != "empty":
+        if not cell:
             return True
+        if cell.get("kind") == "empty":
+            continue
+        if cell.get("kind") == "merged":
+            anchor_name = cell.get("anchor")
+            anchor_cell = table["cells"].get(anchor_name)
+            if anchor_name in cell_names and anchor_cell and anchor_cell.get("kind") == "empty":
+                continue
+            return True
+        return True
     return False
 
 
@@ -276,3 +302,10 @@ def _pdf_cell_name(row: int, column: int) -> str:
         value, remainder = divmod(value - 1, 26)
         letters.append(chr(ord("A") + remainder))
     return "".join(reversed(letters)) + str(max(1, int(row)))
+
+
+def _normalized_pdf_cell_name(value) -> str:
+    match = _PDF_CELL_REFERENCE_PATTERN.fullmatch(str(value or "").strip())
+    if not match:
+        return ""
+    return f"{match.group(1).upper()}{match.group(2)}"
