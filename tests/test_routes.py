@@ -4004,6 +4004,49 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(prepared[0]["report_limit"]["limit"], 30)
         self.assertEqual(prepared[0]["report_limit"]["omitted_count"], 2)
 
+    def test_document_report_omits_additional_no_action_impact_variants(self):
+        raw_items = [
+            {
+                "status": "issue",
+                "category": "错别字",
+                "description": "该术语结合上下文可以接受。",
+                "impact": "无明确影响。",
+                "suggestion": "无需修改。",
+            },
+            {
+                "status": "issue",
+                "category": "编号或交叉引用不规范",
+                "description": "该交叉引用适用于当前章节。",
+                "impact": "不适用。",
+                "suggestion": "无需修改。",
+            },
+            {
+                "status": "issue",
+                "category": "参数问题",
+                "description": "同一参数前后数值不一致。",
+                "impact": "可能导致配置错误。",
+                "suggestion": "核实并统一参数值。",
+            },
+        ]
+
+        prepared = _prepare_task_results(
+            [
+                {
+                    "code": "compliance",
+                    "name": "文档规范性检查",
+                    "result": json.dumps({"summary": "检查完成", "items": raw_items}, ensure_ascii=False),
+                }
+            ],
+            task_type=DOCUMENT_TASK_TYPE,
+            suppression_rules={},
+        )
+
+        report_items = prepared[0]["report_items"]
+        self.assertEqual(len(report_items), 1)
+        self.assertEqual(report_items[0]["description"], "同一参数前后数值不一致。")
+        self.assertEqual(prepared[0]["report_counts"]["issue"], 1)
+        self.assertEqual(prepared[0]["report_counts"]["non_issue"], 0)
+
     def test_text_report_filters_unsupported_visual_missing_claims_only(self):
         raw_items = [
             {

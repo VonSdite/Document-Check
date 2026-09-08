@@ -269,6 +269,10 @@ REPORT_NO_ACTION_IMPACT_MARKERS = (
     "没有实质影响",
     "没有实际影响",
     "无明显影响",
+    "无明确影响",
+    "没有明确影响",
+    "未发现明确影响",
+    "不适用",
     "不造成实质影响",
     "影响不大",
     "影响较小",
@@ -281,6 +285,7 @@ REPORT_NO_ACTION_IMPACT_MARKERS = (
     "nosignificantimpact",
     "norealimpact",
     "noactualimpact",
+    "notapplicable",
     "doesnotaffect",
 )
 REPORT_NO_ACTION_SUGGESTION_MARKERS = (
