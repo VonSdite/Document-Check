@@ -256,17 +256,28 @@ class TaskScheduler:
                         FROM tasks
                         WHERE status IN ('running', 'canceling')
                         GROUP BY owner_subject
+                    ),
+                    ranked_queued AS (
+                        SELECT queued.id,
+                               queued.owner_subject,
+                               COALESCE(running_by_owner.running_count, 0) AS running_for_user,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY queued.owner_subject
+                                   ORDER BY queued.created_at ASC, queued.id ASC
+                               ) AS owner_queue_position,
+                               queued.created_at
+                        FROM tasks AS queued
+                        LEFT JOIN running_by_owner
+                          ON running_by_owner.owner_subject = queued.owner_subject
+                        WHERE queued.status = 'queued'
                     )
-                    SELECT queued.id,
-                           COALESCE(queued.owner_subject, 'ip:' || queued.ip) AS owner_subject,
-                           COALESCE(running_by_owner.running_count, 0) AS running_for_user
-                    FROM tasks AS queued
-                    LEFT JOIN running_by_owner
-                      ON running_by_owner.owner_subject = queued.owner_subject
-                    WHERE queued.status = 'queued'
-                    ORDER BY queued.created_at ASC, queued.id ASC
-                    LIMIT 50
-                    """
+                    SELECT id, owner_subject, running_for_user
+                    FROM ranked_queued
+                    WHERE owner_queue_position <= ? - running_for_user
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (user_limit, slots),
                 ).fetchall()
                 running_by_owner: dict[str, int] = {}
                 for task in queued:

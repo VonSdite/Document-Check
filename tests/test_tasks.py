@@ -234,6 +234,63 @@ class TaskExecutionTest(unittest.TestCase):
         ]
         self.assertEqual(len(task_selects), 2)
 
+    def test_scheduler_skips_large_blocked_owner_queue(self):
+        running_task_id = self._insert_scheduler_task(
+            status="running",
+            owner_subject="ip:10.0.0.1",
+            claim_token="active-claim",
+            lease_expires_at="2999-01-01 00:00:00",
+        )
+        blocked_task_ids = [
+            self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
+            for _ in range(50)
+        ]
+        first_runnable_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
+        second_runnable_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.3")
+        set_setting("global_concurrency", 3)
+        set_setting("user_concurrency", 1)
+
+        claimed = TaskScheduler(self.app)._claim_available_tasks()
+
+        self.assertEqual(
+            [task_id for task_id, _claim in claimed],
+            [first_runnable_id, second_runnable_id],
+        )
+        blocked_statuses = get_db().execute(
+            f"SELECT DISTINCT status FROM tasks WHERE id IN ({','.join('?' for _ in blocked_task_ids)})",
+            tuple(blocked_task_ids),
+        ).fetchall()
+        self.assertEqual([row["status"] for row in blocked_statuses], ["queued"])
+        running_status = get_db().execute(
+            "SELECT status FROM tasks WHERE id = ?",
+            (running_task_id,),
+        ).fetchone()
+        self.assertEqual(running_status["status"], "running")
+
+    def test_scheduler_limits_each_owner_before_global_candidate_limit(self):
+        same_owner_task_ids = [
+            self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
+            for _ in range(50)
+        ]
+        other_owner_task_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
+        set_setting("global_concurrency", 2)
+        set_setting("user_concurrency", 1)
+
+        claimed = TaskScheduler(self.app)._claim_available_tasks()
+
+        self.assertEqual(
+            [task_id for task_id, _claim in claimed],
+            [same_owner_task_ids[0], other_owner_task_id],
+        )
+        queued_same_owner = get_db().execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM tasks
+            WHERE owner_subject = 'ip:10.0.0.1' AND status = 'queued'
+            """
+        ).fetchone()["total"]
+        self.assertEqual(queued_same_owner, 49)
+
     def test_scheduler_does_not_recover_active_lease(self):
         task_id = self._insert_scheduler_task(
             status="running",
