@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event, Thread
 from unittest.mock import patch
 
 from flask import Flask
@@ -272,6 +272,59 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(task["claim_token"], claimed[0][1])
         self.assertGreater(task["lease_expires_at"], now_text())
 
+    def test_canceling_task_keeps_concurrency_slot_until_worker_exits(self):
+        canceling_task_id = self._insert_scheduler_task(
+            status="canceling",
+            owner_subject="ip:10.0.0.1",
+            claim_token="active-claim",
+            lease_expires_at="2999-01-01 00:00:00",
+        )
+        queued_task_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
+        set_setting("global_concurrency", 1)
+
+        claimed = TaskScheduler(self.app)._claim_available_tasks()
+
+        self.assertEqual(claimed, [])
+        tasks = {
+            row["id"]: row["status"]
+            for row in get_db().execute(
+                "SELECT id, status FROM tasks WHERE id IN (?, ?)",
+                (canceling_task_id, queued_task_id),
+            ).fetchall()
+        }
+        self.assertEqual(tasks[canceling_task_id], "canceling")
+        self.assertEqual(tasks[queued_task_id], "queued")
+
+    def test_scheduler_finalizes_expired_canceling_task(self):
+        task_id = self._insert_scheduler_task(
+            status="canceling",
+            api_key="task-secret",
+            claim_token="expired-claim",
+            lease_expires_at="2000-01-01 00:00:00",
+        )
+        get_db().execute(
+            "UPDATE tasks SET cancel_requested = 1 WHERE id = ?",
+            (task_id,),
+        )
+        get_db().commit()
+
+        claimed = TaskScheduler(self.app)._claim_available_tasks()
+
+        self.assertEqual(claimed, [])
+        task = get_db().execute(
+            """
+            SELECT status, api_key, claim_token, lease_expires_at, finished_at
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "canceled")
+        self.assertIsNone(task["api_key"])
+        self.assertIsNone(task["claim_token"])
+        self.assertIsNone(task["lease_expires_at"])
+        self.assertIsNotNone(task["finished_at"])
+
     def test_worker_with_stale_claim_does_not_run_task(self):
         task_id = self._insert_scheduler_task(
             status="running",
@@ -320,6 +373,71 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIsNone(tasks[failed_task_id]["api_key"])
         self.assertEqual(tasks[canceled_task_id]["status"], "canceled")
         self.assertIsNone(tasks[canceled_task_id]["api_key"])
+
+    def test_running_worker_stops_and_finalizes_after_cancel_signal(self):
+        check_item = {
+            "id": 1,
+            "code": "typo",
+            "name": "错别字检查",
+            "prompt": "检查错别字",
+        }
+        task_id = self._insert_running_document_task([check_item])
+        db = get_db()
+        db.execute(
+            """
+            UPDATE tasks
+            SET claim_token = 'worker-claim',
+                lease_expires_at = '2999-01-01 00:00:00'
+            WHERE id = ?
+            """,
+            (task_id,),
+        )
+        db.commit()
+        scheduler = TaskScheduler(self.app)
+        request_started = Event()
+
+        def wait_for_cancel(**kwargs):
+            request_started.set()
+            if not kwargs["cancel_event"].wait(3):
+                raise RuntimeError("测试等待取消信号超时")
+            kwargs["check_canceled"]()
+            return "不应完成"
+
+        with patch("app.tasks.run_check", side_effect=wait_for_cancel) as mocked_run_check:
+            worker = Thread(
+                target=scheduler._run_task,
+                args=(task_id, "worker-claim"),
+                daemon=True,
+            )
+            worker.start()
+            self.assertTrue(request_started.wait(3))
+            db.execute(
+                """
+                UPDATE tasks
+                SET status = 'canceling', cancel_requested = 1
+                WHERE id = ? AND status = 'running'
+                """,
+                (task_id,),
+            )
+            db.commit()
+            self.assertTrue(scheduler.request_cancel(task_id))
+            worker.join(timeout=5)
+
+        self.assertFalse(worker.is_alive())
+        mocked_run_check.assert_called_once()
+        task = db.execute(
+            """
+            SELECT status, api_key, claim_token, lease_expires_at, finished_at
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "canceled")
+        self.assertIsNone(task["api_key"])
+        self.assertIsNone(task["claim_token"])
+        self.assertIsNone(task["lease_expires_at"])
+        self.assertIsNotNone(task["finished_at"])
 
     def test_intermediate_results_use_live_table_without_invalidating_report_cache(self):
         task_id = self._insert_scheduler_task(status="running", claim_token="live-claim")

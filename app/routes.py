@@ -85,6 +85,7 @@ from .videos import allowed_video_file, video_extension_of
 STATUS_LABELS = {
     "queued": "排队中",
     "running": "检查中",
+    "canceling": "取消中",
     "completed": "已完成",
     "partial": "部分完成",
     "failed": "失败",
@@ -1748,7 +1749,7 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
         SELECT
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN t.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
-            COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+            COALESCE(SUM(CASE WHEN t.status IN ('running', 'canceling') THEN 1 ELSE 0 END), 0) AS running,
             COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
             COALESCE(SUM(CASE WHEN t.status = 'partial' THEN 1 ELSE 0 END), 0) AS partial
         FROM tasks t
@@ -1774,7 +1775,7 @@ def _task_status_payload_row(row, suppression_version: str) -> dict:
         "status_label": STATUS_LABELS.get(status, status),
         "progress": int(row["progress"] or 0),
     }
-    if status in {"queued", "running"}:
+    if status in {"queued", "running", "canceling"}:
         review = _task_review_progress(status, 0, 0, 0)
     elif not row["has_result"]:
         review = _task_review_progress(status, 0, 0, 0)
@@ -1820,7 +1821,7 @@ def _task_review_progress(task_status: str, total: int, reviewed: int, pending_r
     total = max(0, int(total or 0))
     reviewed = min(total, max(0, int(reviewed or 0)))
     pending_review = min(total, max(0, int(pending_review or 0)))
-    if task_status in {"queued", "running"}:
+    if task_status in {"queued", "running", "canceling"}:
         review_status = "unavailable"
     elif total <= 0:
         review_status = "empty"
@@ -1917,7 +1918,7 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     elif review_status == "completed":
         clauses.append(f"{report_total_expr} > 0 AND COALESCE(trs.pending_review_item_count, 0) = 0")
     elif review_status == "empty":
-        clauses.append(f"t.status NOT IN ('queued', 'running') AND {report_total_expr} = 0")
+        clauses.append(f"t.status NOT IN ('queued', 'running', 'canceling') AND {report_total_expr} = 0")
     if keyword:
         owner_name_filter = "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
         clauses.append(
@@ -2561,7 +2562,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS video_tasks,
             COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
-            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+            COALESCE(SUM(CASE WHEN status IN ('running', 'canceling') THEN 1 ELSE 0 END), 0) AS running,
             COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
             COALESCE(SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END), 0) AS partial,
             COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
@@ -2668,7 +2669,7 @@ def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
         SELECT
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
-            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+            COALESCE(SUM(CASE WHEN status IN ('running', 'canceling') THEN 1 ELSE 0 END), 0) AS running,
             COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
             COALESCE(SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END), 0) AS partial,
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users
@@ -3623,10 +3624,10 @@ def _get_user_task(task_id: int):
 
 def _task_with_live_result(task) -> dict:
     value = dict(task)
-    if value.get("status") == "running":
+    if value.get("status") in {"running", "canceling"}:
         if value.get("live_result_json") is not None:
             value["result_json"] = value["live_result_json"]
-        if value.get("live_summary") is not None:
+        if value.get("status") == "running" and value.get("live_summary") is not None:
             value["summary"] = value["live_summary"]
     value.pop("live_result_json", None)
     value.pop("live_summary", None)
@@ -3640,27 +3641,45 @@ def _get_user_task_or_local_admin(task_id: int):
 
 
 def _cancel_task(task):
-    if task["status"] in {"completed", "partial", "failed", "canceled"}:
+    if task["status"] in DELETABLE_TASK_STATUSES:
         return
     db = get_db()
-    canceled = db.execute(
-        """
-        UPDATE tasks
-        SET cancel_requested = 1,
-            status = 'canceled',
-            progress = 0,
-            api_key = NULL,
-            claim_token = NULL,
-            lease_expires_at = NULL,
-            updated_at = ?,
-            finished_at = ?
-        WHERE id = ? AND status NOT IN ('completed', 'partial', 'failed', 'canceled')
-        """,
-        (now_text(), now_text(), task["id"]),
-    )
-    if canceled.rowcount == 1:
-        db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
+    now = now_text()
+    if task["status"] == "queued":
+        canceled = db.execute(
+            """
+            UPDATE tasks
+            SET cancel_requested = 1,
+                status = 'canceled',
+                progress = 0,
+                api_key = NULL,
+                claim_token = NULL,
+                lease_expires_at = NULL,
+                updated_at = ?,
+                finished_at = ?
+            WHERE id = ? AND status = 'queued'
+            """,
+            (now, now, task["id"]),
+        )
+        if canceled.rowcount == 1:
+            db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
+    else:
+        db.execute(
+            """
+            UPDATE tasks
+            SET cancel_requested = 1,
+                status = 'canceling',
+                summary = ?,
+                updated_at = ?
+            WHERE id = ? AND status IN ('running', 'canceling')
+            """,
+            ("正在取消任务，请等待当前请求退出。", now, task["id"]),
+        )
     db.commit()
+    scheduler = current_app.extensions.get("task_scheduler")
+    request_cancel = getattr(scheduler, "request_cancel", None)
+    if callable(request_cancel):
+        request_cancel(task["id"])
 
 
 def _delete_task(task):
@@ -5245,7 +5264,7 @@ def _report_item_totals(results: list[dict]) -> dict:
 
 
 def _update_report_item_type(task):
-    if task["status"] in {"queued", "running"}:
+    if task["status"] in {"queued", "running", "canceling"}:
         return {"ok": False, "error": "任务尚未完成，暂不能修改报告条目判定。"}, 409
     data = request.get_json(silent=True) if request.is_json else None
     if not isinstance(data, dict):
@@ -5888,6 +5907,8 @@ def _task_stats_for_where(where: str, params: tuple) -> dict:
     for row in rows:
         count = row["total"]
         stats["total"] += count
-        if row["status"] in stats:
-            stats[row["status"]] = count
+        if row["status"] == "canceling":
+            stats["running"] += count
+        elif row["status"] in stats:
+            stats[row["status"]] += count
     return stats

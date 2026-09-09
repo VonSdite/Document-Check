@@ -7,7 +7,7 @@ import zipfile
 from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import yaml
 from bs4 import BeautifulSoup
@@ -513,10 +513,23 @@ class AdminSettingsRouteTest(unittest.TestCase):
             status="running",
             created_at="2026-05-01 10:05:00",
         )
+        canceling_task_id = self._insert_task(
+            task_type=IMAGE_TASK_TYPE,
+            status="canceling",
+            created_at="2026-05-01 10:06:00",
+        )
 
         response = self.client.post(
             "/tasks/bulk-delete",
-            data={"task_ids": [*deletable_task_ids, queued_task_id, running_task_id], "next": "/images?page=2"},
+            data={
+                "task_ids": [
+                    *deletable_task_ids,
+                    queued_task_id,
+                    running_task_id,
+                    canceling_task_id,
+                ],
+                "next": "/images?page=2",
+            },
         )
 
         self.assertEqual(response.status_code, 302)
@@ -525,15 +538,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
             remaining_ids = {
                 row["id"]
                 for row in get_db().execute(
-                    "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?, ?, ?)",
-                    (*deletable_task_ids, queued_task_id, running_task_id),
+                    "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        *deletable_task_ids,
+                        queued_task_id,
+                        running_task_id,
+                        canceling_task_id,
+                    ),
                 ).fetchall()
             }
-        self.assertEqual(remaining_ids, {running_task_id})
+        self.assertEqual(remaining_ids, {running_task_id, canceling_task_id})
         with self.client.session_transaction() as session:
             messages = [message for _, message in session.get("_flashes", [])]
         self.assertIn("已批量删除 5 个任务，其中 1 个排队任务已取消。", messages)
-        self.assertIn("已跳过 1 个状态已变化或正在运行的任务，请先取消后再删除。", messages)
+        self.assertIn("已跳过 2 个状态已变化或正在运行的任务，请先取消后再删除。", messages)
 
     def test_user_bulk_delete_rejects_another_users_task(self):
         task_id = self._insert_task(
@@ -4604,10 +4622,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 oldest_task_id = task_id
         with self.app.app_context():
             get_db().execute(
-                "UPDATE tasks SET api_key = 'task-secret' WHERE id = ?",
+                """
+                UPDATE tasks
+                SET api_key = 'task-secret',
+                    claim_token = 'worker-claim',
+                    lease_expires_at = '2999-01-01 00:00:00'
+                WHERE id = ?
+                """,
                 (oldest_task_id,),
             )
             get_db().commit()
+        scheduler = Mock()
+        self.app.extensions["task_scheduler"] = scheduler
 
         response = self.client.get(
             "/?page=2",
@@ -4631,11 +4657,41 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(cancel_response.headers["Location"], "/infoCheck/?page=2")
         with self.app.app_context():
             canceled = get_db().execute(
-                "SELECT status, api_key FROM tasks WHERE id = ?",
+                """
+                SELECT status, cancel_requested, progress, api_key,
+                       claim_token, lease_expires_at, finished_at
+                FROM tasks
+                WHERE id = ?
+                """,
                 (oldest_task_id,),
             ).fetchone()
-        self.assertEqual(canceled["status"], "canceled")
-        self.assertIsNone(canceled["api_key"])
+        self.assertEqual(canceled["status"], "canceling")
+        self.assertEqual(canceled["cancel_requested"], 1)
+        self.assertEqual(canceled["progress"], 100)
+        self.assertEqual(canceled["api_key"], "task-secret")
+        self.assertEqual(canceled["claim_token"], "worker-claim")
+        self.assertEqual(canceled["lease_expires_at"], "2999-01-01 00:00:00")
+        self.assertIsNone(canceled["finished_at"])
+        scheduler.request_cancel.assert_called_once_with(oldest_task_id)
+
+        status_response = self.client.get(
+            f"/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={oldest_task_id}"
+        )
+        status_payload = status_response.get_json()
+        self.assertTrue(status_payload["active"])
+        self.assertEqual(status_payload["counts"]["running"], 21)
+        self.assertEqual(status_payload["tasks"][0]["status"], "canceling")
+        self.assertEqual(status_payload["tasks"][0]["status_label"], "取消中")
+
+        page_response = self.client.get("/?page=2")
+        page_soup = BeautifulSoup(page_response.get_data(as_text=True), "html.parser")
+        stats_region = _required_tag(page_soup.select_one('[data-refresh-region="stats"]'))
+        self.assertEqual(stats_region.get("data-refresh-active"), "1")
+        task_row = _required_tag(page_soup.select_one(f'tr[data-task-id="{oldest_task_id}"]'))
+        self.assertEqual(task_row.get("data-task-status"), "canceling")
+        self.assertIn("取消中", task_row.get_text(" ", strip=True))
+        self.assertIsNone(task_row.select_one('form[action$="/cancel"]'))
+        self.assertIsNone(task_row.select_one('form[action$="/delete"]'))
 
     def test_user_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):

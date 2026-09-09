@@ -1,5 +1,6 @@
 import json
 import unittest
+from threading import Event, Thread
 from unittest.mock import call, patch
 
 from app import llm
@@ -450,6 +451,74 @@ class LLMResponseParsingTest(unittest.TestCase):
         result = llm._read_stream_response(response, None)
 
         self.assertEqual(result, "检查完成")
+
+    def test_cancel_closes_streaming_response_and_stops_retry(self):
+        class BlockingResponse(FakeResponse):
+            def __init__(self):
+                super().__init__()
+                self.started = Event()
+                self.closed_event = Event()
+
+            def iter_lines(self, decode_unicode=False):
+                self.started.set()
+                self.closed_event.wait(3)
+                if False:
+                    yield ""
+
+            def close(self):
+                super().close()
+                self.closed_event.set()
+
+        response = BlockingResponse()
+        fake_session = FakeSession([response])
+        cancel_event = Event()
+
+        def cancel_after_stream_starts():
+            response.started.wait(2)
+            cancel_event.set()
+
+        cancel_thread = Thread(target=cancel_after_stream_starts, daemon=True)
+        cancel_thread.start()
+        with patch.object(llm.requests, "Session", return_value=fake_session):
+            with self.assertRaises(llm.LLMRequestCanceled):
+                llm.run_check(
+                    api_base="http://example.test/v1/chat/completions",
+                    api_key="key",
+                    model_name="test-model",
+                    check_name="规范性",
+                    prompt="检查",
+                    document_text="文档",
+                    cancel_event=cancel_event,
+                )
+        cancel_thread.join(timeout=2)
+
+        self.assertTrue(response.closed)
+        self.assertEqual(len(fake_session.calls), 1)
+
+    def test_cancel_prevents_retry_after_request_error(self):
+        cancel_event = Event()
+
+        def fail_after_cancel(**kwargs):
+            cancel_event.set()
+            raise llm.LLMError("模型服务失败")
+
+        with (
+            patch.object(llm, "_run_check_attempt", side_effect=fail_after_cancel) as attempt,
+            patch.object(llm.time, "sleep") as sleep,
+            self.assertRaises(llm.LLMRequestCanceled),
+        ):
+            llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key="key",
+                model_name="test-model",
+                check_name="规范性",
+                prompt="检查",
+                document_text="文档",
+                cancel_event=cancel_event,
+            )
+
+        attempt.assert_called_once()
+        sleep.assert_not_called()
 
     def test_does_not_treat_responses_api_events_as_chat_completion_content(self):
         response = FakeResponse(

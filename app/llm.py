@@ -183,6 +183,10 @@ class LLMError(Exception):
     pass
 
 
+class LLMRequestCanceled(LLMError):
+    pass
+
+
 class _EmptyContentError(LLMError):
     pass
 
@@ -293,6 +297,34 @@ def _reset_http_session_pools():
         pool.close()
 
 
+def _raise_if_request_canceled(
+    cancel_event: threading.Event | None,
+    check_canceled: Optional[Callable[[], None]],
+    *,
+    poll: bool = False,
+):
+    if poll and check_canceled is not None:
+        check_canceled()
+    if cancel_event is not None and not cancel_event.is_set():
+        return
+    if not poll and check_canceled is not None:
+        check_canceled()
+    if cancel_event is not None and cancel_event.is_set():
+        raise LLMRequestCanceled("模型请求已取消")
+
+
+def _wait_before_retry(
+    delay_seconds: float,
+    cancel_event: threading.Event | None,
+    check_canceled: Optional[Callable[[], None]],
+):
+    if cancel_event is None:
+        time.sleep(delay_seconds)
+    else:
+        cancel_event.wait(delay_seconds)
+    _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+
+
 def run_check(
     *,
     api_base: str,
@@ -313,7 +345,10 @@ def run_check(
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
     stream_trace_enabled: bool = False,
+    cancel_event: threading.Event | None = None,
+    check_canceled: Optional[Callable[[], None]] = None,
 ) -> str:
+    _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
 
@@ -388,6 +423,8 @@ def run_check(
         request_id=request_id,
         task_id=task_id,
         stream_trace_enabled=stream_trace_enabled,
+        cancel_event=cancel_event,
+        check_canceled=check_canceled,
     )
 
 
@@ -412,7 +449,10 @@ def run_image_check(
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
     stream_trace_enabled: bool = False,
+    cancel_event: threading.Event | None = None,
+    check_canceled: Optional[Callable[[], None]] = None,
 ) -> str:
+    _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
 
@@ -496,6 +536,8 @@ def run_image_check(
         request_id=request_id,
         task_id=task_id,
         stream_trace_enabled=stream_trace_enabled,
+        cancel_event=cancel_event,
+        check_canceled=check_canceled,
     )
 
 
@@ -522,7 +564,10 @@ def run_multimodal_document_check(
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
     stream_trace_enabled: bool = False,
+    cancel_event: threading.Event | None = None,
+    check_canceled: Optional[Callable[[], None]] = None,
 ) -> str:
+    _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
 
@@ -631,6 +676,8 @@ def run_multimodal_document_check(
         request_id=request_id,
         task_id=task_id,
         stream_trace_enabled=stream_trace_enabled,
+        cancel_event=cancel_event,
+        check_canceled=check_canceled,
     )
 
 
@@ -677,6 +724,8 @@ def _run_payload_with_retries(
     request_id: str,
     task_id: Optional[int],
     stream_trace_enabled: bool,
+    cancel_event: threading.Event | None = None,
+    check_canceled: Optional[Callable[[], None]] = None,
 ) -> str:
     last_error = None
     active_payload = dict(payload)
@@ -684,6 +733,7 @@ def _run_payload_with_retries(
     output_token_fallback_used = False
     attempt = 1
     while attempt <= _MAX_RETRIES + 1:
+        _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         attempt_parts = []
         last_content_callback = 0.0
         last_content_snapshot = ""
@@ -720,6 +770,8 @@ def _run_payload_with_retries(
                 task_id=task_id,
                 attempt=attempt,
                 stream_trace_enabled=stream_trace_enabled,
+                cancel_event=cancel_event,
+                check_canceled=check_canceled,
             )
             if on_content and not attempt_parts and content:
                 on_content(content)
@@ -730,6 +782,7 @@ def _run_payload_with_retries(
                 on_delta(content)
             return content
         except LLMError as exc:
+            _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
             last_error = exc
             if on_content and attempt_parts:
                 on_content("")
@@ -801,7 +854,7 @@ def _run_payload_with_retries(
                 delay_seconds,
                 exc,
             )
-            time.sleep(delay_seconds)
+            _wait_before_retry(delay_seconds, cancel_event, check_canceled)
             attempt += 1
     raise last_error or LLMError("模型服务请求失败")
 
@@ -878,8 +931,11 @@ def _run_check_attempt(
     task_id: Optional[int],
     attempt: int,
     stream_trace_enabled: bool,
+    cancel_event: threading.Event | None = None,
+    check_canceled: Optional[Callable[[], None]] = None,
 ) -> str:
     try:
+        _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         with _pooled_http_session(endpoint, proxy_mode, proxy) as session:
             request_kwargs = {
                 "headers": headers,
@@ -895,6 +951,8 @@ def _run_check_attempt(
             stream_payload["stream"] = True
             stream_payload["stream_options"] = {"include_usage": True}
             response = None
+            response_done = None
+            cancel_watcher = None
             try:
                 if stream_trace_enabled:
                     logger.info(
@@ -910,6 +968,12 @@ def _run_check_attempt(
                 started_at = time.monotonic()
                 response = session.post(
                     endpoint, json=stream_payload, stream=True, **request_kwargs
+                )
+                _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+                response_done, cancel_watcher = _start_response_cancel_watcher(
+                    response,
+                    cancel_event,
+                    task_id=task_id,
                 )
                 if stream_trace_enabled:
                     headers = getattr(response, "headers", {}) or {}
@@ -932,6 +996,8 @@ def _run_check_attempt(
                     attempt=attempt,
                     stream_trace_enabled=stream_trace_enabled,
                     thinking_disabled=_thinking_disabled_in_payload(stream_payload),
+                    cancel_event=cancel_event,
+                    check_canceled=check_canceled,
                 )
                 logger.info(
                     "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=stream output_chars=%s",
@@ -942,8 +1008,13 @@ def _run_check_attempt(
                 )
                 return content
             finally:
+                if response_done is not None:
+                    response_done.set()
                 _close_response(response)
+                if cancel_watcher is not None:
+                    cancel_watcher.join(timeout=0.2)
     except requests.ReadTimeout as exc:
+        _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         logger.warning(
             "LLM 请求超时 request_id=%s task_id=%s attempt=%s timeout=%s",
             request_id,
@@ -955,6 +1026,7 @@ def _run_check_attempt(
             f"模型服务处理超时：已连接到服务，但 {request_timeout} 秒内没有返回结果"
         ) from exc
     except requests.RequestException as exc:
+        _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         logger.warning(
             "LLM 请求失败 request_id=%s task_id=%s attempt=%s error=%s",
             request_id,
@@ -963,6 +1035,36 @@ def _run_check_attempt(
             exc,
         )
         raise LLMError(f"模型服务请求失败：{exc}") from exc
+    except Exception:
+        _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+        raise
+
+
+def _start_response_cancel_watcher(
+    response,
+    cancel_event: threading.Event | None,
+    *,
+    task_id: Optional[int],
+) -> tuple[threading.Event | None, threading.Thread | None]:
+    if cancel_event is None:
+        return None, None
+    response_done = threading.Event()
+
+    def close_on_cancel():
+        while not response_done.wait(0.1):
+            if not cancel_event.is_set():
+                continue
+            logger.info("正在关闭已取消任务的模型响应 task_id=%s", task_id or "-")
+            _close_response(response)
+            return
+
+    watcher = threading.Thread(
+        target=close_on_cancel,
+        daemon=True,
+        name=f"llm-cancel-{task_id or 'request'}",
+    )
+    watcher.start()
+    return response_done, watcher
 
 
 def _chat_completions_endpoint(api_base: str) -> str:
@@ -1266,7 +1368,10 @@ def _read_stream_response(
     attempt: Optional[int] = None,
     stream_trace_enabled: bool = False,
     thinking_disabled: bool = False,
+    cancel_event: threading.Event | None = None,
+    check_canceled: Optional[Callable[[], None]] = None,
 ) -> str:
+    _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     _force_utf8_response(response)
     _raise_for_http_error(response, request_id=request_id, task_id=task_id)
     if stream_trace_enabled:
@@ -1285,6 +1390,8 @@ def _read_stream_response(
         attempt=attempt,
         stream_trace_enabled=stream_trace_enabled,
         thinking_disabled=thinking_disabled,
+        cancel_event=cancel_event,
+        check_canceled=check_canceled,
     )
 
 
@@ -1297,7 +1404,10 @@ def _read_stream_lines(
     attempt: Optional[int] = None,
     stream_trace_enabled: bool = False,
     thinking_disabled: bool = False,
+    cancel_event: threading.Event | None = None,
+    check_canceled: Optional[Callable[[], None]] = None,
 ) -> str:
+    _raise_if_request_canceled(cancel_event, check_canceled)
     parts = []
     content_chars = 0
     content_tail = ""
@@ -1306,6 +1416,7 @@ def _read_stream_lines(
         thinking_disabled
     )
     for raw_line in lines:
+        _raise_if_request_canceled(cancel_event, check_canceled)
         if not raw_line:
             continue
         if isinstance(raw_line, bytes):
@@ -1416,6 +1527,7 @@ def _read_stream_lines(
         if on_delta:
             on_delta(delta)
 
+    _raise_if_request_canceled(cancel_event, check_canceled)
     content = "".join(parts).strip()
     logger.info(
         "LLM 流式响应结束 request_id=%s task_id=%s %s",

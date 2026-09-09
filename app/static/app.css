@@ -2496,6 +2496,11 @@ body.table-column-resize-active * {
   color: #075985;
 }
 
+.status-canceling {
+  background: #fff4dd;
+  color: #9a5b00;
+}
+
 .status-completed {
   background: #f0f6ff;
   color: var(--primary-strong);

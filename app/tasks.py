@@ -95,6 +95,7 @@ TASK_FILE_CLEANUP_INTERVAL_SECONDS = 3600
 TASK_FILE_CLEANUP_BATCH_SIZE = 100
 TASK_LEASE_SECONDS = 90
 TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
+TASK_CANCEL_POLL_INTERVAL_SECONDS = 1
 STREAM_SNAPSHOT_INTERVAL_SECONDS = 5.0
 STREAM_SNAPSHOT_MIN_CHAR_GROWTH = 256
 IMAGE_PAGE_CHECK_CODES = {
@@ -119,6 +120,8 @@ class TaskScheduler:
     def __init__(self, app):
         self.app = app
         self._stop_event = threading.Event()
+        self._cancel_events: dict[int, threading.Event] = {}
+        self._cancel_events_lock = threading.Lock()
         self._launcher = threading.Thread(target=self._loop, daemon=True, name="task-launcher")
         self._last_task_file_cleanup = 0.0
 
@@ -131,6 +134,25 @@ class TaskScheduler:
 
     def is_alive(self) -> bool:
         return self._launcher.is_alive() and not self._stop_event.is_set()
+
+    def request_cancel(self, task_id: int) -> bool:
+        with self._cancel_events_lock:
+            cancel_event = self._cancel_events.get(task_id)
+        if cancel_event is None:
+            return False
+        cancel_event.set()
+        return True
+
+    def _register_cancel_event(self, task_id: int) -> threading.Event:
+        cancel_event = threading.Event()
+        with self._cancel_events_lock:
+            self._cancel_events[task_id] = cancel_event
+        return cancel_event
+
+    def _unregister_cancel_event(self, task_id: int, cancel_event: threading.Event):
+        with self._cancel_events_lock:
+            if self._cancel_events.get(task_id) is cancel_event:
+                self._cancel_events.pop(task_id, None)
 
     def _loop(self):
         while not self._stop_event.is_set():
@@ -164,9 +186,29 @@ class TaskScheduler:
         db = get_db()
         claimed_tasks: list[tuple[int, str]] = []
         recovered_count = 0
+        canceled_count = 0
         try:
             db.execute("BEGIN IMMEDIATE")
             now = now_text()
+            canceled = db.execute(
+                """
+                UPDATE tasks
+                SET status = 'canceled',
+                    progress = 0,
+                    api_key = NULL,
+                    claim_token = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = ?,
+                    finished_at = ?
+                WHERE (
+                        status = 'canceling'
+                        OR (status = 'running' AND cancel_requested = 1)
+                      )
+                  AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                """,
+                (now, now, now),
+            )
+            canceled_count = max(0, canceled.rowcount)
             recovered = db.execute(
                 """
                 UPDATE tasks
@@ -182,6 +224,7 @@ class TaskScheduler:
                     started_at = NULL,
                     finished_at = NULL
                 WHERE status = 'running'
+                  AND cancel_requested = 0
                   AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
                 """,
                 (now, now),
@@ -194,7 +237,7 @@ class TaskScheduler:
                     SELECT 1
                     FROM tasks
                     WHERE tasks.id = task_live_results.task_id
-                      AND tasks.status = 'running'
+                      AND tasks.status IN ('running', 'canceling')
                 )
                 """
             )
@@ -202,7 +245,7 @@ class TaskScheduler:
             global_limit = max(1, _int_setting("global_concurrency", 3))
             user_limit = max(1, _int_setting("user_concurrency", 1))
             running_total = db.execute(
-                "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'"
+                "SELECT COUNT(*) AS total FROM tasks WHERE status IN ('running', 'canceling')"
             ).fetchone()["total"]
             slots = global_limit - running_total
             if slots > 0:
@@ -211,7 +254,7 @@ class TaskScheduler:
                     WITH running_by_owner AS (
                         SELECT owner_subject, COUNT(*) AS running_count
                         FROM tasks
-                        WHERE status = 'running'
+                        WHERE status IN ('running', 'canceling')
                         GROUP BY owner_subject
                     )
                     SELECT queued.id,
@@ -261,6 +304,8 @@ class TaskScheduler:
 
         if recovered_count:
             self.app.logger.warning("已回收租约过期的运行任务 count=%s", recovered_count)
+        if canceled_count:
+            self.app.logger.warning("已结束租约过期的取消中任务 count=%s", canceled_count)
         return claimed_tasks
 
     def _run_task(self, task_id: int, claim_token: str | None = None):
@@ -271,14 +316,22 @@ class TaskScheduler:
                 SELECT *
                 FROM tasks
                 WHERE id = ?
-                  AND (? IS NULL OR (status = 'running' AND claim_token = ?))
+                  AND (? IS NULL OR (status IN ('running', 'canceling') AND claim_token = ?))
                 """,
                 (task_id, claim_token, claim_token),
             ).fetchone()
             if task is None:
                 return
 
-            lease_stop, lease_thread = _start_task_lease_heartbeat(self.app, task_id, claim_token)
+            cancel_event = self._register_cancel_event(task_id)
+            if task["cancel_requested"] or task["status"] == "canceling":
+                cancel_event.set()
+            lease_stop, lease_thread = _start_task_lease_heartbeat(
+                self.app,
+                task_id,
+                claim_token,
+                cancel_event,
+            )
             results = []
             try:
                 self.app.logger.info(
@@ -290,7 +343,7 @@ class TaskScheduler:
                     task["provider_name"],
                     task["model_name"],
                 )
-                if task["cancel_requested"]:
+                if cancel_event.is_set():
                     _mark_canceled(db, task_id, claim_token)
                     return
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
@@ -323,6 +376,7 @@ class TaskScheduler:
                         document_meta=_document_meta(document_meta_raw),
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
+                        cancel_event=cancel_event,
                     )
                 elif task_type == VIDEO_TASK_TYPE:
                     frame_items = image_items_from_meta(document_meta_raw, "frames")
@@ -340,6 +394,7 @@ class TaskScheduler:
                         document_meta=_document_meta(document_meta_raw),
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
+                        cancel_event=cancel_event,
                     )
                 else:
                     if task_type in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
@@ -358,8 +413,9 @@ class TaskScheduler:
                         document_meta=_document_meta(document_meta_raw),
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
+                        cancel_event=cancel_event,
                     )
-                if _cancel_requested(db, task_id, claim_token):
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
 
                 failed_results = _failed_check_results(results)
@@ -415,21 +471,33 @@ class TaskScheduler:
                     else:
                         self.app.logger.info("任务完成 task_id=%s checks=%s", task_id, len(results))
                 else:
-                    self.app.logger.warning("任务执行权已失效，忽略完成结果 task_id=%s", task_id)
+                    if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                        _mark_canceled(db, task_id, claim_token)
+                    else:
+                        self.app.logger.warning("任务执行权已失效，忽略完成结果 task_id=%s", task_id)
             except TaskCanceled:
                 self.app.logger.info("任务取消 task_id=%s", task_id)
                 _mark_canceled(db, task_id, claim_token)
             except (DocumentReadError, LLMError, RuntimeError) as exc:
-                self.app.logger.warning("任务失败 task_id=%s error=%s", task_id, exc)
-                _mark_failed(db, task_id, str(exc), results, claim_token)
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                    self.app.logger.info("任务取消 task_id=%s", task_id)
+                    _mark_canceled(db, task_id, claim_token)
+                else:
+                    self.app.logger.warning("任务失败 task_id=%s error=%s", task_id, exc)
+                    _mark_failed(db, task_id, str(exc), results, claim_token)
             except Exception as exc:
-                self.app.logger.exception("任务执行异常：%s", task_id)
-                _mark_failed(db, task_id, f"任务执行异常：{exc}", results, claim_token)
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                    self.app.logger.info("任务取消 task_id=%s", task_id)
+                    _mark_canceled(db, task_id, claim_token)
+                else:
+                    self.app.logger.exception("任务执行异常：%s", task_id)
+                    _mark_failed(db, task_id, f"任务执行异常：{exc}", results, claim_token)
             finally:
                 if lease_stop is not None:
                     lease_stop.set()
                 if lease_thread is not None:
                     lease_thread.join(timeout=2)
+                self._unregister_cancel_event(task_id, cancel_event)
 
 
 def _prepare_task_inputs(app, db, task, task_type: str, claim_token: str | None) -> tuple[str, str | None]:
@@ -911,6 +979,7 @@ def _run_check_items_concurrently(
     document_meta: dict | None = None,
     max_workers: int,
     stream_trace_enabled: bool,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict]:
     task_id = task["id"]
     claim_token = _task_claim_token(task)
@@ -921,7 +990,7 @@ def _run_check_items_concurrently(
     partial_by_code: dict[str, dict] = {}
     result_lock = threading.Lock()
     save_lock = threading.Lock()
-    cancel_event = threading.Event()
+    cancel_event = cancel_event or threading.Event()
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
         target=_progress_heartbeat,
@@ -1044,6 +1113,8 @@ def _run_check_items_concurrently(
                         "on_content": lambda content: save_partial(content, f"正在并发检查：{item['name']}"),
                         "task_id": task_id,
                         "stream_trace_enabled": stream_trace_enabled,
+                        "cancel_event": cancel_event,
+                        "check_canceled": ensure_active,
                     }
                     if task_type == DOCUMENT_TASK_TYPE:
                         run_check_kwargs["max_completion_tokens"] = None
@@ -1220,6 +1291,7 @@ def _run_image_check_items_concurrently(
     document_meta: dict | None,
     max_workers: int,
     stream_trace_enabled: bool,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict]:
     task_id = task["id"]
     claim_token = _task_claim_token(task)
@@ -1234,7 +1306,7 @@ def _run_image_check_items_concurrently(
     incomplete_codes: set[str] = set()
     result_lock = threading.Lock()
     save_lock = threading.Lock()
-    cancel_event = threading.Event()
+    cancel_event = cancel_event or threading.Event()
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
         target=_progress_heartbeat,
@@ -1277,8 +1349,12 @@ def _run_image_check_items_concurrently(
     def run_group(group_index: int, group: dict):
         with app.app_context():
             db = get_db()
-            if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
-                raise TaskCanceled
+
+            def ensure_active():
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                    raise TaskCanceled
+
+            ensure_active()
 
             items = group["items"]
             batches = group["batches"]
@@ -1406,15 +1482,17 @@ def _run_image_check_items_concurrently(
                         "batch_count": batch_count,
                         "issue_output_limit": issue_output_limit,
                         "output_contract": MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
-                        "on_content": lambda content, current=current_batch: save_partial(
-                            current,
-                            content,
-                            f"正在进行{target_label}：批次 {current['batch_index']}/{current['batch_count']}",
-                        ),
-                        "task_id": task_id,
-                        "stream_trace_enabled": stream_trace_enabled,
-                    },
-                )
+                            "on_content": lambda content, current=current_batch: save_partial(
+                                current,
+                                content,
+                                f"正在进行{target_label}：批次 {current['batch_index']}/{current['batch_count']}",
+                            ),
+                            "task_id": task_id,
+                            "stream_trace_enabled": stream_trace_enabled,
+                            "cancel_event": cancel_event,
+                            "check_canceled": ensure_active,
+                        },
+                    )
                 with result_lock:
                     incomplete_codes.update(_unresolved_check_codes(sections, items))
                 for item in items:
@@ -1504,6 +1582,7 @@ def _run_video_check_items_concurrently(
     document_meta: dict | None,
     max_workers: int,
     stream_trace_enabled: bool,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict]:
     task_id = task["id"]
     claim_token = _task_claim_token(task)
@@ -1521,7 +1600,7 @@ def _run_video_check_items_concurrently(
     incomplete_codes: set[str] = set()
     result_lock = threading.Lock()
     save_lock = threading.Lock()
-    cancel_event = threading.Event()
+    cancel_event = cancel_event or threading.Event()
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
         target=_progress_heartbeat,
@@ -1564,8 +1643,12 @@ def _run_video_check_items_concurrently(
     def run_checks():
         with app.app_context():
             db = get_db()
-            if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
-                raise TaskCanceled
+
+            def ensure_active():
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                    raise TaskCanceled
+
+            ensure_active()
 
             app.logger.info(
                 "任务视频多模态检查开始 task_id=%s checks=%s groups=%s frames=%s skipped_frames=%s batches=%s",
@@ -1695,6 +1778,8 @@ def _run_video_check_items_concurrently(
                             ),
                             "task_id": task_id,
                             "stream_trace_enabled": stream_trace_enabled,
+                            "cancel_event": cancel_event,
+                            "check_canceled": ensure_active,
                         },
                     )
                     with result_lock:
@@ -3476,13 +3561,18 @@ def _task_lease_deadline_text() -> str:
     return deadline.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _start_task_lease_heartbeat(app, task_id: int, claim_token: str | None):
+def _start_task_lease_heartbeat(
+    app,
+    task_id: int,
+    claim_token: str | None,
+    cancel_event: threading.Event,
+):
     if not claim_token:
         return None, None
     stop_event = threading.Event()
     thread = threading.Thread(
         target=_task_lease_heartbeat,
-        args=(app, task_id, claim_token, stop_event),
+        args=(app, task_id, claim_token, stop_event, cancel_event),
         daemon=True,
         name=f"task-lease-{task_id}",
     )
@@ -3490,22 +3580,46 @@ def _start_task_lease_heartbeat(app, task_id: int, claim_token: str | None):
     return stop_event, thread
 
 
-def _task_lease_heartbeat(app, task_id: int, claim_token: str, stop_event: threading.Event):
-    while not stop_event.wait(TASK_LEASE_RENEW_INTERVAL_SECONDS):
+def _task_lease_heartbeat(
+    app,
+    task_id: int,
+    claim_token: str,
+    stop_event: threading.Event,
+    cancel_event: threading.Event,
+):
+    next_renew_at = time.monotonic() + TASK_LEASE_RENEW_INTERVAL_SECONDS
+    while not stop_event.wait(TASK_CANCEL_POLL_INTERVAL_SECONDS):
         try:
             with app.app_context():
                 db = get_db()
+                task = db.execute(
+                    "SELECT status, cancel_requested, claim_token FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                if (
+                    task is None
+                    or task["claim_token"] != claim_token
+                    or task["status"] not in {"running", "canceling"}
+                ):
+                    cancel_event.set()
+                    return
+                if task["cancel_requested"] or task["status"] == "canceling":
+                    cancel_event.set()
+                if time.monotonic() < next_renew_at:
+                    continue
                 renewed = db.execute(
                     """
                     UPDATE tasks
                     SET lease_expires_at = ?
-                    WHERE id = ? AND status = 'running' AND claim_token = ?
+                    WHERE id = ? AND status IN ('running', 'canceling') AND claim_token = ?
                     """,
                     (_task_lease_deadline_text(), task_id, claim_token),
                 )
                 db.commit()
                 if renewed.rowcount != 1:
+                    cancel_event.set()
                     return
+                next_renew_at = time.monotonic() + TASK_LEASE_RENEW_INTERVAL_SECONDS
         except Exception:
             app.logger.exception("任务租约续期失败 task_id=%s", task_id)
 
@@ -3517,7 +3631,9 @@ def _cancel_requested(db, task_id: int, claim_token: str | None = None) -> bool:
     ).fetchone()
     if row is None:
         return True
-    if claim_token is not None and (row["status"] != "running" or row["claim_token"] != claim_token):
+    if claim_token is not None and (
+        row["status"] not in {"running", "canceling"} or row["claim_token"] != claim_token
+    ):
         return True
     return bool(row["cancel_requested"])
 
@@ -3637,7 +3753,7 @@ def _mark_canceled(db, task_id: int, claim_token: str | None = None):
             lease_expires_at = NULL,
             updated_at = ?,
             finished_at = ?
-        WHERE id = ? AND status = 'running'
+        WHERE id = ? AND status IN ('running', 'canceling')
           AND (? IS NULL OR claim_token = ?)
         """,
         (now_text(), now_text(), task_id, claim_token, claim_token),

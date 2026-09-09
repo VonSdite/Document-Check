@@ -2,7 +2,7 @@
 
 {% block title %}任务详情 - 文档智能门禁{% endblock %}
 {% block extra_head %}
-  {% if task.status in ["queued", "running"] %}
+  {% if task.status in ["queued", "running", "canceling"] %}
   <meta http-equiv="refresh" content="2">
   {% endif %}
 {% endblock %}
@@ -193,7 +193,7 @@
         </thead>
         <tbody>
           {% for item in result.report_items %}
-          {% set controls_disabled = task.status in ["queued", "running"] %}
+          {% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
           <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
             <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span></td>
             {% for field, label in report_item_fields %}

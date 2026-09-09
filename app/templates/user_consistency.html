@@ -152,7 +152,7 @@
           <td class="task-model-cell">{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
           <td class="task-status-cell">
             <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
-            {% if task.status == "running" %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
+            {% if task.status in ["running", "canceling"] %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
           </td>
           {% include "_task_review_progress.html" %}
           <td>{{ task.created_at }}</td>
@@ -165,7 +165,7 @@
                 <button class="small-button warn" type="submit">取消</button>
               </form>
               {% endif %}
-              {% if task.status not in ["queued", "running"] %}
+              {% if task.status in ["completed", "partial", "failed", "canceled"] %}
               <form method="post" action="{{ url_for('user_delete_task', task_id=task.id) }}" data-confirm="确认删除该历史任务？删除后不可恢复。">
                 <button class="small-button danger" type="submit">删除</button>
               </form>
