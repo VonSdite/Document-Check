@@ -616,7 +616,7 @@ def register_routes(app):
             return {"error": "任务类型无效。"}, 400
         return _task_status_payload(
             task_type,
-            owner_clause="COALESCE(t.owner_subject, 'ip:' || t.ip) = ?",
+            owner_clause="t.owner_subject = ?",
             owner_params=(identity.subject,),
         )
 
@@ -1674,7 +1674,7 @@ def _render_admin_tasks_page():
 def _user_task_list_data(identity: UserIdentity, task_type: str):
     page = _page_arg()
     per_page = _per_page_arg()
-    owner_clause = "COALESCE(t.owner_subject, 'ip:' || t.ip) = ?"
+    owner_clause = "t.owner_subject = ?"
     params = (identity.subject, task_type)
     total = get_db().execute(
         f"SELECT COUNT(*) AS total FROM tasks t WHERE {owner_clause} AND t.task_type = ?",
@@ -1696,7 +1696,7 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
     ).fetchall()
     rows = _task_rows_with_review_progress(rows)
     stats = _task_stats_for_where(
-        "COALESCE(owner_subject, 'ip:' || ip) = ? AND task_type = ?",
+        "owner_subject = ? AND task_type = ?",
         params,
     )
     return page, per_page, total, rows, stats
@@ -3613,7 +3613,7 @@ def _get_user_task(task_id: int):
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
         LEFT JOIN task_live_results live ON live.task_id = t.id
-        WHERE t.id = ? AND COALESCE(t.owner_subject, 'ip:' || t.ip) = ?
+        WHERE t.id = ? AND t.owner_subject = ?
         """,
         (task_id, identity.subject),
     ).fetchone()

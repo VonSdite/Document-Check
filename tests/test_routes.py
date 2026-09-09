@@ -232,6 +232,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         owner_name_snapshot: str | None = None,
         owner_source: str | None = None,
     ):
+        if owner_subject is None:
+            owner_subject = f"ip:{ip}"
+        if owner_source is None:
+            owner_source = "ip"
         with self.app.app_context():
             cursor = get_db().execute(
                 """

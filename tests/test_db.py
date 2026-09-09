@@ -105,6 +105,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("idx_tasks_status_lease", indexes)
         self.assertIn("idx_tasks_status_created_id", indexes)
         self.assertIn("idx_tasks_status_owner", indexes)
+        self.assertIn("idx_tasks_type_owner_created", indexes)
         self.assertIn("idx_tasks_provider", indexes)
 
         queue_plan = " ".join(
@@ -131,8 +132,24 @@ class CheckItemDefaultsTest(unittest.TestCase):
                 """
             ).fetchall()
         )
+        user_tasks_plan = " ".join(
+            row["detail"]
+            for row in db.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT id, task_type, owner_subject, created_at
+                FROM tasks
+                WHERE owner_subject = 'ip:127.0.0.1'
+                  AND task_type = 'document_check'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 20 OFFSET 0
+                """
+            ).fetchall()
+        )
         self.assertIn("idx_tasks_status_created_id", queue_plan)
         self.assertIn("idx_tasks_status_owner", owner_plan)
+        self.assertIn("idx_tasks_type_owner_created", user_tasks_plan)
+        self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", user_tasks_plan)
 
     def test_user_model_tables_exist(self):
         db = get_db()
