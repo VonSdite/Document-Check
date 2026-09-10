@@ -17,8 +17,9 @@
     </svg>
     <span>返回列表</span>
   </a>
-  {% if task.status in ["completed", "partial"] %}
-  <div class="report-export-actions" aria-label="导出报告">
+  {% if task.status in ["completed", "partial", "failed"] %}
+  <div class="report-export-actions" aria-label="报告操作">
+    {% if task.status in ["completed", "partial"] %}
     <a class="primary-button report-export-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">
       <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 3v11"></path>
@@ -45,6 +46,19 @@
         <span data-report-import-label>回填 EXCEL</span>
       </button>
     </form>
+    {% endif %}
+    {% if task.status in ["partial", "failed"] %}
+    <form class="report-import-form" method="post" action="{{ url_for('admin_retry_task' if mode == 'admin' else 'user_retry_task', task_id=task.id) }}" data-prevent-double-submit="true">
+      <input type="hidden" name="next" value="{{ current_relative_url() }}">
+      <button class="primary-button report-export-button" type="submit">
+        <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M20 6v6h-6"></path>
+          <path d="M18.5 15a7 7 0 1 1-.7-7.8L20 9"></path>
+        </svg>
+        <span>一键重试失败项</span>
+      </button>
+    </form>
+    {% endif %}
   </div>
   {% endif %}
 </div>

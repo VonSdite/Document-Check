@@ -78,7 +78,7 @@ from .task_types import (
     document_groups_from_meta,
     task_type_label,
 )
-from .tasks import cleanup_task_file_cache, task_file_cache_snapshot
+from .tasks import cleanup_task_file_cache, retry_check_codes_for_task, task_file_cache_snapshot
 from .videos import allowed_video_file, video_extension_of
 
 
@@ -685,6 +685,12 @@ def register_routes(app):
         flash("已提交取消请求。", "success")
         return redirect(_task_action_redirect("user_tasks"))
 
+    @app.post("/tasks/<int:task_id>/retry")
+    def user_retry_task(task_id):
+        task = _get_user_task(task_id)
+        _retry_task(task)
+        return redirect(_task_action_redirect(_task_list_endpoint(False, task["task_type"])))
+
     @app.post("/tasks/<int:task_id>/delete")
     def user_delete_task(task_id):
         task = _get_user_task_or_local_admin(task_id)
@@ -926,6 +932,13 @@ def register_routes(app):
         _cancel_task(task)
         flash("已提交取消请求。", "success")
         return redirect(_task_action_redirect("admin_tasks"))
+
+    @app.post(f"{admin_prefix}/tasks/<int:task_id>/retry")
+    @admin_required
+    def admin_retry_task(task_id):
+        task = _get_task_or_404(task_id)
+        _retry_task(task)
+        return redirect(_task_action_redirect(_task_list_endpoint(True, task["task_type"])))
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/delete")
     @admin_required
@@ -3653,6 +3666,7 @@ def _cancel_task(task):
                 status = 'canceled',
                 progress = 0,
                 api_key = NULL,
+                retry_check_codes_json = NULL,
                 claim_token = NULL,
                 lease_expires_at = NULL,
                 updated_at = ?,
@@ -3680,6 +3694,69 @@ def _cancel_task(task):
     request_cancel = getattr(scheduler, "request_cancel", None)
     if callable(request_cancel):
         request_cancel(task["id"])
+
+
+def _retry_task(task) -> bool:
+    try:
+        retry_check_codes = retry_check_codes_for_task(task)
+    except RuntimeError as exc:
+        flash(str(exc), "error")
+        return False
+
+    provider_id = _row_value(task, "provider_id")
+    owner_subject = str(_row_value(task, "owner_subject") or "").strip()
+    if provider_id is None or not owner_subject:
+        flash("原任务的模型提供商信息不完整，无法重试。", "error")
+        return False
+
+    db = get_db()
+    provider = db.execute(
+        """
+        SELECT api_key
+        FROM user_model_providers
+        WHERE id = ? AND owner_subject = ?
+        """,
+        (provider_id, owner_subject),
+    ).fetchone()
+    if provider is None:
+        flash("原任务使用的模型提供商已不存在，无法重试。", "error")
+        return False
+
+    now = now_text()
+    retried = db.execute(
+        """
+        UPDATE tasks
+        SET status = 'queued',
+            progress = 0,
+            cancel_requested = 0,
+            retry_check_codes_json = ?,
+            api_key = ?,
+            claim_token = NULL,
+            lease_expires_at = NULL,
+            summary = ?,
+            error = NULL,
+            updated_at = ?,
+            started_at = NULL,
+            finished_at = NULL
+        WHERE id = ? AND status IN ('failed', 'partial')
+        """,
+        (
+            json.dumps(retry_check_codes, ensure_ascii=False),
+            provider["api_key"],
+            f"已进入重试队列，等待重跑 {len(retry_check_codes)} 个失败检查项。",
+            now,
+            task["id"],
+        ),
+    )
+    if retried.rowcount != 1:
+        db.rollback()
+        flash("任务状态已变化，无法重试。", "error")
+        return False
+
+    db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
+    db.commit()
+    flash(f"已重新加入队列，将只重跑 {len(retry_check_codes)} 个失败检查项。", "success")
+    return True
 
 
 def _delete_task(task):

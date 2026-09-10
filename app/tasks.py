@@ -196,6 +196,7 @@ class TaskScheduler:
                 SET status = 'canceled',
                     progress = 0,
                     api_key = NULL,
+                    retry_check_codes_json = NULL,
                     claim_token = NULL,
                     lease_expires_at = NULL,
                     updated_at = ?,
@@ -217,7 +218,10 @@ class TaskScheduler:
                     cancel_requested = 0,
                     claim_token = NULL,
                     lease_expires_at = NULL,
-                    result_json = NULL,
+                    result_json = CASE
+                        WHEN retry_check_codes_json IS NULL THEN NULL
+                        ELSE result_json
+                    END,
                     summary = NULL,
                     error = NULL,
                     updated_at = ?,
@@ -358,6 +362,25 @@ class TaskScheduler:
                     _mark_canceled(db, task_id, claim_token)
                     return
                 task_type = task["task_type"] or DOCUMENT_TASK_TYPE
+                retry_check_codes = _stored_retry_check_codes(task)
+                original_results = (
+                    _check_results_from_json(_task_value(task, "result_json"))
+                    if retry_check_codes is not None
+                    else []
+                )
+                retry_code_set = set(retry_check_codes or [])
+                base_results = [
+                    result
+                    for result in original_results
+                    if str(result.get("code") or "").strip() not in retry_code_set
+                ]
+                if retry_check_codes is not None:
+                    self.app.logger.info(
+                        "任务重试失败检查项 task_id=%s checks=%s retained=%s",
+                        task_id,
+                        ",".join(retry_check_codes),
+                        len(base_results),
+                    )
                 max_workers = max(
                     1,
                     _int_setting("check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY),
@@ -375,9 +398,10 @@ class TaskScheduler:
                     if not image_items and not page_image_items:
                         raise RuntimeError("未能从 PDF 中生成可检查页面截图或提取到可检查图片")
                     check_items = _task_check_items(db, task, IMAGE_TASK_TYPE)
+                    check_items = _check_items_for_retry(check_items, retry_check_codes)
                     if not check_items:
                         raise RuntimeError("没有可执行的图片检查项")
-                    results = _run_image_check_items_concurrently(
+                    retry_results = _run_image_check_items_concurrently(
                         self.app,
                         task,
                         check_items,
@@ -388,15 +412,17 @@ class TaskScheduler:
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                         cancel_event=cancel_event,
+                        base_results=base_results,
                     )
                 elif task_type == VIDEO_TASK_TYPE:
                     frame_items = image_items_from_meta(document_meta_raw, "frames")
                     if not frame_items:
                         raise RuntimeError("未能从视频中抽取到可检查画面")
                     check_items = _task_check_items(db, task, VIDEO_TASK_TYPE)
+                    check_items = _check_items_for_retry(check_items, retry_check_codes)
                     if not check_items:
                         raise RuntimeError("没有可执行的视频检查项")
-                    results = _run_video_check_items_concurrently(
+                    retry_results = _run_video_check_items_concurrently(
                         self.app,
                         task,
                         check_items,
@@ -406,6 +432,7 @@ class TaskScheduler:
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                         cancel_event=cancel_event,
+                        base_results=base_results,
                     )
                 else:
                     if task_type in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
@@ -413,10 +440,11 @@ class TaskScheduler:
                     else:
                         check_items = _document_check_items(db, task)
 
+                    check_items = _check_items_for_retry(check_items, retry_check_codes)
                     if not check_items:
                         raise RuntimeError("没有可执行的检查项")
 
-                    results = _run_check_items_concurrently(
+                    retry_results = _run_check_items_concurrently(
                         self.app,
                         task,
                         check_items,
@@ -425,7 +453,13 @@ class TaskScheduler:
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
                         cancel_event=cancel_event,
+                        base_results=base_results,
                     )
+                results = (
+                    _merge_check_results(original_results, retry_results)
+                    if retry_check_codes is not None
+                    else retry_results
+                )
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
                     raise TaskCanceled
 
@@ -449,6 +483,7 @@ class TaskScheduler:
                         summary = ?,
                         error = ?,
                         api_key = NULL,
+                        retry_check_codes_json = NULL,
                         claim_token = NULL,
                         lease_expires_at = NULL,
                         updated_at = ?,
@@ -896,7 +931,19 @@ def _document_check_items(db, task) -> list[dict]:
 
 
 def _task_check_items(db, task, task_type: str) -> list[dict]:
-    snapshot = _check_items_from_snapshot(_task_value(task, "checks_snapshot_json"))
+    snapshot_raw = _task_value(task, "checks_snapshot_json")
+    snapshot = _check_items_from_snapshot(snapshot_raw)
+    if _task_value(task, "retry_check_codes_json") is not None:
+        try:
+            snapshot_value = json.loads(snapshot_raw) if snapshot_raw else None
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("原任务缺少有效的检查项快照，无法重试") from exc
+        if (
+            not isinstance(snapshot_value, list)
+            or not snapshot_value
+            or len(snapshot) != len(snapshot_value)
+        ):
+            raise RuntimeError("原任务缺少有效的检查项快照，无法重试")
     if snapshot:
         return snapshot
 
@@ -943,7 +990,7 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
         return []
     try:
         value = json.loads(raw)
-    except json.JSONDecodeError:
+    except (TypeError, json.JSONDecodeError):
         return []
     if not isinstance(value, list):
         return []
@@ -961,6 +1008,144 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
         seen_codes.add(code)
         items.append({"code": code, "name": name, "prompt": prompt})
     return items
+
+
+def retry_check_codes_for_task(task) -> list[str]:
+    status = str(_task_value(task, "status") or "").strip()
+    if status not in {"failed", "partial"}:
+        raise RuntimeError("仅失败或部分完成任务可重试。")
+
+    snapshot_raw = _task_value(task, "checks_snapshot_json")
+    try:
+        snapshot_value = json.loads(snapshot_raw) if snapshot_raw else None
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("原任务缺少有效的检查项快照，无法重试。") from exc
+    snapshot_items = _check_items_from_snapshot(snapshot_raw)
+    if (
+        not isinstance(snapshot_value, list)
+        or not snapshot_value
+        or len(snapshot_items) != len(snapshot_value)
+    ):
+        raise RuntimeError("原任务缺少有效的检查项快照，无法重试。")
+
+    snapshot_codes = [item["code"] for item in snapshot_items]
+    snapshot_code_set = set(snapshot_codes)
+    results = _check_results_from_json(_task_value(task, "result_json"))
+    results_by_code = {
+        str(result.get("code") or "").strip(): result
+        for result in results
+        if str(result.get("code") or "").strip() in snapshot_code_set
+    }
+    failed_codes = {
+        code
+        for code, result in results_by_code.items()
+        if _check_result_failed(result)
+    }
+
+    if status == "partial":
+        retry_codes = [code for code in snapshot_codes if code in failed_codes]
+    else:
+        stored_codes = _stored_retry_check_codes(task)
+        if stored_codes is not None:
+            stored_code_set = set(stored_codes)
+            retry_codes = [
+                code
+                for code in snapshot_codes
+                if code in stored_code_set
+                and (code not in results_by_code or code in failed_codes)
+            ]
+        elif results_by_code:
+            retry_codes = [
+                code
+                for code in snapshot_codes
+                if code not in results_by_code or code in failed_codes
+            ]
+        else:
+            retry_codes = snapshot_codes
+
+    if not retry_codes:
+        raise RuntimeError("任务没有可重试的失败检查项。")
+    return retry_codes
+
+
+def _check_results_from_json(raw: str | None) -> list[dict]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _stored_retry_check_codes(task) -> list[str] | None:
+    raw = _task_value(task, "retry_check_codes_json")
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("重试检查项范围无效") from exc
+    if not isinstance(value, list) or not value:
+        raise RuntimeError("重试检查项范围无效")
+
+    codes = []
+    seen_codes = set()
+    for item in value:
+        code = str(item or "").strip() if isinstance(item, str) else ""
+        if not code or code in seen_codes:
+            raise RuntimeError("重试检查项范围无效")
+        seen_codes.add(code)
+        codes.append(code)
+    return codes
+
+
+def _check_items_for_retry(
+    check_items: list[dict],
+    retry_check_codes: list[str] | None,
+) -> list[dict]:
+    if retry_check_codes is None:
+        return check_items
+    items_by_code = {str(item.get("code") or "").strip(): item for item in check_items}
+    missing_codes = [code for code in retry_check_codes if code not in items_by_code]
+    if missing_codes:
+        raise RuntimeError(f"原任务检查项快照缺少重试项：{','.join(missing_codes)}")
+    return [items_by_code[code] for code in retry_check_codes]
+
+
+def _merge_check_results(base_results: list[dict], updates: list[dict]) -> list[dict]:
+    updates_by_code = {
+        str(result.get("code") or "").strip(): result
+        for result in updates
+        if isinstance(result, dict) and str(result.get("code") or "").strip()
+    }
+    merged = []
+    placed_codes = set()
+    for result in base_results:
+        if not isinstance(result, dict):
+            continue
+        code = str(result.get("code") or "").strip()
+        if code and code in updates_by_code:
+            if code not in placed_codes:
+                merged.append(dict(updates_by_code[code]))
+                placed_codes.add(code)
+            continue
+        merged.append(dict(result))
+
+    for result in updates:
+        if not isinstance(result, dict):
+            continue
+        code = str(result.get("code") or "").strip()
+        if code:
+            if code in placed_codes:
+                continue
+            merged.append(dict(result))
+            placed_codes.add(code)
+        else:
+            merged.append(dict(result))
+    return merged
 
 
 def _task_value(task, key: str):
@@ -991,6 +1176,7 @@ def _run_check_items_concurrently(
     max_workers: int,
     stream_trace_enabled: bool,
     cancel_event: threading.Event | None = None,
+    base_results: list[dict] | None = None,
 ) -> list[dict]:
     task_id = task["id"]
     claim_token = _task_claim_token(task)
@@ -999,6 +1185,7 @@ def _run_check_items_concurrently(
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
+    base_results = list(base_results or [])
     result_lock = threading.Lock()
     save_lock = threading.Lock()
     cancel_event = cancel_event or threading.Event()
@@ -1019,13 +1206,24 @@ def _run_check_items_concurrently(
     )
     with save_lock:
         db = get_db()
-        _update_progress(db, task_id, 5, claim_token)
+        if base_results:
+            _save_intermediate_results(
+                db,
+                task_id,
+                base_results,
+                f"正在重试 {total} 个失败检查项。",
+                5,
+                claim_token,
+            )
+        else:
+            _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
     task_type = _task_value(task, "task_type") or DOCUMENT_TASK_TYPE
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
-            snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
+            current_results = _ordered_results(check_items, completed_by_code, partial_by_code)
+            snapshot = _merge_check_results(base_results, current_results)
         with save_lock:
             _save_intermediate_results(db, task_id, snapshot, summary, progress, claim_token)
 
@@ -1303,6 +1501,7 @@ def _run_image_check_items_concurrently(
     max_workers: int,
     stream_trace_enabled: bool,
     cancel_event: threading.Event | None = None,
+    base_results: list[dict] | None = None,
 ) -> list[dict]:
     task_id = task["id"]
     claim_token = _task_claim_token(task)
@@ -1314,6 +1513,7 @@ def _run_image_check_items_concurrently(
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
+    base_results = list(base_results or [])
     incomplete_codes: set[str] = set()
     result_lock = threading.Lock()
     save_lock = threading.Lock()
@@ -1335,12 +1535,23 @@ def _run_image_check_items_concurrently(
     )
     with save_lock:
         db = get_db()
-        _update_progress(db, task_id, 5, claim_token)
+        if base_results:
+            _save_intermediate_results(
+                db,
+                task_id,
+                base_results,
+                f"正在重试 {total} 个失败检查项。",
+                5,
+                claim_token,
+            )
+        else:
+            _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
-            snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
+            current_results = _ordered_results(check_items, completed_by_code, partial_by_code)
+            snapshot = _merge_check_results(base_results, current_results)
         with save_lock:
             _save_intermediate_results(db, task_id, snapshot, summary, progress, claim_token)
 
@@ -1594,6 +1805,7 @@ def _run_video_check_items_concurrently(
     max_workers: int,
     stream_trace_enabled: bool,
     cancel_event: threading.Event | None = None,
+    base_results: list[dict] | None = None,
 ) -> list[dict]:
     task_id = task["id"]
     claim_token = _task_claim_token(task)
@@ -1608,6 +1820,7 @@ def _run_video_check_items_concurrently(
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
+    base_results = list(base_results or [])
     incomplete_codes: set[str] = set()
     result_lock = threading.Lock()
     save_lock = threading.Lock()
@@ -1629,12 +1842,23 @@ def _run_video_check_items_concurrently(
     )
     with save_lock:
         db = get_db()
-        _update_progress(db, task_id, 5, claim_token)
+        if base_results:
+            _save_intermediate_results(
+                db,
+                task_id,
+                base_results,
+                f"正在重试 {total} 个失败检查项。",
+                5,
+                claim_token,
+            )
+        else:
+            _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
-            snapshot = _ordered_results(check_items, completed_by_code, partial_by_code)
+            current_results = _ordered_results(check_items, completed_by_code, partial_by_code)
+            snapshot = _merge_check_results(base_results, current_results)
         with save_lock:
             _save_intermediate_results(db, task_id, snapshot, summary, progress, claim_token)
 
@@ -3760,6 +3984,7 @@ def _mark_canceled(db, task_id: int, claim_token: str | None = None):
         SET status = 'canceled',
             progress = 0,
             api_key = NULL,
+            retry_check_codes_json = NULL,
             claim_token = NULL,
             lease_expires_at = NULL,
             updated_at = ?,

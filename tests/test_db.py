@@ -87,6 +87,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("document_text", columns)
         self.assertIn("document_meta_json", columns)
         self.assertIn("checks_snapshot_json", columns)
+        self.assertIn("retry_check_codes_json", columns)
         self.assertIn("provider_id", columns)
         self.assertIn("reasoning_effort", columns)
         self.assertIn("owner_subject", columns)

@@ -190,6 +190,12 @@
           <td class="right">
             <div class="task-actions">
               <a class="small-button" href="{{ url_for('admin_task_detail', task_id=task.id) }}" target="_blank" rel="noopener">查看</a>
+              {% if task.status in ["partial", "failed"] %}
+              <form method="post" action="{{ url_for('admin_retry_task', task_id=task.id) }}" data-prevent-double-submit="true">
+                <input type="hidden" name="next" value="{{ current_relative_url() }}">
+                <button class="small-button" type="submit">一键重试</button>
+              </form>
+              {% endif %}
               {% if task.status in ["queued", "running"] %}
               <form method="post" action="{{ url_for('admin_cancel_task', task_id=task.id) }}">
                 <input type="hidden" name="next" value="{{ current_relative_url() }}">

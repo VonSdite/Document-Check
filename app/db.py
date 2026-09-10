@@ -72,6 +72,7 @@ def init_db():
             document_meta_json TEXT,
             checks_json TEXT NOT NULL,
             checks_snapshot_json TEXT,
+            retry_check_codes_json TEXT,
             provider_id INTEGER,
             provider_name TEXT,
             model_name TEXT NOT NULL,
@@ -207,6 +208,7 @@ def init_db():
     _ensure_column(db, "tasks", "document_text", "TEXT")
     _ensure_column(db, "tasks", "document_meta_json", "TEXT")
     _ensure_column(db, "tasks", "checks_snapshot_json", "TEXT")
+    _ensure_column(db, "tasks", "retry_check_codes_json", "TEXT")
     _ensure_column(db, "tasks", "provider_id", "INTEGER")
     _ensure_column(db, "tasks", "force_disable_thinking", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(db, "tasks", "reasoning_effort", "TEXT")

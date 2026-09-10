@@ -31,6 +31,7 @@ from app.tasks import (
     _format_image_check_issue_summary,
     _check_item_groups,
     _image_check_target,
+    _merge_check_results,
     _merge_video_batch_reports,
     _run_combined_multimodal_check_with_repair,
     _run_check_items_concurrently,
@@ -328,6 +329,34 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(task["progress"], 1)
         self.assertEqual(task["claim_token"], claimed[0][1])
         self.assertGreater(task["lease_expires_at"], now_text())
+
+    def test_scheduler_recovery_preserves_retry_base_results(self):
+        task_id = self._insert_scheduler_task(
+            status="running",
+            claim_token="expired-retry-claim",
+            lease_expires_at="2000-01-01 00:00:00",
+        )
+        base_results = [{"code": "success", "name": "成功项", "result": "保留结果"}]
+        get_db().execute(
+            "UPDATE tasks SET result_json = ?, retry_check_codes_json = ? WHERE id = ?",
+            (
+                json.dumps(base_results, ensure_ascii=False),
+                json.dumps(["failed"]),
+                task_id,
+            ),
+        )
+        get_db().commit()
+
+        claimed = TaskScheduler(self.app)._claim_available_tasks()
+
+        self.assertEqual([claim[0] for claim in claimed], [task_id])
+        task = get_db().execute(
+            "SELECT status, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(json.loads(task["result_json"]), base_results)
+        self.assertEqual(json.loads(task["retry_check_codes_json"]), ["failed"])
 
     def test_canceling_task_keeps_concurrency_slot_until_worker_exits(self):
         canceling_task_id = self._insert_scheduler_task(
@@ -1745,6 +1774,118 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("2 个检查项失败", updated["error"])
         self.assertEqual(len(results), 2)
         self.assertTrue(all(result["error"] == "模型服务不可用" for result in results))
+
+    def test_retry_run_only_executes_failed_item_and_replaces_result_by_code(self):
+        check_items = [
+            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
+            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
+        ]
+        task_id = self._insert_running_document_task(check_items)
+        old_results = [
+            {
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "result": "旧的失败输出",
+                "error": "模型服务不可用",
+            },
+            {
+                "code": "clarity",
+                "name": "易理解性检查",
+                "result": "原成功结果",
+                "item_classifications": {"item-1": "issue"},
+            },
+        ]
+        get_db().execute(
+            """
+            UPDATE tasks
+            SET result_json = ?, retry_check_codes_json = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(old_results, ensure_ascii=False),
+                json.dumps(["compliance"]),
+                task_id,
+            ),
+        )
+        get_db().commit()
+        calls = []
+        live_snapshots = []
+
+        def run_retry(**kwargs):
+            calls.append(kwargs["check_name"])
+            live = get_db().execute(
+                "SELECT result_json FROM task_live_results WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            live_snapshots.append(json.loads(live["result_json"]))
+            return "重试成功结果"
+
+        with patch("app.tasks.run_check", side_effect=run_retry):
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            """
+            SELECT status, result_json, retry_check_codes_json, api_key
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(calls, ["文档规范性检查"])
+        self.assertEqual(live_snapshots, [[old_results[1]]])
+        self.assertEqual(updated["status"], "completed")
+        self.assertIsNone(updated["retry_check_codes_json"])
+        self.assertIsNone(updated["api_key"])
+        self.assertEqual([result["code"] for result in results], ["compliance", "clarity"])
+        self.assertEqual(results[0]["result"], "重试成功结果")
+        self.assertNotIn("error", results[0])
+        self.assertEqual(results[1], old_results[1])
+
+    def test_retry_run_keeps_successful_result_when_failed_item_fails_again(self):
+        check_items = [
+            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
+            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
+        ]
+        task_id = self._insert_running_document_task(check_items)
+        old_results = [
+            {"code": "compliance", "name": "文档规范性检查", "result": "", "error": "首次失败"},
+            {"code": "clarity", "name": "易理解性检查", "result": "原成功结果"},
+        ]
+        get_db().execute(
+            "UPDATE tasks SET result_json = ?, retry_check_codes_json = ? WHERE id = ?",
+            (json.dumps(old_results, ensure_ascii=False), json.dumps(["compliance"]), task_id),
+        )
+        get_db().commit()
+
+        with patch("app.tasks.run_check", side_effect=LLMError("重试仍失败")) as run_check_mock:
+            TaskScheduler(self.app)._run_task(task_id)
+
+        updated = get_db().execute(
+            "SELECT status, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        results = json.loads(updated["result_json"])
+        self.assertEqual(run_check_mock.call_count, 1)
+        self.assertEqual(updated["status"], "partial")
+        self.assertIsNone(updated["retry_check_codes_json"])
+        self.assertEqual(results[0]["error"], "重试仍失败")
+        self.assertEqual(results[1], old_results[1])
+
+    def test_merge_check_results_replaces_in_original_order_and_appends_new_codes(self):
+        merged = _merge_check_results(
+            [
+                {"code": "a", "result": "旧 A"},
+                {"code": "b", "result": "保留 B"},
+            ],
+            [
+                {"code": "a", "result": "新 A"},
+                {"code": "c", "result": "新增 C"},
+            ],
+        )
+
+        self.assertEqual([item["code"] for item in merged], ["a", "b", "c"])
+        self.assertEqual(merged[0]["result"], "新 A")
 
     def test_consistency_task_uses_selected_check_snapshot(self):
         db = get_db()
