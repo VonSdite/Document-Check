@@ -217,7 +217,7 @@
               {% if task.status in ["partial", "failed"] %}
               <form method="post" action="{{ url_for('admin_retry_task', task_id=task.id) }}" data-prevent-double-submit="true">
                 <input type="hidden" name="next" value="{{ current_relative_url() }}">
-                <button class="small-button" type="submit">一键重试</button>
+                <button class="small-button" type="submit">重试</button>
               </form>
               {% endif %}
               {% if task.status in ["queued", "running"] %}

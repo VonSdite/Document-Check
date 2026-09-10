@@ -4927,7 +4927,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
                     form = soup.select_one(f'form[action="{action}"]')
                     self.assertIsNotNone(form)
-                    self.assertIn("一键重试", form.get_text(" ", strip=True))
+                    self.assertIn("重试", form.get_text(" ", strip=True))
 
     def test_user_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):
