@@ -2055,7 +2055,7 @@ body.table-column-resize-active * {
 }
 
 .task-table th:nth-child(2) {
-  width: 44%;
+  width: 41%;
 }
 
 .task-table th:nth-child(3) {
@@ -2075,11 +2075,11 @@ body.table-column-resize-active * {
 }
 
 .task-table th:nth-child(7) {
-  width: 118px;
+  width: 180px;
 }
 
 .admin-task-table th:nth-child(2) {
-  width: 38%;
+  width: 33%;
 }
 
 .admin-task-table th:nth-child(3) {
@@ -2103,7 +2103,7 @@ body.table-column-resize-active * {
 }
 
 .admin-task-table th:nth-child(8) {
-  width: 118px;
+  width: 180px;
 }
 
 .provider-table th:nth-child(1) {
@@ -2317,6 +2317,7 @@ body.table-column-resize-active * {
 
 .task-table td.right .task-actions,
 .admin-task-table td.right .task-actions {
+  gap: 4px;
   justify-content: center;
 }
 
