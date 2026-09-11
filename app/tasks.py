@@ -3581,9 +3581,10 @@ def task_file_cache_snapshot_async(app) -> tuple[dict, bool]:
             return deepcopy(state["snapshot"]), True
         if not state["building"]:
             state["building"] = True
+            generation = state["generation"]
             threading.Thread(
                 target=_build_task_file_cache_snapshot_background,
-                args=(app,),
+                args=(app, generation),
                 daemon=True,
                 name="task-file-cache-snapshot",
             ).start()
@@ -3602,6 +3603,7 @@ def _task_file_cache_state(app) -> dict:
                 "snapshot": None,
                 "cached_at": 0.0,
                 "building": False,
+                "generation": 0,
             }
             app.extensions["task_file_cache_snapshot"] = state
     return state
@@ -3612,16 +3614,18 @@ def _invalidate_task_file_cache_snapshot(app) -> None:
     with state["lock"]:
         state["snapshot"] = None
         state["cached_at"] = 0.0
+        state["generation"] += 1
 
 
-def _build_task_file_cache_snapshot_background(app) -> None:
+def _build_task_file_cache_snapshot_background(app, generation: int) -> None:
     state = _task_file_cache_state(app)
     try:
         with app.app_context():
             snapshot = _build_task_file_cache_snapshot(app)
         with state["lock"]:
-            state["snapshot"] = snapshot
-            state["cached_at"] = time.monotonic()
+            if state["generation"] == generation:
+                state["snapshot"] = snapshot
+                state["cached_at"] = time.monotonic()
     except Exception:
         app.logger.exception("后台生成任务文件缓存快照失败")
     finally:
