@@ -1,9 +1,11 @@
 import hashlib
 import json
+import os
 import re
 import threading
 import time
 import uuid
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -97,6 +99,7 @@ TASK_LEASE_SECONDS = 90
 TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
 TASK_CANCEL_POLL_INTERVAL_SECONDS = 1
 REPORT_STATS_REFRESH_INTERVAL_SECONDS = 2
+TASK_FILE_CACHE_SNAPSHOT_TTL_SECONDS = 15
 STREAM_SNAPSHOT_INTERVAL_SECONDS = 5.0
 STREAM_SNAPSHOT_MIN_CHAR_GROWTH = 256
 IMAGE_PAGE_CHECK_CODES = {
@@ -115,6 +118,9 @@ IMAGE_CHECK_TARGET_LABELS = {
     "page": "页面级检查",
     "resource": "图片资源检查",
 }
+
+
+_TASK_FILE_CACHE_STATE_INIT_LOCK = threading.Lock()
 
 
 class TaskScheduler:
@@ -3538,12 +3544,106 @@ def cleanup_expired_task_files(app) -> int:
             app.logger.exception("定期清理任务文件失败 task_id=%s", task["id"])
     if cleaned:
         db.commit()
+        _invalidate_task_file_cache_snapshot(app)
         app.logger.info("定期清理任务文件完成 cleaned=%s cutoff=%s retention_days=%s", cleaned, cutoff, retention_days)
     return cleaned
 
 
-def task_file_cache_snapshot(app) -> dict:
+def task_file_cache_snapshot(app, *, force: bool = False) -> dict:
+    """返回任务文件缓存快照，并在短时间内复用已计算结果。
+
+    该页面每分钟会刷新一次。快照计算涉及大量文件 stat 和元数据解析，
+    因此使用进程内短缓存，避免同一进程内的重复扫描。
+    """
+
+    state = _task_file_cache_state(app)
+    now = time.monotonic()
+    with state["lock"]:
+        if (
+            not force
+            and state["snapshot"] is not None
+            and now - state["cached_at"] < TASK_FILE_CACHE_SNAPSHOT_TTL_SECONDS
+        ):
+            return deepcopy(state["snapshot"])
+        snapshot = _build_task_file_cache_snapshot(app)
+        state["snapshot"] = snapshot
+        state["cached_at"] = time.monotonic()
+        return deepcopy(snapshot)
+
+
+def task_file_cache_snapshot_async(app) -> tuple[dict, bool]:
+    """非阻塞地获取快照；首次计算由后台线程完成。"""
+
+    state = _task_file_cache_state(app)
+    now = time.monotonic()
+    with state["lock"]:
+        if state["snapshot"] is not None and now - state["cached_at"] < TASK_FILE_CACHE_SNAPSHOT_TTL_SECONDS:
+            return deepcopy(state["snapshot"]), True
+        if not state["building"]:
+            state["building"] = True
+            threading.Thread(
+                target=_build_task_file_cache_snapshot_background,
+                args=(app,),
+                daemon=True,
+                name="task-file-cache-snapshot",
+            ).start()
+        return _empty_task_file_cache_snapshot(), False
+
+
+def _task_file_cache_state(app) -> dict:
+    state = app.extensions.get("task_file_cache_snapshot")
+    if state is not None:
+        return state
+    with _TASK_FILE_CACHE_STATE_INIT_LOCK:
+        state = app.extensions.get("task_file_cache_snapshot")
+        if state is None:
+            state = {
+                "lock": threading.RLock(),
+                "snapshot": None,
+                "cached_at": 0.0,
+                "building": False,
+            }
+            app.extensions["task_file_cache_snapshot"] = state
+    return state
+
+
+def _invalidate_task_file_cache_snapshot(app) -> None:
+    state = _task_file_cache_state(app)
+    with state["lock"]:
+        state["snapshot"] = None
+        state["cached_at"] = 0.0
+
+
+def _build_task_file_cache_snapshot_background(app) -> None:
+    state = _task_file_cache_state(app)
+    try:
+        with app.app_context():
+            snapshot = _build_task_file_cache_snapshot(app)
+        with state["lock"]:
+            state["snapshot"] = snapshot
+            state["cached_at"] = time.monotonic()
+    except Exception:
+        app.logger.exception("后台生成任务文件缓存快照失败")
+    finally:
+        with state["lock"]:
+            state["building"] = False
+
+
+def _empty_task_file_cache_snapshot() -> dict:
+    return {
+        "generated_at": now_text(),
+        "total_size_bytes": 0,
+        "upload_size_bytes": 0,
+        "generated_size_bytes": 0,
+        "cleanable_size_bytes": 0,
+        "cleanable_count": 0,
+        "items": [],
+    }
+
+
+def _build_task_file_cache_snapshot(app) -> dict:
     db = get_db()
+    file_index, upload_size_bytes, generated_size_bytes = _task_file_cache_file_index(app)
     tasks = db.execute(
         """
         SELECT id, task_type, original_filename, stored_filename, document_meta_json,
@@ -3555,7 +3655,7 @@ def task_file_cache_snapshot(app) -> dict:
     ).fetchall()
     items = []
     for task in tasks:
-        size_bytes, file_count = _task_artifact_usage(app, task)
+        size_bytes, file_count = _task_artifact_usage(app, task, file_index=file_index)
         if file_count <= 0:
             continue
         finished_at = task["finished_at"] or task["updated_at"] or task["created_at"]
@@ -3572,8 +3672,6 @@ def task_file_cache_snapshot(app) -> dict:
         )
     items.sort(key=lambda item: (item["finished_at"], item["size_bytes"], item["id"]))
 
-    upload_size_bytes = _directory_file_size(Path(app.config["UPLOAD_FOLDER"]))
-    generated_size_bytes = _directory_file_size(_task_image_folder(app))
     return {
         "generated_at": now_text(),
         "total_size_bytes": upload_size_bytes + generated_size_bytes,
@@ -3583,6 +3681,47 @@ def task_file_cache_snapshot(app) -> dict:
         "cleanable_count": len(items),
         "items": items,
     }
+
+
+def _task_file_cache_file_index(app) -> tuple[dict[str, int], int, int]:
+    index: dict[str, int] = {}
+    totals = []
+    for root in (Path(app.config["UPLOAD_FOLDER"]), _task_image_folder(app)):
+        total = 0
+        for path, size_bytes in _iter_regular_files(root):
+            index[_artifact_path_key(path)] = size_bytes
+            total += size_bytes
+        totals.append(total)
+    return index, totals[0], totals[1]
+
+
+def _iter_regular_files(root: Path):
+    """递归遍历常规文件，避免 Path.rglob 对大量文件反复创建对象。"""
+
+    if not root.is_dir():
+        return
+    pending = [os.fspath(root)]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = os.scandir(current)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_file(follow_symlinks=False):
+                        yield Path(entry.path), int(entry.stat(follow_symlinks=False).st_size)
+                    elif entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
+                except OSError:
+                    continue
+
+
+def _artifact_path_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
 
 
 def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
@@ -3643,6 +3782,7 @@ def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
 
     if result["cleaned_ids"]:
         db.commit()
+        _invalidate_task_file_cache_snapshot(app)
         app.logger.info(
             "手动清理任务文件完成 cleaned=%s freed_size_bytes=%s",
             len(result["cleaned_ids"]),
@@ -3728,13 +3868,20 @@ def _task_artifact_paths(app, task) -> list[Path]:
     return _dedupe_paths(paths)
 
 
-def _task_artifact_usage(app, task) -> tuple[int, int]:
+def _task_artifact_usage(app, task, *, file_index: dict[str, int] | None = None) -> tuple[int, int]:
     upload_root = Path(app.config["UPLOAD_FOLDER"])
     image_root = _task_image_folder(app)
     size_bytes = 0
     file_count = 0
     for path in _task_artifact_paths(app, task):
         if not (_path_is_relative_to(path, upload_root) or _path_is_relative_to(path, image_root)):
+            continue
+        if file_index is not None:
+            artifact_size = file_index.get(_artifact_path_key(path))
+            if artifact_size is None:
+                continue
+            size_bytes += artifact_size
+            file_count += 1
             continue
         try:
             if path.is_symlink() or not path.is_file():
@@ -3747,22 +3894,7 @@ def _task_artifact_usage(app, task) -> tuple[int, int]:
 
 
 def _directory_file_size(root: Path) -> int:
-    target = Path(root)
-    if not target.is_dir():
-        return 0
-    size_bytes = 0
-    try:
-        paths = target.rglob("*")
-        for path in paths:
-            try:
-                if path.is_symlink() or not path.is_file():
-                    continue
-                size_bytes += path.stat().st_size
-            except OSError:
-                continue
-    except OSError:
-        return size_bytes
-    return size_bytes
+    return sum(size_bytes for _, size_bytes in _iter_regular_files(Path(root)))
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:

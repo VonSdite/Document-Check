@@ -78,7 +78,12 @@ from .task_types import (
     document_groups_from_meta,
     task_type_label,
 )
-from .tasks import cleanup_task_file_cache, retry_check_codes_for_task, task_file_cache_snapshot
+from .tasks import (
+    cleanup_task_file_cache,
+    retry_check_codes_for_task,
+    task_file_cache_snapshot,
+    task_file_cache_snapshot_async,
+)
 from .videos import allowed_video_file, video_extension_of
 
 
@@ -965,7 +970,12 @@ def register_routes(app):
     @app.get(f"{admin_prefix}/settings/task-cache")
     @admin_required
     def admin_task_file_cache():
-        snapshot = task_file_cache_snapshot(current_app)
+        app = current_app._get_current_object()
+        if request.args.get("background") == "1":
+            snapshot, ready = task_file_cache_snapshot_async(app)
+        else:
+            snapshot = task_file_cache_snapshot(app)
+            ready = True
         items = []
         for item in snapshot["items"]:
             row = dict(item)
@@ -978,6 +988,7 @@ def register_routes(app):
             row.pop("document_meta_json", None)
             items.append(row)
         snapshot["items"] = items
+        snapshot["ready"] = ready
         return snapshot
 
     @app.post(f"{admin_prefix}/settings/task-cache/cleanup")

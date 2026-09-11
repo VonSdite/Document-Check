@@ -2496,6 +2496,7 @@ let taskCacheItems = [];
 let taskCacheSortField = "finished_at";
 let taskCacheSortDirection = "asc";
 let taskCacheLoading = false;
+let taskCacheRetryTimer = null;
 
 function compareTaskCacheItems(left, right, field) {
   const leftValue = field === "size_bytes" ? Number(left[field] || 0) : String(left[field] || "");
@@ -2573,6 +2574,12 @@ function renderTaskCacheItems(selectedIds = new Set()) {
   const empty = document.querySelector("[data-task-cache-empty]");
   const summary = document.querySelector("[data-task-cache-dialog-summary]");
   if (!rows || !tableWrap || !empty || !summary) {
+    return;
+  }
+  const modal = document.getElementById("task-cache-modal");
+  // 设置页加载时只更新摘要，不提前创建数千个表格行；用户打开弹窗时
+  // 再渲染明细，避免浏览器主线程被大 DOM 占满。
+  if (modal instanceof HTMLDialogElement && !modal.open) {
     return;
   }
 
@@ -2667,7 +2674,8 @@ async function loadTaskFileCache({ notifyError = false } = {}) {
   if (!taskCacheRoot || taskCacheLoading) {
     return;
   }
-  const url = taskCacheRoot.dataset.taskCacheUrl;
+  const url = new URL(taskCacheRoot.dataset.taskCacheUrl, window.location.href);
+  url.searchParams.set("background", "1");
   if (!url) {
     return;
   }
@@ -2686,6 +2694,19 @@ async function loadTaskFileCache({ notifyError = false } = {}) {
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || "缓存统计失败。");
+    }
+    if (data.ready === false) {
+      const dialogSummary = document.querySelector("[data-task-cache-dialog-summary]");
+      if (dialogSummary) {
+        dialogSummary.textContent = "正在后台统计任务文件，稍后自动刷新...";
+      }
+      if (taskCacheRetryTimer === null) {
+        taskCacheRetryTimer = window.setTimeout(() => {
+          taskCacheRetryTimer = null;
+          loadTaskFileCache({ notifyError });
+        }, 1000);
+      }
+      return;
     }
     taskCacheItems = Array.isArray(data.items) ? data.items : [];
     updateTaskCacheSummary(data);
