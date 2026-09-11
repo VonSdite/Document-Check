@@ -168,6 +168,10 @@ REPORT_REJECTION_REASON_HINTS = {
 REPORT_SUPPRESSION_REJECTION_REASONS = {"model_hallucination", "false_positive", "not_applicable"}
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
 REPORT_STATS_PREPARATION_VERSION = "3"
+# 报告统计格式升级后，历史任务可能需要重算数千条报告。请求线程只同步处理
+# 少量记录，其余记录由任务调度器在后台分批刷新，避免管理页被网关超时切断。
+REPORT_STATS_INLINE_REBUILD_LIMIT = 20
+REPORT_STATS_BACKGROUND_BATCH_SIZE = 100
 REPORT_SUPPRESSION_DESCRIPTION_REPLACEMENTS = (
     ("不统一", "不一致"),
     ("不相同", "不一致"),
@@ -2730,6 +2734,12 @@ def _task_report_stat_rows_for_where(where_clause: str, params: tuple) -> list:
     if not stale_ids:
         return rows
 
+    # 报告统计版本变更时，历史任务可能全部过期。不要在一次 HTTP 请求中
+    # 解析整张任务表；调度器会通过 refresh_stale_report_stats_batch() 持续
+    # 后台刷新，当前请求最多同步处理少量记录以保持小数据集的即时一致性。
+    if len(stale_ids) > REPORT_STATS_INLINE_REBUILD_LIMIT:
+        stale_ids = stale_ids[:REPORT_STATS_INLINE_REBUILD_LIMIT]
+
     rules_by_type = {
         task_type: _enabled_report_suppression_rules(task_type)
         for task_type in task_types
@@ -2763,6 +2773,86 @@ def _task_report_stat_rows_for_where(where_clause: str, params: tuple) -> list:
             )
     _write_task_report_stat_rows(cache_rows)
     return _select_task_report_stat_rows(where_clause, params)
+
+
+def refresh_stale_report_stats_batch(limit: int = REPORT_STATS_BACKGROUND_BATCH_SIZE) -> int:
+    """在当前应用上下文中刷新一小批过期的报告统计缓存。
+
+    该函数由任务调度器调用，不依赖请求上下文。每次只读取并解析有限条
+    ``result_json``，避免报告统计迁移期间阻塞正常的 HTTP 请求。
+    """
+
+    try:
+        batch_size = max(1, int(limit))
+    except (TypeError, ValueError):
+        batch_size = REPORT_STATS_BACKGROUND_BATCH_SIZE
+
+    task_types = {
+        DOCUMENT_TASK_TYPE,
+        CONSISTENCY_TASK_TYPE,
+        LANGUAGE_CONSISTENCY_TASK_TYPE,
+        IMAGE_TASK_TYPE,
+        VIDEO_TASK_TYPE,
+    }
+    suppression_versions = _report_suppression_versions(task_types)
+    stale_clauses = [
+        "s.task_id IS NULL",
+        "COALESCE(s.source_updated_at, '') != COALESCE(t.updated_at, '')",
+    ]
+    stale_params: list[str] = []
+    for task_type in sorted(task_types):
+        stale_clauses.append(
+            "(COALESCE(t.task_type, ?) = ? AND COALESCE(s.suppression_version, '') != ?)"
+        )
+        stale_params.extend(
+            [
+                DOCUMENT_TASK_TYPE,
+                task_type,
+                suppression_versions.get(task_type, _empty_report_suppression_version()),
+            ]
+        )
+
+    rows = get_db().execute(
+        f"""
+        SELECT t.id, t.task_type, t.updated_at, t.result_json
+        FROM tasks t
+        LEFT JOIN task_report_stats s ON s.task_id = t.id
+        WHERE t.result_json IS NOT NULL
+          AND t.result_json != ''
+          AND ({' OR '.join(stale_clauses)})
+        ORDER BY t.id ASC
+        LIMIT ?
+        """,
+        (*stale_params, batch_size),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    rules_by_type = {
+        task_type: _enabled_report_suppression_rules(task_type)
+        for task_type in {str(row["task_type"] or DOCUMENT_TASK_TYPE) for row in rows}
+    }
+    cache_rows = []
+    for row in rows:
+        task_type = str(row["task_type"] or DOCUMENT_TASK_TYPE)
+        prepared = _prepare_task_results(
+            _parse_result_json(row["result_json"]),
+            task_type=task_type,
+            task_id=row["id"],
+            suppression_rules=rules_by_type.get(task_type, {}),
+        )
+        item_totals = _report_item_totals(prepared)
+        cache_rows.append(
+            (
+                row["id"],
+                row["updated_at"] or "",
+                suppression_versions.get(task_type, _empty_report_suppression_version()),
+                *[int(item_totals.get(key) or 0) for key in REPORT_COUNT_KEYS],
+                now_text(),
+            )
+        )
+    _write_task_report_stat_rows(cache_rows)
+    return len(cache_rows)
 
 
 def _select_task_report_stat_rows(where_clause: str, params: tuple) -> list:

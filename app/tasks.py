@@ -96,6 +96,7 @@ TASK_FILE_CLEANUP_BATCH_SIZE = 100
 TASK_LEASE_SECONDS = 90
 TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
 TASK_CANCEL_POLL_INTERVAL_SECONDS = 1
+REPORT_STATS_REFRESH_INTERVAL_SECONDS = 2
 STREAM_SNAPSHOT_INTERVAL_SECONDS = 5.0
 STREAM_SNAPSHOT_MIN_CHAR_GROWTH = 256
 IMAGE_PAGE_CHECK_CODES = {
@@ -124,6 +125,7 @@ class TaskScheduler:
         self._cancel_events_lock = threading.Lock()
         self._launcher = threading.Thread(target=self._loop, daemon=True, name="task-launcher")
         self._last_task_file_cleanup = 0.0
+        self._last_report_stats_refresh = 0.0
 
     def start(self):
         self._launcher.start()
@@ -159,10 +161,28 @@ class TaskScheduler:
             try:
                 with self.app.app_context():
                     self._cleanup_task_files_if_due()
+                    self._refresh_report_stats_if_due()
                     self._launch_available_tasks()
             except Exception:
                 self.app.logger.exception("任务调度循环异常")
             self._stop_event.wait(2)
+
+    def _refresh_report_stats_if_due(self):
+        now = time.monotonic()
+        if now - self._last_report_stats_refresh < REPORT_STATS_REFRESH_INTERVAL_SECONDS:
+            return
+        self._last_report_stats_refresh = now
+        try:
+            # 延迟导入可避免 routes -> tasks 的模块循环依赖；调度器启动时
+            # create_app 已完成路由注册，因此此处导入是安全的。
+            from .routes import refresh_stale_report_stats_batch
+
+            refreshed = refresh_stale_report_stats_batch()
+            if refreshed:
+                self.app.logger.info("后台刷新报告统计缓存 count=%s", refreshed)
+        except Exception:
+            # 统计缓存刷新失败不应阻塞任务领取，下一轮继续重试。
+            self.app.logger.exception("后台刷新报告统计缓存失败")
 
     def _cleanup_task_files_if_due(self):
         now = time.monotonic()
