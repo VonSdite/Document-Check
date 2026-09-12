@@ -1017,7 +1017,7 @@ def register_routes(app):
             action = request.form.get("action", "concurrency")
             if action == "concurrency":
                 try:
-                    global_concurrency = max(1, int(request.form.get("global_concurrency", "3")))
+                    global_concurrency = int(request.form.get("global_concurrency", "3"))
                     user_concurrency = max(1, int(request.form.get("user_concurrency", "1")))
                     check_item_concurrency = max(
                         1,
@@ -1036,6 +1036,10 @@ def register_routes(app):
                     )
                 except ValueError:
                     flash("任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。", "error")
+                    return redirect(url_for("admin_settings"))
+                max_task_processes = _max_task_processes()
+                if not 1 <= global_concurrency <= max_task_processes:
+                    flash(f"系统同时执行任务数必须在 1 到 {max_task_processes} 之间。", "error")
                     return redirect(url_for("admin_settings"))
                 set_setting("global_concurrency", global_concurrency)
                 set_setting("user_concurrency", user_concurrency)
@@ -1312,7 +1316,11 @@ def register_routes(app):
                     "default_check_codes": default_check_item_codes(VIDEO_TASK_TYPE),
                 },
             ],
-            global_concurrency=get_setting("global_concurrency", 3),
+            global_concurrency=min(
+                _max_task_processes(),
+                max(1, _int_setting("global_concurrency", 3)),
+            ),
+            max_task_processes=_max_task_processes(),
             user_concurrency=get_setting("user_concurrency", 1),
             check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
             image_page_check_max_pages=get_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES),
@@ -1413,6 +1421,13 @@ def _max_upload_mb() -> int:
         return max(1, int(current_app.config.get("MAX_UPLOAD_MB") or 1))
     except (TypeError, ValueError):
         return 1
+
+
+def _max_task_processes() -> int:
+    try:
+        return max(1, int(current_app.config.get("MAX_TASK_PROCESSES") or 4))
+    except (TypeError, ValueError):
+        return 4
 
 
 def _request_entity_too_large_redirect() -> str:
@@ -3791,10 +3806,6 @@ def _cancel_task(task):
             ("正在取消任务，请等待当前请求退出。", now, task["id"]),
         )
     db.commit()
-    scheduler = current_app.extensions.get("task_scheduler")
-    request_cancel = getattr(scheduler, "request_cancel", None)
-    if callable(request_cancel):
-        request_cancel(task["id"])
 
 
 def _retry_task(task) -> bool:

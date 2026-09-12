@@ -14,6 +14,7 @@ from app.db import get_db, init_db, now_text, set_setting
 from app.llm import LLMError
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.hyperlinks import HYPERLINK_CHECK_CODE
+from app.task_supervisor import TaskSupervisor
 from app.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -22,7 +23,7 @@ from app.task_types import (
     VIDEO_TASK_TYPE,
 )
 from app.tasks import (
-    TaskScheduler,
+    TaskRunner,
     cleanup_task_file_cache,
     cleanup_expired_task_files,
     task_file_cache_snapshot,
@@ -167,7 +168,7 @@ class TaskExecutionTest(unittest.TestCase):
         def claim_task():
             with self.app.app_context():
                 barrier.wait()
-                return TaskScheduler(self.app)._claim_available_tasks()
+                return TaskSupervisor(self.app)._claim_available_tasks()
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             claims = list(executor.map(lambda _: claim_task(), range(2)))
@@ -192,7 +193,7 @@ class TaskExecutionTest(unittest.TestCase):
         def claim_tasks():
             with self.app.app_context():
                 barrier.wait()
-                return TaskScheduler(self.app)._claim_available_tasks()
+                return TaskSupervisor(self.app)._claim_available_tasks()
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             claims = list(executor.map(lambda _: claim_tasks(), range(2)))
@@ -217,7 +218,7 @@ class TaskExecutionTest(unittest.TestCase):
         db = get_db()
         db.set_trace_callback(statements.append)
         try:
-            claimed = TaskScheduler(self.app)._claim_available_tasks()
+            claimed = TaskSupervisor(self.app)._claim_available_tasks()
         finally:
             db.set_trace_callback(None)
 
@@ -251,7 +252,7 @@ class TaskExecutionTest(unittest.TestCase):
         set_setting("global_concurrency", 3)
         set_setting("user_concurrency", 1)
 
-        claimed = TaskScheduler(self.app)._claim_available_tasks()
+        claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual(
             [task_id for task_id, _claim in claimed],
@@ -277,7 +278,7 @@ class TaskExecutionTest(unittest.TestCase):
         set_setting("global_concurrency", 2)
         set_setting("user_concurrency", 1)
 
-        claimed = TaskScheduler(self.app)._claim_available_tasks()
+        claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual(
             [task_id for task_id, _claim in claimed],
@@ -299,7 +300,7 @@ class TaskExecutionTest(unittest.TestCase):
             lease_expires_at="2999-01-01 00:00:00",
         )
 
-        claimed = TaskScheduler(self.app)._claim_available_tasks()
+        claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual(claimed, [])
         task = get_db().execute(
@@ -317,7 +318,7 @@ class TaskExecutionTest(unittest.TestCase):
             lease_expires_at="2000-01-01 00:00:00",
         )
 
-        claimed = TaskScheduler(self.app)._claim_available_tasks()
+        claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual([claim[0] for claim in claimed], [task_id])
         self.assertNotEqual(claimed[0][1], "expired-claim")
@@ -347,7 +348,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
         get_db().commit()
 
-        claimed = TaskScheduler(self.app)._claim_available_tasks()
+        claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual([claim[0] for claim in claimed], [task_id])
         task = get_db().execute(
@@ -368,7 +369,7 @@ class TaskExecutionTest(unittest.TestCase):
         queued_task_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
         set_setting("global_concurrency", 1)
 
-        claimed = TaskScheduler(self.app)._claim_available_tasks()
+        claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual(claimed, [])
         tasks = {
@@ -394,7 +395,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
         get_db().commit()
 
-        claimed = TaskScheduler(self.app)._claim_available_tasks()
+        claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual(claimed, [])
         task = get_db().execute(
@@ -419,7 +420,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         with patch("app.tasks.run_check") as mocked_run_check:
-            TaskScheduler(self.app)._run_task(task_id, "stale-claim")
+            TaskRunner(self.app).run(task_id, "stale-claim")
 
         mocked_run_check.assert_not_called()
         task = get_db().execute(
@@ -444,9 +445,9 @@ class TaskExecutionTest(unittest.TestCase):
         )
         get_db().commit()
 
-        scheduler = TaskScheduler(self.app)
-        scheduler._run_task(failed_task_id)
-        scheduler._run_task(canceled_task_id)
+        runner = TaskRunner(self.app)
+        runner.run(failed_task_id)
+        runner.run(canceled_task_id)
 
         tasks = {
             row["id"]: row
@@ -479,7 +480,7 @@ class TaskExecutionTest(unittest.TestCase):
             (task_id,),
         )
         db.commit()
-        scheduler = TaskScheduler(self.app)
+        runner = TaskRunner(self.app)
         request_started = Event()
 
         def wait_for_cancel(**kwargs):
@@ -491,7 +492,7 @@ class TaskExecutionTest(unittest.TestCase):
 
         with patch("app.tasks.run_check", side_effect=wait_for_cancel) as mocked_run_check:
             worker = Thread(
-                target=scheduler._run_task,
+                target=runner.run,
                 args=(task_id, "worker-claim"),
                 daemon=True,
             )
@@ -506,7 +507,6 @@ class TaskExecutionTest(unittest.TestCase):
                 (task_id,),
             )
             db.commit()
-            self.assertTrue(scheduler.request_cancel(task_id))
             worker.join(timeout=5)
 
         self.assertFalse(worker.is_alive())
@@ -644,7 +644,7 @@ class TaskExecutionTest(unittest.TestCase):
         calls = []
 
         with patch("app.tasks.run_check", side_effect=lambda **kwargs: calls.append(kwargs) or "完成"):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         task = db.execute(
             "SELECT status, api_key FROM tasks WHERE id = ?",
@@ -1410,7 +1410,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "完成"
 
         with patch("app.tasks.run_check", side_effect=fake_run_check):
-            TaskScheduler(self.app)._run_task(task_id, "test-claim")
+            TaskRunner(self.app).run(task_id, "test-claim")
 
         updated = db.execute(
             "SELECT status, result_json, api_key, claim_token, lease_expires_at FROM tasks WHERE id = ?",
@@ -1441,7 +1441,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "完成"
 
         with patch("app.tasks.run_check", side_effect=fake_run_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
@@ -1474,7 +1474,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, document_meta_json, result_json FROM tasks WHERE id = ?",
@@ -1504,7 +1504,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         with patch("app.tasks.run_check") as run_check_mock:
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, error, document_text FROM tasks WHERE id = ?",
@@ -1569,7 +1569,7 @@ class TaskExecutionTest(unittest.TestCase):
             ),
             patch("app.tasks.run_multimodal_document_check", return_value="未发现问题"),
         ):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
@@ -1639,7 +1639,7 @@ class TaskExecutionTest(unittest.TestCase):
             patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames),
             patch("app.tasks.run_multimodal_document_check", return_value="未发现问题"),
         ):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
@@ -1703,7 +1703,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         with patch("app.tasks.run_check", return_value="完成"):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
@@ -1732,7 +1732,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "易理解性检查完成"
 
         with patch("app.tasks.run_check", side_effect=fake_run_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
@@ -1761,7 +1761,7 @@ class TaskExecutionTest(unittest.TestCase):
         task_id = self._insert_running_document_task(check_items)
 
         with patch("app.tasks.run_check", side_effect=LLMError("模型服务不可用")):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
@@ -1821,7 +1821,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "重试成功结果"
 
         with patch("app.tasks.run_check", side_effect=run_retry):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             """
@@ -1859,7 +1859,7 @@ class TaskExecutionTest(unittest.TestCase):
         get_db().commit()
 
         with patch("app.tasks.run_check", side_effect=LLMError("重试仍失败")) as run_check_mock:
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = get_db().execute(
             "SELECT status, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
@@ -1930,7 +1930,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "发现参数不一致"
 
         with patch("app.tasks.run_check", side_effect=fake_run_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
         self.assertEqual(updated["status"], "completed")
@@ -1976,7 +1976,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "完成"
 
         with patch("app.tasks.run_check", side_effect=fake_run_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         self.assertEqual(calls[0]["check_name"], "多文档对照检查")
         self.assertEqual(calls[0]["prompt"], "默认多文档对照提示词")
@@ -2054,7 +2054,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "图文最终结果\n发现问题：图片中中文说明与英文文档语种不一致。\n需人工确认：截图底部文字较小。"
 
         with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
         results = json.loads(updated["result_json"])
@@ -2199,7 +2199,7 @@ class TaskExecutionTest(unittest.TestCase):
             )
 
         with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
         results = json.loads(updated["result_json"])
@@ -2531,7 +2531,7 @@ class TaskExecutionTest(unittest.TestCase):
 - 未发现其他安装顺序问题。"""
 
         with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
-            TaskScheduler(self.app)._run_task(task_id)
+            TaskRunner(self.app).run(task_id)
 
         updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
         results = json.loads(updated["result_json"])

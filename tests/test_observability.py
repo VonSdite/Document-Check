@@ -14,11 +14,11 @@ from app.observability import (
 )
 
 
-class _FakeScheduler:
+class _FakeSupervisorProbe:
     def __init__(self, alive: bool = True):
         self.alive = alive
 
-    def is_alive(self) -> bool:
+    def __call__(self) -> bool:
         return self.alive
 
 
@@ -50,7 +50,8 @@ class ObservabilityTest(unittest.TestCase):
         )
         with self.app.app_context():
             init_db()
-        self.app.extensions["task_scheduler"] = _FakeScheduler()
+        self.supervisor_probe = _FakeSupervisorProbe()
+        self.app.extensions["task_supervisor_probe"] = self.supervisor_probe
         configure_access_logging(self.app)
         register_observability(self.app)
 
@@ -117,7 +118,7 @@ class ObservabilityTest(unittest.TestCase):
         self.assertEqual(self._access_log_text(), "")
 
     def test_readiness_fails_when_scheduler_is_not_alive(self):
-        self.app.extensions["task_scheduler"].alive = False
+        self.supervisor_probe.alive = False
 
         with self.assertLogs(self.app.logger.name, level="WARNING") as captured:
             response = self.client.get("/health/ready")

@@ -4,7 +4,6 @@ import os
 import re
 import threading
 import time
-import uuid
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -93,12 +92,10 @@ MULTIMODAL_CHECK_GROUP_SIZE = 3
 IMAGE_CONTEXT_NEIGHBOR_PAGES = 1
 IMAGE_DOCUMENT_CONTEXT_MAX_CHARS = 20000
 DEFAULT_TASK_FILE_RETENTION_DAYS = 0
-TASK_FILE_CLEANUP_INTERVAL_SECONDS = 3600
 TASK_FILE_CLEANUP_BATCH_SIZE = 100
 TASK_LEASE_SECONDS = 90
 TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
 TASK_CANCEL_POLL_INTERVAL_SECONDS = 1
-REPORT_STATS_REFRESH_INTERVAL_SECONDS = 2
 TASK_FILE_CACHE_SNAPSHOT_TTL_SECONDS = 15
 STREAM_SNAPSHOT_INTERVAL_SECONDS = 5.0
 STREAM_SNAPSHOT_MIN_CHAR_GROWTH = 256
@@ -123,233 +120,11 @@ IMAGE_CHECK_TARGET_LABELS = {
 _TASK_FILE_CACHE_STATE_INIT_LOCK = threading.Lock()
 
 
-class TaskScheduler:
+class TaskRunner:
     def __init__(self, app):
         self.app = app
-        self._stop_event = threading.Event()
-        self._cancel_events: dict[int, threading.Event] = {}
-        self._cancel_events_lock = threading.Lock()
-        self._launcher = threading.Thread(target=self._loop, daemon=True, name="task-launcher")
-        self._last_task_file_cleanup = 0.0
-        self._last_report_stats_refresh = 0.0
 
-    def start(self):
-        self._launcher.start()
-
-    def stop(self):
-        self._stop_event.set()
-        self._launcher.join(timeout=3)
-
-    def is_alive(self) -> bool:
-        return self._launcher.is_alive() and not self._stop_event.is_set()
-
-    def request_cancel(self, task_id: int) -> bool:
-        with self._cancel_events_lock:
-            cancel_event = self._cancel_events.get(task_id)
-        if cancel_event is None:
-            return False
-        cancel_event.set()
-        return True
-
-    def _register_cancel_event(self, task_id: int) -> threading.Event:
-        cancel_event = threading.Event()
-        with self._cancel_events_lock:
-            self._cancel_events[task_id] = cancel_event
-        return cancel_event
-
-    def _unregister_cancel_event(self, task_id: int, cancel_event: threading.Event):
-        with self._cancel_events_lock:
-            if self._cancel_events.get(task_id) is cancel_event:
-                self._cancel_events.pop(task_id, None)
-
-    def _loop(self):
-        while not self._stop_event.is_set():
-            try:
-                with self.app.app_context():
-                    self._cleanup_task_files_if_due()
-                    self._refresh_report_stats_if_due()
-                    self._launch_available_tasks()
-            except Exception:
-                self.app.logger.exception("任务调度循环异常")
-            self._stop_event.wait(2)
-
-    def _refresh_report_stats_if_due(self):
-        now = time.monotonic()
-        if now - self._last_report_stats_refresh < REPORT_STATS_REFRESH_INTERVAL_SECONDS:
-            return
-        self._last_report_stats_refresh = now
-        try:
-            # 延迟导入可避免 routes -> tasks 的模块循环依赖；调度器启动时
-            # create_app 已完成路由注册，因此此处导入是安全的。
-            from .routes import refresh_stale_report_stats_batch
-
-            refreshed = refresh_stale_report_stats_batch()
-            if refreshed:
-                self.app.logger.info("后台刷新报告统计缓存 count=%s", refreshed)
-        except Exception:
-            # 统计缓存刷新失败不应阻塞任务领取，下一轮继续重试。
-            self.app.logger.exception("后台刷新报告统计缓存失败")
-
-    def _cleanup_task_files_if_due(self):
-        now = time.monotonic()
-        if now - self._last_task_file_cleanup < TASK_FILE_CLEANUP_INTERVAL_SECONDS:
-            return
-        self._last_task_file_cleanup = now
-        cleanup_expired_task_files(self.app)
-
-    def _launch_available_tasks(self):
-        claimed_tasks = self._claim_available_tasks()
-        for task_id, claim_token in claimed_tasks:
-            worker = threading.Thread(
-                target=self._run_task,
-                args=(task_id, claim_token),
-                daemon=True,
-                name=f"task-worker-{task_id}",
-            )
-            worker.start()
-
-    def _claim_available_tasks(self) -> list[tuple[int, str]]:
-        db = get_db()
-        claimed_tasks: list[tuple[int, str]] = []
-        recovered_count = 0
-        canceled_count = 0
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            now = now_text()
-            canceled = db.execute(
-                """
-                UPDATE tasks
-                SET status = 'canceled',
-                    progress = 0,
-                    api_key = NULL,
-                    retry_check_codes_json = NULL,
-                    claim_token = NULL,
-                    lease_expires_at = NULL,
-                    updated_at = ?,
-                    finished_at = ?
-                WHERE (
-                        status = 'canceling'
-                        OR (status = 'running' AND cancel_requested = 1)
-                      )
-                  AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
-                """,
-                (now, now, now),
-            )
-            canceled_count = max(0, canceled.rowcount)
-            recovered = db.execute(
-                """
-                UPDATE tasks
-                SET status = 'queued',
-                    progress = 0,
-                    cancel_requested = 0,
-                    claim_token = NULL,
-                    lease_expires_at = NULL,
-                    result_json = CASE
-                        WHEN retry_check_codes_json IS NULL THEN NULL
-                        ELSE result_json
-                    END,
-                    summary = NULL,
-                    error = NULL,
-                    updated_at = ?,
-                    started_at = NULL,
-                    finished_at = NULL
-                WHERE status = 'running'
-                  AND cancel_requested = 0
-                  AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
-                """,
-                (now, now),
-            )
-            recovered_count = max(0, recovered.rowcount)
-            db.execute(
-                """
-                DELETE FROM task_live_results
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM tasks
-                    WHERE tasks.id = task_live_results.task_id
-                      AND tasks.status IN ('running', 'canceling')
-                )
-                """
-            )
-
-            global_limit = max(1, _int_setting("global_concurrency", 3))
-            user_limit = max(1, _int_setting("user_concurrency", 1))
-            running_total = db.execute(
-                "SELECT COUNT(*) AS total FROM tasks WHERE status IN ('running', 'canceling')"
-            ).fetchone()["total"]
-            slots = global_limit - running_total
-            if slots > 0:
-                queued = db.execute(
-                    """
-                    WITH running_by_owner AS (
-                        SELECT owner_subject, COUNT(*) AS running_count
-                        FROM tasks
-                        WHERE status IN ('running', 'canceling')
-                        GROUP BY owner_subject
-                    ),
-                    ranked_queued AS (
-                        SELECT queued.id,
-                               queued.owner_subject,
-                               COALESCE(running_by_owner.running_count, 0) AS running_for_user,
-                               ROW_NUMBER() OVER (
-                                   PARTITION BY queued.owner_subject
-                                   ORDER BY queued.created_at ASC, queued.id ASC
-                               ) AS owner_queue_position,
-                               queued.created_at
-                        FROM tasks AS queued
-                        LEFT JOIN running_by_owner
-                          ON running_by_owner.owner_subject = queued.owner_subject
-                        WHERE queued.status = 'queued'
-                    )
-                    SELECT id, owner_subject, running_for_user
-                    FROM ranked_queued
-                    WHERE owner_queue_position <= ? - running_for_user
-                    ORDER BY created_at ASC, id ASC
-                    LIMIT ?
-                    """,
-                    (user_limit, slots),
-                ).fetchall()
-                running_by_owner: dict[str, int] = {}
-                for task in queued:
-                    if len(claimed_tasks) >= slots:
-                        break
-                    owner_subject = str(task["owner_subject"])
-                    running_for_user = running_by_owner.setdefault(
-                        owner_subject,
-                        int(task["running_for_user"] or 0),
-                    )
-                    if running_for_user >= user_limit:
-                        continue
-
-                    claim_token = uuid.uuid4().hex
-                    claimed = db.execute(
-                        """
-                        UPDATE tasks
-                        SET status = 'running',
-                            progress = 1,
-                            claim_token = ?,
-                            lease_expires_at = ?,
-                            started_at = ?,
-                            updated_at = ?
-                        WHERE id = ? AND status = 'queued'
-                        """,
-                        (claim_token, _task_lease_deadline_text(), now, now, task["id"]),
-                    )
-                    if claimed.rowcount == 1:
-                        claimed_tasks.append((task["id"], claim_token))
-                        running_by_owner[owner_subject] = running_for_user + 1
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-
-        if recovered_count:
-            self.app.logger.warning("已回收租约过期的运行任务 count=%s", recovered_count)
-        if canceled_count:
-            self.app.logger.warning("已结束租约过期的取消中任务 count=%s", canceled_count)
-        return claimed_tasks
-
-    def _run_task(self, task_id: int, claim_token: str | None = None):
+    def run(self, task_id: int, claim_token: str | None = None):
         with self.app.app_context():
             db = get_db()
             task = db.execute(
@@ -364,7 +139,7 @@ class TaskScheduler:
             if task is None:
                 return
 
-            cancel_event = self._register_cancel_event(task_id)
+            cancel_event = threading.Event()
             if task["cancel_requested"] or task["status"] == "canceling":
                 cancel_event.set()
             lease_stop, lease_thread = _start_task_lease_heartbeat(
@@ -569,7 +344,6 @@ class TaskScheduler:
                     lease_stop.set()
                 if lease_thread is not None:
                     lease_thread.join(timeout=2)
-                self._unregister_cancel_event(task_id, cancel_event)
 
 
 def _prepare_task_inputs(app, db, task, task_type: str, claim_token: str | None) -> tuple[str, str | None]:

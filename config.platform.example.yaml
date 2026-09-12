@@ -18,6 +18,13 @@ server:
   real_ip_header: X-Real-IP
   # 如果 Nginx 同时注入 X-Forwarded-Proto/Host/Prefix 等标准代理头，可开启。
   proxy_fix: false
+  max_upload_mb: 1024
+  # Gunicorn 使用 2 个 Web 进程，每个进程使用 16 个原生请求线程。
+  web_workers: 2
+  web_threads: 16
+worker:
+  # 管理页面中的“系统同时执行任务数”不能超过该机器级上限。
+  max_task_processes: 4
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。

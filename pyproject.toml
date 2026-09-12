@@ -6,10 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "beautifulsoup4==4.12.3",
+  "concurrent-log-handler==0.9.29",
   "flask==3.0.3",
-  "gevent==26.4.0",
+  "gunicorn==26.2.0",
   "mistune==3.0.2",
   "openpyxl==3.1.5",
+  "portalocker==4.3.0",
   "pymupdf>=1.27.2.3",
   "pypdf[image]==4.3.1",
   "python-docx==1.1.2",

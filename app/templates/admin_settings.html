@@ -73,7 +73,7 @@
     <input type="hidden" name="action" value="concurrency">
     <label>
       系统同时执行任务数
-      <input name="global_concurrency" type="number" min="1" step="1" value="{{ global_concurrency }}" required>
+      <input name="global_concurrency" type="number" min="1" max="{{ max_task_processes }}" step="1" value="{{ global_concurrency }}" required>
     </label>
     <label>
       单个用户同时执行任务数

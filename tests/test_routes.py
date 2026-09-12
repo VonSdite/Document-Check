@@ -1145,6 +1145,31 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(get_setting("issue_output_limit"), 30)
             self.assertEqual(get_setting("task_file_retention_days"), 14)
 
+    def test_admin_settings_limits_global_concurrency_to_task_process_capacity(self):
+        response = self.client.get("/admin/settings")
+
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        field = _required_tag(soup.select_one('input[name="global_concurrency"]'))
+        self.assertEqual(field.get("max"), "4")
+
+        rejected = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "concurrency",
+                "global_concurrency": "5",
+                "user_concurrency": "1",
+                "check_item_concurrency": "1",
+                "image_page_check_max_pages": "36",
+                "issue_output_limit": "30",
+                "task_file_retention_days": "0",
+            },
+        )
+
+        self.assertEqual(rejected.status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(get_setting("global_concurrency"), 3)
+
     def test_admin_settings_places_task_retention_details_in_help_tip(self):
         response = self.client.get("/admin/settings")
 
@@ -4703,9 +4728,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 (oldest_task_id,),
             )
             get_db().commit()
-        scheduler = Mock()
-        self.app.extensions["task_scheduler"] = scheduler
-
         response = self.client.get(
             "/?page=2",
             environ_overrides={"SCRIPT_NAME": "/infoCheck"},
@@ -4743,8 +4765,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(canceled["claim_token"], "worker-claim")
         self.assertEqual(canceled["lease_expires_at"], "2999-01-01 00:00:00")
         self.assertIsNone(canceled["finished_at"])
-        scheduler.request_cancel.assert_called_once_with(oldest_task_id)
-
         status_response = self.client.get(
             f"/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={oldest_task_id}"
         )

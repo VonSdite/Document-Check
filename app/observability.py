@@ -6,9 +6,9 @@ import re
 import sys
 import time
 import uuid
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from concurrent_log_handler import ConcurrentRotatingFileHandler
 from flask import current_app, g, jsonify, request
 
 from .db import get_db
@@ -31,7 +31,7 @@ def configure_access_logging(app) -> None:
     access_logger.setLevel(logging.INFO)
 
     if not _has_file_handler(access_logger, access_log_file):
-        file_handler = RotatingFileHandler(
+        file_handler = ConcurrentRotatingFileHandler(
             access_log_file,
             maxBytes=ACCESS_LOG_MAX_BYTES,
             backupCount=ACCESS_LOG_BACKUP_COUNT,
@@ -172,11 +172,13 @@ def _directory_status(value) -> str:
 
 
 def _scheduler_status(app) -> str:
-    scheduler = app.extensions.get("task_scheduler")
-    if scheduler is None:
-        return "error"
+    probe = app.extensions.get("task_supervisor_probe")
+    if probe is None:
+        from .task_supervisor import supervisor_is_ready
+
+        probe = lambda: supervisor_is_ready(app)
     try:
-        return "ok" if scheduler.is_alive() else "error"
+        return "ok" if probe() else "error"
     except Exception:
         return "error"
 
@@ -224,7 +226,7 @@ def _log_access_event(event: str, *, level: int = logging.INFO, **fields) -> Non
 
 def _has_file_handler(target_logger, log_file: Path) -> bool:
     return any(
-        isinstance(handler, RotatingFileHandler)
+        isinstance(handler, ConcurrentRotatingFileHandler)
         and Path(handler.baseFilename) == log_file
         for handler in target_logger.handlers
     )
@@ -233,9 +235,7 @@ def _has_file_handler(target_logger, log_file: Path) -> bool:
 def _ensure_console_handler(target_logger) -> None:
     formatter = logging.Formatter("%(asctime)s %(levelname)s [access] %(message)s")
     for handler in target_logger.handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(
-            handler, RotatingFileHandler
-        ):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
             handler.setLevel(logging.INFO)
             handler.setFormatter(formatter)
             return

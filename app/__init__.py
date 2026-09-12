@@ -1,27 +1,47 @@
 import logging
-import os
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from concurrent_log_handler import ConcurrentRotatingFileHandler
 from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import load_local_config
-from .db import init_db, seed_defaults
+from .db import close_db, init_db, seed_defaults
 from .formatting import render_markdown
 from .observability import (
     configure_access_logging,
-    log_startup_self_check,
     register_observability,
 )
 from .routes import register_routes
-from .tasks import TaskScheduler
 
 
 def create_app():
+    app = _create_base_app()
+    configure_access_logging(app)
+
+    with app.app_context():
+        init_db()
+        seed_defaults()
+
+    register_observability(app)
+    register_routes(app)
+    app.add_template_filter(render_markdown, "markdown")
+    return app
+
+
+def create_task_app():
+    app = _create_base_app()
+    # Supervisor contexts are long-lived and do not run init_db(), which is
+    # where the web app normally registers this teardown handler.
+    app.teardown_appcontext(close_db)
+    return app
+
+
+def _create_base_app():
     root_dir = _runtime_root_dir()
     local_config = load_local_config(root_dir)
     server_config = local_config["server"]
+    worker_config = local_config["worker"]
 
     app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True)
     if server_config["proxy_fix"]:
@@ -50,27 +70,15 @@ def create_app():
         ACCESS_LOG_FILE=str(root_dir / "instance" / "logs" / "access.log"),
         MAX_UPLOAD_MB=server_config["max_upload_mb"],
         MAX_CONTENT_LENGTH=server_config["max_upload_mb"] * 1024 * 1024,
+        WEB_WORKERS=server_config["web_workers"],
+        WEB_THREADS=server_config["web_threads"],
+        MAX_TASK_PROCESSES=worker_config["max_task_processes"],
     )
 
     Path(app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
     Path(app.config["IMAGE_FOLDER"]).mkdir(parents=True, exist_ok=True)
     Path(app.instance_path).mkdir(parents=True, exist_ok=True)
     _configure_logging(app)
-
-    with app.app_context():
-        init_db()
-        seed_defaults()
-
-    register_observability(app)
-    register_routes(app)
-    app.add_template_filter(render_markdown, "markdown")
-
-    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-        scheduler = TaskScheduler(app)
-        scheduler.start()
-        app.extensions["task_scheduler"] = scheduler
-
-    log_startup_self_check(app)
 
     return app
 
@@ -89,7 +97,7 @@ def _configure_logging(app):
         target_logger.setLevel(logging.INFO)
         if not _has_log_file_handler(target_logger, log_file):
             if file_handler is None:
-                file_handler = RotatingFileHandler(
+                file_handler = ConcurrentRotatingFileHandler(
                     log_file,
                     maxBytes=5 * 1024 * 1024,
                     backupCount=2,
@@ -106,12 +114,11 @@ def _configure_logging(app):
         target_logger.propagate = False
 
     app.logger.info("本地日志已启用：%s", log_file)
-    configure_access_logging(app)
 
 
 def _has_log_file_handler(target_logger, log_file: Path) -> bool:
     return any(
-        isinstance(handler, RotatingFileHandler)
+        isinstance(handler, ConcurrentRotatingFileHandler)
         and Path(handler.baseFilename) == log_file
         for handler in target_logger.handlers
     )
@@ -120,9 +127,7 @@ def _has_log_file_handler(target_logger, log_file: Path) -> bool:
 def _ensure_console_handler(target_logger):
     formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
     for handler in target_logger.handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(
-            handler, RotatingFileHandler
-        ):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
             handler.setLevel(logging.INFO)
             handler.setFormatter(formatter)
             return

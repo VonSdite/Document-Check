@@ -14,6 +14,9 @@ DEFAULT_URL_PREFIX = ""
 DEFAULT_REAL_IP_HEADER = ""
 DEFAULT_PROXY_FIX = False
 DEFAULT_MAX_UPLOAD_MB = 1024
+DEFAULT_WEB_WORKERS = 2
+DEFAULT_WEB_THREADS = 16
+DEFAULT_MAX_TASK_PROCESSES = 4
 DEFAULT_AUTH_MODE = "ip"
 AUTH_MODES = {"ip", "trusted_header", "saml"}
 DEFAULT_PROXY_MODE = "direct"
@@ -72,6 +75,11 @@ def _default_config() -> dict:
             "real_ip_header": DEFAULT_REAL_IP_HEADER,
             "proxy_fix": DEFAULT_PROXY_FIX,
             "max_upload_mb": DEFAULT_MAX_UPLOAD_MB,
+            "web_workers": DEFAULT_WEB_WORKERS,
+            "web_threads": DEFAULT_WEB_THREADS,
+        },
+        "worker": {
+            "max_task_processes": DEFAULT_MAX_TASK_PROCESSES,
         },
         "network": {
             "proxy_mode": DEFAULT_PROXY_MODE,
@@ -134,6 +142,22 @@ def _normalize_config(config: dict) -> dict:
     server["max_upload_mb"] = _normalize_positive_int(
         server.get("max_upload_mb", DEFAULT_MAX_UPLOAD_MB),
         DEFAULT_MAX_UPLOAD_MB,
+    )
+    server["web_workers"] = _normalize_positive_int(
+        server.get("web_workers", DEFAULT_WEB_WORKERS),
+        DEFAULT_WEB_WORKERS,
+    )
+    server["web_threads"] = _normalize_positive_int(
+        server.get("web_threads", DEFAULT_WEB_THREADS),
+        DEFAULT_WEB_THREADS,
+    )
+    worker = config.get("worker")
+    if not isinstance(worker, dict):
+        worker = {}
+    config["worker"] = worker
+    worker["max_task_processes"] = _normalize_positive_int(
+        worker.get("max_task_processes", DEFAULT_MAX_TASK_PROCESSES),
+        DEFAULT_MAX_TASK_PROCESSES,
     )
     config["network"] = normalize_network_config(config.get("network", {}))
     config["auth"] = _normalize_auth(config.get("auth", {}))

@@ -374,14 +374,14 @@ class ProviderConfigTest(unittest.TestCase):
                 patch("app._configure_logging"),
             ):
                 created_app = create_app()
-            try:
-                self.assertFalse(created_app.config["PLATFORM"])
-                self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
-                self.assertEqual(created_app.config["LISTEN_PORT"], 5000)
-                self.assertEqual(created_app.config["MAX_UPLOAD_MB"], DEFAULT_MAX_UPLOAD_MB)
-                self.assertEqual(created_app.config["MAX_CONTENT_LENGTH"], DEFAULT_MAX_UPLOAD_MB * 1024 * 1024)
-            finally:
-                created_app.extensions["task_scheduler"].stop()
+            self.assertFalse(created_app.config["PLATFORM"])
+            self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
+            self.assertEqual(created_app.config["LISTEN_PORT"], 5000)
+            self.assertEqual(created_app.config["MAX_UPLOAD_MB"], DEFAULT_MAX_UPLOAD_MB)
+            self.assertEqual(created_app.config["MAX_CONTENT_LENGTH"], DEFAULT_MAX_UPLOAD_MB * 1024 * 1024)
+            self.assertEqual(created_app.config["WEB_WORKERS"], 2)
+            self.assertEqual(created_app.config["WEB_THREADS"], 16)
+            self.assertEqual(created_app.config["MAX_TASK_PROCESSES"], 4)
 
     def test_app_without_config_defaults_to_non_platform(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -390,17 +390,17 @@ class ProviderConfigTest(unittest.TestCase):
                 patch("app._configure_logging"),
             ):
                 created_app = create_app()
-            try:
-                config = load_local_config(Path(temp_dir))
+            config = load_local_config(Path(temp_dir))
 
-                self.assertFalse(created_app.config["PLATFORM"])
-                self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
-                self.assertFalse(config["platform"])
-                self.assertEqual(config["server"]["host"], "127.0.0.1")
-                self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
-                self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())
-            finally:
-                created_app.extensions["task_scheduler"].stop()
+            self.assertFalse(created_app.config["PLATFORM"])
+            self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
+            self.assertFalse(config["platform"])
+            self.assertEqual(config["server"]["host"], "127.0.0.1")
+            self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
+            self.assertEqual(config["server"]["web_workers"], 2)
+            self.assertEqual(config["server"]["web_threads"], 16)
+            self.assertEqual(config["worker"]["max_task_processes"], 4)
+            self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())
 
     def test_app_uses_configured_url_prefix_for_generated_urls(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -424,17 +424,14 @@ class ProviderConfigTest(unittest.TestCase):
                 patch("app._configure_logging"),
             ):
                 created_app = create_app()
-            try:
-                response = created_app.test_client().get("/")
-                html = response.get_data(as_text=True)
+            response = created_app.test_client().get("/")
+            html = response.get_data(as_text=True)
 
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(created_app.config["APPLICATION_ROOT"], "/infoCheck")
-                self.assertIn('href="/infoCheck/static/app.css"', html)
-                self.assertIn('src="/infoCheck/static/app.js"', html)
-                self.assertIn('src="/infoCheck/static/table-resize.js"', html)
-            finally:
-                created_app.extensions["task_scheduler"].stop()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(created_app.config["APPLICATION_ROOT"], "/infoCheck")
+            self.assertIn('href="/infoCheck/static/app.css"', html)
+            self.assertIn('src="/infoCheck/static/app.js"', html)
+            self.assertIn('src="/infoCheck/static/table-resize.js"', html)
 
     def test_config_drops_legacy_providers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
