@@ -7,11 +7,15 @@ from app import llm
 
 
 class FakeResponse:
-    def __init__(self, *, lines=None, data=None, status_code=200, text=None, headers=None):
+    def __init__(
+        self, *, lines=None, data=None, status_code=200, text=None, headers=None
+    ):
         self._lines = lines or []
         self._data = data
         self.status_code = status_code
-        self.text = text if text is not None else json.dumps(data or {}, ensure_ascii=False)
+        self.text = (
+            text if text is not None else json.dumps(data or {}, ensure_ascii=False)
+        )
         self.headers = headers or {"content-type": "text/event-stream"}
         self.closed = False
 
@@ -134,7 +138,9 @@ class LLMResponseParsingTest(unittest.TestCase):
             ]
         )
 
-        with patch.object(llm.requests, "Session", return_value=fake_session) as session_factory:
+        with patch.object(
+            llm.requests, "Session", return_value=fake_session
+        ) as session_factory:
             first = llm.run_check(
                 api_base="http://example.test/v1/chat/completions",
                 api_key="key",
@@ -401,7 +407,9 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         self.assertEqual(result, '{"summary":"降级完成","items":[]}')
         self.assertEqual(len(fake_session.calls), 2)
-        self.assertEqual(fake_session.calls[0][1]["json"]["response_format"], {"type": "json_object"})
+        self.assertEqual(
+            fake_session.calls[0][1]["json"]["response_format"], {"type": "json_object"}
+        )
         self.assertNotIn("response_format", fake_session.calls[1][1]["json"])
         sleep.assert_not_called()
 
@@ -434,7 +442,9 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(result, "完成")
         first_payload = fake_session.calls[0][1]["json"]
         second_payload = fake_session.calls[1][1]["json"]
-        self.assertEqual(first_payload["max_completion_tokens"], llm._MAX_COMPLETION_TOKENS)
+        self.assertEqual(
+            first_payload["max_completion_tokens"], llm._MAX_COMPLETION_TOKENS
+        )
         self.assertNotIn("max_completion_tokens", second_payload)
         self.assertEqual(second_payload["max_tokens"], llm._MAX_COMPLETION_TOKENS)
 
@@ -503,7 +513,9 @@ class LLMResponseParsingTest(unittest.TestCase):
             raise llm.LLMError("模型服务失败")
 
         with (
-            patch.object(llm, "_run_check_attempt", side_effect=fail_after_cancel) as attempt,
+            patch.object(
+                llm, "_run_check_attempt", side_effect=fail_after_cancel
+            ) as attempt,
             patch.object(llm.time, "sleep") as sleep,
             self.assertRaises(llm.LLMRequestCanceled),
         ):
@@ -655,7 +667,9 @@ class LLMResponseParsingTest(unittest.TestCase):
                 )
             }
         }
-        response = FakeResponse(status_code=500, text=json.dumps(body, ensure_ascii=False))
+        response = FakeResponse(
+            status_code=500, text=json.dumps(body, ensure_ascii=False)
+        )
 
         with self.assertRaises(llm.LLMError) as context:
             llm._read_stream_response(response, None)
@@ -664,7 +678,9 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("降低系统同时执行任务数", message)
 
     def test_preserves_general_http_error_message(self):
-        response = FakeResponse(status_code=400, text='{"error":{"message":"invalid model"}}')
+        response = FakeResponse(
+            status_code=400, text='{"error":{"message":"invalid model"}}'
+        )
 
         with self.assertRaisesRegex(llm.LLMError, "模型服务返回 400：invalid model"):
             llm._read_stream_response(response, None)
@@ -706,9 +722,13 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(chunks, ["流式结果"])
         self.assertEqual(len(fake_session.calls), 2)
         self.assertTrue(fake_session.calls[0][1]["json"]["stream"])
-        self.assertEqual(fake_session.calls[0][1]["json"]["stream_options"], {"include_usage": True})
+        self.assertEqual(
+            fake_session.calls[0][1]["json"]["stream_options"], {"include_usage": True}
+        )
         self.assertTrue(fake_session.calls[1][1]["json"]["stream"])
-        self.assertEqual(fake_session.calls[1][1]["json"]["stream_options"], {"include_usage": True})
+        self.assertEqual(
+            fake_session.calls[1][1]["json"]["stream_options"], {"include_usage": True}
+        )
         self.assertTrue(fake_session.calls[0][1]["stream"])
         self.assertTrue(fake_session.calls[1][1]["stream"])
         self.assertFalse(fake_session.calls[0][1]["verify"])
@@ -867,7 +887,9 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_generic_reasoning_only_retry_does_not_add_deepseek_thinking_flags(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"reasoning":"分析"}}]}']),
+                FakeResponse(
+                    lines=['data: {"choices":[{"delta":{"reasoning":"分析"}}]}']
+                ),
                 FakeResponse(
                     lines=[
                         'data: {"choices":[{"delta":{"content":"重试成功"}}]}',
@@ -903,7 +925,9 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_retries_stream_when_stream_frame_is_malformed(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"reasoning":"分析中"}']),
+                FakeResponse(
+                    lines=['data: {"choices":[{"delta":{"reasoning":"分析中"}']
+                ),
                 FakeResponse(
                     lines=[
                         'data: {"choices":[{"delta":{"content":"流式结果"}}]}',
@@ -959,7 +983,12 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_passes_ssl_verify_flag_to_requests(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"校验开启"}}]}', "data: [DONE]"]),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"校验开启"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
             ]
         )
 
@@ -981,7 +1010,12 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_force_disable_thinking_adds_all_fallback_flags_for_unknown_provider(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
             ]
         )
 
@@ -1010,7 +1044,12 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_force_disable_thinking_adds_all_payload_flags_for_deepseek(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
             ]
         )
 
@@ -1057,7 +1096,9 @@ class LLMResponseParsingTest(unittest.TestCase):
 
                 self.assert_all_thinking_disable_flags(payload)
 
-    def test_force_disable_thinking_uses_all_fallback_flags_without_confirmed_official_disable(self):
+    def test_force_disable_thinking_uses_all_fallback_flags_without_confirmed_official_disable(
+        self,
+    ):
         cases = (
             "deepseek-reasoner",
             "DeepSeek-R1-0528",
@@ -1092,7 +1133,9 @@ class LLMResponseParsingTest(unittest.TestCase):
                     },
                 )
 
-    def test_force_disable_thinking_uses_all_fallback_flags_for_other_known_models(self):
+    def test_force_disable_thinking_uses_all_fallback_flags_for_other_known_models(
+        self,
+    ):
         model_names = (
             "deepseek-chat",
             "qwen2.5-72b-instruct",
@@ -1132,7 +1175,12 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_force_disable_thinking_adds_all_payload_flags_for_dingpan(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
             ]
         )
 
@@ -1171,7 +1219,12 @@ class LLMResponseParsingTest(unittest.TestCase):
 
                 fake_session = FakeSession(
                     [
-                        FakeResponse(lines=['data: {"choices":[{"delta":{"content":"完成"}}]}', "data: [DONE]"]),
+                        FakeResponse(
+                            lines=[
+                                'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                                "data: [DONE]",
+                            ]
+                        ),
                     ]
                 )
 
@@ -1193,7 +1246,9 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_dingpan_reasoning_only_retry_uses_chat_template_thinking_flag(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"reasoning":"持续分析"}}]}']),
+                FakeResponse(
+                    lines=['data: {"choices":[{"delta":{"reasoning":"持续分析"}}]}']
+                ),
                 FakeResponse(
                     lines=[
                         'data: {"choices":[{"delta":{"content":"降级重试成功"}}]}',
@@ -1236,7 +1291,12 @@ class LLMResponseParsingTest(unittest.TestCase):
     def test_run_image_check_sends_multimodal_chat_content(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"图片检查完成"}}]}', "data: [DONE]"]),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"图片检查完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
             ]
         )
 
@@ -1264,12 +1324,20 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("统一三级判定规则", content[0]["text"])
         self.assertIn('"status":"issue|suggestion"', content[0]["text"])
         self.assertEqual(payload["reasoning_effort"], "high")
-        self.assertEqual(content[1], {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}})
+        self.assertEqual(
+            content[1],
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        )
 
     def test_run_multimodal_document_check_sends_text_and_multiple_images(self):
         fake_session = FakeSession(
             [
-                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"图文检查完成"}}]}', "data: [DONE]"]),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"图文检查完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
             ]
         )
 
@@ -1307,7 +1375,9 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(result, "图文检查完成")
         payload = fake_session.calls[0][1]["json"]
         content = payload["messages"][1]["content"]
-        self.assertEqual([item["type"] for item in content], ["text", "image_url", "image_url"])
+        self.assertEqual(
+            [item["type"] for item in content], ["text", "image_url", "image_url"]
+        )
         self.assertIn("图文对应检查", content[0]["text"])
         self.assertIn("当前图片批次：1/2", content[0]["text"])
         self.assertIn("单次回复最多列出 30 条问题", content[0]["text"])
@@ -1328,7 +1398,12 @@ class LLMResponseParsingTest(unittest.TestCase):
             [
                 FakeResponse(lines=['data: {"error":{"message":"temporary"}}']),
                 FakeResponse(lines=['data: {"error":{"message":"temporary again"}}']),
-                FakeResponse(lines=['data: {"choices":[{"delta":{"content":"重试成功"}}]}', "data: [DONE]"]),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"重试成功"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
             ]
         )
         chunks = []

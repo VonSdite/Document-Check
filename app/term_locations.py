@@ -1,7 +1,6 @@
 import re
 from bisect import bisect_right
 
-
 TERM_CONTEXT_CHARS = 45
 TERM_LOCATIONS_PER_ISSUE = 5
 

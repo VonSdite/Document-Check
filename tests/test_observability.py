@@ -1,4 +1,3 @@
-import json
 import logging
 import tempfile
 import unittest
@@ -90,7 +89,9 @@ class ObservabilityTest(unittest.TestCase):
         self.assertNotIn("must-not-be-logged", log_text)
 
     def test_invalid_request_id_is_replaced(self):
-        response = self.client.get("/echo", headers={"X-Request-ID": "invalid request id"})
+        response = self.client.get(
+            "/echo", headers={"X-Request-ID": "invalid request id"}
+        )
 
         request_id = response.headers["X-Request-ID"]
         self.assertEqual(len(request_id), 32)

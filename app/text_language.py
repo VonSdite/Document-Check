@@ -1,7 +1,6 @@
 import re
 import unicodedata
 
-
 TEXT_LANGUAGE_CHINESE = "zh"
 TEXT_LANGUAGE_MIXED = "mixed"
 TEXT_LANGUAGE_LATIN = "latin"
@@ -78,7 +77,9 @@ def estimate_text_language_from_counts(
 
 
 def text_language_label(language: str) -> str:
-    return _TEXT_LANGUAGE_LABELS.get(str(language or ""), _TEXT_LANGUAGE_LABELS[TEXT_LANGUAGE_UNKNOWN])
+    return _TEXT_LANGUAGE_LABELS.get(
+        str(language or ""), _TEXT_LANGUAGE_LABELS[TEXT_LANGUAGE_UNKNOWN]
+    )
 
 
 def _is_han(character: str) -> bool:
@@ -91,7 +92,9 @@ def _is_latin(character: str) -> bool:
 
 def _latin_prose_character_count(value: str) -> int:
     text_without_identifiers = _ASCII_TECHNICAL_TOKEN_RE.sub(
-        lambda match: "" if _is_alphanumeric_identifier(match.group(0)) else match.group(0),
+        lambda match: (
+            "" if _is_alphanumeric_identifier(match.group(0)) else match.group(0)
+        ),
         value,
     )
     return sum(_is_latin(character) for character in text_without_identifiers)

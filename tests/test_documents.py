@@ -1,6 +1,8 @@
 import json
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -8,13 +10,14 @@ from unittest.mock import MagicMock, patch
 
 import fitz
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from openpyxl import Workbook
 
 from app.documents import (
     _extract_pymupdf_page_with_tables,
+    _pdf_should_try_pypdf,
     _select_pdf_page_text,
     allowed_file,
     extract_document,
@@ -25,23 +28,22 @@ from app.images import (
     candidate_pdf_pages_for_image_check,
     extract_images,
     format_image_document_text,
-    image_path_from_item,
     image_items_from_meta,
+    image_path_from_item,
     select_pdf_page_numbers,
 )
 from app.videos import (
-    _VideoFrameCommandError,
     VideoFrameExtractionError,
-    allowed_video_file,
-    extract_video_frames,
-    format_video_document_text,
-    video_extension_of,
     _decode_process_output,
     _extract_frame,
     _probe_video_duration,
     _sample_video_timestamps,
+    _VideoFrameCommandError,
+    allowed_video_file,
+    extract_video_frames,
+    format_video_document_text,
+    video_extension_of,
 )
-
 
 _TINY_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -183,7 +185,11 @@ class DocumentFormattingTest(unittest.TestCase):
             start_x = 72
             page.insert_text((start_x, 72), "D ", fontsize=font_size)
             page.insert_text(
-                (start_x + fitz.get_text_length("D", fontname="helv", fontsize=font_size), 72),
+                (
+                    start_x
+                    + fitz.get_text_length("D", fontname="helv", fontsize=font_size),
+                    72,
+                ),
                 "ANGER",
                 fontsize=font_size,
             )
@@ -219,6 +225,49 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("https://docs.example.com/install", text)
         self.assertEqual(hyperlinks[0]["location"], "第1页")
         self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/install")
+
+    def test_pdf_extraction_skips_pypdf_for_clean_pymupdf_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "clean.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "Clean PDF text")
+            document.save(path)
+            document.close()
+
+            with patch(
+                "app.extraction.pdf.PdfReader",
+                side_effect=AssertionError("不应加载 pypdf"),
+            ):
+                text = extract_text(path, "pdf")
+
+        self.assertIn("Clean PDF text", text)
+
+    def test_pdf_text_extraction_can_skip_table_structure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "table.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            for x in (50, 150, 250):
+                page.draw_line((x, 50), (x, 150))
+            for y in (50, 100, 150):
+                page.draw_line((50, y), (250, y))
+            page.insert_text((65, 80), "A")
+            document.save(path)
+            document.close()
+
+            with patch(
+                "app.extraction.pdf._extract_pymupdf_page_with_tables"
+            ) as table_extractor:
+                text = extract_text(path, "pdf", include_tables=False)
+
+        self.assertIn("A", text)
+        table_extractor.assert_not_called()
+
+    def test_pdf_fallback_predicate_only_accepts_empty_or_corrupted_text(self):
+        self.assertTrue(_pdf_should_try_pypdf(""))
+        self.assertTrue(_pdf_should_try_pypdf("标题 \ufffd 正文"))
+        self.assertFalse(_pdf_should_try_pypdf("标题 完整正文"))
 
     def test_extracts_pdf_table_in_reading_order_with_merged_and_empty_cells(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -320,7 +369,9 @@ class DocumentFormattingTest(unittest.TestCase):
     def test_pdf_table_extraction_skips_one_malformed_candidate(self):
         page = MagicMock()
         page.find_tables.return_value.tables = [object(), object()]
-        page.get_drawings.return_value = []
+        page.get_drawings.return_value = [
+            {"items": [("l",), ("l",), ("l",), ("l",)], "rect": (0, 0, 1, 1)}
+        ]
         page.get_image_info.return_value = []
         valid_model = {
             "id": "page001-table002",
@@ -346,13 +397,24 @@ class DocumentFormattingTest(unittest.TestCase):
         }
 
         with patch(
-            "app.documents._pdf_table_model",
+            "app.extraction.pdf._pdf_table_model",
             side_effect=(RuntimeError("malformed table"), valid_model),
         ):
             text = _extract_pymupdf_page_with_tables(page, 1, {}, "")
 
         self.assertIn("page001-table002", text)
         self.assertIn("项目", text)
+
+    def test_pdf_table_extraction_skips_pages_without_vector_edges(self):
+        page = MagicMock()
+        page.get_drawings.return_value = []
+        page.get_image_info.return_value = []
+
+        with patch.object(page, "find_tables") as find_tables:
+            text = _extract_pymupdf_page_with_tables(page, 1, {}, "正文")
+
+        self.assertEqual(text, "")
+        find_tables.assert_not_called()
 
     def test_pdf_page_selection_prefers_pymupdf_when_pypdf_is_corrupted(self):
         pypdf_text = "标题 \ufffd\ufffd\ufffd\ufffd\ufffd 正文"
@@ -415,12 +477,16 @@ class DocumentFormattingTest(unittest.TestCase):
             image_dir = root / "images"
             _write_docx_with_inline_image(document_path)
 
-            images = extract_images(document_path, "docx", image_dir, source_filename="图纸.docx")
+            images = extract_images(
+                document_path, "docx", image_dir, source_filename="图纸.docx"
+            )
 
         self.assertEqual(len(images), 1)
         image = images[0]
         self.assertEqual(image["position"], "document-1-安装步骤-block002-p002")
-        self.assertTrue(image["filename"].startswith("0001_document-1-安装步骤-block002-p002"))
+        self.assertTrue(
+            image["filename"].startswith("0001_document-1-安装步骤-block002-p002")
+        )
         self.assertEqual(image["mime_type"], "image/png")
         self.assertIn("图纸.docx", format_image_document_text("图纸.docx", images))
 
@@ -458,8 +524,12 @@ class DocumentFormattingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
 
-            self.assertIsNone(image_path_from_item(root, {"relative_path": "/etc/passwd"}))
-            self.assertIsNone(image_path_from_item(root, {"relative_path": "../outside.png"}))
+            self.assertIsNone(
+                image_path_from_item(root, {"relative_path": "/etc/passwd"})
+            )
+            self.assertIsNone(
+                image_path_from_item(root, {"relative_path": "../outside.png"})
+            )
             self.assertEqual(
                 image_path_from_item(root, {"relative_path": "task/image.png"}),
                 root.resolve() / "task" / "image.png",
@@ -490,7 +560,9 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("0001_page001-screenshot.png", text)
 
     def test_select_pdf_pages_uses_candidates_and_segments_for_long_documents(self):
-        selection = select_pdf_page_numbers(200, max_pages=10, candidate_pages=[50, 120])
+        selection = select_pdf_page_numbers(
+            200, max_pages=10, candidate_pages=[50, 120]
+        )
 
         self.assertEqual(selection["total_pages"], 200)
         self.assertEqual(len(selection["selected_pages"]), 10)
@@ -567,7 +639,9 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("stream=duration:format=duration", command)
 
     def test_video_frame_command_hides_banner_and_selects_video_stream(self):
-        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
 
         with patch("app.videos.subprocess.run", return_value=completed) as runner:
             _extract_frame(Path("video.mp4"), Path("frame.jpg"), 131.057)
@@ -605,6 +679,46 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertEqual(selection["skipped_frame_count"], 0)
         self.assertIn(2.05, selection["selected_timestamps"])
 
+    def test_video_frame_extraction_uses_bounded_parallel_workers(self):
+        active = 0
+        maximum = 0
+        lock = threading.Lock()
+
+        def fake_extract_frame(
+            _video_path, _output_dir, sequence, timestamp, _duration
+        ):
+            nonlocal active, maximum
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            time.sleep(0.01)
+            destination = _output_dir / f"{sequence:04d}.jpg"
+            destination.write_bytes(b"jpeg")
+            with lock:
+                active -= 1
+            return timestamp, destination.name, destination
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with (
+                patch("app.videos._probe_video_duration", return_value=9.2),
+                patch(
+                    "app.videos._extract_frame_with_fallback",
+                    side_effect=fake_extract_frame,
+                ),
+            ):
+                frames, _selection = extract_video_frames(
+                    root / "video.mp4",
+                    root / "frames",
+                    max_frames=4,
+                )
+
+        self.assertEqual(maximum, 2)
+        self.assertEqual(
+            [frame["id"] for frame in frames],
+            ["frame-0001", "frame-0002", "frame-0003", "frame-0004"],
+        )
+
     def test_video_frame_extraction_skips_one_isolated_bad_sample(self):
         def fake_extract_frame(video_path, destination, timestamp):
             if 1.5 <= timestamp <= 3.6:
@@ -639,7 +753,9 @@ class DocumentFormattingTest(unittest.TestCase):
                 patch("app.videos._probe_video_duration", return_value=5.2),
                 patch("app.videos._extract_frame", side_effect=fake_extract_frame),
             ):
-                with self.assertRaisesRegex(VideoFrameExtractionError, "仅成功抽取 1/3 帧"):
+                with self.assertRaisesRegex(
+                    VideoFrameExtractionError, "仅成功抽取 1/3 帧"
+                ):
                     extract_video_frames(
                         root / "video.mp4",
                         root / "frames",

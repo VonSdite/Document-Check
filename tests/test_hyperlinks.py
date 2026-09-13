@@ -24,8 +24,16 @@ class HyperlinkRuleTest(unittest.TestCase):
 
         report = build_hyperlink_report(
             [
-                {"target": "https://docs.example.com/guide", "display_text": "指南", "location": "第1章"},
-                {"target": "https://docs.example.com/guide", "display_text": "操作指南", "location": "第2章"},
+                {
+                    "target": "https://docs.example.com/guide",
+                    "display_text": "指南",
+                    "location": "第1章",
+                },
+                {
+                    "target": "https://docs.example.com/guide",
+                    "display_text": "操作指南",
+                    "location": "第2章",
+                },
             ],
             issue_limit=30,
             probe=fake_probe,
@@ -39,7 +47,13 @@ class HyperlinkRuleTest(unittest.TestCase):
         probe_called = []
 
         report = build_hyperlink_report(
-            [{"target": "javascript:alert(1)", "display_text": "点击", "location": "第1段"}],
+            [
+                {
+                    "target": "javascript:alert(1)",
+                    "display_text": "点击",
+                    "location": "第1段",
+                }
+            ],
             issue_limit=30,
             probe=lambda *_args: probe_called.append(True),
         )

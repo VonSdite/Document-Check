@@ -109,7 +109,9 @@ class ReportGuardrailTest(unittest.TestCase):
         self.assertEqual(sanitized, content)
         self.assertEqual(removed_count, 0)
 
-    def test_pdf_table_evidence_filters_merged_nontext_and_unlocated_missing_claims(self):
+    def test_pdf_table_evidence_filters_merged_nontext_and_unlocated_missing_claims(
+        self,
+    ):
         document_text = """
 <table id="page001-table001" data-confidence="high">
   <tr>

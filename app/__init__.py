@@ -43,7 +43,11 @@ def _create_base_app():
     server_config = local_config["server"]
     worker_config = local_config["worker"]
 
-    app = Flask(__name__, instance_path=str(root_dir / "instance"), instance_relative_config=True)
+    app = Flask(
+        __name__,
+        instance_path=str(root_dir / "instance"),
+        instance_relative_config=True,
+    )
     if server_config["proxy_fix"]:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
@@ -127,7 +131,9 @@ def _has_log_file_handler(target_logger, log_file: Path) -> bool:
 def _ensure_console_handler(target_logger):
     formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
     for handler in target_logger.handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, logging.FileHandler
+        ):
             handler.setLevel(logging.INFO)
             handler.setFormatter(formatter)
             return

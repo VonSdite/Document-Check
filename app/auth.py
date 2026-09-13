@@ -45,7 +45,9 @@ def current_identity(*, require_sso: bool = False) -> UserIdentity:
             return identity
         if require_sso:
             raise AuthenticationRequired("未收到 SSO 用户信息")
-    return UserIdentity(subject=ip_subject(ip), display_name=get_ip_username(ip), source="ip", ip=ip)
+    return UserIdentity(
+        subject=ip_subject(ip), display_name=get_ip_username(ip), source="ip", ip=ip
+    )
 
 
 def client_ip() -> str:
@@ -80,7 +82,12 @@ def _identity_from_trusted_header(auth_config: dict, ip: str) -> UserIdentity | 
         return None
 
     display_name = _header_value(header_config.get("username")) or user_id
-    return UserIdentity(subject=f"trusted_header:{user_id}", display_name=display_name, source="trusted_header", ip=ip)
+    return UserIdentity(
+        subject=f"trusted_header:{user_id}",
+        display_name=display_name,
+        source="trusted_header",
+        ip=ip,
+    )
 
 
 def _identity_from_saml_session(ip: str) -> UserIdentity | None:
@@ -91,7 +98,9 @@ def _identity_from_saml_session(ip: str) -> UserIdentity | None:
     if not user_id:
         return None
     display_name = str(saml_user.get("username") or "").strip() or user_id
-    return UserIdentity(subject=f"saml:{user_id}", display_name=display_name, source="saml", ip=ip)
+    return UserIdentity(
+        subject=f"saml:{user_id}", display_name=display_name, source="saml", ip=ip
+    )
 
 
 def _header_value(header_name) -> str:

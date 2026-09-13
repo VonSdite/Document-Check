@@ -2,7 +2,6 @@ import html
 import json
 import re
 
-
 TEXT_EXTRACTION_LIMITATION = (
     "输入内容是解析器从原文中抽取的文本，不代表原文的全部视觉内容。"
     "图片、图标、矢量图形、公式和表格版式可能未出现在抽取结果中。"
@@ -26,7 +25,9 @@ _MISSING_ACTION = (
     r"没有(?:提供|插入|附上|附加|包含|展示|显示|找到|发现|出现))"
 )
 _MISSING_VISUAL_PATTERNS = (
-    re.compile(rf"{_MISSING_ACTION}[^，。；：;:\n]{{0,20}}{_VISUAL_OBJECT}", re.IGNORECASE),
+    re.compile(
+        rf"{_MISSING_ACTION}[^，。；：;:\n]{{0,20}}{_VISUAL_OBJECT}", re.IGNORECASE
+    ),
     re.compile(
         rf"{_VISUAL_OBJECT}(?:本身|对象|文件|整体)?(?:在文档中)?"
         rf"{_MISSING_ACTION}(?!{_VISUAL_DETAIL})",
@@ -72,7 +73,9 @@ _PDF_TABLE_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _PDF_TABLE_ROW_PATTERN = re.compile(r"<tr>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
-_PDF_TABLE_CELL_PATTERN = re.compile(r"<td(?P<attributes>[^>]*)>(?P<content>.*?)</td>", re.IGNORECASE | re.DOTALL)
+_PDF_TABLE_CELL_PATTERN = re.compile(
+    r"<td(?P<attributes>[^>]*)>(?P<content>.*?)</td>", re.IGNORECASE | re.DOTALL
+)
 _PDF_TABLE_ATTRIBUTE_PATTERN = re.compile(r'([\w-]+)="([^"]*)"')
 _PDF_TABLE_ID_PATTERN = re.compile(r"\bpage\d+-table\d+\b", re.IGNORECASE)
 _PDF_CELL_REFERENCE_PATTERN = re.compile(r"\b([A-Z]{1,3})([1-9]\d*)\b", re.IGNORECASE)
@@ -111,7 +114,9 @@ def filter_unsupported_visual_missing_items(
     for item in items:
         if isinstance(item, dict) and (
             is_unsupported_visual_missing_item(item)
-            or is_unsupported_pdf_table_data_missing_item(item, pdf_table_evidence or {})
+            or is_unsupported_pdf_table_data_missing_item(
+                item, pdf_table_evidence or {}
+            )
         ):
             removed_count += 1
             continue
@@ -129,7 +134,9 @@ def sanitize_text_check_result(
     payload = _load_report_payload(text)
     if not isinstance(payload, dict):
         return text, 0
-    item_key = next((key for key in _REPORT_ITEM_KEYS if isinstance(payload.get(key), list)), "")
+    item_key = next(
+        (key for key in _REPORT_ITEM_KEYS if isinstance(payload.get(key), list)), ""
+    )
     if not item_key:
         return text, 0
 
@@ -175,7 +182,9 @@ def build_pdf_table_evidence_index(document_text: str) -> dict:
                 rowspan = _positive_int(attributes.get("rowspan"), 1)
                 colspan = _positive_int(attributes.get("colspan"), 1)
                 anchor = _pdf_cell_name(row_index, column_index)
-                inherited_from = _normalized_pdf_cell_name(attributes.get("data-inherited-from"))
+                inherited_from = _normalized_pdf_cell_name(
+                    attributes.get("data-inherited-from")
+                )
                 if inherited_from:
                     kind = "merged"
                     anchor = inherited_from
@@ -192,7 +201,9 @@ def build_pdf_table_evidence_index(document_text: str) -> dict:
                         cell_map[cell_name] = {
                             "kind": kind if cell_name == anchor else "merged",
                             "anchor": anchor,
-                            "text": html.unescape(content).strip() if cell_name == anchor else "",
+                            "text": html.unescape(content).strip()
+                            if cell_name == anchor
+                            else "",
                         }
                 column_index += colspan
         tables[table_id] = {
@@ -202,20 +213,24 @@ def build_pdf_table_evidence_index(document_text: str) -> dict:
     return tables
 
 
-def is_unsupported_pdf_table_data_missing_item(item: dict, pdf_table_evidence: dict) -> bool:
+def is_unsupported_pdf_table_data_missing_item(
+    item: dict, pdf_table_evidence: dict
+) -> bool:
     if not isinstance(item, dict) or not pdf_table_evidence:
         return False
     excerpt = "\n".join(str(item.get(field) or "") for field in _EXCERPT_FIELDS)
     if _EXPLICIT_PLACEHOLDER_PATTERN.search(excerpt):
         return False
     decision_text = "\n".join(str(item.get(field) or "") for field in _DECISION_FIELDS)
-    evidence_text = "\n".join(
-        (str(item.get("location") or ""), excerpt, decision_text)
-    )
+    evidence_text = "\n".join((str(item.get("location") or ""), excerpt, decision_text))
     location_text = str(item.get("location") or "")
-    if not any(pattern.search(decision_text) for pattern in _TABLE_DATA_MISSING_PATTERNS):
+    if not any(
+        pattern.search(decision_text) for pattern in _TABLE_DATA_MISSING_PATTERNS
+    ):
         return False
-    table_ids = {value.lower() for value in _PDF_TABLE_ID_PATTERN.findall(location_text)}
+    table_ids = {
+        value.lower() for value in _PDF_TABLE_ID_PATTERN.findall(location_text)
+    }
     if not table_ids and not re.search(r"表格|单元格|行|列", evidence_text):
         return False
     if len(table_ids) != 1:
@@ -238,7 +253,11 @@ def is_unsupported_pdf_table_data_missing_item(item: dict, pdf_table_evidence: d
         if cell.get("kind") == "merged":
             anchor_name = cell.get("anchor")
             anchor_cell = table["cells"].get(anchor_name)
-            if anchor_name in cell_names and anchor_cell and anchor_cell.get("kind") == "empty":
+            if (
+                anchor_name in cell_names
+                and anchor_cell
+                and anchor_cell.get("kind") == "empty"
+            ):
                 continue
             return True
         return True
@@ -247,13 +266,17 @@ def is_unsupported_pdf_table_data_missing_item(item: dict, pdf_table_evidence: d
 
 def guarded_report_summary(items: list) -> str:
     statuses = [
-        str(item.get("status") or item.get("状态") or item.get("type") or "").strip().lower()
+        str(item.get("status") or item.get("状态") or item.get("type") or "")
+        .strip()
+        .lower()
         if isinstance(item, dict)
         else ""
         for item in items
     ]
     issue_count = sum(status in {"issue", "问题", "明确问题"} for status in statuses)
-    suggestion_count = sum(status in {"suggestion", "建议", "待确认建议"} for status in statuses)
+    suggestion_count = sum(
+        status in {"suggestion", "建议", "待确认建议"} for status in statuses
+    )
     other_count = max(0, len(items) - issue_count - suggestion_count)
     if not items:
         return "未发现具有充分文本证据的问题。"
@@ -272,7 +295,9 @@ def _load_report_payload(text: str):
     candidates = [raw.strip()]
     candidates.extend(
         match.group(1).strip()
-        for match in re.finditer(r"```(?:json)?\s*(.*?)```", raw, re.IGNORECASE | re.DOTALL)
+        for match in re.finditer(
+            r"```(?:json)?\s*(.*?)```", raw, re.IGNORECASE | re.DOTALL
+        )
     )
     object_start = raw.find("{")
     object_end = raw.rfind("}")

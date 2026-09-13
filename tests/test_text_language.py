@@ -18,8 +18,14 @@ class TextLanguageTest(unittest.TestCase):
             "maintenance, restrictions, and troubleshooting procedures."
         )
         mixed = "这是中文说明文字，用于介绍安装配置操作和结果验证。" * 5 + english * 2
-        japanese = "この文書では、製品のインストール、設定、操作、確認、および保守手順について説明します。" * 3
-        korean = "이 문서는 제품 설치 구성 작동 확인 유지 관리 및 문제 해결 절차를 설명합니다." * 3
+        japanese = (
+            "この文書では、製品のインストール、設定、操作、確認、および保守手順について説明します。"
+            * 3
+        )
+        korean = (
+            "이 문서는 제품 설치 구성 작동 확인 유지 관리 및 문제 해결 절차를 설명합니다."
+            * 3
+        )
 
         self.assertEqual(estimate_text_language(chinese), TEXT_LANGUAGE_CHINESE)
         self.assertEqual(estimate_text_language(english), TEXT_LANGUAGE_LATIN)

@@ -3,7 +3,6 @@ import re
 import mistune
 from markupsafe import Markup
 
-
 _markdown = mistune.create_markdown(
     escape=True,
     hard_wrap=True,

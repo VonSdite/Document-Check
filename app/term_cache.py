@@ -3,14 +3,17 @@ from pathlib import Path
 from threading import RLock
 from typing import Callable, TypeVar
 
-
 T = TypeVar("T")
 _MAX_CACHE_ENTRIES = 16
 _cache_lock = RLock()
-_cache: OrderedDict[tuple[str, str], tuple[tuple[int, int, int], tuple[object, ...]]] = OrderedDict()
+_cache: OrderedDict[
+    tuple[str, str], tuple[tuple[int, int, int], tuple[object, ...]]
+] = OrderedDict()
 
 
-def load_cached_terms(namespace: str, path: Path, loader: Callable[[Path], list[T]]) -> list[T]:
+def load_cached_terms(
+    namespace: str, path: Path, loader: Callable[[Path], list[T]]
+) -> list[T]:
     resolved_path = Path(path).resolve()
     cache_key = (str(namespace), str(resolved_path))
     signature = _file_signature(resolved_path)

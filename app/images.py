@@ -12,7 +12,6 @@ from pypdf import PdfReader
 
 from .documents import DocumentReadError
 
-
 SUPPORTED_IMAGE_TYPES = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
 DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES = 120
 PDF_PAGE_IMAGE_SCALE = 1.6
@@ -68,7 +67,9 @@ def render_pdf_page_images(
     try:
         import fitz
     except ImportError as exc:
-        raise ImageExtractionError("PDF 页面截图渲染依赖 PyMuPDF，当前环境未安装。") from exc
+        raise ImageExtractionError(
+            "PDF 页面截图渲染依赖 PyMuPDF，当前环境未安装。"
+        ) from exc
 
     try:
         with fitz.open(str(document_path)) as document:
@@ -78,12 +79,24 @@ def render_pdf_page_images(
                 candidate_pages=candidate_pages,
             )
             records = []
-            for sequence, page_number in enumerate(selection["selected_pages"], start=1):
+            for sequence, page_number in enumerate(
+                selection["selected_pages"], start=1
+            ):
                 page = document.load_page(page_number - 1)
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(PDF_PAGE_IMAGE_SCALE, PDF_PAGE_IMAGE_SCALE), alpha=False)
+                pixmap = page.get_pixmap(
+                    matrix=fitz.Matrix(PDF_PAGE_IMAGE_SCALE, PDF_PAGE_IMAGE_SCALE),
+                    alpha=False,
+                )
                 data = pixmap.tobytes("png")
                 position = f"page{page_number:03d}-screenshot"
-                record = _write_image_record(output_dir, sequence, position, f"page{page_number:03d}.png", data, source_name)
+                record = _write_image_record(
+                    output_dir,
+                    sequence,
+                    position,
+                    f"page{page_number:03d}.png",
+                    data,
+                    source_name,
+                )
                 record["id"] = f"page-{sequence:04d}"
                 record["kind"] = "page"
                 record["page_number"] = page_number
@@ -140,7 +153,9 @@ def select_pdf_page_numbers(
     }
 
 
-def candidate_pdf_pages_for_image_check(document_text: str = "", images: list[dict] | None = None) -> list[int]:
+def candidate_pdf_pages_for_image_check(
+    document_text: str = "", images: list[dict] | None = None
+) -> list[int]:
     pages = set()
     for image in images or []:
         for page in page_numbers_from_image_item(image):
@@ -237,7 +252,9 @@ def format_image_document_text(
 
 
 def image_path_from_item(image_folder: Path, item: dict) -> Path | None:
-    raw_path = str(item.get("relative_path") or item.get("stored_filename") or "").strip()
+    raw_path = str(
+        item.get("relative_path") or item.get("stored_filename") or ""
+    ).strip()
     if not raw_path:
         return None
     relative_path = Path(raw_path)
@@ -261,20 +278,21 @@ def image_to_data_url(path: Path, mime_type: str) -> str:
 def _extract_docx_images(path: Path, output_dir: Path, source_name: str) -> list[dict]:
     try:
         with ZipFile(path) as archive:
+            archive_names = set(archive.namelist())
             records = []
             sequence = 0
             part_names = ["word/document.xml"]
             part_names.extend(
                 sorted(
                     name
-                    for name in archive.namelist()
+                    for name in archive_names
                     if re.fullmatch(r"word/(header|footer)\d+\.xml", name)
                 )
             )
             for part_name in part_names:
-                if part_name not in archive.namelist():
+                if part_name not in archive_names:
                     continue
-                rels = _zip_relationships(archive, part_name)
+                rels = _zip_relationships(archive, part_name, archive_names)
                 part_label = _docx_part_label(part_name)
                 root = ET.fromstring(archive.read(part_name))
                 for rel_id, position in _docx_image_refs(root, rels, part_label):
@@ -298,7 +316,9 @@ def _extract_docx_images(path: Path, output_dir: Path, source_name: str) -> list
                     )
             return records
     except BadZipFile as exc:
-        raise ImageExtractionError("无法读取 docx 图片：文件不是有效的 Office 文档。") from exc
+        raise ImageExtractionError(
+            "无法读取 docx 图片：文件不是有效的 Office 文档。"
+        ) from exc
 
 
 def _docx_part_label(part_name: str) -> str:
@@ -307,7 +327,9 @@ def _docx_part_label(part_name: str) -> str:
     return Path(part_name).stem
 
 
-def _docx_image_refs(root: ET.Element, rels: dict[str, str], part_label: str) -> list[tuple[str, str]]:
+def _docx_image_refs(
+    root: ET.Element, rels: dict[str, str], part_label: str
+) -> list[tuple[str, str]]:
     body = root.find(f".//{{{_WORD_NS}}}body")
     if body is None:
         return []
@@ -326,18 +348,34 @@ def _docx_image_refs(root: ET.Element, rels: dict[str, str], part_label: str) ->
             paragraph_text = _docx_paragraph_text(child)
             heading_level = _docx_heading_level(child, paragraph_text)
             if heading_level:
-                heading_path = _update_docx_heading_path(heading_path, heading_level, paragraph_text)
+                heading_path = _update_docx_heading_path(
+                    heading_path, heading_level, paragraph_text
+                )
             section_prefix = _docx_section_prefix(part_label, heading_path)
             position = f"{section_prefix}-block{block_index:03d}-p{paragraph_index:03d}"
-            refs.extend((rel_id, position) for rel_id in _image_relation_ids(child) if rel_id in rels)
+            refs.extend(
+                (rel_id, position)
+                for rel_id in _image_relation_ids(child)
+                if rel_id in rels
+            )
         elif local == "tbl":
             table_index += 1
             section_prefix = _docx_section_prefix(part_label, heading_path)
-            refs.extend(_docx_table_refs(child, rels, f"{section_prefix}-block{block_index:03d}-tbl{table_index:03d}"))
+            refs.extend(
+                _docx_table_refs(
+                    child,
+                    rels,
+                    f"{section_prefix}-block{block_index:03d}-tbl{table_index:03d}",
+                )
+            )
         else:
             section_prefix = _docx_section_prefix(part_label, heading_path)
             position = f"{section_prefix}-block{block_index:03d}"
-            refs.extend((rel_id, position) for rel_id in _image_relation_ids(child) if rel_id in rels)
+            refs.extend(
+                (rel_id, position)
+                for rel_id in _image_relation_ids(child)
+                if rel_id in rels
+            )
     return refs
 
 
@@ -395,7 +433,9 @@ def _docx_heading_level_from_text(text: str) -> int:
     return 0
 
 
-def _update_docx_heading_path(heading_path: list[tuple[int, str]], level: int, text: str) -> list[tuple[int, str]]:
+def _update_docx_heading_path(
+    heading_path: list[tuple[int, str]], level: int, text: str
+) -> list[tuple[int, str]]:
     normalized_level = max(1, min(9, int(level or 1)))
     label = _docx_heading_label(normalized_level, text)
     path = [item for item in heading_path if item[0] < normalized_level]
@@ -415,7 +455,9 @@ def _docx_section_prefix(part_label: str, heading_path: list[tuple[int, str]]) -
     return f"{part_label}-{'-'.join(labels)}"
 
 
-def _docx_table_refs(table: ET.Element, rels: dict[str, str], base_position: str) -> list[tuple[str, str]]:
+def _docx_table_refs(
+    table: ET.Element, rels: dict[str, str], base_position: str
+) -> list[tuple[str, str]]:
     refs = []
     for row_index, row in enumerate(_direct_children(table, "tr"), start=1):
         for cell_index, cell in enumerate(_direct_children(row, "tc"), start=1):
@@ -426,13 +468,21 @@ def _docx_table_refs(table: ET.Element, rels: dict[str, str], base_position: str
                 if local == "p":
                     paragraph_index += 1
                     position = f"{base_position}-r{row_index:03d}c{cell_index:03d}-p{paragraph_index:03d}"
-                    refs.extend((rel_id, position) for rel_id in _image_relation_ids(child) if rel_id in rels)
+                    refs.extend(
+                        (rel_id, position)
+                        for rel_id in _image_relation_ids(child)
+                        if rel_id in rels
+                    )
                 elif local == "tbl":
                     nested_table_index += 1
                     nested = f"{base_position}-r{row_index:03d}c{cell_index:03d}-tbl{nested_table_index:03d}"
                     refs.extend(_docx_table_refs(child, rels, nested))
     if not refs:
-        refs.extend((rel_id, base_position) for rel_id in _image_relation_ids(table) if rel_id in rels)
+        refs.extend(
+            (rel_id, base_position)
+            for rel_id in _image_relation_ids(table)
+            if rel_id in rels
+        )
     return refs
 
 
@@ -443,7 +493,11 @@ def _image_relation_ids(element: ET.Element) -> list[str]:
         local = _local_name(node.tag)
         rel_id = ""
         if local == "blip":
-            rel_id = node.attrib.get(f"{{{_OFFICE_REL_NS}}}embed") or node.attrib.get(f"{{{_OFFICE_REL_NS}}}link") or ""
+            rel_id = (
+                node.attrib.get(f"{{{_OFFICE_REL_NS}}}embed")
+                or node.attrib.get(f"{{{_OFFICE_REL_NS}}}link")
+                or ""
+            )
         elif local == "imagedata":
             rel_id = node.attrib.get(f"{{{_OFFICE_REL_NS}}}id") or ""
         if rel_id and rel_id not in seen:
@@ -455,24 +509,31 @@ def _image_relation_ids(element: ET.Element) -> list[str]:
 def _extract_xlsx_images(path: Path, output_dir: Path, source_name: str) -> list[dict]:
     try:
         with ZipFile(path) as archive:
-            if "xl/workbook.xml" not in archive.namelist():
+            archive_names = set(archive.namelist())
+            if "xl/workbook.xml" not in archive_names:
                 return []
-            workbook_rels = _zip_relationships(archive, "xl/workbook.xml")
+            workbook_rels = _zip_relationships(
+                archive, "xl/workbook.xml", archive_names
+            )
             workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
             records = []
             sequence = 0
-            for sheet_index, sheet in enumerate(_workbook_sheets(workbook_root), start=1):
+            for sheet_index, sheet in enumerate(
+                _workbook_sheets(workbook_root), start=1
+            ):
                 sheet_part = workbook_rels.get(sheet["rel_id"])
-                if not sheet_part or sheet_part not in archive.namelist():
+                if not sheet_part or sheet_part not in archive_names:
                     continue
-                sheet_rels = _zip_relationships(archive, sheet_part)
+                sheet_rels = _zip_relationships(archive, sheet_part, archive_names)
                 drawing_parts = [
                     target
                     for target in sheet_rels.values()
-                    if target.startswith("xl/drawings/") and target in archive.namelist()
+                    if target.startswith("xl/drawings/") and target in archive_names
                 ]
                 for drawing_part in drawing_parts:
-                    drawing_rels = _zip_relationships(archive, drawing_part)
+                    drawing_rels = _zip_relationships(
+                        archive, drawing_part, archive_names
+                    )
                     drawing_root = ET.fromstring(archive.read(drawing_part))
                     image_index = 0
                     for anchor in _drawing_anchors(drawing_root):
@@ -486,7 +547,9 @@ def _extract_xlsx_images(path: Path, output_dir: Path, source_name: str) -> list
                             continue
                         image_index += 1
                         sequence += 1
-                        position = _xlsx_anchor_position(sheet_index, sheet["name"], anchor, image_index)
+                        position = _xlsx_anchor_position(
+                            sheet_index, sheet["name"], anchor, image_index
+                        )
                         records.append(
                             _write_image_record(
                                 output_dir,
@@ -499,12 +562,16 @@ def _extract_xlsx_images(path: Path, output_dir: Path, source_name: str) -> list
                         )
             return records
     except BadZipFile as exc:
-        raise ImageExtractionError("无法读取 Excel 图片：文件不是有效的 Office 工作簿。") from exc
+        raise ImageExtractionError(
+            "无法读取 Excel 图片：文件不是有效的 Office 工作簿。"
+        ) from exc
 
 
 def _workbook_sheets(workbook_root: ET.Element) -> list[dict]:
     sheets = []
-    for sheet in workbook_root.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"):
+    for sheet in workbook_root.findall(
+        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"
+    ):
         rel_id = sheet.attrib.get(f"{{{_OFFICE_REL_NS}}}id") or ""
         name = str(sheet.attrib.get("name") or "Sheet")
         if rel_id:
@@ -513,20 +580,30 @@ def _workbook_sheets(workbook_root: ET.Element) -> list[dict]:
 
 
 def _drawing_anchors(root: ET.Element) -> list[ET.Element]:
-    return [node for node in list(root) if _local_name(node.tag) in {"oneCellAnchor", "twoCellAnchor", "absoluteAnchor"}]
+    return [
+        node
+        for node in list(root)
+        if _local_name(node.tag) in {"oneCellAnchor", "twoCellAnchor", "absoluteAnchor"}
+    ]
 
 
 def _first_image_rel_id(anchor: ET.Element) -> str:
     for node in anchor.iter():
         if _local_name(node.tag) != "blip":
             continue
-        rel_id = node.attrib.get(f"{{{_OFFICE_REL_NS}}}embed") or node.attrib.get(f"{{{_OFFICE_REL_NS}}}link") or ""
+        rel_id = (
+            node.attrib.get(f"{{{_OFFICE_REL_NS}}}embed")
+            or node.attrib.get(f"{{{_OFFICE_REL_NS}}}link")
+            or ""
+        )
         if rel_id:
             return rel_id
     return ""
 
 
-def _xlsx_anchor_position(sheet_index: int, sheet_name: str, anchor: ET.Element, image_index: int) -> str:
+def _xlsx_anchor_position(
+    sheet_index: int, sheet_name: str, anchor: ET.Element, image_index: int
+) -> str:
     row = None
     col = None
     for child in list(anchor):
@@ -555,9 +632,14 @@ def _extract_pdf_images(path: Path, output_dir: Path, source_name: str) -> list[
             if not data:
                 continue
             sequence += 1
-            image_name = str(getattr(image_file, "name", "") or f"page{page_index:03d}-image{image_index:03d}")
+            image_name = str(
+                getattr(image_file, "name", "")
+                or f"page{page_index:03d}-image{image_index:03d}"
+            )
             position = f"page{page_index:03d}-image{image_index:03d}"
-            record = _write_image_record(output_dir, sequence, position, image_name, data, source_name)
+            record = _write_image_record(
+                output_dir, sequence, position, image_name, data, source_name
+            )
             record["kind"] = "embedded"
             record["page_number"] = page_index
             records.append(record)
@@ -584,7 +666,9 @@ def page_sections_from_document_text(document_text: str) -> list[tuple[int, str]
     matches = list(re.finditer(r"(?m)^\[第(\d+)页]\s*$", body))
     sections = []
     for index, match in enumerate(matches):
-        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        next_start = (
+            matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        )
         try:
             page = int(match.group(1))
         except ValueError:
@@ -632,7 +716,11 @@ def _extract_html_images(path: Path, output_dir: Path, source_name: str) -> list
         ext = mimetypes.guess_extension(mime_type) or ".png"
         alt = _safe_name(str(tag.get("alt") or ""), "image")
         position = f"html-img{image_index:03d}-{alt}"
-        records.append(_write_image_record(output_dir, sequence, position, f"inline{ext}", data, source_name))
+        records.append(
+            _write_image_record(
+                output_dir, sequence, position, f"inline{ext}", data, source_name
+            )
+        )
     return records
 
 
@@ -647,9 +735,14 @@ def _decode_data_uri(src: str) -> tuple[str, bytes]:
         return "", b""
 
 
-def _zip_relationships(archive: ZipFile, part_name: str) -> dict[str, str]:
+def _zip_relationships(
+    archive: ZipFile,
+    part_name: str,
+    archive_names: set[str] | None = None,
+) -> dict[str, str]:
     rels_name = _rels_part_name(part_name)
-    if rels_name not in archive.namelist():
+    names = archive_names if archive_names is not None else set(archive.namelist())
+    if rels_name not in names:
         return {}
     root = ET.fromstring(archive.read(rels_name))
     relationships = {}
@@ -706,7 +799,9 @@ def _image_extension(source_name: str, data: bytes) -> str:
         suffix = "jpg"
     if suffix in SUPPORTED_IMAGE_TYPES:
         return "jpg" if suffix == "jpeg" else suffix
-    if suffix and (mimetypes.guess_type(f"file.{suffix}")[0] or "").startswith("image/"):
+    if suffix and (mimetypes.guess_type(f"file.{suffix}")[0] or "").startswith(
+        "image/"
+    ):
         return "jpg" if suffix == "jpeg" else suffix
     guessed = mimetypes.guess_extension(_mime_type_from_magic(data) or "")
     if guessed:
@@ -746,7 +841,9 @@ def _unique_filename(output_dir: Path, stem: str, extension: str) -> str:
 
 
 def _safe_name(value: str, fallback: str) -> str:
-    value = re.sub(r"[\x00-\x1f\x7f/\\<>:\"|?*\s]+", "-", str(value or "")).strip(" .-_")
+    value = re.sub(r"[\x00-\x1f\x7f/\\<>:\"|?*\s]+", "-", str(value or "")).strip(
+        " .-_"
+    )
     value = re.sub(r"-+", "-", value)
     return value[:120] or fallback
 

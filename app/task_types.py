@@ -1,6 +1,5 @@
 import json
 
-
 DOCUMENT_TASK_TYPE = "document_check"
 CONSISTENCY_TASK_TYPE = "consistency_check"
 LANGUAGE_CONSISTENCY_TASK_TYPE = "language_consistency_check"
@@ -16,6 +15,7 @@ TASK_TYPE_LABELS = {
     IMAGE_TASK_TYPE: "图片检查",
     VIDEO_TASK_TYPE: "视频检查",
 }
+
 
 def task_type_label(task_type: str | None) -> str:
     return TASK_TYPE_LABELS.get(task_type or DOCUMENT_TASK_TYPE, "单文档检查")

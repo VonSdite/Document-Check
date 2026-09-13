@@ -13,7 +13,6 @@ from flask import current_app, g, jsonify, request
 
 from .db import get_db
 
-
 REQUEST_ID_HEADER = "X-Request-ID"
 ACCESS_LOG_MAX_BYTES = 10 * 1024 * 1024
 ACCESS_LOG_BACKUP_COUNT = 4
@@ -176,7 +175,9 @@ def _scheduler_status(app) -> str:
     if probe is None:
         from .task_supervisor import supervisor_is_ready
 
-        probe = lambda: supervisor_is_ready(app)
+        def probe():
+            return supervisor_is_ready(app)
+
     try:
         return "ok" if probe() else "error"
     except Exception:
@@ -235,7 +236,9 @@ def _has_file_handler(target_logger, log_file: Path) -> bool:
 def _ensure_console_handler(target_logger) -> None:
     formatter = logging.Formatter("%(asctime)s %(levelname)s [access] %(message)s")
     for handler in target_logger.handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, logging.FileHandler
+        ):
             handler.setLevel(logging.INFO)
             handler.setFormatter(formatter)
             return

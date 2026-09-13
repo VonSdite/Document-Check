@@ -9,7 +9,6 @@ from app.network import access_urls
 from app.observability import log_startup_self_check
 from app.task_supervisor import wait_for_supervisor
 
-
 SUPERVISOR_STOP_TIMEOUT_SECONDS = 20
 
 
@@ -105,7 +104,9 @@ def _stop_task_supervisor(app, stop_event, supervisor) -> None:
     try:
         supervisor.wait(timeout=SUPERVISOR_STOP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        app.logger.warning("任务调度进程未在期限内退出，准备终止 pid=%s", supervisor.pid)
+        app.logger.warning(
+            "任务调度进程未在期限内退出，准备终止 pid=%s", supervisor.pid
+        )
         supervisor.kill()
         supervisor.wait(timeout=3)
 

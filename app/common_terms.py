@@ -4,13 +4,16 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from openpyxl import load_workbook
 import xlrd
+from openpyxl import load_workbook
 
 from .term_cache import load_cached_terms
-from .term_locations import DocumentLocationIndex, TERM_LOCATIONS_PER_ISSUE, excerpt_for
-from .text_language import TEXT_LANGUAGE_CHINESE, estimate_text_language, text_language_label
-
+from .term_locations import TERM_LOCATIONS_PER_ISSUE, DocumentLocationIndex, excerpt_for
+from .text_language import (
+    TEXT_LANGUAGE_CHINESE,
+    estimate_text_language,
+    text_language_label,
+)
 
 COMMON_TERMS_CHECK_CODE = "common-terms"
 COMMON_TERMS_FILENAMES = (
@@ -289,7 +292,10 @@ def _load_xls_terms(path: Path) -> list[CommonTermRule]:
         rules = []
         for sheet in workbook.sheets():
             rows = (
-                [sheet.cell_value(row_index, column_index) for column_index in range(sheet.ncols)]
+                [
+                    sheet.cell_value(row_index, column_index)
+                    for column_index in range(sheet.ncols)
+                ]
                 for row_index in range(sheet.nrows)
             )
             rules.extend(_rules_from_rows(rows, sheet.name))
@@ -439,17 +445,23 @@ def _rule_applies_to_language(rule: CommonTermRule, language: str) -> bool:
     return rule.language_scope == language
 
 
-def _common_terms_context_summary(*, source_path: Path, language: str, skipped_rule_count: int) -> str:
+def _common_terms_context_summary(
+    *, source_path: Path, language: str, skipped_rule_count: int
+) -> str:
     lines = [
         f"文档语种估计：{text_language_label(language)}。",
         f"词表文件：{source_path}",
     ]
     if skipped_rule_count:
-        lines.append(f"已跳过 {skipped_rule_count} 条不适用于当前文档语种的常用词规则。")
+        lines.append(
+            f"已跳过 {skipped_rule_count} 条不适用于当前文档语种的常用词规则。"
+        )
     return "\n".join(lines)
 
 
-def _find_common_term_matches(document_text: str, rules: list[CommonTermRule]) -> list[dict]:
+def _find_common_term_matches(
+    document_text: str, rules: list[CommonTermRule]
+) -> list[dict]:
     text = str(document_text or "")
     candidates = []
     for rule in rules:
@@ -503,7 +515,9 @@ def _find_common_term_matches(document_text: str, rules: list[CommonTermRule]) -
             match["excerpts"].append(
                 excerpt_for(text, candidate["start"], len(candidate["observed"]))
             )
-    return sorted(grouped.values(), key=lambda item: (item["first_position"], item["observed"]))
+    return sorted(
+        grouped.values(), key=lambda item: (item["first_position"], item["observed"])
+    )
 
 
 def _candidate(match: re.Match, standard: str, kind: str) -> dict:

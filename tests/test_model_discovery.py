@@ -37,7 +37,9 @@ class FakeSession:
 class ModelDiscoveryTest(unittest.TestCase):
     def test_builds_model_endpoint_candidates_from_chat_completions_url(self):
         self.assertEqual(
-            model_discovery._build_model_endpoint_candidates("https://example.test/proxy/v1/chat/completions"),
+            model_discovery._build_model_endpoint_candidates(
+                "https://example.test/proxy/v1/chat/completions"
+            ),
             [
                 "https://example.test/proxy/v1/models",
                 "https://example.test/proxy/models",
@@ -51,7 +53,9 @@ class ModelDiscoveryTest(unittest.TestCase):
             ]
         )
 
-        with patch.object(model_discovery.requests, "Session", return_value=fake_session):
+        with patch.object(
+            model_discovery.requests, "Session", return_value=fake_session
+        ):
             models = model_discovery.fetch_models(
                 api_base="https://example.test/v1/chat/completions",
                 api_key="secret",
@@ -61,7 +65,9 @@ class ModelDiscoveryTest(unittest.TestCase):
 
         self.assertEqual(models, ["model-a", "model-b"])
         self.assertEqual(fake_session.calls[0][0], "https://example.test/v1/models")
-        self.assertEqual(fake_session.calls[0][1]["headers"]["Authorization"], "Bearer secret")
+        self.assertEqual(
+            fake_session.calls[0][1]["headers"]["Authorization"], "Bearer secret"
+        )
         self.assertTrue(fake_session.calls[0][1]["verify"])
         self.assertFalse(fake_session.calls[0][2])
 

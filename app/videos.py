@@ -2,16 +2,17 @@ import json
 import locale
 import math
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .documents import DocumentReadError
-
 
 ALLOWED_VIDEO_EXTENSIONS = {"mp4", "mov", "mkv", "webm", "avi", "m4v"}
 DEFAULT_VIDEO_FRAME_MAX_COUNT = 16
 VIDEO_FRAME_MIME_TYPE = "image/jpeg"
 VIDEO_FRAME_RETRY_OFFSETS = (0.0, -0.5, 0.5, -1.0, 1.0)
 VIDEO_FRAME_MIN_SUCCESS_RATIO = 0.75
+VIDEO_FRAME_EXTRACTION_WORKERS = 2
 PROCESS_MESSAGE_MAX_CHARS = 2000
 
 
@@ -24,7 +25,10 @@ class _VideoFrameCommandError(VideoFrameExtractionError):
 
 
 def allowed_video_file(filename: str) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
+    return (
+        "." in filename
+        and filename.rsplit(".", 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
+    )
 
 
 def video_extension_of(filename: str) -> str:
@@ -48,7 +52,10 @@ def _decode_process_output(value) -> str:
 
 
 def _process_message(completed) -> str:
-    message = (_decode_process_output(completed.stderr) or _decode_process_output(completed.stdout)).strip()
+    message = (
+        _decode_process_output(completed.stderr)
+        or _decode_process_output(completed.stdout)
+    ).strip()
     if len(message) > PROCESS_MESSAGE_MAX_CHARS:
         return f"…{message[-PROCESS_MESSAGE_MAX_CHARS:]}"
     return message
@@ -68,24 +75,48 @@ def extract_video_frames(
     if not timestamps:
         raise VideoFrameExtractionError("未能计算视频抽帧时间点。")
 
+    extraction_results = {}
+    extraction_errors = {}
+    worker_count = min(VIDEO_FRAME_EXTRACTION_WORKERS, len(timestamps))
+    with ThreadPoolExecutor(
+        max_workers=max(1, worker_count),
+        thread_name_prefix="video-frame-extract",
+    ) as executor:
+        futures = {
+            executor.submit(
+                _extract_frame_with_fallback,
+                video_path,
+                output_dir,
+                sequence,
+                requested_timestamp,
+                duration,
+            ): (sequence, requested_timestamp)
+            for sequence, requested_timestamp in enumerate(timestamps, start=1)
+        }
+        for future in as_completed(futures):
+            sequence, requested_timestamp = futures[future]
+            try:
+                extraction_results[sequence] = (
+                    requested_timestamp,
+                    future.result(),
+                )
+            except _VideoFrameCommandError as exc:
+                extraction_errors[sequence] = (requested_timestamp, exc)
+
     frames = []
     selected_timestamps = []
     skipped_timestamps = []
     fallback_frame_count = 0
     last_frame_error = None
     for sequence, requested_timestamp in enumerate(timestamps, start=1):
-        try:
-            timestamp, filename, destination = _extract_frame_with_fallback(
-                video_path,
-                output_dir,
-                sequence,
-                requested_timestamp,
-                duration,
-            )
-        except _VideoFrameCommandError as exc:
+        extracted = extraction_results.get(sequence)
+        if extracted is None:
             skipped_timestamps.append(round(float(requested_timestamp), 3))
-            last_frame_error = exc
+            error = extraction_errors.get(sequence)
+            if error is not None:
+                last_frame_error = error[1]
             continue
+        requested_timestamp, (timestamp, filename, destination) = extracted
         if abs(timestamp - requested_timestamp) >= 0.001:
             fallback_frame_count += 1
         selected_timestamps.append(round(float(timestamp), 3))
@@ -106,7 +137,10 @@ def extract_video_frames(
         )
     minimum_frame_count = max(
         1,
-        min(len(timestamps) - 1, math.ceil(len(timestamps) * VIDEO_FRAME_MIN_SUCCESS_RATIO)),
+        min(
+            len(timestamps) - 1,
+            math.ceil(len(timestamps) * VIDEO_FRAME_MIN_SUCCESS_RATIO),
+        ),
     )
     if len(frames) < minimum_frame_count:
         detail = f"；最后错误：{last_frame_error}" if last_frame_error else ""
@@ -126,7 +160,9 @@ def extract_video_frames(
     }
 
 
-def format_video_document_text(filename: str, frames: list[dict], selection: dict | None = None) -> str:
+def format_video_document_text(
+    filename: str, frames: list[dict], selection: dict | None = None
+) -> str:
     name = Path(str(filename or "")).name.strip() or "video"
     selection = selection or {}
     duration = float(selection.get("duration_seconds") or 0)
@@ -134,7 +170,9 @@ def format_video_document_text(filename: str, frames: list[dict], selection: dic
         f"file: {name}",
         "",
         "video_context:",
-        f"- 视频时长：{_format_timestamp(duration)}（{duration:.1f} 秒）" if duration else "- 视频时长：未识别",
+        f"- 视频时长：{_format_timestamp(duration)}（{duration:.1f} 秒）"
+        if duration
+        else "- 视频时长：未识别",
         f"- 抽取帧数：{len(frames)}",
         "- 抽帧策略：按时间轴均匀采样，模型只能看到这些采样帧，连续动作需结合前后帧判断。",
         "",
@@ -165,17 +203,25 @@ def _probe_video_duration(video_path: Path) -> float:
         str(video_path),
     ]
     try:
-        completed = subprocess.run(command, capture_output=True, timeout=30, check=False)
+        completed = subprocess.run(
+            command, capture_output=True, timeout=30, check=False
+        )
     except FileNotFoundError as exc:
-        raise VideoFrameExtractionError("视频抽帧依赖 ffmpeg/ffprobe，当前环境未安装或未加入 PATH。") from exc
+        raise VideoFrameExtractionError(
+            "视频抽帧依赖 ffmpeg/ffprobe，当前环境未安装或未加入 PATH。"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise VideoFrameExtractionError("读取视频时长超时。") from exc
     if completed.returncode != 0:
         message = _process_message(completed)
-        raise VideoFrameExtractionError(f"读取视频时长失败：{message or 'ffprobe 返回异常'}")
+        raise VideoFrameExtractionError(
+            f"读取视频时长失败：{message or 'ffprobe 返回异常'}"
+        )
     try:
         payload = json.loads(_decode_process_output(completed.stdout) or "{}")
-        stream_duration = _positive_float((payload.get("streams") or [{}])[0].get("duration"))
+        stream_duration = _positive_float(
+            (payload.get("streams") or [{}])[0].get("duration")
+        )
         format_duration = _positive_float(payload.get("format", {}).get("duration"))
         durations = [value for value in (stream_duration, format_duration) if value > 0]
         duration = min(durations) if durations else 0
@@ -240,14 +286,22 @@ def _extract_frame(video_path: Path, destination: Path, timestamp: float) -> Non
         str(destination),
     ]
     try:
-        completed = subprocess.run(command, capture_output=True, timeout=60, check=False)
+        completed = subprocess.run(
+            command, capture_output=True, timeout=60, check=False
+        )
     except FileNotFoundError as exc:
-        raise VideoFrameExtractionError("视频抽帧依赖 ffmpeg/ffprobe，当前环境未安装或未加入 PATH。") from exc
+        raise VideoFrameExtractionError(
+            "视频抽帧依赖 ffmpeg/ffprobe，当前环境未安装或未加入 PATH。"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise _VideoFrameCommandError(f"抽取 {_format_timestamp(timestamp)} 视频帧超时。") from exc
+        raise _VideoFrameCommandError(
+            f"抽取 {_format_timestamp(timestamp)} 视频帧超时。"
+        ) from exc
     if completed.returncode != 0:
         message = _process_message(completed)
-        raise _VideoFrameCommandError(f"抽取 {_format_timestamp(timestamp)} 视频帧失败：{message or 'ffmpeg 返回异常'}")
+        raise _VideoFrameCommandError(
+            f"抽取 {_format_timestamp(timestamp)} 视频帧失败：{message or 'ffmpeg 返回异常'}"
+        )
 
 
 def _extract_frame_with_fallback(
@@ -271,10 +325,14 @@ def _extract_frame_with_fallback(
         if destination.is_file() and destination.stat().st_size > 0:
             return timestamp, filename, destination
         destination.unlink(missing_ok=True)
-        last_error = _VideoFrameCommandError(f"抽取 {_format_timestamp(timestamp)} 视频帧后未生成有效图片。")
+        last_error = _VideoFrameCommandError(
+            f"抽取 {_format_timestamp(timestamp)} 视频帧后未生成有效图片。"
+        )
     if last_error is not None:
         raise last_error
-    raise _VideoFrameCommandError(f"视频采样点 {_format_timestamp(requested_timestamp)} 无可用抽帧时间。")
+    raise _VideoFrameCommandError(
+        f"视频采样点 {_format_timestamp(requested_timestamp)} 无可用抽帧时间。"
+    )
 
 
 def _frame_timestamp_candidates(timestamp: float, duration: float) -> list[float]:

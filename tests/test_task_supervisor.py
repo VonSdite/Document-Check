@@ -100,9 +100,11 @@ class TaskSupervisorTest(unittest.TestCase):
         claimed = supervisor._claim_available_tasks(max_claims=2)
 
         self.assertEqual(len(claimed), 2)
-        running = get_db().execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'"
-        ).fetchone()["total"]
+        running = (
+            get_db()
+            .execute("SELECT COUNT(*) AS total FROM tasks WHERE status = 'running'")
+            .fetchone()["total"]
+        )
         self.assertEqual(running, 2)
 
     def test_supervisor_launches_one_process_for_each_claimed_task(self):

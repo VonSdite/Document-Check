@@ -18,7 +18,6 @@ from .tasks import (
     cleanup_expired_task_files,
 )
 
-
 SUPERVISOR_POLL_SECONDS = 2
 SUPERVISOR_HEARTBEAT_STALE_SECONDS = 10
 SUPERVISOR_SHUTDOWN_GRACE_SECONDS = 10
@@ -104,12 +103,16 @@ class TaskSupervisor:
                 self.max_processes,
             )
 
-    def _claim_available_tasks(self, max_claims: int | None = None) -> list[tuple[int, str]]:
+    def _claim_available_tasks(
+        self, max_claims: int | None = None
+    ) -> list[tuple[int, str]]:
         db = get_db()
         claimed_tasks: list[tuple[int, str]] = []
         recovered_count = 0
         canceled_count = 0
-        claim_limit = self.max_processes if max_claims is None else max(0, int(max_claims))
+        claim_limit = (
+            self.max_processes if max_claims is None else max(0, int(max_claims))
+        )
         try:
             db.execute("BEGIN IMMEDIATE")
             now = now_text()
@@ -193,7 +196,7 @@ class TaskSupervisor:
                                COALESCE(running_by_owner.running_count, 0) AS running_for_user,
                                ROW_NUMBER() OVER (
                                    PARTITION BY queued.owner_subject
-                                   ORDER BY queued.created_at ASC, queued.id ASC
+                                   ORDER BY queued.id ASC
                                ) AS owner_queue_position,
                                queued.created_at
                         FROM tasks AS queued
@@ -233,7 +236,13 @@ class TaskSupervisor:
                             updated_at = ?
                         WHERE id = ? AND status = 'queued'
                         """,
-                        (claim_token, _task_lease_deadline_text(), now, now, task["id"]),
+                        (
+                            claim_token,
+                            _task_lease_deadline_text(),
+                            now,
+                            now,
+                            task["id"],
+                        ),
                     )
                     if claimed.rowcount == 1:
                         claimed_tasks.append((task["id"], claim_token))
@@ -244,9 +253,13 @@ class TaskSupervisor:
             raise
 
         if recovered_count:
-            self.app.logger.warning("已回收租约过期的运行任务 count=%s", recovered_count)
+            self.app.logger.warning(
+                "已回收租约过期的运行任务 count=%s", recovered_count
+            )
         if canceled_count:
-            self.app.logger.warning("已结束租约过期的取消中任务 count=%s", canceled_count)
+            self.app.logger.warning(
+                "已结束租约过期的取消中任务 count=%s", canceled_count
+            )
         return claimed_tasks
 
     def _reap_finished_processes(self) -> None:
@@ -267,7 +280,10 @@ class TaskSupervisor:
 
     def _refresh_report_stats_if_due(self) -> None:
         now = time.monotonic()
-        if now - self._last_report_stats_refresh < REPORT_STATS_REFRESH_INTERVAL_SECONDS:
+        if (
+            now - self._last_report_stats_refresh
+            < REPORT_STATS_REFRESH_INTERVAL_SECONDS
+        ):
             return
         self._last_report_stats_refresh = now
         try:
@@ -318,8 +334,7 @@ def run_task_supervisor(stop_event, parent_pid: int | None = None) -> None:
     try:
         TaskSupervisor(create_task_app()).run(stop_event, parent_pid=parent_pid)
     except KeyboardInterrupt:
-        # Gunicorn forwards terminal signals to the process group. The
-        # supervisor has already entered its shutdown path in this case.
+        # Gunicorn 将终端信号转发到进程组，监督器在此结束运行。
         return
 
 
@@ -342,7 +357,9 @@ def supervisor_is_ready(app, *, now: float | None = None) -> bool:
         return False
     if state.get("status") != "running":
         return False
-    if (time.time() if now is None else now) - heartbeat_at > SUPERVISOR_HEARTBEAT_STALE_SECONDS:
+    if (
+        time.time() if now is None else now
+    ) - heartbeat_at > SUPERVISOR_HEARTBEAT_STALE_SECONDS:
         return False
     try:
         os.kill(pid, 0)
@@ -360,7 +377,9 @@ def wait_for_supervisor(app, process, timeout: float = 10) -> bool:
             return False
         if supervisor_is_ready(app):
             try:
-                state = json.loads(supervisor_state_path(app).read_text(encoding="utf-8"))
+                state = json.loads(
+                    supervisor_state_path(app).read_text(encoding="utf-8")
+                )
             except (OSError, json.JSONDecodeError):
                 pass
             else:

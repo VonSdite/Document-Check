@@ -2,11 +2,12 @@ import shutil
 import time
 from pathlib import Path
 
-
 LOCKED_FILE_WINERRORS = {32, 33}
 
 
-def remove_file(path: Path, *, retries: int = 2, delay_seconds: float = 0.2) -> tuple[bool, str]:
+def remove_file(
+    path: Path, *, retries: int = 2, delay_seconds: float = 0.2
+) -> tuple[bool, str]:
     target = Path(path)
     last_error = None
     for attempt in range(max(0, retries) + 1):
@@ -26,7 +27,9 @@ def remove_file(path: Path, *, retries: int = 2, delay_seconds: float = 0.2) -> 
     return False, file_error_text(last_error)
 
 
-def remove_directory_tree(path: Path, *, retries: int = 2, delay_seconds: float = 0.2) -> tuple[bool, str]:
+def remove_directory_tree(
+    path: Path, *, retries: int = 2, delay_seconds: float = 0.2
+) -> tuple[bool, str]:
     target = Path(path)
     last_error = None
     for attempt in range(max(0, retries) + 1):

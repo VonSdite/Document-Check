@@ -6,7 +6,11 @@ from unittest.mock import patch
 from openpyxl import Workbook
 
 from app import common_terms, sensitive_terms
-from app.common_terms import CommonTermRule, build_common_terms_report, load_common_terms
+from app.common_terms import (
+    CommonTermRule,
+    build_common_terms_report,
+    load_common_terms,
+)
 from app.sensitive_terms import load_sensitive_terms
 from app.term_cache import clear_term_file_cache
 
@@ -140,8 +144,12 @@ class CommonTermsTest(unittest.TestCase):
         self.assertIn("不推荐用法“Open AI”", descriptions)
         self.assertIn("不推荐用法“登陆”", descriptions)
         self.assertNotIn("openaiService", descriptions)
-        self.assertTrue(all("文件：doc.txt" in item["location"] for item in report["items"]))
-        self.assertTrue(all("页码：第3页" in item["location"] for item in report["items"]))
+        self.assertTrue(
+            all("文件：doc.txt" in item["location"] for item in report["items"])
+        )
+        self.assertTrue(
+            all("页码：第3页" in item["location"] for item in report["items"])
+        )
 
     def test_accepts_exact_case_and_does_not_match_inside_longer_identifier(self):
         rules = [CommonTermRule("OpenAI", ("Open AI",))]
@@ -169,7 +177,9 @@ class CommonTermsTest(unittest.TestCase):
 
         self.assertEqual(report["items"], [])
 
-    def test_chinese_only_rule_checks_discouraged_terms_and_case_in_chinese_document(self):
+    def test_chinese_only_rule_checks_discouraged_terms_and_case_in_chinese_document(
+        self,
+    ):
         rules = [CommonTermRule("App", ("APP", "app"), language_scope="zh")]
         document_text = (
             "这是面向客户发布的中文操作指南，介绍移动应用的安装、登录、配置、使用和维护方法。"
@@ -261,8 +271,10 @@ class CommonTermsTest(unittest.TestCase):
     def test_chinese_only_rule_is_skipped_for_mixed_or_short_document(self):
         rules = [CommonTermRule("App", ("APP", "app"), language_scope="zh")]
         mixed_text = (
-            "这是中文说明文字，用于介绍安装配置操作、使用限制、结果验证和维护注意事项。" * 2
-            + " This English section explains installation configuration operation verification maintenance " * 3
+            "这是中文说明文字，用于介绍安装配置操作、使用限制、结果验证和维护注意事项。"
+            * 2
+            + " This English section explains installation configuration operation verification maintenance "
+            * 3
             + "APP app"
         )
 

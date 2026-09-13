@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-
 DEFAULT_ADMIN_URL = "/console"
 DEFAULT_PLATFORM = False
 DEFAULT_LISTEN_HOST = "0.0.0.0"
@@ -69,7 +68,9 @@ def _default_config() -> dict:
         },
         "admin_url": DEFAULT_ADMIN_URL,
         "server": {
-            "host": DEFAULT_LISTEN_HOST if DEFAULT_PLATFORM else DEFAULT_LOCAL_LISTEN_HOST,
+            "host": DEFAULT_LISTEN_HOST
+            if DEFAULT_PLATFORM
+            else DEFAULT_LOCAL_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
             "url_prefix": DEFAULT_URL_PREFIX,
             "real_ip_header": DEFAULT_REAL_IP_HEADER,
@@ -127,17 +128,25 @@ def _normalize_config(config: dict) -> dict:
     admin_password = admin.get("password")
     admin["username"] = "admin" if admin_username is None else str(admin_username)
     admin["password"] = "admin123" if admin_password is None else str(admin_password)
-    config["admin_url"] = _normalize_admin_url(config.get("admin_url", DEFAULT_ADMIN_URL))
+    config["admin_url"] = _normalize_admin_url(
+        config.get("admin_url", DEFAULT_ADMIN_URL)
+    )
 
     server = config.get("server")
     if not isinstance(server, dict):
         server = {}
     config["server"] = server
-    default_host = DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
+    default_host = (
+        DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
+    )
     server["host"] = str(server.get("host") or default_host).strip() or default_host
     server["port"] = _normalize_port(server.get("port", DEFAULT_LISTEN_PORT))
-    server["url_prefix"] = _normalize_url_prefix(server.get("url_prefix", DEFAULT_URL_PREFIX))
-    server["real_ip_header"] = _normalize_header_name(server.get("real_ip_header", DEFAULT_REAL_IP_HEADER))
+    server["url_prefix"] = _normalize_url_prefix(
+        server.get("url_prefix", DEFAULT_URL_PREFIX)
+    )
+    server["real_ip_header"] = _normalize_header_name(
+        server.get("real_ip_header", DEFAULT_REAL_IP_HEADER)
+    )
     server["proxy_fix"] = _normalize_bool(server.get("proxy_fix"), DEFAULT_PROXY_FIX)
     server["max_upload_mb"] = _normalize_positive_int(
         server.get("max_upload_mb", DEFAULT_MAX_UPLOAD_MB),

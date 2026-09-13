@@ -2,7 +2,6 @@ import re
 
 from .text_language import estimate_text_language, text_language_label
 
-
 LANGUAGE_STATIC_TOKEN_RE = re.compile(
     r"https?://[^\s<>\]\)\"']+"
     r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"

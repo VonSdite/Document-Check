@@ -265,11 +265,15 @@ def _create_http_session(proxy_mode: str):
     return session
 
 
-def _http_session_pool(endpoint: str, proxy_mode: str, proxy: Optional[str]) -> _HTTPSessionPool:
+def _http_session_pool(
+    endpoint: str, proxy_mode: str, proxy: Optional[str]
+) -> _HTTPSessionPool:
     normalized_mode = str(proxy_mode or "direct").strip().lower() or "direct"
     normalized_proxy = str(proxy or "").strip() if normalized_mode == "custom" else ""
     parsed_endpoint = urlsplit(str(endpoint or ""))
-    endpoint_origin = f"{parsed_endpoint.scheme.lower()}://{parsed_endpoint.netloc.lower()}"
+    endpoint_origin = (
+        f"{parsed_endpoint.scheme.lower()}://{parsed_endpoint.netloc.lower()}"
+    )
     key = (endpoint_origin, normalized_mode, normalized_proxy)
     with _http_session_pools_lock:
         pool = _http_session_pools.get(key)
@@ -358,9 +362,7 @@ def run_check(
 
     issue_limit = _normalized_issue_output_limit(issue_output_limit)
     output_token_limit = (
-        None
-        if max_completion_tokens is None
-        else max(1, int(max_completion_tokens))
+        None if max_completion_tokens is None else max(1, int(max_completion_tokens))
     )
     payload = {
         "model": model_name,
@@ -1511,7 +1513,9 @@ def _read_stream_lines(
                 f"模型流式正文超过字符上限 {_MAX_STREAM_CONTENT_CHARS}，已提前终止本次请求。"
             )
         parts.append(delta)
-        content_tail = (content_tail + delta)[-max(_REPEAT_WINDOW_SIZES) * _REPEAT_WINDOW_COUNT :]
+        content_tail = (content_tail + delta)[
+            -max(_REPEAT_WINDOW_SIZES) * _REPEAT_WINDOW_COUNT :
+        ]
         if _repeated_content_tail(content_tail):
             logger.warning(
                 "LLM 流式正文疑似重复输出，提前中止 request_id=%s task_id=%s attempt=%s chars=%s %s",

@@ -5,8 +5,13 @@ from datetime import datetime
 from flask import current_app, g
 
 from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
-from .task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
-
+from .task_types import (
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    IMAGE_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+    VIDEO_TASK_TYPE,
+)
 
 MODEL_THINKING_DEFAULT_MIGRATION_KEY = "model_force_disable_thinking_default_v2"
 
@@ -203,8 +208,12 @@ def init_db():
             ON report_suppression_hits(rule_id, created_at DESC);
         """
     )
-    _ensure_column(db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")
-    _ensure_column(db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'")
+    _ensure_column(
+        db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
+    )
+    _ensure_column(
+        db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
+    )
     _ensure_column(db, "tasks", "document_text", "TEXT")
     _ensure_column(db, "tasks", "document_meta_json", "TEXT")
     _ensure_column(db, "tasks", "checks_snapshot_json", "TEXT")
@@ -220,12 +229,27 @@ def init_db():
     _ensure_column(db, "tasks", "claim_token", "TEXT")
     _ensure_column(db, "tasks", "lease_expires_at", "TEXT")
     _ensure_column(db, "tasks", "source_files_cleaned_at", "TEXT")
-    _ensure_column(db, "task_report_stats", "reviewed_item_count", "INTEGER NOT NULL DEFAULT 0")
-    _ensure_column(db, "task_report_stats", "pending_review_item_count", "INTEGER NOT NULL DEFAULT 0")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_lease ON tasks(status, lease_expires_at)")
+    _ensure_column(
+        db, "task_report_stats", "reviewed_item_count", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _ensure_column(
+        db,
+        "task_report_stats",
+        "pending_review_item_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(task_type, status)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_lease ON tasks(status, lease_expires_at)"
+    )
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_status_created_id "
         "ON tasks(status, created_at ASC, id ASC)"
@@ -257,7 +281,9 @@ def init_db():
 
 
 def _ensure_column(db, table: str, column: str, definition: str):
-    columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+    columns = {
+        row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()
+    }
     if column not in columns:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
@@ -363,7 +389,9 @@ def set_setting(key: str, value):
 
 
 def get_setting(key: str, default=None):
-    row = get_db().execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    row = (
+        get_db().execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    )
     if row is None:
         return default
     try:
@@ -395,7 +423,11 @@ def get_ip_username(ip: str) -> str:
     ip = str(ip or "").strip()
     if not ip:
         return ""
-    row = get_db().execute("SELECT username FROM ip_usernames WHERE ip = ?", (ip,)).fetchone()
+    row = (
+        get_db()
+        .execute("SELECT username FROM ip_usernames WHERE ip = ?", (ip,))
+        .fetchone()
+    )
     return row["username"] if row is not None else ""
 
 
@@ -883,21 +915,25 @@ DEFAULT_IMAGE_CHECK_ITEMS = (
     },
 )
 
-DEFAULT_CHECK_ITEMS = tuple(
-    {**item, "task_type": DOCUMENT_TASK_TYPE}
-    for item in DEFAULT_DOCUMENT_CHECK_ITEMS
-) + tuple(
-    {**item, "task_type": CONSISTENCY_TASK_TYPE}
-    for item in DEFAULT_CONSISTENCY_CHECK_ITEMS
-) + tuple(
-    {**item, "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE}
-    for item in DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS
-) + tuple(
-    {**item, "task_type": VIDEO_TASK_TYPE}
-    for item in DEFAULT_VIDEO_CHECK_ITEMS
-) + tuple(
-    {**item, "task_type": IMAGE_TASK_TYPE}
-    for item in DEFAULT_IMAGE_CHECK_ITEMS
+DEFAULT_CHECK_ITEMS = (
+    tuple(
+        {**item, "task_type": DOCUMENT_TASK_TYPE}
+        for item in DEFAULT_DOCUMENT_CHECK_ITEMS
+    )
+    + tuple(
+        {**item, "task_type": CONSISTENCY_TASK_TYPE}
+        for item in DEFAULT_CONSISTENCY_CHECK_ITEMS
+    )
+    + tuple(
+        {**item, "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE}
+        for item in DEFAULT_LANGUAGE_CONSISTENCY_CHECK_ITEMS
+    )
+    + tuple(
+        {**item, "task_type": VIDEO_TASK_TYPE} for item in DEFAULT_VIDEO_CHECK_ITEMS
+    )
+    + tuple(
+        {**item, "task_type": IMAGE_TASK_TYPE} for item in DEFAULT_IMAGE_CHECK_ITEMS
+    )
 )
 DEFAULT_CHECK_ITEMS_BY_CODE = {item["code"]: item for item in DEFAULT_CHECK_ITEMS}
 _IMAGE_LANGUAGE_MATCH_CODE = "image-small-language-text"
@@ -1023,7 +1059,10 @@ _LEGACY_IMAGE_LANGUAGE_MARKERS = ("小语种", "非中文、非英文")
 _QWEN_VL_OPTIMIZED_IMAGE_PROMPT_MARKERS = {
     "image-text-correspondence": ("图文一致性审查专家",),
     "image-wiring": ("电气接线图和设备接线审查专家",),
-    "image-figure-table-title-standard": ("必须判为表标题缺失", "同一张图片中可能同时出现"),
+    "image-figure-table-title-standard": (
+        "必须判为表标题缺失",
+        "同一张图片中可能同时出现",
+    ),
     "image-integrity-clarity": ("异常红块", "过度拉伸"),
     "image-drawing-standard": ("技术制图和图示规范审查专家", "线型线宽"),
 }
@@ -1087,7 +1126,9 @@ def seed_defaults():
                 (key, json.dumps(value, ensure_ascii=False), now),
             )
 
-    issue_limit_row = db.execute("SELECT value FROM settings WHERE key = 'issue_output_limit'").fetchone()
+    issue_limit_row = db.execute(
+        "SELECT value FROM settings WHERE key = 'issue_output_limit'"
+    ).fetchone()
     if issue_limit_row is not None:
         try:
             stored_issue_limit = json.loads(issue_limit_row["value"])
@@ -1101,7 +1142,9 @@ def seed_defaults():
             )
 
     for item in DEFAULT_CHECK_ITEMS:
-        exists = db.execute("SELECT 1 FROM check_items WHERE code = ?", (item["code"],)).fetchone()
+        exists = db.execute(
+            "SELECT 1 FROM check_items WHERE code = ?", (item["code"],)
+        ).fetchone()
         if exists is None:
             db.execute(
                 """
@@ -1166,12 +1209,9 @@ def _sync_compliance_prompt(db, updated_at: str):
     if row is None:
         return
     prompt = str(row["prompt"] or "")
-    is_stock_prompt = (
-        prompt == default_item["prompt"]
-        or any(
-            all(marker in prompt for marker in markers)
-            for markers in _COMPLIANCE_STOCK_PROMPT_MARKER_SETS
-        )
+    is_stock_prompt = prompt == default_item["prompt"] or any(
+        all(marker in prompt for marker in markers)
+        for markers in _COMPLIANCE_STOCK_PROMPT_MARKER_SETS
     )
     if not is_stock_prompt:
         return
@@ -1255,12 +1295,9 @@ def _sync_understandability_prompt(db, updated_at: str):
     if row is None:
         return
     prompt = str(row["prompt"] or "")
-    is_stock_prompt = (
-        prompt == default_item["prompt"]
-        or any(
-            all(marker in prompt for marker in markers)
-            for markers in _UNDERSTANDABILITY_STOCK_PROMPT_MARKER_SETS
-        )
+    is_stock_prompt = prompt == default_item["prompt"] or any(
+        all(marker in prompt for marker in markers)
+        for markers in _UNDERSTANDABILITY_STOCK_PROMPT_MARKER_SETS
     )
     if not is_stock_prompt:
         return
@@ -1301,12 +1338,9 @@ def _sync_completeness_prompt(db, updated_at: str):
     if row is None:
         return
     prompt = str(row["prompt"] or "")
-    is_stock_prompt = (
-        prompt == default_item["prompt"]
-        or any(
-            all(marker in prompt for marker in markers)
-            for markers in _COMPLETENESS_STOCK_PROMPT_MARKER_SETS
-        )
+    is_stock_prompt = prompt == default_item["prompt"] or any(
+        all(marker in prompt for marker in markers)
+        for markers in _COMPLETENESS_STOCK_PROMPT_MARKER_SETS
     )
     if not is_stock_prompt:
         return
@@ -1347,12 +1381,9 @@ def _sync_consistency_prompt(db, updated_at: str):
     if row is None:
         return
     prompt = str(row["prompt"] or "")
-    is_stock_prompt = (
-        prompt == default_item["prompt"]
-        or any(
-            all(marker in prompt for marker in markers)
-            for markers in _CONSISTENCY_STOCK_PROMPT_MARKER_SETS
-        )
+    is_stock_prompt = prompt == default_item["prompt"] or any(
+        all(marker in prompt for marker in markers)
+        for markers in _CONSISTENCY_STOCK_PROMPT_MARKER_SETS
     )
     if not is_stock_prompt:
         return
@@ -1393,12 +1424,9 @@ def _disable_merged_typo_check_item(db, updated_at: str):
     if row is None:
         return
     prompt = str(row["prompt"] or "")
-    is_stock_item = (
-        prompt == default_item["prompt"]
-        or any(
-            all(marker in prompt for marker in markers)
-            for markers in _TYPO_STOCK_PROMPT_MARKER_SETS
-        )
+    is_stock_item = prompt == default_item["prompt"] or any(
+        all(marker in prompt for marker in markers)
+        for markers in _TYPO_STOCK_PROMPT_MARKER_SETS
     )
     if not is_stock_item:
         return
@@ -1488,7 +1516,9 @@ def _sync_renamed_default_check_items(db, updated_at: str):
     if row is None:
         return
     prompt = str(row["prompt"] or "")
-    should_update_prompt = any(marker in prompt for marker in _LEGACY_IMAGE_LANGUAGE_MARKERS)
+    should_update_prompt = any(
+        marker in prompt for marker in _LEGACY_IMAGE_LANGUAGE_MARKERS
+    )
     next_prompt = default_item["prompt"] if should_update_prompt else prompt
     if (
         row["name"] == default_item["name"]
@@ -1530,7 +1560,9 @@ def _sync_qwen_vl_optimized_image_check_items(db, updated_at: str):
         if row is None:
             continue
         prompt = str(row["prompt"] or "")
-        is_stock_prompt = prompt == default_item["prompt"] or all(marker in prompt for marker in markers)
+        is_stock_prompt = prompt == default_item["prompt"] or all(
+            marker in prompt for marker in markers
+        )
         if not is_stock_prompt:
             continue
         if (

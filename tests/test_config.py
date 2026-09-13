@@ -5,8 +5,13 @@ from unittest.mock import patch
 
 import yaml
 
-from app import _runtime_root_dir, create_app
-from app.config import CONFIG_FILENAME, DEFAULT_MAX_UPLOAD_MB, load_local_config, save_network_config
+from app import create_app
+from app.config import (
+    CONFIG_FILENAME,
+    DEFAULT_MAX_UPLOAD_MB,
+    load_local_config,
+    save_network_config,
+)
 
 
 def _write_config(root_dir: str, config: dict):
@@ -28,7 +33,8 @@ class ProviderConfigTest(unittest.TestCase):
                 continue
             table_templates.append(template_path.name)
             self.assertTrue(
-                '{% extends "base.html" %}' in source or "{{ table_resize_js|safe }}" in source,
+                '{% extends "base.html" %}' in source
+                or "{{ table_resize_js|safe }}" in source,
                 f"{template_path.name} 未加载表格列宽拖拽脚本",
             )
 
@@ -46,9 +52,14 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["server"]["real_ip_header"], "")
         self.assertFalse(config["server"]["proxy_fix"])
         self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
-        self.assertEqual(config["network"], {"proxy_mode": "direct", "proxy": "", "ssl_verify": False})
+        self.assertEqual(
+            config["network"],
+            {"proxy_mode": "direct", "proxy": "", "ssl_verify": False},
+        )
         self.assertEqual(config["auth"]["mode"], "ip")
-        self.assertEqual(config["auth"]["trusted_header"], {"user_id": "", "username": ""})
+        self.assertEqual(
+            config["auth"]["trusted_header"], {"user_id": "", "username": ""}
+        )
         self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "")
 
     def test_server_proxy_config_is_normalized(self):
@@ -144,7 +155,9 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["server"]["host"], "0.0.0.0")
         self.assertEqual(config["server"]["port"], 31945)
         self.assertEqual(config["auth"]["mode"], "trusted_header")
-        self.assertEqual(config["auth"]["trusted_header"], {"user_id": "", "username": ""})
+        self.assertEqual(
+            config["auth"]["trusted_header"], {"user_id": "", "username": ""}
+        )
 
     def test_explicit_empty_admin_password_is_preserved(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -254,7 +267,10 @@ class ProviderConfigTest(unittest.TestCase):
             config = load_local_config(Path(temp_dir))
 
         self.assertEqual(config["auth"]["mode"], "saml")
-        self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "https://doc.example.com/auth/saml/metadata")
+        self.assertEqual(
+            config["auth"]["saml"]["sp_entity_id"],
+            "https://doc.example.com/auth/saml/metadata",
+        )
         self.assertEqual(config["auth"]["saml"]["idp_x509_cert"], "test-cert")
         self.assertEqual(config["auth"]["saml"]["user_id_attribute"], "uid")
 
@@ -295,13 +311,20 @@ class ProviderConfigTest(unittest.TestCase):
                     "admin": {"username": "admin", "password": "password"},
                     "admin_url": "/admin",
                     "server": {"host": "127.0.0.1", "port": 5000},
-                    "network": {"proxy_mode": "custom", "proxy": "", "ssl_verify": "off"},
+                    "network": {
+                        "proxy_mode": "custom",
+                        "proxy": "",
+                        "ssl_verify": "off",
+                    },
                 },
             )
 
             config = load_local_config(Path(temp_dir))
 
-        self.assertEqual(config["network"], {"proxy_mode": "direct", "proxy": "", "ssl_verify": False})
+        self.assertEqual(
+            config["network"],
+            {"proxy_mode": "direct", "proxy": "", "ssl_verify": False},
+        )
 
     def test_save_network_config_writes_yaml_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -313,19 +336,33 @@ class ProviderConfigTest(unittest.TestCase):
                     "admin": {"username": "admin", "password": "password"},
                     "admin_url": "/admin",
                     "server": {"host": "0.0.0.0", "port": 5000},
-                    "network": {"proxy_mode": "direct", "proxy": "", "ssl_verify": False},
+                    "network": {
+                        "proxy_mode": "direct",
+                        "proxy": "",
+                        "ssl_verify": False,
+                    },
                 },
             )
 
             network = save_network_config(
                 Path(temp_dir),
-                {"proxy_mode": "custom", "proxy": " http://127.0.0.1:7890 ", "ssl_verify": True},
+                {
+                    "proxy_mode": "custom",
+                    "proxy": " http://127.0.0.1:7890 ",
+                    "ssl_verify": True,
+                },
             )
-            config = yaml.safe_load((Path(temp_dir) / CONFIG_FILENAME).read_text(encoding="utf-8"))
+            config = yaml.safe_load(
+                (Path(temp_dir) / CONFIG_FILENAME).read_text(encoding="utf-8")
+            )
 
         self.assertEqual(
             network,
-            {"proxy_mode": "custom", "proxy": "http://127.0.0.1:7890", "ssl_verify": True},
+            {
+                "proxy_mode": "custom",
+                "proxy": "http://127.0.0.1:7890",
+                "ssl_verify": True,
+            },
         )
         self.assertTrue(config["platform"])
         self.assertEqual(config["network"], network)
@@ -378,7 +415,10 @@ class ProviderConfigTest(unittest.TestCase):
             self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
             self.assertEqual(created_app.config["LISTEN_PORT"], 5000)
             self.assertEqual(created_app.config["MAX_UPLOAD_MB"], DEFAULT_MAX_UPLOAD_MB)
-            self.assertEqual(created_app.config["MAX_CONTENT_LENGTH"], DEFAULT_MAX_UPLOAD_MB * 1024 * 1024)
+            self.assertEqual(
+                created_app.config["MAX_CONTENT_LENGTH"],
+                DEFAULT_MAX_UPLOAD_MB * 1024 * 1024,
+            )
             self.assertEqual(created_app.config["WEB_WORKERS"], 2)
             self.assertEqual(created_app.config["WEB_THREADS"], 16)
             self.assertEqual(created_app.config["MAX_TASK_PROCESSES"], 4)
@@ -456,6 +496,7 @@ class ProviderConfigTest(unittest.TestCase):
             config = load_local_config(Path(temp_dir))
 
         self.assertNotIn("providers", config)
+
 
 if __name__ == "__main__":
     unittest.main()

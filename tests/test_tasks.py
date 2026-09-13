@@ -11,9 +11,9 @@ from openpyxl import Workbook
 
 from app.common_terms import COMMON_TERMS_CHECK_CODE
 from app.db import get_db, init_db, now_text, set_setting
+from app.hyperlinks import HYPERLINK_CHECK_CODE
 from app.llm import LLMError
 from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
-from app.hyperlinks import HYPERLINK_CHECK_CODE
 from app.task_supervisor import TaskSupervisor
 from app.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -24,22 +24,22 @@ from app.task_types import (
 )
 from app.tasks import (
     TaskRunner,
-    cleanup_task_file_cache,
-    cleanup_expired_task_files,
-    task_file_cache_snapshot,
+    _check_item_groups,
     _document_check_items,
     _document_text_for_image_batch,
     _format_image_check_issue_summary,
-    _check_item_groups,
     _image_check_target,
+    _mark_failed,
     _merge_check_results,
     _merge_video_batch_reports,
-    _run_combined_multimodal_check_with_repair,
     _run_check_items_concurrently,
+    _run_combined_multimodal_check_with_repair,
     _save_intermediate_results,
     _split_combined_check_output,
     _split_combined_structured_output,
-    _mark_failed,
+    cleanup_expired_task_files,
+    cleanup_task_file_cache,
+    task_file_cache_snapshot,
 )
 
 
@@ -50,7 +50,11 @@ class TaskExecutionTest(unittest.TestCase):
         self.app.config["DATABASE"] = str(Path(self.temp_dir.name) / "test.sqlite3")
         self.app.config["UPLOAD_FOLDER"] = str(Path(self.temp_dir.name) / "uploads")
         self.app.config["IMAGE_FOLDER"] = str(Path(self.temp_dir.name) / "images")
-        self.app.config["NETWORK"] = {"proxy_mode": "direct", "proxy": "", "ssl_verify": False}
+        self.app.config["NETWORK"] = {
+            "proxy_mode": "direct",
+            "proxy": "",
+            "ssl_verify": False,
+        }
         Path(self.app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
         Path(self.app.config["IMAGE_FOLDER"]).mkdir(parents=True, exist_ok=True)
         self.context = self.app.app_context()
@@ -87,12 +91,23 @@ class TaskExecutionTest(unittest.TestCase):
                 ?, 0, ?, ?, ?, ?
             )
             """,
-            (owner_subject, provider_id, api_key, status, claim_token, lease_expires_at, now, now),
+            (
+                owner_subject,
+                provider_id,
+                api_key,
+                status,
+                claim_token,
+                lease_expires_at,
+                now,
+                now,
+            ),
         )
         get_db().commit()
         return int(cursor.lastrowid)
 
-    def _insert_running_document_task(self, check_items: list[dict], *, api_key: str = "task-secret") -> int:
+    def _insert_running_document_task(
+        self, check_items: list[dict], *, api_key: str = "task-secret"
+    ) -> int:
         now = now_text()
         cursor = get_db().execute(
             """
@@ -150,7 +165,10 @@ class TaskExecutionTest(unittest.TestCase):
                 original_filename,
                 stored_filename,
                 file_type,
-                json.dumps(document_meta or {"preprocessing": {"status": "pending"}}, ensure_ascii=False),
+                json.dumps(
+                    document_meta or {"preprocessing": {"status": "pending"}},
+                    ensure_ascii=False,
+                ),
                 json.dumps([check_item["id"]]),
                 json.dumps([check_item], ensure_ascii=False),
                 max_input_chars,
@@ -176,10 +194,14 @@ class TaskExecutionTest(unittest.TestCase):
         claimed = [claim for scheduler_claims in claims for claim in scheduler_claims]
         self.assertEqual([claim[0] for claim in claimed], [task_id])
         self.assertEqual(len(claimed[0][1]), 32)
-        task = get_db().execute(
-            "SELECT status, claim_token, lease_expires_at FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        task = (
+            get_db()
+            .execute(
+                "SELECT status, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         self.assertEqual(task["status"], "running")
         self.assertEqual(task["claim_token"], claimed[0][1])
         self.assertGreater(task["lease_expires_at"], now_text())
@@ -198,11 +220,11 @@ class TaskExecutionTest(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as executor:
             claims = list(executor.map(lambda _: claim_tasks(), range(2)))
 
-        claimed_ids = [claim[0] for scheduler_claims in claims for claim in scheduler_claims]
+        claimed_ids = [
+            claim[0] for scheduler_claims in claims for claim in scheduler_claims
+        ]
         self.assertEqual(claimed_ids, [first_task_id])
-        tasks = get_db().execute(
-            "SELECT id, status FROM tasks ORDER BY id"
-        ).fetchall()
+        tasks = get_db().execute("SELECT id, status FROM tasks ORDER BY id").fetchall()
         self.assertEqual(
             [(task["id"], task["status"]) for task in tasks],
             [(first_task_id, "running"), (second_task_id, "queued")],
@@ -210,7 +232,9 @@ class TaskExecutionTest(unittest.TestCase):
 
     def test_scheduler_batches_owner_counts_without_per_task_queries(self):
         first_owner_task = self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
-        blocked_same_owner_task = self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
+        blocked_same_owner_task = self._insert_scheduler_task(
+            owner_subject="ip:10.0.0.1"
+        )
         other_owner_task = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
         set_setting("global_concurrency", 3)
         set_setting("user_concurrency", 1)
@@ -222,7 +246,10 @@ class TaskExecutionTest(unittest.TestCase):
         finally:
             db.set_trace_callback(None)
 
-        self.assertEqual([task_id for task_id, _claim in claimed], [first_owner_task, other_owner_task])
+        self.assertEqual(
+            [task_id for task_id, _claim in claimed],
+            [first_owner_task, other_owner_task],
+        )
         blocked = db.execute(
             "SELECT status FROM tasks WHERE id = ?",
             (blocked_same_owner_task,),
@@ -244,8 +271,7 @@ class TaskExecutionTest(unittest.TestCase):
             lease_expires_at="2999-01-01 00:00:00",
         )
         blocked_task_ids = [
-            self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
-            for _ in range(50)
+            self._insert_scheduler_task(owner_subject="ip:10.0.0.1") for _ in range(50)
         ]
         first_runnable_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
         second_runnable_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.3")
@@ -258,21 +284,28 @@ class TaskExecutionTest(unittest.TestCase):
             [task_id for task_id, _claim in claimed],
             [first_runnable_id, second_runnable_id],
         )
-        blocked_statuses = get_db().execute(
-            f"SELECT DISTINCT status FROM tasks WHERE id IN ({','.join('?' for _ in blocked_task_ids)})",
-            tuple(blocked_task_ids),
-        ).fetchall()
+        blocked_statuses = (
+            get_db()
+            .execute(
+                f"SELECT DISTINCT status FROM tasks WHERE id IN ({','.join('?' for _ in blocked_task_ids)})",
+                tuple(blocked_task_ids),
+            )
+            .fetchall()
+        )
         self.assertEqual([row["status"] for row in blocked_statuses], ["queued"])
-        running_status = get_db().execute(
-            "SELECT status FROM tasks WHERE id = ?",
-            (running_task_id,),
-        ).fetchone()
+        running_status = (
+            get_db()
+            .execute(
+                "SELECT status FROM tasks WHERE id = ?",
+                (running_task_id,),
+            )
+            .fetchone()
+        )
         self.assertEqual(running_status["status"], "running")
 
     def test_scheduler_limits_each_owner_before_global_candidate_limit(self):
         same_owner_task_ids = [
-            self._insert_scheduler_task(owner_subject="ip:10.0.0.1")
-            for _ in range(50)
+            self._insert_scheduler_task(owner_subject="ip:10.0.0.1") for _ in range(50)
         ]
         other_owner_task_id = self._insert_scheduler_task(owner_subject="ip:10.0.0.2")
         set_setting("global_concurrency", 2)
@@ -284,13 +317,17 @@ class TaskExecutionTest(unittest.TestCase):
             [task_id for task_id, _claim in claimed],
             [same_owner_task_ids[0], other_owner_task_id],
         )
-        queued_same_owner = get_db().execute(
-            """
+        queued_same_owner = (
+            get_db()
+            .execute(
+                """
             SELECT COUNT(*) AS total
             FROM tasks
             WHERE owner_subject = 'ip:10.0.0.1' AND status = 'queued'
             """
-        ).fetchone()["total"]
+            )
+            .fetchone()["total"]
+        )
         self.assertEqual(queued_same_owner, 49)
 
     def test_scheduler_does_not_recover_active_lease(self):
@@ -303,10 +340,14 @@ class TaskExecutionTest(unittest.TestCase):
         claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual(claimed, [])
-        task = get_db().execute(
-            "SELECT status, claim_token, lease_expires_at FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        task = (
+            get_db()
+            .execute(
+                "SELECT status, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         self.assertEqual(task["status"], "running")
         self.assertEqual(task["claim_token"], "active-claim")
         self.assertEqual(task["lease_expires_at"], "2999-01-01 00:00:00")
@@ -322,10 +363,14 @@ class TaskExecutionTest(unittest.TestCase):
 
         self.assertEqual([claim[0] for claim in claimed], [task_id])
         self.assertNotEqual(claimed[0][1], "expired-claim")
-        task = get_db().execute(
-            "SELECT status, progress, claim_token, lease_expires_at FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        task = (
+            get_db()
+            .execute(
+                "SELECT status, progress, claim_token, lease_expires_at FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         self.assertEqual(task["status"], "running")
         self.assertEqual(task["progress"], 1)
         self.assertEqual(task["claim_token"], claimed[0][1])
@@ -351,10 +396,14 @@ class TaskExecutionTest(unittest.TestCase):
         claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual([claim[0] for claim in claimed], [task_id])
-        task = get_db().execute(
-            "SELECT status, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        task = (
+            get_db()
+            .execute(
+                "SELECT status, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         self.assertEqual(task["status"], "running")
         self.assertEqual(json.loads(task["result_json"]), base_results)
         self.assertEqual(json.loads(task["retry_check_codes_json"]), ["failed"])
@@ -374,10 +423,12 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(claimed, [])
         tasks = {
             row["id"]: row["status"]
-            for row in get_db().execute(
+            for row in get_db()
+            .execute(
                 "SELECT id, status FROM tasks WHERE id IN (?, ?)",
                 (canceling_task_id, queued_task_id),
-            ).fetchall()
+            )
+            .fetchall()
         }
         self.assertEqual(tasks[canceling_task_id], "canceling")
         self.assertEqual(tasks[queued_task_id], "queued")
@@ -398,14 +449,18 @@ class TaskExecutionTest(unittest.TestCase):
         claimed = TaskSupervisor(self.app)._claim_available_tasks()
 
         self.assertEqual(claimed, [])
-        task = get_db().execute(
-            """
+        task = (
+            get_db()
+            .execute(
+                """
             SELECT status, api_key, claim_token, lease_expires_at, finished_at
             FROM tasks
             WHERE id = ?
             """,
-            (task_id,),
-        ).fetchone()
+                (task_id,),
+            )
+            .fetchone()
+        )
         self.assertEqual(task["status"], "canceled")
         self.assertIsNone(task["api_key"])
         self.assertIsNone(task["claim_token"])
@@ -423,10 +478,14 @@ class TaskExecutionTest(unittest.TestCase):
             TaskRunner(self.app).run(task_id, "stale-claim")
 
         mocked_run_check.assert_not_called()
-        task = get_db().execute(
-            "SELECT status, claim_token FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        task = (
+            get_db()
+            .execute(
+                "SELECT status, claim_token FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         self.assertEqual(task["status"], "running")
         self.assertEqual(task["claim_token"], "current-claim")
 
@@ -451,10 +510,12 @@ class TaskExecutionTest(unittest.TestCase):
 
         tasks = {
             row["id"]: row
-            for row in get_db().execute(
+            for row in get_db()
+            .execute(
                 "SELECT id, status, api_key FROM tasks WHERE id IN (?, ?)",
                 (failed_task_id, canceled_task_id),
-            ).fetchall()
+            )
+            .fetchall()
         }
         self.assertEqual(tasks[failed_task_id]["status"], "failed")
         self.assertIsNone(tasks[failed_task_id]["api_key"])
@@ -490,7 +551,9 @@ class TaskExecutionTest(unittest.TestCase):
             kwargs["check_canceled"]()
             return "不应完成"
 
-        with patch("app.tasks.run_check", side_effect=wait_for_cancel) as mocked_run_check:
+        with patch(
+            "app.tasks.run_check", side_effect=wait_for_cancel
+        ) as mocked_run_check:
             worker = Thread(
                 target=runner.run,
                 args=(task_id, "worker-claim"),
@@ -525,8 +588,12 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIsNone(task["lease_expires_at"])
         self.assertIsNotNone(task["finished_at"])
 
-    def test_intermediate_results_use_live_table_without_invalidating_report_cache(self):
-        task_id = self._insert_scheduler_task(status="running", claim_token="live-claim")
+    def test_intermediate_results_use_live_table_without_invalidating_report_cache(
+        self,
+    ):
+        task_id = self._insert_scheduler_task(
+            status="running", claim_token="live-claim"
+        )
         db = get_db()
         db.execute(
             """
@@ -617,7 +684,14 @@ class TaskExecutionTest(unittest.TestCase):
             """,
             (
                 json.dumps(
-                    [{"id": 1, "code": "typo", "name": "错别字检查", "prompt": "检查错别字"}],
+                    [
+                        {
+                            "id": 1,
+                            "code": "typo",
+                            "name": "错别字检查",
+                            "prompt": "检查错别字",
+                        }
+                    ],
                     ensure_ascii=False,
                 ),
                 provider_id,
@@ -639,11 +713,16 @@ class TaskExecutionTest(unittest.TestCase):
             """,
             (provider_id,),
         )
-        db.execute("DELETE FROM user_model_configs WHERE provider_id = ?", (provider_id,))
+        db.execute(
+            "DELETE FROM user_model_configs WHERE provider_id = ?", (provider_id,)
+        )
         db.commit()
         calls = []
 
-        with patch("app.tasks.run_check", side_effect=lambda **kwargs: calls.append(kwargs) or "完成"):
+        with patch(
+            "app.tasks.run_check",
+            side_effect=lambda **kwargs: calls.append(kwargs) or "完成",
+        ):
             TaskRunner(self.app).run(task_id)
 
         task = db.execute(
@@ -652,11 +731,15 @@ class TaskExecutionTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(task["status"], "completed")
         self.assertIsNone(task["api_key"])
-        self.assertEqual(calls[0]["api_base"], "https://snapshot.example.test/v1/chat/completions")
+        self.assertEqual(
+            calls[0]["api_base"], "https://snapshot.example.test/v1/chat/completions"
+        )
         self.assertEqual(calls[0]["api_key"], "snapshot-secret")
         self.assertEqual(calls[0]["request_timeout"], 37)
 
-    def test_cleanup_expired_task_files_preserves_history_and_removes_runtime_data(self):
+    def test_cleanup_expired_task_files_preserves_history_and_removes_runtime_data(
+        self,
+    ):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         image_root = Path(self.app.config["IMAGE_FOLDER"])
         old_upload = upload_dir / "old.pdf"
@@ -695,9 +778,30 @@ class TaskExecutionTest(unittest.TestCase):
             ],
         }
         rows = [
-            ("old.pdf", "old.pdf", IMAGE_TASK_TYPE, json.dumps(old_meta, ensure_ascii=False), "completed", "2000-01-01 00:00:00"),
-            ("recent.pdf", "recent.pdf", IMAGE_TASK_TYPE, "{}", "completed", now_text()),
-            ("running.pdf", "running.pdf", IMAGE_TASK_TYPE, "{}", "running", "2000-01-01 00:00:00"),
+            (
+                "old.pdf",
+                "old.pdf",
+                IMAGE_TASK_TYPE,
+                json.dumps(old_meta, ensure_ascii=False),
+                "completed",
+                "2000-01-01 00:00:00",
+            ),
+            (
+                "recent.pdf",
+                "recent.pdf",
+                IMAGE_TASK_TYPE,
+                "{}",
+                "completed",
+                now_text(),
+            ),
+            (
+                "running.pdf",
+                "running.pdf",
+                IMAGE_TASK_TYPE,
+                "{}",
+                "running",
+                "2000-01-01 00:00:00",
+            ),
         ]
         task_ids = {}
         for original, stored, task_type, meta, status, finished_at in rows:
@@ -712,7 +816,16 @@ class TaskExecutionTest(unittest.TestCase):
                         'http://example.test/v1/chat/completions', 'task-secret', 30, 5000,
                         ?, 100, ?, ?, ?)
                 """,
-                (task_type, original, stored, meta, status, finished_at, finished_at, finished_at),
+                (
+                    task_type,
+                    original,
+                    stored,
+                    meta,
+                    status,
+                    finished_at,
+                    finished_at,
+                    finished_at,
+                ),
             )
             task_ids[stored] = int(cursor.lastrowid)
         rule_id = db.execute(
@@ -755,7 +868,10 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIsNone(remaining["old.pdf"]["document_text"])
         self.assertEqual(remaining["old.pdf"]["api_key"], "task-secret")
         self.assertIsNotNone(remaining["old.pdf"]["source_files_cleaned_at"])
-        self.assertEqual(remaining["old.pdf"]["document_meta_json"], json.dumps(old_meta, ensure_ascii=False))
+        self.assertEqual(
+            remaining["old.pdf"]["document_meta_json"],
+            json.dumps(old_meta, ensure_ascii=False),
+        )
         self.assertEqual(remaining["old.pdf"]["result_json"], '[{"result":"历史报告"}]')
         self.assertEqual(remaining["recent.pdf"]["document_text"], "保留前的文档正文")
         self.assertEqual(remaining["running.pdf"]["document_text"], "保留前的文档正文")
@@ -768,7 +884,9 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertTrue(running_upload.exists())
         remaining_hit_task_ids = {
             row["task_id"]
-            for row in db.execute("SELECT task_id FROM report_suppression_hits").fetchall()
+            for row in db.execute(
+                "SELECT task_id FROM report_suppression_hits"
+            ).fetchall()
         }
         self.assertEqual(
             remaining_hit_task_ids,
@@ -796,15 +914,22 @@ class TaskExecutionTest(unittest.TestCase):
         )
         db.commit()
 
-        with patch("app.tasks.remove_file", return_value=(False, "[WinError 32] 文件正被占用")):
+        with patch(
+            "app.task_runtime.artifacts.remove_file",
+            return_value=(False, "[WinError 32] 文件正被占用"),
+        ):
             self.assertEqual(cleanup_expired_task_files(self.app), 0)
 
-        task = db.execute("SELECT * FROM tasks WHERE stored_filename = 'old.pdf'").fetchone()
+        task = db.execute(
+            "SELECT * FROM tasks WHERE stored_filename = 'old.pdf'"
+        ).fetchone()
         self.assertIsNotNone(task)
         self.assertIsNone(task["source_files_cleaned_at"])
         self.assertTrue(old_upload.exists())
 
-    def test_task_file_cache_snapshot_counts_actual_files_and_sorts_oldest_smallest_first(self):
+    def test_task_file_cache_snapshot_counts_actual_files_and_sorts_oldest_smallest_first(
+        self,
+    ):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         image_root = Path(self.app.config["IMAGE_FOLDER"])
         (upload_dir / "large.pdf").write_bytes(b"1234")
@@ -853,10 +978,15 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(snapshot["generated_size_bytes"], 3)
         self.assertEqual(snapshot["cleanable_size_bytes"], 9)
         self.assertEqual(snapshot["cleanable_count"], 2)
-        self.assertEqual([item["original_filename"] for item in snapshot["items"]], ["small.txt", "large.pdf"])
+        self.assertEqual(
+            [item["original_filename"] for item in snapshot["items"]],
+            ["small.txt", "large.pdf"],
+        )
         self.assertEqual([item["file_count"] for item in snapshot["items"]], [1, 2])
 
-    def test_cleanup_task_file_cache_preserves_report_and_removes_cleaned_task_from_snapshot(self):
+    def test_cleanup_task_file_cache_preserves_report_and_removes_cleaned_task_from_snapshot(
+        self,
+    ):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         completed_file = upload_dir / "completed.txt"
         running_file = upload_dir / "running.txt"
@@ -901,7 +1031,9 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(result["skipped_ids"], [running_id])
         self.assertFalse(completed_file.exists())
         self.assertTrue(running_file.exists())
-        completed = db.execute("SELECT * FROM tasks WHERE id = ?", (completed_id,)).fetchone()
+        completed = db.execute(
+            "SELECT * FROM tasks WHERE id = ?", (completed_id,)
+        ).fetchone()
         self.assertIsNone(completed["document_text"])
         self.assertIsNotNone(completed["source_files_cleaned_at"])
         self.assertEqual(completed["result_json"], '[{"result":"保留报告"}]')
@@ -928,7 +1060,9 @@ class TaskExecutionTest(unittest.TestCase):
         db.commit()
         task = db.execute("SELECT * FROM tasks").fetchone()
         check_items = [{"code": "typo", "name": "错别字检查", "prompt": "检查错别字"}]
-        document_text = "\n\n".join(f"第{i}段 " + ("内容" * 15_000) for i in range(1, 6))
+        document_text = "\n\n".join(
+            f"第{i}段 " + ("内容" * 15_000) for i in range(1, 6)
+        )
         set_setting("issue_output_limit", 45)
         calls = []
 
@@ -958,7 +1092,9 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(results[0]["result"], "最终结果")
         self.assertEqual(results[0]["issue_output_limit"], 30)
 
-    def test_document_check_filters_pdf_table_missing_claim_against_cell_structure(self):
+    def test_document_check_filters_pdf_table_missing_claim_against_cell_structure(
+        self,
+    ):
         db = get_db()
         created_at = now_text()
         db.execute(
@@ -1002,11 +1138,20 @@ class TaskExecutionTest(unittest.TestCase):
             ],
         }
 
-        with patch("app.tasks.run_check", return_value=json.dumps(model_result, ensure_ascii=False)):
+        with patch(
+            "app.tasks.run_check",
+            return_value=json.dumps(model_result, ensure_ascii=False),
+        ):
             results = _run_check_items_concurrently(
                 self.app,
                 task,
-                [{"code": "completeness", "name": "内容完整性检查", "prompt": "检查完整性"}],
+                [
+                    {
+                        "code": "completeness",
+                        "name": "内容完整性检查",
+                        "prompt": "检查完整性",
+                    }
+                ],
                 document_text,
                 max_workers=1,
                 stream_trace_enabled=False,
@@ -1053,7 +1198,9 @@ class TaskExecutionTest(unittest.TestCase):
                     (task_type, json.dumps([1]), created_at, created_at),
                 )
                 db.commit()
-                task = db.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                task = db.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)
+                ).fetchone()
                 calls = []
 
                 def fake_run_check(**kwargs):
@@ -1064,7 +1211,13 @@ class TaskExecutionTest(unittest.TestCase):
                     results = _run_check_items_concurrently(
                         self.app,
                         task,
-                        [{"code": check_code, "name": check_name, "prompt": "执行完整对照"}],
+                        [
+                            {
+                                "code": check_code,
+                                "name": check_name,
+                                "prompt": "执行完整对照",
+                            }
+                        ],
                         document_text,
                         max_workers=1,
                         stream_trace_enabled=False,
@@ -1108,10 +1261,20 @@ class TaskExecutionTest(unittest.TestCase):
         )
         db.commit()
         task = db.execute("SELECT * FROM tasks").fetchone()
-        check_items = [{"code": SENSITIVE_TERMS_CHECK_CODE, "name": "敏感词检查", "prompt": "本地检查"}]
-        document_text = "file: doc.txt\n\n[第2页]\n这里出现旧称，坏词也出现了。旧称需要统一。"
+        check_items = [
+            {
+                "code": SENSITIVE_TERMS_CHECK_CODE,
+                "name": "敏感词检查",
+                "prompt": "本地检查",
+            }
+        ]
+        document_text = (
+            "file: doc.txt\n\n[第2页]\n这里出现旧称，坏词也出现了。旧称需要统一。"
+        )
 
-        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+        with patch(
+            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+        ):
             results = _run_check_items_concurrently(
                 self.app,
                 task,
@@ -1163,10 +1326,18 @@ class TaskExecutionTest(unittest.TestCase):
         )
         db.commit()
         task = db.execute("SELECT * FROM tasks").fetchone()
-        check_items = [{"code": COMMON_TERMS_CHECK_CODE, "name": "常用词检查", "prompt": "本地检查"}]
+        check_items = [
+            {
+                "code": COMMON_TERMS_CHECK_CODE,
+                "name": "常用词检查",
+                "prompt": "本地检查",
+            }
+        ]
         document_text = "file: doc.txt\n\n[第2页]\nOpenAI 正确，openai 错误，Open AI 不推荐，请勿写成登陆。"
 
-        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+        with patch(
+            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+        ):
             results = _run_check_items_concurrently(
                 self.app,
                 task,
@@ -1218,9 +1389,17 @@ class TaskExecutionTest(unittest.TestCase):
         )
         db.commit()
         task = db.execute("SELECT * FROM tasks").fetchone()
-        check_items = [{"code": HYPERLINK_CHECK_CODE, "name": "超链接有效性检查", "prompt": "本地规则"}]
+        check_items = [
+            {
+                "code": HYPERLINK_CHECK_CODE,
+                "name": "超链接有效性检查",
+                "prompt": "本地规则",
+            }
+        ]
 
-        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+        with patch(
+            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+        ):
             results = _run_check_items_concurrently(
                 self.app,
                 task,
@@ -1426,7 +1605,12 @@ class TaskExecutionTest(unittest.TestCase):
     def test_run_task_extracts_and_persists_document_text_in_worker(self):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "queued.txt"
         upload_path.write_text("后台解析正文", encoding="utf-8")
-        check_item = {"id": 1, "code": "typo", "name": "错别字检查", "prompt": "检查错别字"}
+        check_item = {
+            "id": 1,
+            "code": "typo",
+            "name": "错别字检查",
+            "prompt": "检查错别字",
+        }
         task_id = self._insert_running_preprocessing_task(
             task_type=DOCUMENT_TASK_TYPE,
             original_filename="queued.txt",
@@ -1443,10 +1627,14 @@ class TaskExecutionTest(unittest.TestCase):
         with patch("app.tasks.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         meta = json.loads(updated["document_meta_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(updated["document_text"], "file: queued.txt\n\n后台解析正文")
@@ -1473,13 +1661,19 @@ class TaskExecutionTest(unittest.TestCase):
             check_item=check_item,
         )
 
-        with patch("app.tasks.run_check", side_effect=AssertionError("should not call llm")):
+        with patch(
+            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+        ):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, document_meta_json, result_json FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, document_meta_json, result_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         meta = json.loads(updated["document_meta_json"])
         results = json.loads(updated["result_json"])
         self.assertEqual(updated["status"], "completed")
@@ -1493,7 +1687,12 @@ class TaskExecutionTest(unittest.TestCase):
     def test_run_task_marks_oversized_document_failed_after_worker_extraction(self):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "long.txt"
         upload_path.write_text("超长正文" * 20, encoding="utf-8")
-        check_item = {"id": 1, "code": "typo", "name": "错别字检查", "prompt": "检查错别字"}
+        check_item = {
+            "id": 1,
+            "code": "typo",
+            "name": "错别字检查",
+            "prompt": "检查错别字",
+        }
         task_id = self._insert_running_preprocessing_task(
             task_type=DOCUMENT_TASK_TYPE,
             original_filename="long.txt",
@@ -1506,10 +1705,14 @@ class TaskExecutionTest(unittest.TestCase):
         with patch("app.tasks.run_check") as run_check_mock:
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, error, document_text FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, error, document_text FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         run_check_mock.assert_not_called()
         self.assertEqual(updated["status"], "failed")
         self.assertIn("超过当前模型文本上限", updated["error"])
@@ -1542,7 +1745,9 @@ class TaskExecutionTest(unittest.TestCase):
             },
         )
 
-        def fake_extract_images(_document_path, _file_type, output_dir, *, source_filename=""):
+        def fake_extract_images(
+            _document_path, _file_type, output_dir, *, source_filename=""
+        ):
             output_dir.mkdir(parents=True, exist_ok=True)
             image_path = output_dir / "0001_page001-image001.png"
             image_path.write_bytes(b"png-bytes")
@@ -1561,26 +1766,52 @@ class TaskExecutionTest(unittest.TestCase):
             ]
 
         with (
-            patch("app.tasks.extract_text", return_value="[第1页]\n图 1 是接线图。"),
-            patch("app.tasks.extract_images", side_effect=fake_extract_images),
             patch(
-                "app.tasks.render_pdf_page_images",
-                return_value=([], {"total_pages": 1, "selected_pages": [], "omitted_pages": 1, "max_pages": 120}),
+                "app.task_runtime.preprocessing.extract_text",
+                return_value="[第1页]\n图 1 是接线图。",
             ),
-            patch("app.tasks.run_multimodal_document_check", return_value="未发现问题"),
+            patch(
+                "app.task_runtime.preprocessing.extract_images",
+                side_effect=fake_extract_images,
+            ),
+            patch(
+                "app.task_runtime.preprocessing.render_pdf_page_images",
+                return_value=(
+                    [],
+                    {
+                        "total_pages": 1,
+                        "selected_pages": [],
+                        "omitted_pages": 1,
+                        "max_pages": 120,
+                    },
+                ),
+            ),
+            patch(
+                "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+                return_value="未发现问题",
+            ),
         ):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         meta = json.loads(updated["document_meta_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertIn("document_text:", updated["document_text"])
         self.assertEqual(meta["preprocessing"]["status"], "completed")
         self.assertEqual(len(meta["images"]), 1)
-        self.assertTrue((Path(self.app.config["IMAGE_FOLDER"]) / meta["images"][0]["relative_path"]).is_file())
+        self.assertTrue(
+            (
+                Path(self.app.config["IMAGE_FOLDER"])
+                / meta["images"][0]["relative_path"]
+            ).is_file()
+        )
 
     def test_run_video_task_extracts_frames_and_persists_metadata_in_worker(self):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "install.mp4"
@@ -1608,7 +1839,9 @@ class TaskExecutionTest(unittest.TestCase):
             },
         )
 
-        def fake_extract_video_frames(_video_path, output_dir, *, source_filename="", max_frames=16):
+        def fake_extract_video_frames(
+            _video_path, output_dir, *, source_filename="", max_frames=16
+        ):
             output_dir.mkdir(parents=True, exist_ok=True)
             frame_path = output_dir / "0001_t000001000.jpg"
             frame_path.write_bytes(b"jpeg-bytes")
@@ -1636,25 +1869,42 @@ class TaskExecutionTest(unittest.TestCase):
             )
 
         with (
-            patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames),
-            patch("app.tasks.run_multimodal_document_check", return_value="未发现问题"),
+            patch(
+                "app.task_runtime.preprocessing.extract_video_frames",
+                side_effect=fake_extract_video_frames,
+            ),
+            patch(
+                "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+                return_value="未发现问题",
+            ),
         ):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         meta = json.loads(updated["document_meta_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertIn("video_frames:", updated["document_text"])
         self.assertEqual(meta["preprocessing"]["status"], "completed")
         self.assertEqual(meta["frames"][0]["position"], "00:01.000")
-        self.assertTrue((Path(self.app.config["IMAGE_FOLDER"]) / meta["frames"][0]["relative_path"]).is_file())
+        self.assertTrue(
+            (
+                Path(self.app.config["IMAGE_FOLDER"])
+                / meta["frames"][0]["relative_path"]
+            ).is_file()
+        )
 
     def test_run_language_consistency_task_builds_static_precheck_in_worker(self):
         upload_folder = Path(self.app.config["UPLOAD_FOLDER"])
-        (upload_folder / "zh.txt").write_text("1. 安装要求\n设备电流为 10A。", encoding="utf-8")
+        (upload_folder / "zh.txt").write_text(
+            "1. 安装要求\n设备电流为 10A。", encoding="utf-8"
+        )
         (upload_folder / "en.txt").write_text(
             "1. Installation requirements\nThe device current is 12A.",
             encoding="utf-8",
@@ -1705,10 +1955,14 @@ class TaskExecutionTest(unittest.TestCase):
         with patch("app.tasks.run_check", return_value="完成"):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, document_text, document_meta_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         meta = json.loads(updated["document_meta_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertIn("# 静态预检摘要", updated["document_text"])
@@ -1718,9 +1972,24 @@ class TaskExecutionTest(unittest.TestCase):
 
     def test_run_task_continues_other_checks_and_marks_partial(self):
         check_items = [
-            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
-            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
-            {"id": 3, "code": COMMON_TERMS_CHECK_CODE, "name": "常用词检查", "prompt": "本地检查"},
+            {
+                "id": 1,
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "prompt": "检查规范性",
+            },
+            {
+                "id": 2,
+                "code": "clarity",
+                "name": "易理解性检查",
+                "prompt": "检查易理解性",
+            },
+            {
+                "id": 3,
+                "code": COMMON_TERMS_CHECK_CODE,
+                "name": "常用词检查",
+                "prompt": "本地检查",
+            },
         ]
         task_id = self._insert_running_document_task(check_items)
         calls = []
@@ -1734,10 +2003,14 @@ class TaskExecutionTest(unittest.TestCase):
         with patch("app.tasks.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         results = json.loads(updated["result_json"])
         self.assertEqual(calls, ["文档规范性检查", "易理解性检查"])
         self.assertEqual(updated["status"], "partial")
@@ -1755,18 +2028,32 @@ class TaskExecutionTest(unittest.TestCase):
 
     def test_run_task_marks_failed_when_all_checks_fail(self):
         check_items = [
-            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
-            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
+            {
+                "id": 1,
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "prompt": "检查规范性",
+            },
+            {
+                "id": 2,
+                "code": "clarity",
+                "name": "易理解性检查",
+                "prompt": "检查易理解性",
+            },
         ]
         task_id = self._insert_running_document_task(check_items)
 
         with patch("app.tasks.run_check", side_effect=LLMError("模型服务不可用")):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, progress, result_json, summary, error, api_key FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         results = json.loads(updated["result_json"])
         self.assertEqual(updated["status"], "failed")
         self.assertIsNone(updated["api_key"])
@@ -1777,8 +2064,18 @@ class TaskExecutionTest(unittest.TestCase):
 
     def test_retry_run_only_executes_failed_item_and_replaces_result_by_code(self):
         check_items = [
-            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
-            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
+            {
+                "id": 1,
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "prompt": "检查规范性",
+            },
+            {
+                "id": 2,
+                "code": "clarity",
+                "name": "易理解性检查",
+                "prompt": "检查易理解性",
+            },
         ]
         task_id = self._insert_running_document_task(check_items)
         old_results = [
@@ -1813,58 +2110,93 @@ class TaskExecutionTest(unittest.TestCase):
 
         def run_retry(**kwargs):
             calls.append(kwargs["check_name"])
-            live = get_db().execute(
-                "SELECT result_json FROM task_live_results WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            live = (
+                get_db()
+                .execute(
+                    "SELECT result_json FROM task_live_results WHERE task_id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
             live_snapshots.append(json.loads(live["result_json"]))
             return "重试成功结果"
 
         with patch("app.tasks.run_check", side_effect=run_retry):
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            """
+        updated = (
+            get_db()
+            .execute(
+                """
             SELECT status, result_json, retry_check_codes_json, api_key
             FROM tasks
             WHERE id = ?
             """,
-            (task_id,),
-        ).fetchone()
+                (task_id,),
+            )
+            .fetchone()
+        )
         results = json.loads(updated["result_json"])
         self.assertEqual(calls, ["文档规范性检查"])
         self.assertEqual(live_snapshots, [[old_results[1]]])
         self.assertEqual(updated["status"], "completed")
         self.assertIsNone(updated["retry_check_codes_json"])
         self.assertIsNone(updated["api_key"])
-        self.assertEqual([result["code"] for result in results], ["compliance", "clarity"])
+        self.assertEqual(
+            [result["code"] for result in results], ["compliance", "clarity"]
+        )
         self.assertEqual(results[0]["result"], "重试成功结果")
         self.assertNotIn("error", results[0])
         self.assertEqual(results[1], old_results[1])
 
     def test_retry_run_keeps_successful_result_when_failed_item_fails_again(self):
         check_items = [
-            {"id": 1, "code": "compliance", "name": "文档规范性检查", "prompt": "检查规范性"},
-            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查易理解性"},
+            {
+                "id": 1,
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "prompt": "检查规范性",
+            },
+            {
+                "id": 2,
+                "code": "clarity",
+                "name": "易理解性检查",
+                "prompt": "检查易理解性",
+            },
         ]
         task_id = self._insert_running_document_task(check_items)
         old_results = [
-            {"code": "compliance", "name": "文档规范性检查", "result": "", "error": "首次失败"},
+            {
+                "code": "compliance",
+                "name": "文档规范性检查",
+                "result": "",
+                "error": "首次失败",
+            },
             {"code": "clarity", "name": "易理解性检查", "result": "原成功结果"},
         ]
         get_db().execute(
             "UPDATE tasks SET result_json = ?, retry_check_codes_json = ? WHERE id = ?",
-            (json.dumps(old_results, ensure_ascii=False), json.dumps(["compliance"]), task_id),
+            (
+                json.dumps(old_results, ensure_ascii=False),
+                json.dumps(["compliance"]),
+                task_id,
+            ),
         )
         get_db().commit()
 
-        with patch("app.tasks.run_check", side_effect=LLMError("重试仍失败")) as run_check_mock:
+        with patch(
+            "app.tasks.run_check", side_effect=LLMError("重试仍失败")
+        ) as run_check_mock:
             TaskRunner(self.app).run(task_id)
 
-        updated = get_db().execute(
-            "SELECT status, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
-            (task_id,),
-        ).fetchone()
+        updated = (
+            get_db()
+            .execute(
+                "SELECT status, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            .fetchone()
+        )
         results = json.loads(updated["result_json"])
         self.assertEqual(run_check_mock.call_count, 1)
         self.assertEqual(updated["status"], "partial")
@@ -1932,7 +2264,9 @@ class TaskExecutionTest(unittest.TestCase):
         with patch("app.tasks.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id)
 
-        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        updated = db.execute(
+            "SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(calls[0]["check_name"], "参数一致性检查")
         self.assertEqual(calls[0]["prompt"], "只检查参数是否一致")
@@ -2007,7 +2341,7 @@ class TaskExecutionTest(unittest.TestCase):
                     "position": "page001-image001",
                     "source": "图纸.pdf",
                     "size_bytes": 9,
-                }
+                },
             ]
         }
         db.execute(
@@ -2053,10 +2387,15 @@ class TaskExecutionTest(unittest.TestCase):
             kwargs["on_content"]("流式图文结果")
             return "图文最终结果\n发现问题：图片中中文说明与英文文档语种不一致。\n需人工确认：截图底部文字较小。"
 
-        with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
+        with patch(
+            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            side_effect=fake_run_multimodal_document_check,
+        ):
             TaskRunner(self.app).run(task_id)
 
-        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        updated = db.execute(
+            "SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
         results = json.loads(updated["result_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(len(calls), 1)
@@ -2069,10 +2408,19 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["reasoning_effort"], "xhigh")
         self.assertEqual(calls[0]["issue_output_limit"], 30)
         self.assertEqual(calls[0]["image_items"][0]["index"], 2)
-        self.assertEqual(calls[0]["image_items"][0]["name"], "0001_page001-image001.png")
-        self.assertEqual(calls[0]["image_items"][0]["position"], "PDF第1页（page001-image001）")
-        self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/png;base64,"))
-        self.assertIn("PDF第1页（page001-image001）：0001_page001-image001.png", results[0]["result"])
+        self.assertEqual(
+            calls[0]["image_items"][0]["name"], "0001_page001-image001.png"
+        )
+        self.assertEqual(
+            calls[0]["image_items"][0]["position"], "PDF第1页（page001-image001）"
+        )
+        self.assertTrue(
+            calls[0]["image_items"][0]["data_url"].startswith("data:image/png;base64,")
+        )
+        self.assertIn(
+            "PDF第1页（page001-image001）：0001_page001-image001.png",
+            results[0]["result"],
+        )
         self.assertIn("0001_page001-image001.png", results[0]["result"])
         self.assertIn("0120_page094-image001.bin", results[0]["result"])
         self.assertIn("已跳过的图片", results[0]["result"])
@@ -2198,10 +2546,15 @@ class TaskExecutionTest(unittest.TestCase):
                 ensure_ascii=False,
             )
 
-        with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
+        with patch(
+            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            side_effect=fake_run_multimodal_document_check,
+        ):
             TaskRunner(self.app).run(task_id)
 
-        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        updated = db.execute(
+            "SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
         results = json.loads(updated["result_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(len(calls), 1)
@@ -2210,13 +2563,26 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("image-integrity-clarity", calls[0]["prompt"])
         self.assertIn("PDF 页码", calls[0]["prompt"])
         self.assertEqual(calls[0]["output_contract"], "multi_check_json")
-        self.assertEqual(calls[0]["image_items"][0]["position"], "PDF第1页（page001-screenshot）")
-        self.assertEqual([item["code"] for item in results], ["image-figure-table-title-standard", "image-integrity-clarity"])
-        self.assertIn("PDF第1页（page001-screenshot）：0001_page001-screenshot.png", results[0]["result"])
+        self.assertEqual(
+            calls[0]["image_items"][0]["position"], "PDF第1页（page001-screenshot）"
+        )
+        self.assertEqual(
+            [item["code"] for item in results],
+            ["image-figure-table-title-standard", "image-integrity-clarity"],
+        )
+        self.assertIn(
+            "PDF第1页（page001-screenshot）：0001_page001-screenshot.png",
+            results[0]["result"],
+        )
         self.assertIn("page001：表格缺少表标题", results[0]["result"])
-        self.assertIn("page001：表格缺少表标题", results[0]["result"].split("### 检查汇总", 1)[-1])
+        self.assertIn(
+            "page001：表格缺少表标题", results[0]["result"].split("### 检查汇总", 1)[-1]
+        )
         self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"])
-        self.assertIn("页面截图较小，需人工确认清晰度", results[1]["result"].split("### 检查汇总", 1)[-1])
+        self.assertIn(
+            "页面截图较小，需人工确认清晰度",
+            results[1]["result"].split("### 检查汇总", 1)[-1],
+        )
         self.assertIn("未覆盖 149 页", results[0]["result"])
 
     def test_combined_json_output_maps_results_by_exact_code(self):
@@ -2246,7 +2612,9 @@ class TaskExecutionTest(unittest.TestCase):
             ensure_ascii=False,
         )
 
-        recognized = _split_combined_check_output(content, check_items, fill_missing=False)
+        recognized = _split_combined_check_output(
+            content, check_items, fill_missing=False
+        )
         completed = _split_combined_check_output(content, check_items)
 
         self.assertEqual(list(recognized), ["video-a"])
@@ -2345,7 +2713,9 @@ class TaskExecutionTest(unittest.TestCase):
             )
 
         report = _merge_video_batch_reports("video-a", batch_results)
-        reversed_report = _merge_video_batch_reports("video-a", list(reversed(batch_results)))
+        reversed_report = _merge_video_batch_reports(
+            "video-a", list(reversed(batch_results))
+        )
 
         self.assertEqual(len(report["items"]), 1)
         item = report["items"][0]
@@ -2367,7 +2737,9 @@ class TaskExecutionTest(unittest.TestCase):
 #### 总体判断
 需人工确认。"""
 
-        sections = _split_combined_check_output(content, check_items, fill_missing=False)
+        sections = _split_combined_check_output(
+            content, check_items, fill_missing=False
+        )
 
         self.assertEqual(set(sections), {"video-a", "video-b"})
 
@@ -2387,7 +2759,10 @@ class TaskExecutionTest(unittest.TestCase):
             ),
         ]
 
-        with patch("app.tasks.run_multimodal_document_check", side_effect=responses) as runner:
+        with patch(
+            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            side_effect=responses,
+        ) as runner:
             sections = _run_combined_multimodal_check_with_repair(
                 self.app,
                 check_items=check_items,
@@ -2411,7 +2786,10 @@ class TaskExecutionTest(unittest.TestCase):
         ]
 
         with (
-            patch("app.tasks.run_multimodal_document_check", side_effect=["无法解析", "仍然无法解析"]) as runner,
+            patch(
+                "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+                side_effect=["无法解析", "仍然无法解析"],
+            ) as runner,
             self.assertRaisesRegex(RuntimeError, "连续两次未返回可识别"),
         ):
             _run_combined_multimodal_check_with_repair(
@@ -2435,7 +2813,10 @@ class TaskExecutionTest(unittest.TestCase):
             ensure_ascii=False,
         )
 
-        with patch("app.tasks.run_multimodal_document_check", side_effect=[first_response, "无法解析"]):
+        with patch(
+            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            side_effect=[first_response, "无法解析"],
+        ):
             sections = _run_combined_multimodal_check_with_repair(
                 self.app,
                 check_items=check_items,
@@ -2530,10 +2911,15 @@ class TaskExecutionTest(unittest.TestCase):
 #### 未发现问题
 - 未发现其他安装顺序问题。"""
 
-        with patch("app.tasks.run_multimodal_document_check", side_effect=fake_run_multimodal_document_check):
+        with patch(
+            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            side_effect=fake_run_multimodal_document_check,
+        ):
             TaskRunner(self.app).run(task_id)
 
-        updated = db.execute("SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        updated = db.execute(
+            "SELECT status, result_json FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
         results = json.loads(updated["result_json"])
         self.assertEqual(updated["status"], "completed")
         self.assertEqual(len(calls), 1)
@@ -2543,21 +2929,33 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("current_batch_video_frames", calls[0]["document_text"])
         self.assertEqual(calls[0]["reasoning_effort"], "max")
         self.assertEqual(calls[0]["image_items"][0]["position"], "00:01.000")
-        self.assertTrue(calls[0]["image_items"][0]["data_url"].startswith("data:image/jpeg;base64,"))
-        self.assertEqual([item["code"] for item in results], ["video-installation-sequence"])
+        self.assertTrue(
+            calls[0]["image_items"][0]["data_url"].startswith("data:image/jpeg;base64,")
+        )
+        self.assertEqual(
+            [item["code"] for item in results], ["video-installation-sequence"]
+        )
         self.assertEqual(len(results[0]["structured_report"]["items"]), 1)
         self.assertEqual(results[0]["structured_report"]["items"][0]["status"], "issue")
         self.assertTrue(results[0]["structured_report"]["items"][0]["id"])
         self.assertIn("覆盖视频帧", results[0]["result"])
         self.assertIn("视频时间 00:01.000", results[0]["result"])
         self.assertIn("未确认接地线后直接上电", results[0]["result"])
-        self.assertIn("未确认接地线后直接上电", results[0]["result"].split("### 检查汇总", 1)[-1])
+        self.assertIn(
+            "未确认接地线后直接上电", results[0]["result"].split("### 检查汇总", 1)[-1]
+        )
 
     def test_qwen_vl_optimized_image_checks_use_expected_targets(self):
-        self.assertEqual(_image_check_target({"code": "image-text-correspondence"}), "page")
+        self.assertEqual(
+            _image_check_target({"code": "image-text-correspondence"}), "page"
+        )
         self.assertEqual(_image_check_target({"code": "image-wiring"}), "resource")
-        self.assertEqual(_image_check_target({"code": "image-ui-step-consistency"}), "page")
-        self.assertEqual(_image_check_target({"code": "image-device-installation"}), "resource")
+        self.assertEqual(
+            _image_check_target({"code": "image-ui-step-consistency"}), "page"
+        )
+        self.assertEqual(
+            _image_check_target({"code": "image-device-installation"}), "resource"
+        )
 
     def test_image_issue_summary_reads_bare_page_level_sections(self):
         summary = _format_image_check_issue_summary(
@@ -2589,7 +2987,9 @@ class TaskExecutionTest(unittest.TestCase):
 
         self.assertIn("批次 23/30", summary)
         self.assertIn("PDF第89页", summary)
-        self.assertIn("图片 89（page089-screenshot）：页面顶部的表格缺失表编号", summary)
+        self.assertIn(
+            "图片 89（page089-screenshot）：页面顶部的表格缺失表编号", summary
+        )
         self.assertNotIn("线索：表格上方仅有", summary)
         self.assertNotIn("未汇总到明确问题", summary)
 
@@ -2619,7 +3019,9 @@ class TaskExecutionTest(unittest.TestCase):
             [],
         )
 
-        issue_section = summary.split("#### 明确问题", 1)[-1].split("#### 需人工确认", 1)[0]
+        issue_section = summary.split("#### 明确问题", 1)[-1].split(
+            "#### 需人工确认", 1
+        )[0]
         manual_section = summary.split("#### 需人工确认", 1)[-1]
         self.assertIn("PDF第3页", summary)
         self.assertIn("右下角表格标题缺失", issue_section)

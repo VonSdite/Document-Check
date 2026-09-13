@@ -6,8 +6,8 @@ import unittest
 import zipfile
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import Mock, patch
 
 import yaml
 from bs4 import BeautifulSoup
@@ -18,7 +18,14 @@ from werkzeug.datastructures import FileStorage
 
 from app.auth import SAML_USER_SESSION_KEY
 from app.config import CONFIG_FILENAME
-from app.db import get_db, get_ip_username, get_setting, init_db, seed_defaults, set_setting
+from app.db import (
+    get_db,
+    get_ip_username,
+    get_setting,
+    init_db,
+    seed_defaults,
+    set_setting,
+)
 from app.documents import DocumentReadError
 from app.formatting import render_markdown
 from app.routes import (
@@ -32,8 +39,13 @@ from app.routes import (
     get_enabled_models,
     register_routes,
 )
-from app.task_types import CONSISTENCY_TASK_TYPE, DOCUMENT_TASK_TYPE, IMAGE_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE, VIDEO_TASK_TYPE
-
+from app.task_types import (
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    IMAGE_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+    VIDEO_TASK_TYPE,
+)
 
 _TINY_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -284,20 +296,24 @@ class AdminSettingsRouteTest(unittest.TestCase):
             {"code": "check-a", "name": "检查 A", "prompt": "执行检查 A"},
             {"code": "check-b", "name": "检查 B", "prompt": "执行检查 B"},
         ]
-        results = [
-            {
-                "code": "check-a",
-                "name": "检查 A",
-                "result": "原成功结果",
-                "item_classifications": {"item-1": "issue"},
-            },
-            {
-                "code": "check-b",
-                "name": "检查 B",
-                "result": "失败时的部分输出",
-                "error": "首次检查失败",
-            },
-        ] if status == "partial" else []
+        results = (
+            [
+                {
+                    "code": "check-a",
+                    "name": "检查 A",
+                    "result": "原成功结果",
+                    "item_classifications": {"item-1": "issue"},
+                },
+                {
+                    "code": "check-b",
+                    "name": "检查 B",
+                    "result": "失败时的部分输出",
+                    "error": "首次检查失败",
+                },
+            ]
+            if status == "partial"
+            else []
+        )
         with self.app.app_context():
             get_db().execute(
                 """
@@ -364,7 +380,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     status,
                     finished_at,
                     finished_at,
-                    finished_at if status in {"completed", "failed", "canceled"} else None,
+                    finished_at
+                    if status in {"completed", "failed", "canceled"}
+                    else None,
                 ),
             )
             get_db().commit()
@@ -410,7 +428,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         ?, 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), status, now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    status,
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             return cursor.lastrowid
@@ -420,15 +444,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "stored.txt"
         upload_path.write_text("content", encoding="utf-8")
         with self.app.app_context():
-            task_id = get_db().execute("SELECT id FROM tasks WHERE stored_filename = 'stored.txt'").fetchone()["id"]
+            task_id = (
+                get_db()
+                .execute("SELECT id FROM tasks WHERE stored_filename = 'stored.txt'")
+                .fetchone()["id"]
+            )
 
-        with patch("app.routes.remove_file", return_value=(False, "[WinError 32] 文件正被占用")):
-            response = self.client.post(f"/admin/tasks/{task_id}/delete", follow_redirects=True)
+        with patch(
+            "app.task_files.remove_file",
+            return_value=(False, "[WinError 32] 文件正被占用"),
+        ):
+            response = self.client.post(
+                f"/admin/tasks/{task_id}/delete", follow_redirects=True
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("任务文件正被其他程序使用", response.get_data(as_text=True))
         with self.app.app_context():
-            task = get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                .fetchone()
+            )
         self.assertIsNotNone(task)
         self.assertTrue(upload_path.exists())
 
@@ -461,10 +498,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            hit = get_db().execute(
-                "SELECT id FROM report_suppression_hits WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            hit = (
+                get_db()
+                .execute(
+                    "SELECT id FROM report_suppression_hits WHERE task_id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertIsNone(hit)
 
     def test_task_list_and_download_follow_actual_source_file_state(self):
@@ -474,15 +515,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         missing_list = self.client.get("/admin/tasks")
         self.assertEqual(missing_list.status_code, 200)
         missing_soup = BeautifulSoup(missing_list.get_data(as_text=True), "html.parser")
-        missing_row = _required_tag(missing_soup.select_one(f'tr[data-task-id="{task_id}"]'))
+        missing_row = _required_tag(
+            missing_soup.select_one(f'tr[data-task-id="{task_id}"]')
+        )
         self.assertIn("原文件已清理或缺失", missing_row.get_text(" ", strip=True))
         self.assertIsNotNone(missing_row.select_one(".source-file-status-missing"))
         self.assertIsNone(missing_row.select_one(".task-download-link"))
 
         missing_detail = self.client.get(f"/admin/tasks/{task_id}")
         self.assertEqual(missing_detail.status_code, 200)
-        missing_detail_soup = BeautifulSoup(missing_detail.get_data(as_text=True), "html.parser")
-        self.assertIsNotNone(missing_detail_soup.select_one(".source-file-status-missing"))
+        missing_detail_soup = BeautifulSoup(
+            missing_detail.get_data(as_text=True), "html.parser"
+        )
+        self.assertIsNotNone(
+            missing_detail_soup.select_one(".source-file-status-missing")
+        )
         self.assertIsNone(missing_detail_soup.select_one(".source-file-download-link"))
 
         missing_download = self.client.get(
@@ -490,22 +537,34 @@ class AdminSettingsRouteTest(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(missing_download.status_code, 200)
-        self.assertIn("原文件已清理或缺失，无法下载", missing_download.get_data(as_text=True))
+        self.assertIn(
+            "原文件已清理或缺失，无法下载", missing_download.get_data(as_text=True)
+        )
 
         upload_path.write_text("restored", encoding="utf-8")
 
         restored_list = self.client.get("/admin/tasks")
         self.assertEqual(restored_list.status_code, 200)
-        restored_soup = BeautifulSoup(restored_list.get_data(as_text=True), "html.parser")
-        restored_row = _required_tag(restored_soup.select_one(f'tr[data-task-id="{task_id}"]'))
+        restored_soup = BeautifulSoup(
+            restored_list.get_data(as_text=True), "html.parser"
+        )
+        restored_row = _required_tag(
+            restored_soup.select_one(f'tr[data-task-id="{task_id}"]')
+        )
         self.assertNotIn("原文件已清理或缺失", restored_row.get_text(" ", strip=True))
         self.assertIsNotNone(restored_row.select_one(".task-download-link"))
 
         restored_detail = self.client.get(f"/admin/tasks/{task_id}")
         self.assertEqual(restored_detail.status_code, 200)
-        restored_detail_soup = BeautifulSoup(restored_detail.get_data(as_text=True), "html.parser")
-        self.assertIsNotNone(restored_detail_soup.select_one(".source-file-status-available"))
-        download_link = _required_tag(restored_detail_soup.select_one(".source-file-download-link"))
+        restored_detail_soup = BeautifulSoup(
+            restored_detail.get_data(as_text=True), "html.parser"
+        )
+        self.assertIsNotNone(
+            restored_detail_soup.select_one(".source-file-status-available")
+        )
+        download_link = _required_tag(
+            restored_detail_soup.select_one(".source-file-download-link")
+        )
         self.assertEqual(download_link.get_text(" ", strip=True), "下载原文件")
 
         restored_download = self.client.get(f"/admin/tasks/{task_id}/document")
@@ -557,7 +616,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(partial_download.status_code, 200)
-        self.assertIn("部分或全部原文件已清理或缺失", partial_download.get_data(as_text=True))
+        self.assertIn(
+            "部分或全部原文件已清理或缺失", partial_download.get_data(as_text=True)
+        )
 
         second_path.write_text("second", encoding="utf-8")
 
@@ -570,9 +631,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_user_bulk_delete_removes_queued_and_history_tasks(self):
         deletable_task_ids = [
             self._insert_task(task_type=IMAGE_TASK_TYPE, status="failed"),
-            self._insert_task(task_type=IMAGE_TASK_TYPE, status="canceled", created_at="2026-05-01 10:01:00"),
-            self._insert_task(task_type=IMAGE_TASK_TYPE, status="completed", created_at="2026-05-01 10:02:00"),
-            self._insert_task(task_type=IMAGE_TASK_TYPE, status="partial", created_at="2026-05-01 10:03:00"),
+            self._insert_task(
+                task_type=IMAGE_TASK_TYPE,
+                status="canceled",
+                created_at="2026-05-01 10:01:00",
+            ),
+            self._insert_task(
+                task_type=IMAGE_TASK_TYPE,
+                status="completed",
+                created_at="2026-05-01 10:02:00",
+            ),
+            self._insert_task(
+                task_type=IMAGE_TASK_TYPE,
+                status="partial",
+                created_at="2026-05-01 10:03:00",
+            ),
         ]
         queued_task_id = self._insert_task(
             task_type=IMAGE_TASK_TYPE,
@@ -608,7 +681,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             remaining_ids = {
                 row["id"]
-                for row in get_db().execute(
+                for row in get_db()
+                .execute(
                     "SELECT id FROM tasks WHERE id IN (?, ?, ?, ?, ?, ?, ?)",
                     (
                         *deletable_task_ids,
@@ -616,13 +690,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         running_task_id,
                         canceling_task_id,
                     ),
-                ).fetchall()
+                )
+                .fetchall()
             }
         self.assertEqual(remaining_ids, {running_task_id, canceling_task_id})
         with self.client.session_transaction() as session:
             messages = [message for _, message in session.get("_flashes", [])]
         self.assertIn("已批量删除 5 个任务，其中 1 个排队任务已取消。", messages)
-        self.assertIn("已跳过 2 个状态已变化或正在运行的任务，请先取消后再删除。", messages)
+        self.assertIn(
+            "已跳过 2 个状态已变化或正在运行的任务，请先取消后再删除。", messages
+        )
 
     def test_user_bulk_delete_rejects_another_users_task(self):
         task_id = self._insert_task(
@@ -639,14 +716,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         with self.app.app_context():
-            task = get_db().execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
+                .fetchone()
+            )
         self.assertIsNotNone(task)
 
     def test_queued_bulk_delete_does_not_remove_task_claimed_by_worker(self):
         task_id = self._insert_task(status="queued")
         with self.app.app_context():
             db = get_db()
-            queued_snapshot = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            queued_snapshot = db.execute(
+                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
             db.execute(
                 "UPDATE tasks SET status = 'running', claim_token = 'worker-claim' WHERE id = ?",
                 (task_id,),
@@ -675,20 +758,31 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         response = self.client.post(
             "/admin/tasks/bulk-delete",
-            data={"task_ids": [canceled_task_id], "next": "/admin/videos?status=canceled"},
+            data={
+                "task_ids": [canceled_task_id],
+                "next": "/admin/videos?status=canceled",
+            },
         )
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/admin/videos?status=canceled")
         with self.app.app_context():
-            task = get_db().execute("SELECT id FROM tasks WHERE id = ?", (canceled_task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT id FROM tasks WHERE id = ?", (canceled_task_id,))
+                .fetchone()
+            )
         self.assertIsNone(task)
 
     def test_all_task_lists_expose_bulk_selection_for_queued_and_history_tasks(self):
         task_routes = (
             (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
             (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
-            (LANGUAGE_CONSISTENCY_TASK_TYPE, "/language-consistency", "/admin/language-consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
             (IMAGE_TASK_TYPE, "/images", "/admin/images"),
             (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
         )
@@ -696,9 +790,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         for task_type, user_list_url, admin_list_url in task_routes:
             deletable_task_ids = {
                 self._insert_task(task_type=task_type, status="failed"),
-                self._insert_task(task_type=task_type, status="completed", created_at="2026-05-01 10:01:00"),
-                self._insert_task(task_type=task_type, status="canceled", created_at="2026-05-01 10:02:00"),
-                self._insert_task(task_type=task_type, status="partial", created_at="2026-05-01 10:03:00"),
+                self._insert_task(
+                    task_type=task_type,
+                    status="completed",
+                    created_at="2026-05-01 10:01:00",
+                ),
+                self._insert_task(
+                    task_type=task_type,
+                    status="canceled",
+                    created_at="2026-05-01 10:02:00",
+                ),
+                self._insert_task(
+                    task_type=task_type,
+                    status="partial",
+                    created_at="2026-05-01 10:03:00",
+                ),
             }
             queued_task_id = self._insert_task(
                 task_type=task_type,
@@ -706,7 +812,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 created_at="2026-05-01 10:04:00",
             )
             deletable_task_ids.add(queued_task_id)
-            self._insert_task(task_type=task_type, status="running", created_at="2026-05-01 10:05:00")
+            self._insert_task(
+                task_type=task_type, status="running", created_at="2026-05-01 10:05:00"
+            )
             for list_url, action in (
                 (user_list_url, "/tasks/bulk-delete"),
                 (admin_list_url, "/admin/tasks/bulk-delete"),
@@ -715,25 +823,42 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     response = self.client.get(list_url)
                     self.assertEqual(response.status_code, 200)
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                    headers = [header.get_text(" ", strip=True) for header in soup.select("table thead th")]
+                    headers = [
+                        header.get_text(" ", strip=True)
+                        for header in soup.select("table thead th")
+                    ]
                     self.assertIn("检查状态", headers)
                     self.assertIn("标注进度", headers)
                     if list_url.startswith("/admin"):
-                        self.assertIsNotNone(soup.select_one(".filter-bar.task-filter-bar"))
+                        self.assertIsNotNone(
+                            soup.select_one(".filter-bar.task-filter-bar")
+                        )
                     form = _required_tag(soup.select_one("[data-bulk-delete-form]"))
                     checkboxes = soup.select("[data-bulk-task]")
                     toggle = _required_tag(soup.select_one("[data-bulk-task-toggle]"))
                     button = _required_tag(soup.select_one("[data-bulk-delete-button]"))
                     self.assertEqual(form.get("action"), action)
-                    self.assertEqual({int(checkbox.get("value")) for checkbox in checkboxes}, deletable_task_ids)
-                    self.assertTrue(all(checkbox.get("form") == "bulk-delete-tasks" for checkbox in checkboxes))
+                    self.assertEqual(
+                        {int(checkbox.get("value")) for checkbox in checkboxes},
+                        deletable_task_ids,
+                    )
+                    self.assertTrue(
+                        all(
+                            checkbox.get("form") == "bulk-delete-tasks"
+                            for checkbox in checkboxes
+                        )
+                    )
                     self.assertIsNone(toggle.get("disabled"))
                     self.assertIsNotNone(button.get("disabled"))
                     self.assertEqual(button.get_text(" ", strip=True), "批量删除")
                     self.assertIn("排队中和已结束", str(button.get("title")))
-                    queued_checkbox = _required_tag(soup.select_one(f'[data-bulk-task][value="{queued_task_id}"]'))
+                    queued_checkbox = _required_tag(
+                        soup.select_one(f'[data-bulk-task][value="{queued_task_id}"]')
+                    )
                     self.assertEqual(queued_checkbox.get("data-task-status"), "queued")
-                    self.assertIn("排队任务将先取消", str(queued_checkbox.get("aria-label")))
+                    self.assertIn(
+                        "排队任务将先取消", str(queued_checkbox.get("aria-label"))
+                    )
 
     def test_task_pages_use_consistent_navigation_and_heading_hierarchy(self):
         task_pages = (
@@ -759,13 +884,24 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     if panel.select_one("[data-refresh-region='task-list']")
                 ]
 
-                self.assertEqual(_required_tag(soup.select_one(".page-title h1")).get_text(strip=True), page_title)
+                self.assertEqual(
+                    _required_tag(soup.select_one(".page-title h1")).get_text(
+                        strip=True
+                    ),
+                    page_title,
+                )
                 self.assertEqual(active_link.get_text(strip=True), nav_label)
                 self.assertEqual(active_link.get("title"), nav_title)
-                self.assertEqual(_required_tag(create_panel.find("h2")).get_text(strip=True), "新建任务")
+                self.assertEqual(
+                    _required_tag(create_panel.find("h2")).get_text(strip=True),
+                    "新建任务",
+                )
                 self.assertEqual(len(metric_grid.select(":scope > .metric")), 5)
                 self.assertEqual(len(task_panels), 1)
-                self.assertEqual(_required_tag(task_panels[0].find("h2")).get_text(strip=True), "任务记录")
+                self.assertEqual(
+                    _required_tag(task_panels[0].find("h2")).get_text(strip=True),
+                    "任务记录",
+                )
 
     def test_task_model_select_marks_thinking_disabled_options_for_badge(self):
         model_id = self._configure_provider()
@@ -802,20 +938,44 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 response = self.client.get(route)
                 self.assertEqual(response.status_code, 200)
                 soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                options = soup.select('select[name="model_id"] option[data-model-label]')
+                options = soup.select(
+                    'select[name="model_id"] option[data-model-label]'
+                )
                 self.assertEqual(len(options), 2)
-                self.assertTrue(all(option.get("data-model-label") == expected_label for option in options))
-                normal_option = next(option for option in options if option.get("data-thinking-disabled") is None)
-                disabled_option = next(option for option in options if option.get("data-thinking-disabled") == "true")
+                self.assertTrue(
+                    all(
+                        option.get("data-model-label") == expected_label
+                        for option in options
+                    )
+                )
+                normal_option = next(
+                    option
+                    for option in options
+                    if option.get("data-thinking-disabled") is None
+                )
+                disabled_option = next(
+                    option
+                    for option in options
+                    if option.get("data-thinking-disabled") == "true"
+                )
                 self.assertEqual(normal_option.get_text(strip=True), expected_label)
-                self.assertEqual(disabled_option.get_text(strip=True), f"{expected_label}（关闭思考）")
+                self.assertEqual(
+                    disabled_option.get_text(strip=True),
+                    f"{expected_label}（关闭思考）",
+                )
 
     def test_admin_metric_groups_are_categorized_and_limited_to_five_items(self):
         task_groups = (("任务概况", 5), ("AI 结果统计", 4), ("AI 质量指标", 2))
         pages = (
             (
                 "/admin",
-                (("使用概况", 2), ("任务类型", 5), ("任务状态", 5), ("AI 结果统计", 4), ("AI 质量指标", 2)),
+                (
+                    ("使用概况", 2),
+                    ("任务类型", 5),
+                    ("任务状态", 5),
+                    ("AI 结果统计", 4),
+                    ("AI 质量指标", 2),
+                ),
             ),
             ("/admin/tasks", task_groups),
             ("/admin/consistency", task_groups),
@@ -843,8 +1003,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        active_link = _required_tag(soup.select_one("nav[aria-label='主导航'] a.active"))
-        self.assertEqual(_required_tag(soup.select_one(".page-title h1")).get_text(strip=True), "模型管理")
+        active_link = _required_tag(
+            soup.select_one("nav[aria-label='主导航'] a.active")
+        )
+        self.assertEqual(
+            _required_tag(soup.select_one(".page-title h1")).get_text(strip=True),
+            "模型管理",
+        )
         self.assertEqual(active_link.get_text(strip=True), "模型")
         self.assertEqual(active_link.get("title"), "模型管理")
 
@@ -854,7 +1019,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             db = get_db()
             now = "2026-05-01 09:00:00"
-            for index, model_name in enumerate(("model-b", "model-c", "model-d", "model-e"), start=2):
+            for index, model_name in enumerate(
+                ("model-b", "model-c", "model-d", "model-e"), start=2
+            ):
                 db.execute(
                     """
                     INSERT INTO user_model_configs(
@@ -872,7 +1039,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         model_group = _required_tag(soup.select_one("[data-provider-model-group]"))
         model_chips = model_group.select("[data-provider-model]")
-        self.assertEqual([chip.get_text(" ", strip=True) for chip in model_chips], [f"model-{letter}" for letter in "abcde"])
+        self.assertEqual(
+            [chip.get_text(" ", strip=True) for chip in model_chips],
+            [f"model-{letter}" for letter in "abcde"],
+        )
         self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips))
         self.assertIsNone(model_group.select_one("[data-provider-model-summary]"))
         self.assertIsNone(model_group.select_one("[data-provider-model-toggle]"))
@@ -883,7 +1053,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             db = get_db()
             now = "2026-05-01 09:00:00"
-            for index, model_name in enumerate(("model-b", "model-c", "model-d", "model-e", "model-f", "model-g"), start=2):
+            for index, model_name in enumerate(
+                ("model-b", "model-c", "model-d", "model-e", "model-f", "model-g"),
+                start=2,
+            ):
                 db.execute(
                     """
                     INSERT INTO user_model_configs(
@@ -902,7 +1075,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         model_group = _required_tag(soup.select_one("[data-provider-model-group]"))
         model_list = _required_tag(model_group.select_one("[data-provider-model-list]"))
         model_chips = model_list.select("[data-provider-model]")
-        self.assertEqual([chip.get_text(" ", strip=True) for chip in model_chips], [f"model-{letter}" for letter in "abcdefg"])
+        self.assertEqual(
+            [chip.get_text(" ", strip=True) for chip in model_chips],
+            [f"model-{letter}" for letter in "abcdefg"],
+        )
         self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips[:5]))
         self.assertTrue(all(chip.has_attr("hidden") for chip in model_chips[5:]))
 
@@ -1033,7 +1209,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         DOCUMENT_TASK_TYPE,
                         f"search-rule-{index}",
                         json.dumps(
-                            {"category": category, "location": location, "description": description},
+                            {
+                                "category": category,
+                                "location": location,
+                                "description": description,
+                            },
                             ensure_ascii=False,
                         ),
                         reason,
@@ -1044,7 +1224,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 )
             db.commit()
 
-        response = self.client.get("/admin/settings?rule_keyword=功率+参数&rule_status=candidate")
+        response = self.client.get(
+            "/admin/settings?rule_keyword=功率+参数&rule_status=candidate"
+        )
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
@@ -1052,10 +1234,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         search = _required_tag(section.select_one("[data-report-suppression-search]"))
         status = _required_tag(section.select_one("[data-report-suppression-status]"))
         self.assertEqual(search.get("value"), "功率 参数")
-        self.assertEqual(_required_tag(status.select_one("option[selected]")).get("value"), "candidate")
+        self.assertEqual(
+            _required_tag(status.select_one("option[selected]")).get("value"),
+            "candidate",
+        )
         rows = section.select("[data-report-suppression-row]")
         self.assertEqual(len(rows), 2)
-        self.assertEqual({row.get("data-rule-status") for row in rows}, {"candidate", "enabled"})
+        self.assertEqual(
+            {row.get("data-rule-status") for row in rows}, {"candidate", "enabled"}
+        )
         searchable_text = " ".join(
             part.get_text(" ", strip=True)
             for row in rows
@@ -1065,10 +1252,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("格式问题", searchable_text)
         self.assertIsNotNone(section.select_one("[data-report-suppression-empty]"))
         self.assertTrue(
-            all(field.get("value") == "功率 参数" for field in section.select("[data-report-suppression-keyword-field]"))
+            all(
+                field.get("value") == "功率 参数"
+                for field in section.select("[data-report-suppression-keyword-field]")
+            )
         )
         self.assertTrue(
-            all(field.get("value") == "candidate" for field in section.select("[data-report-suppression-status-field]"))
+            all(
+                field.get("value") == "candidate"
+                for field in section.select("[data-report-suppression-status-field]")
+            )
         )
 
     def test_report_suppression_action_keeps_filters_and_section_anchor(self):
@@ -1104,10 +1297,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         location = urlparse(response.headers["Location"])
-        self.assertEqual(parse_qs(location.query), {"rule_keyword": ["保留 搜索"], "rule_status": ["candidate"]})
+        self.assertEqual(
+            parse_qs(location.query),
+            {"rule_keyword": ["保留 搜索"], "rule_status": ["candidate"]},
+        )
         self.assertEqual(location.fragment, "report-suppression-rules")
         with self.app.app_context():
-            rule = get_db().execute("SELECT enabled FROM report_suppression_rules WHERE id = ?", (rule_id,)).fetchone()
+            rule = (
+                get_db()
+                .execute(
+                    "SELECT enabled FROM report_suppression_rules WHERE id = ?",
+                    (rule_id,),
+                )
+                .fetchone()
+            )
             self.assertEqual(rule["enabled"], 1)
 
     def test_admin_settings_puts_network_and_diagnostics_last(self):
@@ -1176,10 +1379,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         field = _required_tag(soup.select_one(".settings-task-retention-field"))
-        self.assertEqual(_required_tag(field.select_one(".field-label")).get_text(strip=True), "任务数据保留天数")
+        self.assertEqual(
+            _required_tag(field.select_one(".field-label")).get_text(strip=True),
+            "任务数据保留天数",
+        )
         tip = _required_tag(field.find("button", {"aria-label": "任务数据保留说明"}))
         self.assertIn("0 表示不自动清理", tip.get("data-tip", ""))
-        self.assertIn("任务历史、检查报告和人工复核结果继续保留", tip.get("data-tip", ""))
+        self.assertIn(
+            "任务历史、检查报告和人工复核结果继续保留", tip.get("data-tip", "")
+        )
         self.assertNotIn("任务结束并超过保留天数", field.get_text(" ", strip=True))
 
     def test_admin_settings_shows_task_file_cache_summary_and_cleanup_dialog(self):
@@ -1189,31 +1397,53 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         cache = _required_tag(soup.select_one("[data-task-cache]"))
         self.assertEqual(cache.get("data-task-cache-url"), "/admin/settings/task-cache")
-        self.assertEqual(cache.get("data-task-cache-cleanup-url"), "/admin/settings/task-cache/cleanup")
         self.assertEqual(
-            _required_tag(cache.select_one(".settings-task-cache-label")).get_text(strip=True),
+            cache.get("data-task-cache-cleanup-url"),
+            "/admin/settings/task-cache/cleanup",
+        )
+        self.assertEqual(
+            _required_tag(cache.select_one(".settings-task-cache-label")).get_text(
+                strip=True
+            ),
             "任务文件缓存",
         )
         self.assertEqual(cache.name, "details")
         self.assertIsNone(cache.get("open"))
         concurrency_section = _required_tag(cache.find_parent("section"))
-        self.assertIsNotNone(concurrency_section.select_one(".settings-concurrency-form"))
-        self.assertEqual(_required_tag(cache.select_one("[data-task-cache-total]")).get_text(strip=True), "统计中...")
+        self.assertIsNotNone(
+            concurrency_section.select_one(".settings-concurrency-form")
+        )
+        self.assertEqual(
+            _required_tag(cache.select_one("[data-task-cache-total]")).get_text(
+                strip=True
+            ),
+            "统计中...",
+        )
         self.assertIsNotNone(cache.select_one("[data-task-cache-open]"))
         self.assertIsNone(cache.select_one("[data-task-cache-refresh]"))
         dialog = _required_tag(soup.find("dialog", {"id": "task-cache-modal"}))
-        time_heading = _required_tag(dialog.select_one('[data-task-cache-sort-heading="finished_at"]'))
-        size_heading = _required_tag(dialog.select_one('[data-task-cache-sort-heading="size_bytes"]'))
+        time_heading = _required_tag(
+            dialog.select_one('[data-task-cache-sort-heading="finished_at"]')
+        )
+        size_heading = _required_tag(
+            dialog.select_one('[data-task-cache-sort-heading="size_bytes"]')
+        )
         self.assertEqual(time_heading.get("aria-sort"), "ascending")
         self.assertEqual(size_heading.get("aria-sort"), "none")
 
-    def test_admin_task_file_cache_lists_finished_tasks_with_report_links_and_actual_sizes(self):
+    def test_admin_task_file_cache_lists_finished_tasks_with_report_links_and_actual_sizes(
+        self,
+    ):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         (upload_dir / "large.pdf").write_bytes(b"1234")
         (upload_dir / "small.pdf").write_bytes(b"12")
         (upload_dir / "running.pdf").write_bytes(b"running")
-        large_id = self._insert_cache_task(original_filename="large.pdf", stored_filename="large.pdf")
-        small_id = self._insert_cache_task(original_filename="small.pdf", stored_filename="small.pdf")
+        large_id = self._insert_cache_task(
+            original_filename="large.pdf", stored_filename="large.pdf"
+        )
+        small_id = self._insert_cache_task(
+            original_filename="small.pdf", stored_filename="small.pdf"
+        )
         self._insert_cache_task(
             original_filename="running.pdf",
             stored_filename="running.pdf",
@@ -1230,9 +1460,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in data["items"]], [small_id, large_id])
         self.assertEqual(data["items"][0]["report_url"], f"/admin/tasks/{small_id}")
         self.assertEqual(data["items"][0]["task_type_label"], "单文档检查")
-        self.assertEqual(self.client.get(data["items"][0]["report_url"]).status_code, 200)
+        self.assertEqual(
+            self.client.get(data["items"][0]["report_url"]).status_code, 200
+        )
 
-    def test_admin_task_file_cache_cleanup_preserves_report_and_removes_successful_row(self):
+    def test_admin_task_file_cache_cleanup_preserves_report_and_removes_successful_row(
+        self,
+    ):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         completed_file = upload_dir / "completed.pdf"
         running_file = upload_dir / "running.pdf"
@@ -1260,21 +1494,32 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertFalse(completed_file.exists())
         self.assertTrue(running_file.exists())
         with self.app.app_context():
-            task = get_db().execute("SELECT * FROM tasks WHERE id = ?", (completed_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT * FROM tasks WHERE id = ?", (completed_id,))
+                .fetchone()
+            )
             self.assertIsNone(task["document_text"])
             self.assertIsNotNone(task["source_files_cleaned_at"])
             self.assertEqual(task["result_json"], '[{"result":"历史报告"}]')
         refreshed = self.client.get("/admin/settings/task-cache").get_json()
         self.assertNotIn(completed_id, [item["id"] for item in refreshed["items"]])
-        self.assertEqual(self.client.get(f"/admin/tasks/{completed_id}").status_code, 200)
+        self.assertEqual(
+            self.client.get(f"/admin/tasks/{completed_id}").status_code, 200
+        )
 
     def test_admin_task_file_cache_keeps_locked_task_available_for_retry(self):
         upload_dir = Path(self.app.config["UPLOAD_FOLDER"])
         locked_file = upload_dir / "locked.pdf"
         locked_file.write_bytes(b"locked")
-        task_id = self._insert_cache_task(original_filename="locked.pdf", stored_filename="locked.pdf")
+        task_id = self._insert_cache_task(
+            original_filename="locked.pdf", stored_filename="locked.pdf"
+        )
 
-        with patch("app.tasks.remove_file", return_value=(False, "[WinError 32] 文件正被占用")):
+        with patch(
+            "app.task_runtime.artifacts.remove_file",
+            return_value=(False, "[WinError 32] 文件正被占用"),
+        ):
             response = self.client.post(
                 "/admin/settings/task-cache/cleanup",
                 json={"task_ids": [task_id]},
@@ -1300,9 +1545,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        expected = {"proxy_mode": "custom", "proxy": "http://127.0.0.1:7890", "ssl_verify": True}
+        expected = {
+            "proxy_mode": "custom",
+            "proxy": "http://127.0.0.1:7890",
+            "ssl_verify": True,
+        }
         self.assertEqual(self.app.config["NETWORK"], expected)
-        config = yaml.safe_load((self.app.config["ROOT_DIR"] / CONFIG_FILENAME).read_text(encoding="utf-8"))
+        config = yaml.safe_load(
+            (self.app.config["ROOT_DIR"] / CONFIG_FILENAME).read_text(encoding="utf-8")
+        )
         self.assertEqual(config["network"], expected)
         with self.app.app_context():
             self.assertIsNone(get_setting("network"))
@@ -1316,7 +1567,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.headers["Location"].endswith("/admin/settings?tab=ip_users"))
+        self.assertTrue(
+            response.headers["Location"].endswith("/admin/settings?tab=ip_users")
+        )
         with self.app.app_context():
             self.assertEqual(get_ip_username("10.0.0.8"), "张三")
 
@@ -1340,7 +1593,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             headers={"X-Requested-With": "fetch"},
         )
         self.assertEqual(json_response.status_code, 200)
-        self.assertEqual(json_response.get_json(), {"ok": True, "ip": "10.0.0.8", "username": "李四"})
+        self.assertEqual(
+            json_response.get_json(), {"ok": True, "ip": "10.0.0.8", "username": "李四"}
+        )
 
     def test_admin_settings_shows_ip_username_mapping_in_local_ip_mode(self):
         self.app.config["PLATFORM"] = False
@@ -1417,25 +1672,71 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task_type_input = _required_tag(panel.find("input", {"name": "task_type"}))
             self.assertEqual(task_type_input.get("value"), task_type)
             self.assertIsNotNone(panel.select_one("[data-create-check-item-form]"))
-        document_tip = _required_tag(soup.find("button", {"aria-label": "单文档检查提示词说明"}))
-        consistency_tip = _required_tag(soup.find("button", {"aria-label": "多文档对照提示词说明"}))
-        language_tip = _required_tag(soup.find("button", {"aria-label": "跨语种检查提示词说明"}))
-        image_tip = _required_tag(soup.find("button", {"aria-label": "图片检查提示词说明"}))
-        video_tip = _required_tag(soup.find("button", {"aria-label": "视频检查提示词说明"}))
-        self.assertEqual(document_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除。")
-        self.assertEqual(consistency_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。")
-        self.assertEqual(language_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。")
-        self.assertEqual(image_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。")
-        self.assertEqual(video_tip.get("data-tip"), "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。")
-        visible_descriptions = [item.get_text(strip=True) for item in soup.select(".settings-section-head p")]
-        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除。", visible_descriptions)
-        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。", visible_descriptions)
-        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。", visible_descriptions)
-        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。", visible_descriptions)
-        self.assertNotIn("内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。", visible_descriptions)
+        document_tip = _required_tag(
+            soup.find("button", {"aria-label": "单文档检查提示词说明"})
+        )
+        consistency_tip = _required_tag(
+            soup.find("button", {"aria-label": "多文档对照提示词说明"})
+        )
+        language_tip = _required_tag(
+            soup.find("button", {"aria-label": "跨语种检查提示词说明"})
+        )
+        image_tip = _required_tag(
+            soup.find("button", {"aria-label": "图片检查提示词说明"})
+        )
+        video_tip = _required_tag(
+            soup.find("button", {"aria-label": "视频检查提示词说明"})
+        )
+        self.assertEqual(
+            document_tip.get("data-tip"),
+            "内置检查项不可删除；扩展检查项可新增、停用或删除。",
+        )
+        self.assertEqual(
+            consistency_tip.get("data-tip"),
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。",
+        )
+        self.assertEqual(
+            language_tip.get("data-tip"),
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。",
+        )
+        self.assertEqual(
+            image_tip.get("data-tip"),
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。",
+        )
+        self.assertEqual(
+            video_tip.get("data-tip"),
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。",
+        )
+        visible_descriptions = [
+            item.get_text(strip=True)
+            for item in soup.select(".settings-section-head p")
+        ]
+        self.assertNotIn(
+            "内置检查项不可删除；扩展检查项可新增、停用或删除。", visible_descriptions
+        )
+        self.assertNotIn(
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。",
+            visible_descriptions,
+        )
+        self.assertNotIn(
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。",
+            visible_descriptions,
+        )
+        self.assertNotIn(
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。",
+            visible_descriptions,
+        )
+        self.assertNotIn(
+            "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。",
+            visible_descriptions,
+        )
 
     def test_admin_overview_counts_tasks_in_selected_range(self):
-        self._insert_task(ip="10.0.0.1", username_snapshot="测试用户A", created_at="2026-05-01 10:00:00")
+        self._insert_task(
+            ip="10.0.0.1",
+            username_snapshot="测试用户A",
+            created_at="2026-05-01 10:00:00",
+        )
         self._insert_task(
             task_type=CONSISTENCY_TASK_TYPE,
             ip="10.0.0.1",
@@ -1443,9 +1744,17 @@ class AdminSettingsRouteTest(unittest.TestCase):
             status="failed",
             created_at="2026-05-01 11:00:00",
         )
-        self._insert_task(ip="10.0.0.2", status="queued", created_at="2026-05-02 08:00:00")
-        self._insert_task(task_type=LANGUAGE_CONSISTENCY_TASK_TYPE, ip="10.0.0.2", created_at="2026-05-02 09:00:00")
-        self._insert_task(task_type=VIDEO_TASK_TYPE, ip="10.0.0.2", created_at="2026-05-02 10:00:00")
+        self._insert_task(
+            ip="10.0.0.2", status="queued", created_at="2026-05-02 08:00:00"
+        )
+        self._insert_task(
+            task_type=LANGUAGE_CONSISTENCY_TASK_TYPE,
+            ip="10.0.0.2",
+            created_at="2026-05-02 09:00:00",
+        )
+        self._insert_task(
+            task_type=VIDEO_TASK_TYPE, ip="10.0.0.2", created_at="2026-05-02 10:00:00"
+        )
         self._insert_task(ip="10.0.0.3", created_at="2026-04-30 23:59:59")
 
         response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-02")
@@ -1469,12 +1778,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         quick_filters = {
             link.get_text(strip=True): link
-            for link in BeautifulSoup(html, "html.parser").select(".overview-quick-filter")
+            for link in BeautifulSoup(html, "html.parser").select(
+                ".overview-quick-filter"
+            )
         }
         self.assertEqual(set(quick_filters), {"今天", "近7天", "近30天"})
-        actions = BeautifulSoup(html, "html.parser").select_one(".overview-filter-actions")
+        actions = BeautifulSoup(html, "html.parser").select_one(
+            ".overview-filter-actions"
+        )
         self.assertEqual(
-            [element.name for element in actions.find_all(["div", "button"], recursive=False)],
+            [
+                element.name
+                for element in actions.find_all(["div", "button"], recursive=False)
+            ],
             ["div", "button"],
         )
         for link in quick_filters.values():
@@ -1490,8 +1806,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("active", today_soup.select_one('[data-range="today"]')["class"])
 
         seven_day_response = self.client.get(quick_filters["近7天"]["href"])
-        seven_day_soup = BeautifulSoup(seven_day_response.get_data(as_text=True), "html.parser")
-        self.assertIn("active", seven_day_soup.select_one('[data-range="7-days"]')["class"])
+        seven_day_soup = BeautifulSoup(
+            seven_day_response.get_data(as_text=True), "html.parser"
+        )
+        self.assertIn(
+            "active", seven_day_soup.select_one('[data-range="7-days"]')["class"]
+        )
 
     def test_admin_overview_defaults_to_today_and_uses_query_label(self):
         response = self.client.get("/admin")
@@ -1502,10 +1822,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         end_date = _required_tag(soup.find("input", {"name": "end_date"}))
         self.assertEqual(start_date.get("value"), date.today().isoformat())
         self.assertEqual(end_date.get("value"), date.today().isoformat())
-        self.assertIn("active", _required_tag(soup.select_one('[data-range="today"]')).get("class", []))
+        self.assertIn(
+            "active",
+            _required_tag(soup.select_one('[data-range="today"]')).get("class", []),
+        )
         overview_filter = _required_tag(soup.select_one(".overview-filter"))
         self.assertEqual(
-            _required_tag(overview_filter.find("button", {"type": "submit"})).get_text(strip=True),
+            _required_tag(overview_filter.find("button", {"type": "submit"})).get_text(
+                strip=True
+            ),
             "查询",
         )
 
@@ -1522,7 +1847,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(len(daily_rows), 30)
         self.assertEqual(daily_rows[0].find("td").get_text(strip=True), "2026-05-31")
         self.assertEqual(daily_rows[-1].find("td").get_text(strip=True), "2026-05-02")
-        self.assertIn("<span>提交任务</span><strong>31</strong>", response.get_data(as_text=True))
+        self.assertIn(
+            "<span>提交任务</span><strong>31</strong>", response.get_data(as_text=True)
+        )
 
     def test_admin_overview_uses_ip_username_mapping(self):
         self._insert_task(ip="10.0.0.8", created_at="2026-05-01 10:00:00")
@@ -1593,10 +1920,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(parser.call_count, 1)
         with self.app.app_context():
-            cached = get_db().execute(
-                "SELECT issue_count, source_updated_at FROM task_report_stats WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            cached = (
+                get_db()
+                .execute(
+                    "SELECT issue_count, source_updated_at FROM task_report_stats WHERE task_id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(cached["issue_count"], 1)
         self.assertEqual(cached["source_updated_at"], "2026-05-01 10:01:00")
 
@@ -1610,12 +1941,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 """,
                 (task_id,),
             )
-            get_db().execute("UPDATE tasks SET result_json = '[]' WHERE id = ?", (task_id,))
+            get_db().execute(
+                "UPDATE tasks SET result_json = '[]' WHERE id = ?", (task_id,)
+            )
             get_db().commit()
-            cached = get_db().execute(
-                "SELECT task_id FROM task_report_stats WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            cached = (
+                get_db()
+                .execute(
+                    "SELECT task_id FROM task_report_stats WHERE task_id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertIsNone(cached)
 
     def test_report_preparation_change_invalidates_cached_report_totals(self):
@@ -1660,14 +1997,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         self.assertEqual(
-            _required_tag(soup.select_one('[data-admin-report-count="non_issue"]')).get_text(strip=True),
+            _required_tag(
+                soup.select_one('[data-admin-report-count="non_issue"]')
+            ).get_text(strip=True),
             "0",
         )
         with self.app.app_context():
-            cached = get_db().execute(
-                "SELECT non_issue_count, suppression_version FROM task_report_stats WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            cached = (
+                get_db()
+                .execute(
+                    "SELECT non_issue_count, suppression_version FROM task_report_stats WHERE task_id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(cached["non_issue_count"], 0)
         self.assertTrue(cached["suppression_version"].startswith("3|"))
 
@@ -1726,16 +2069,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.client.get("/admin/tasks")
 
         with self.app.app_context():
-            cached = get_db().execute(
-                "SELECT issue_count, suppressed_count FROM task_report_stats WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            cached = (
+                get_db()
+                .execute(
+                    "SELECT issue_count, suppressed_count FROM task_report_stats WHERE task_id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(cached["issue_count"], 0)
         self.assertEqual(cached["suppressed_count"], 1)
 
     def test_admin_task_status_endpoint_returns_lightweight_progress(self):
         task_id = self._insert_task(status="running")
-        response = self.client.get(f"/admin/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={task_id}")
+        response = self.client.get(
+            f"/admin/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={task_id}"
+        )
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -1799,7 +2148,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         pending_page = self.client.get("/admin/tasks?review_status=pending")
         pending_soup = BeautifulSoup(pending_page.get_data(as_text=True), "html.parser")
-        pending_row = _required_tag(pending_soup.select_one(f'[data-task-id="{task_id}"]'))
+        pending_row = _required_tag(
+            pending_soup.select_one(f'[data-task-id="{task_id}"]')
+        )
         self.assertEqual(pending_row.get("data-task-review-key"), "pending:0:2")
         self.assertIn("未标注 0/2", pending_row.get_text(" ", strip=True))
         self.assertIsNone(pending_soup.select_one(f'[data-task-id="{empty_task_id}"]'))
@@ -1829,7 +2180,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(first_review.get_json()["totals"]["reviewed"], 1)
         self.assertEqual(first_review.get_json()["totals"]["pending_review"], 1)
 
-        with patch("app.routes._parse_result_json", side_effect=AssertionError("轻量接口不应解析报告正文")):
+        with patch(
+            "app.routes._parse_result_json",
+            side_effect=AssertionError("轻量接口不应解析报告正文"),
+        ):
             status_response = self.client.get(
                 f"/admin/task-statuses?task_type={DOCUMENT_TASK_TYPE}&ids={task_id}"
             )
@@ -1838,10 +2192,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(status_task["review_key"], "in_progress:1:2")
 
         in_progress_page = self.client.get("/admin/tasks?review_status=in_progress")
-        in_progress_soup = BeautifulSoup(in_progress_page.get_data(as_text=True), "html.parser")
-        in_progress_row = _required_tag(in_progress_soup.select_one(f'[data-task-id="{task_id}"]'))
+        in_progress_soup = BeautifulSoup(
+            in_progress_page.get_data(as_text=True), "html.parser"
+        )
+        in_progress_row = _required_tag(
+            in_progress_soup.select_one(f'[data-task-id="{task_id}"]')
+        )
         self.assertIn("标注中 1/2", in_progress_row.get_text(" ", strip=True))
-        self.assertIn("review_status=in_progress", in_progress_page.get_data(as_text=True))
+        self.assertIn(
+            "review_status=in_progress", in_progress_page.get_data(as_text=True)
+        )
 
         second_review = self.client.post(
             f"/admin/tasks/{task_id}/report-items",
@@ -1858,18 +2218,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(second_review.get_json()["totals"]["pending_review"], 0)
 
         completed_page = self.client.get("/admin/tasks?review_status=completed")
-        completed_soup = BeautifulSoup(completed_page.get_data(as_text=True), "html.parser")
-        completed_row = _required_tag(completed_soup.select_one(f'[data-task-id="{task_id}"]'))
+        completed_soup = BeautifulSoup(
+            completed_page.get_data(as_text=True), "html.parser"
+        )
+        completed_row = _required_tag(
+            completed_soup.select_one(f'[data-task-id="{task_id}"]')
+        )
         self.assertEqual(completed_row.get("data-task-review-key"), "completed:2:2")
         self.assertIn("已标注 2/2", completed_row.get_text(" ", strip=True))
         with self.app.app_context():
-            cached = get_db().execute(
-                """
+            cached = (
+                get_db()
+                .execute(
+                    """
                 SELECT reviewed_item_count, pending_review_item_count
                 FROM task_report_stats WHERE task_id = ?
                 """,
-                (task_id,),
-            ).fetchone()
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(cached["reviewed_item_count"], 2)
         self.assertEqual(cached["pending_review_item_count"], 0)
 
@@ -1880,12 +2248,17 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         stats = _required_tag(soup.select_one('[data-refresh-region="stats"]'))
         task_row = _required_tag(soup.select_one(f'[data-task-id="{task_id}"]'))
-        self.assertIn("/admin/task-statuses?task_type=document_check", str(stats.get("data-refresh-url")))
+        self.assertIn(
+            "/admin/task-statuses?task_type=document_check",
+            str(stats.get("data-refresh-url")),
+        )
         self.assertEqual(task_row.get("data-task-status"), "running")
         self.assertEqual(task_row.get("data-task-review-key"), "unavailable:0:0")
 
     def test_user_task_status_endpoint_only_returns_current_owner_tasks(self):
-        own_task_id = self._insert_task(status="running", owner_subject="ip:127.0.0.1", owner_source="ip")
+        own_task_id = self._insert_task(
+            status="running", owner_subject="ip:127.0.0.1", owner_source="ip"
+        )
         other_task_id = self._insert_task(
             ip="10.0.0.2",
             status="running",
@@ -1903,14 +2276,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(payload["counts"]["tasks"], 1)
 
     def test_user_task_page_exposes_lightweight_refresh_metadata(self):
-        task_id = self._insert_task(status="running", owner_subject="ip:127.0.0.1", owner_source="ip")
+        task_id = self._insert_task(
+            status="running", owner_subject="ip:127.0.0.1", owner_source="ip"
+        )
 
         response = self.client.get("/")
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
 
         stats = _required_tag(soup.select_one('[data-refresh-region="stats"]'))
         task_row = _required_tag(soup.select_one(f'[data-task-id="{task_id}"]'))
-        self.assertIn("/task-statuses?task_type=document_check", str(stats.get("data-refresh-url")))
+        self.assertIn(
+            "/task-statuses?task_type=document_check",
+            str(stats.get("data-refresh-url")),
+        )
         self.assertEqual(task_row.get("data-task-status"), "running")
 
     def test_admin_overview_filters_tasks_by_auth_mode(self):
@@ -2008,7 +2386,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.app.config["REAL_IP_HEADER"] = "X-Real-IP"
         model_id = self._configure_provider("ip:10.20.30.40")
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
 
         response = self.client.post(
             "/",
@@ -2099,19 +2481,27 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            models = get_db().execute(
-                """
+            models = (
+                get_db()
+                .execute(
+                    """
                 SELECT m.model_name, m.force_disable_thinking, m.reasoning_effort
                 FROM user_model_configs m
                 JOIN user_model_providers p ON p.id = m.provider_id
                 WHERE p.owner_subject = ?
                 ORDER BY m.sort_order
                 """,
-                ("ip:127.0.0.1",),
-            ).fetchall()
+                    ("ip:127.0.0.1",),
+                )
+                .fetchall()
+            )
         self.assertEqual(
             [
-                (row["model_name"], bool(row["force_disable_thinking"]), row["reasoning_effort"])
+                (
+                    row["model_name"],
+                    bool(row["force_disable_thinking"]),
+                    row["reasoning_effort"],
+                )
                 for row in models
             ],
             [
@@ -2139,7 +2529,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            row = get_db().execute("SELECT max_input_chars FROM user_model_providers").fetchone()
+            row = (
+                get_db()
+                .execute("SELECT max_input_chars FROM user_model_providers")
+                .fetchone()
+            )
         self.assertEqual(row["max_input_chars"], 1000000)
 
     def test_user_models_defaults_input_limit_to_five_hundred_thousand(self):
@@ -2160,7 +2554,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            row = get_db().execute("SELECT max_input_chars FROM user_model_providers").fetchone()
+            row = (
+                get_db()
+                .execute("SELECT max_input_chars FROM user_model_providers")
+                .fetchone()
+            )
         self.assertEqual(row["max_input_chars"], 500000)
 
     def test_user_models_defaults_legacy_model_config_to_keep_thinking(self):
@@ -2172,15 +2570,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "api_key": "",
                 "request_timeout": "30",
                 "is_active": "on",
-                "model_configs": json.dumps([{"model_name": "legacy-model"}], ensure_ascii=False),
+                "model_configs": json.dumps(
+                    [{"model_name": "legacy-model"}], ensure_ascii=False
+                ),
             },
         )
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            row = get_db().execute(
-                "SELECT force_disable_thinking, reasoning_effort FROM user_model_configs WHERE model_name = 'legacy-model'"
-            ).fetchone()
+            row = (
+                get_db()
+                .execute(
+                    "SELECT force_disable_thinking, reasoning_effort FROM user_model_configs WHERE model_name = 'legacy-model'"
+                )
+                .fetchone()
+            )
         self.assertEqual(row["force_disable_thinking"], 0)
         self.assertIsNone(row["reasoning_effort"])
 
@@ -2215,15 +2619,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            saved_models = get_db().execute(
-                """
+            saved_models = (
+                get_db()
+                .execute(
+                    """
                 SELECT m.model_name, m.force_disable_thinking
                 FROM user_model_configs m
                 ORDER BY m.sort_order
                 """
-            ).fetchall()
+                )
+                .fetchall()
+            )
         self.assertEqual(
-            [(row["model_name"], bool(row["force_disable_thinking"])) for row in saved_models],
+            [
+                (row["model_name"], bool(row["force_disable_thinking"]))
+                for row in saved_models
+            ],
             [
                 ("same-model", False),
                 ("same-model", True),
@@ -2235,8 +2646,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(len(models), 2)
             self.assertEqual(len({model["id"] for model in models}), 2)
             by_mode = {model["force_disable_thinking"]: model for model in models}
-            thinking_enabled_model = _find_enabled_model(by_mode[False]["id"], "ip:127.0.0.1")
-            thinking_disabled_model = _find_enabled_model(by_mode[True]["id"], "ip:127.0.0.1")
+            thinking_enabled_model = _find_enabled_model(
+                by_mode[False]["id"], "ip:127.0.0.1"
+            )
+            thinking_disabled_model = _find_enabled_model(
+                by_mode[True]["id"], "ip:127.0.0.1"
+            )
             assert thinking_enabled_model is not None
             assert thinking_disabled_model is not None
             self.assertFalse(thinking_enabled_model["force_disable_thinking"])
@@ -2250,7 +2665,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "proxy": "http://127.0.0.1:7890",
             "ssl_verify": True,
         }
-        with patch("app.routes.test_model_connection", return_value="模型连通性测试通过。") as mocked_test:
+        with patch(
+            "app.routes.test_model_connection", return_value="模型连通性测试通过。"
+        ) as mocked_test:
             response = self.client.post(
                 "/models/test",
                 json={
@@ -2264,7 +2681,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), {"ok": True, "message": "模型连通性测试通过。"})
+        self.assertEqual(
+            response.get_json(), {"ok": True, "message": "模型连通性测试通过。"}
+        )
         mocked_test.assert_called_once_with(
             api_base="https://example.test/v1/chat/completions",
             api_key="sk-test",
@@ -2294,7 +2713,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), {"fetched_models": ["model-a"], "fetched_count": 1})
+        self.assertEqual(
+            response.get_json(), {"fetched_models": ["model-a"], "fetched_count": 1}
+        )
         mocked_fetch.assert_called_once_with(
             api_base="https://example.test/v1/chat/completions",
             api_key="sk-test",
@@ -2307,7 +2728,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_user_fetch_models_rejects_get_query_parameters(self):
         response = self.client.get(
             "/models/fetch",
-            query_string={"api_base": "https://example.test/v1/chat/completions", "api_key": "secret"},
+            query_string={
+                "api_base": "https://example.test/v1/chat/completions",
+                "api_key": "secret",
+            },
         )
 
         self.assertEqual(response.status_code, 405)
@@ -2327,14 +2751,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            item = get_db().execute(
-                """
+            item = (
+                get_db()
+                .execute(
+                    """
                 SELECT task_type, code, name, description, prompt, enabled
                 FROM check_items
                 WHERE name = ?
                 """,
-                ("遗漏内容检查",),
-            ).fetchone()
+                    ("遗漏内容检查",),
+                )
+                .fetchone()
+            )
         self.assertEqual(item["task_type"], CONSISTENCY_TASK_TYPE)
         self.assertTrue(item["code"].startswith("custom-consistency-"))
         self.assertEqual(item["description"], "检查资料是否遗漏素材关键内容")
@@ -2361,8 +2789,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(data["message"], "扩展检查项已创建，可继续添加。")
         self.assertIsInstance(data["item_id"], int)
         html = BeautifulSoup(data["html"], "html.parser")
-        row = _required_tag(html.select_one('[data-check-item-row]'))
-        detail = _required_tag(html.select_one('[data-check-item-detail]'))
+        row = _required_tag(html.select_one("[data-check-item-row]"))
+        detail = _required_tag(html.select_one("[data-check-item-detail]"))
         self.assertEqual(row.get("data-check-item-id"), str(data["item_id"]))
         self.assertEqual(detail.get("data-check-item-detail"), str(data["item_id"]))
         self.assertIn("连续创建测试项", row.get_text(" ", strip=True))
@@ -2397,7 +2825,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
             },
         )
         with self.app.app_context():
-            item = get_db().execute("SELECT 1 FROM check_items WHERE id = ?", (created["item_id"],)).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT 1 FROM check_items WHERE id = ?", (created["item_id"],)
+                )
+                .fetchone()
+            )
         self.assertIsNone(item)
 
     def test_admin_settings_returns_json_error_for_invalid_check_item(self):
@@ -2413,7 +2847,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.get_json(), {"ok": False, "error": "检查项名称和提示词不能为空。"})
+        self.assertEqual(
+            response.get_json(), {"ok": False, "error": "检查项名称和提示词不能为空。"}
+        )
 
     def test_admin_settings_orders_new_check_items_first(self):
         for name in ("先创建的检查项", "后创建的检查项"):
@@ -2429,17 +2865,23 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(response.status_code, 302)
 
         with self.app.app_context():
-            rows = get_db().execute(
-                """
+            rows = (
+                get_db()
+                .execute(
+                    """
                 SELECT name
                 FROM check_items
                 WHERE task_type = ? AND name IN (?, ?)
                 ORDER BY sort_order ASC, id ASC
                 """,
-                (DOCUMENT_TASK_TYPE, "先创建的检查项", "后创建的检查项"),
-            ).fetchall()
+                    (DOCUMENT_TASK_TYPE, "先创建的检查项", "后创建的检查项"),
+                )
+                .fetchall()
+            )
 
-        self.assertEqual([row["name"] for row in rows], ["后创建的检查项", "先创建的检查项"])
+        self.assertEqual(
+            [row["name"] for row in rows], ["后创建的检查项", "先创建的检查项"]
+        )
 
     def test_admin_settings_creates_image_check_item(self):
         response = self.client.post(
@@ -2456,14 +2898,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            item = get_db().execute(
-                """
+            item = (
+                get_db()
+                .execute(
+                    """
                 SELECT task_type, code, name, description, prompt, enabled
                 FROM check_items
                 WHERE name = ?
                 """,
-                ("接线颜色检查",),
-            ).fetchone()
+                    ("接线颜色检查",),
+                )
+                .fetchone()
+            )
         self.assertEqual(item["task_type"], IMAGE_TASK_TYPE)
         self.assertTrue(item["code"].startswith("custom-image-"))
         self.assertEqual(item["description"], "检查线缆颜色是否符合图纸要求")
@@ -2485,14 +2931,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            item = get_db().execute(
-                """
+            item = (
+                get_db()
+                .execute(
+                    """
                 SELECT task_type, code, name, description, prompt, enabled
                 FROM check_items
                 WHERE name = ?
                 """,
-                ("铭牌信息检查",),
-            ).fetchone()
+                    ("铭牌信息检查",),
+                )
+                .fetchone()
+            )
         self.assertEqual(item["task_type"], VIDEO_TASK_TYPE)
         self.assertTrue(item["code"].startswith("custom-video-"))
         self.assertEqual(item["description"], "检查视频中设备铭牌是否清晰")
@@ -2501,8 +2951,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_upload_destination_uses_unique_name_for_same_second_uploads(self):
         with self.app.app_context():
-            first_name, _ = _upload_destination("报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt")
-            second_name, _ = _upload_destination("报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt")
+            first_name, _ = _upload_destination(
+                "报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt"
+            )
+            second_name, _ = _upload_destination(
+                "报告.txt", "127.0.0.1", "2026-05-22 12:00:00", "txt"
+            )
 
         self.assertNotEqual(first_name, second_name)
         self.assertTrue(first_name.endswith(".txt"))
@@ -2511,8 +2965,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_rejects_disabled_check_item_before_saving_file(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
-            get_db().execute("UPDATE check_items SET enabled = 0 WHERE id = ?", (item["id"],))
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
+            get_db().execute(
+                "UPDATE check_items SET enabled = 0 WHERE id = ?", (item["id"],)
+            )
             get_db().commit()
 
         response = self.client.post(
@@ -2527,7 +2987,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
@@ -2550,8 +3014,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         field = _required_tag(upload.find_parent(class_="multi-file-field"))
         self.assertIsNotNone(field.select_one("[data-file-list]"))
         check_names = [
-            label.get_text(" ", strip=True)
-            for label in soup.select(".check-chip")
+            label.get_text(" ", strip=True) for label in soup.select(".check-chip")
         ]
         self.assertTrue(any("文档规范性检查" in name for name in check_names))
         self.assertTrue(any("易理解性检查" in name for name in check_names))
@@ -2571,12 +3034,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertTrue(upload.has_attr("multiple"))
                 field = _required_tag(upload.find_parent(class_="multi-file-field"))
                 self.assertIsNotNone(field.select_one("[data-file-list]"))
-                self.assertIn("每个视频独立创建检查任务", soup.get_text(" ", strip=True))
+                self.assertIn(
+                    "每个视频独立创建检查任务", soup.get_text(" ", strip=True)
+                )
 
     def test_create_task_saves_check_snapshot_and_defers_text_extraction(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
-            item = get_db().execute("SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'"
+                )
+                .fetchone()
+            )
 
         response = self.client.post(
             "/",
@@ -2611,9 +3082,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_saves_long_filename_when_upload_folder_is_missing(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
 
-        upload_folder = Path(self.app.config["ROOT_DIR"]) / ("deep-" + "x" * 50) / "uploads"
+        upload_folder = (
+            Path(self.app.config["ROOT_DIR"]) / ("deep-" + "x" * 50) / "uploads"
+        )
         self.app.config["UPLOAD_FOLDER"] = str(upload_folder)
         if upload_folder.exists():
             shutil.rmtree(upload_folder)
@@ -2634,7 +3111,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute("SELECT original_filename, stored_filename, document_text FROM tasks").fetchone()
+            task = (
+                get_db()
+                .execute(
+                    "SELECT original_filename, stored_filename, document_text FROM tasks"
+                )
+                .fetchone()
+            )
         stored_path = upload_folder / task["stored_filename"]
         self.assertTrue(stored_path.is_file())
         self.assertLessEqual(len(str(stored_path.resolve())), UPLOAD_PATH_SAFE_CHARS)
@@ -2644,7 +3127,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_defers_model_input_limit_check_to_worker(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
         long_text = "长文档内容。" * 20_000
 
         response = self.client.post(
@@ -2660,7 +3147,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
         self.assertEqual(total, 1)
         self.assertEqual(len(uploaded_files), 1)
@@ -2668,15 +3159,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_creates_one_task_per_uploaded_document(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id, code, name, prompt FROM check_items WHERE code = 'compliance'"
+                )
+                .fetchone()
+            )
 
         response = self.client.post(
             "/",
             data={
                 "document": [
-                    (io.BytesIO(f"document {index}".encode("utf-8")), f"doc-{index:02d}.txt")
+                    (
+                        io.BytesIO(f"document {index}".encode("utf-8")),
+                        f"doc-{index:02d}.txt",
+                    )
                     for index in range(21)
                 ],
                 "checks": [str(item["id"])],
@@ -2687,13 +3185,17 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            tasks = get_db().execute(
-                """
+            tasks = (
+                get_db()
+                .execute(
+                    """
                 SELECT original_filename, document_text, status, checks_snapshot_json
                 FROM tasks
                 ORDER BY original_filename ASC
                 """
-            ).fetchall()
+                )
+                .fetchall()
+            )
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
 
         self.assertEqual(len(tasks), 21)
@@ -2703,12 +3205,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(all(task["document_text"] is None for task in tasks))
         self.assertEqual(len(uploaded_files), 21)
         snapshots = [json.loads(task["checks_snapshot_json"]) for task in tasks]
-        self.assertTrue(all(snapshot[0]["code"] == item["code"] for snapshot in snapshots))
+        self.assertTrue(
+            all(snapshot[0]["code"] == item["code"] for snapshot in snapshots)
+        )
 
     def test_create_task_queues_entire_batch_before_text_extraction(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
 
         response = self.client.post(
             "/",
@@ -2725,7 +3233,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
         self.assertEqual(total, 2)
         self.assertEqual(len(uploaded_files), 2)
@@ -2733,9 +3245,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_does_not_parse_document_during_request(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
 
-        with patch("app.tasks.extract_text", side_effect=ValueError("company parser failed")) as extract_mock:
+        with patch(
+            "app.task_runtime.preprocessing.extract_text",
+            side_effect=ValueError("company parser failed"),
+        ) as extract_mock:
             response = self.client.post(
                 "/",
                 data={
@@ -2750,7 +3269,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         extract_mock.assert_not_called()
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
         self.assertEqual(total, 1)
         self.assertEqual(len(uploaded_files), 1)
@@ -2758,13 +3281,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_task_removes_partial_file_when_upload_save_fails(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
 
         def fail_after_partial_write(_upload, destination, buffer_size=16384):
             Path(destination).write_bytes(b"partial")
             raise OSError("disk write failed")
 
-        with patch.object(FileStorage, "save", autospec=True, side_effect=fail_after_partial_write):
+        with patch.object(
+            FileStorage, "save", autospec=True, side_effect=fail_after_partial_write
+        ):
             response = self.client.post(
                 "/",
                 data={
@@ -2779,16 +3308,24 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("文档上传或读取失败", response.get_data(as_text=True))
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_image_task_defers_image_extraction_to_worker(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id, code, name, prompt FROM check_items WHERE code = 'image-small-language-text'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id, code, name, prompt FROM check_items WHERE code = 'image-small-language-text'"
+                )
+                .fetchone()
+            )
 
         response = self.client.post(
             "/images",
@@ -2803,7 +3340,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
-            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            image_root = (
+                Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            )
         meta = json.loads(task["document_meta_json"])
         snapshots = json.loads(task["checks_snapshot_json"])
         self._assert_task_uses_provider_reference(task, model_id, "high")
@@ -2827,9 +3366,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_image_task_removes_files_when_database_insert_fails(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
+                )
+                .fetchone()
+            )
         self._reject_task_inserts()
 
         response = self.client.post(
@@ -2846,7 +3389,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("创建图片检查任务失败", response.get_data(as_text=True))
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
@@ -2855,11 +3402,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_image_task_does_not_extract_embedded_images_during_request(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
+                )
+                .fetchone()
+            )
 
-        with patch("app.tasks.extract_images", side_effect=AssertionError("不应在请求中提取")) as extract_mock:
+        with patch(
+            "app.task_runtime.preprocessing.extract_images",
+            side_effect=AssertionError("不应在请求中提取"),
+        ) as extract_mock:
             response = self.client.post(
                 "/images",
                 data={
@@ -2882,9 +3436,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_image_task_rejects_non_pdf_document(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'image-small-language-text'"
+                )
+                .fetchone()
+            )
 
         response = self.client.post(
             "/images",
@@ -2898,17 +3456,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
 
     def test_create_video_task_defers_frame_extraction_to_worker(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id, code, name, prompt FROM check_items WHERE code = 'video-installation-sequence'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id, code, name, prompt FROM check_items WHERE code = 'video-installation-sequence'"
+                )
+                .fetchone()
+            )
 
-        with patch("app.tasks.extract_video_frames", side_effect=AssertionError("不应在请求中抽帧")) as extract_mock:
+        with patch(
+            "app.task_runtime.preprocessing.extract_video_frames",
+            side_effect=AssertionError("不应在请求中抽帧"),
+        ) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -2923,7 +3492,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         extract_mock.assert_not_called()
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
-            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            image_root = (
+                Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            )
         meta = json.loads(task["document_meta_json"])
         snapshots = json.loads(task["checks_snapshot_json"])
         self._assert_task_uses_provider_reference(task, model_id, "high")
@@ -2948,11 +3519,17 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_video_tasks_creates_one_task_per_uploaded_video(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+                )
+                .fetchone()
+            )
 
-        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
+        def fake_extract_video_frames(
+            video_path, output_dir, *, source_filename="", max_frames=16
+        ):
             output_dir.mkdir(parents=True, exist_ok=True)
             frame_path = output_dir / "0001_t000001000.jpg"
             frame_path.write_bytes(_TINY_PNG)
@@ -2977,7 +3554,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 },
             )
 
-        with patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames) as extract_mock:
+        with patch(
+            "app.task_runtime.preprocessing.extract_video_frames",
+            side_effect=fake_extract_video_frames,
+        ) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -2996,14 +3576,23 @@ class AdminSettingsRouteTest(unittest.TestCase):
         extract_mock.assert_not_called()
         self.assertIn("已创建 2 个视频检查任务", response.get_data(as_text=True))
         with self.app.app_context():
-            tasks = get_db().execute(
-                "SELECT original_filename, file_type, document_meta_json FROM tasks ORDER BY id ASC"
-            ).fetchall()
+            tasks = (
+                get_db()
+                .execute(
+                    "SELECT original_filename, file_type, document_meta_json FROM tasks ORDER BY id ASC"
+                )
+                .fetchall()
+            )
             upload_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            image_root = (
+                Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            )
             frame_files = list(image_root.rglob("*.jpg"))
 
-        self.assertEqual([task["original_filename"] for task in tasks], ["install-01.mp4", "install-02.mov"])
+        self.assertEqual(
+            [task["original_filename"] for task in tasks],
+            ["install-01.mp4", "install-02.mov"],
+        )
         self.assertEqual([task["file_type"] for task in tasks], ["mp4", "mov"])
         self.assertEqual(len(upload_files), 2)
         self.assertEqual(len(frame_files), 0)
@@ -3016,11 +3605,17 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_video_tasks_defer_invalid_video_detection_to_worker(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+                )
+                .fetchone()
+            )
 
-        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
+        def fake_extract_video_frames(
+            video_path, output_dir, *, source_filename="", max_frames=16
+        ):
             output_dir.mkdir(parents=True, exist_ok=True)
             if source_filename == "broken.mp4":
                 raise DocumentReadError("视频局部数据损坏")
@@ -3041,7 +3636,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {"duration_seconds": 8.0, "frame_count": 1, "max_frames": max_frames},
             )
 
-        with patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames) as extract_mock:
+        with patch(
+            "app.task_runtime.preprocessing.extract_video_frames",
+            side_effect=fake_extract_video_frames,
+        ) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -3063,22 +3661,32 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             tasks = get_db().execute("SELECT original_filename FROM tasks").fetchall()
             upload_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            image_root = (
+                Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            )
             frame_files = list(image_root.rglob("*.jpg")) if image_root.exists() else []
 
-        self.assertEqual([task["original_filename"] for task in tasks], ["good.mp4", "broken.mp4"])
+        self.assertEqual(
+            [task["original_filename"] for task in tasks], ["good.mp4", "broken.mp4"]
+        )
         self.assertEqual(len(upload_files), 2)
         self.assertEqual(len(frame_files), 0)
 
     def test_create_video_task_removes_files_when_database_insert_fails(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+                )
+                .fetchone()
+            )
         self._reject_task_inserts()
 
-        def fake_extract_video_frames(video_path, output_dir, *, source_filename="", max_frames=16):
+        def fake_extract_video_frames(
+            video_path, output_dir, *, source_filename="", max_frames=16
+        ):
             output_dir.mkdir(parents=True, exist_ok=True)
             frame_path = output_dir / "0001_t000001000.jpg"
             frame_path.write_bytes(_TINY_PNG)
@@ -3094,7 +3702,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {"frame_count": 1, "max_frames": max_frames},
             )
 
-        with patch("app.tasks.extract_video_frames", side_effect=fake_extract_video_frames) as extract_mock:
+        with patch(
+            "app.task_runtime.preprocessing.extract_video_frames",
+            side_effect=fake_extract_video_frames,
+        ) as extract_mock:
             response = self.client.post(
                 "/videos",
                 data={
@@ -3110,7 +3721,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         extract_mock.assert_not_called()
         self.assertIn("创建视频检查任务失败", response.get_data(as_text=True))
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
@@ -3119,9 +3734,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_create_video_task_rejects_unsupported_file(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'video-installation-sequence'"
+                )
+                .fetchone()
+            )
 
         response = self.client.post(
             "/videos",
@@ -3135,7 +3754,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
 
     def test_oversized_upload_shows_chinese_limit_message(self):
@@ -3279,7 +3902,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -3292,38 +3920,87 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         items = soup.select("[data-report-item]")
         self.assertEqual(len(items), 2)
-        meta_labels = [node.get_text(strip=True) for node in soup.select(".report-meta-list > div > dt")]
-        self.assertEqual(meta_labels[:5], ["任务类型", "归属用户", "原文件", "文件名称", "文件信息"])
+        meta_labels = [
+            node.get_text(strip=True)
+            for node in soup.select(".report-meta-list > div > dt")
+        ]
+        self.assertEqual(
+            meta_labels[:5], ["任务类型", "归属用户", "原文件", "文件名称", "文件信息"]
+        )
         file_meta = _required_tag(soup.select_one(".report-file-meta"))
         self.assertEqual(file_meta.get_text(" ", strip=True), "文件名称 report.txt")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "0")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="pending_issue_acceptance"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "50.0%")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_acceptance_rate"]')).get_text(strip=True), "-")
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="issue"]')).get_text(
+                strip=True
+            ),
+            "1",
+        )
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(
+                strip=True
+            ),
+            "1",
+        )
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(
+                strip=True
+            ),
+            "0",
+        )
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-report-count="pending_issue_acceptance"]')
+            ).get_text(strip=True),
+            "1",
+        )
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-report-count="issue_detection_rate"]')
+            ).get_text(strip=True),
+            "50.0%",
+        )
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-report-count="issue_acceptance_rate"]')
+            ).get_text(strip=True),
+            "-",
+        )
         detail_text = soup.get_text(" ", strip=True)
         self.assertNotIn("可在条目判定列标记为问题、建议或非问题", detail_text)
         self.assertNotIn("共 2 条：", detail_text)
         issue_count = _required_tag(soup.select_one('[data-report-count="issue"]'))
-        self.assertEqual(_required_tag(issue_count.parent).get_text(" ", strip=True), "问题 1")
+        self.assertEqual(
+            _required_tag(issue_count.parent).get_text(" ", strip=True), "问题 1"
+        )
 
         exported_soup = BeautifulSoup(exported.get_data(as_text=True), "html.parser")
         exported_text = exported_soup.get_text(" ", strip=True)
         self.assertIn("dataset.tableColumnResizer", exported.get_data(as_text=True))
-        exported_meta_labels = [node.get_text(strip=True) for node in exported_soup.select(".report-meta-list > div > dt")]
-        self.assertEqual(exported_meta_labels[:4], ["任务类型", "归属用户", "文件名称", "文件信息"])
-        exported_headers = [node.get_text(strip=True) for node in exported_soup.select(".report-table th")]
+        exported_meta_labels = [
+            node.get_text(strip=True)
+            for node in exported_soup.select(".report-meta-list > div > dt")
+        ]
+        self.assertEqual(
+            exported_meta_labels[:4], ["任务类型", "归属用户", "文件名称", "文件信息"]
+        )
+        exported_headers = [
+            node.get_text(strip=True)
+            for node in exported_soup.select(".report-table th")
+        ]
         self.assertEqual(exported_headers[-2:], ["条目判定", "是否接纳"])
         self.assertNotIn("不接纳原因", exported_headers)
         self.assertIn("AI 检查条目统计", exported_text)
         self.assertNotIn("共 2 条：", exported_text)
         self.assertEqual(
-            _required_tag(exported_soup.select_one(".report-counts span")).get_text(" ", strip=True),
+            _required_tag(exported_soup.select_one(".report-counts span")).get_text(
+                " ", strip=True
+            ),
             "问题 1",
         )
         self.assertEqual(
-            _required_tag(exported_soup.select_one(".report-table tbody .report-index-cell")).get_text(strip=True),
+            _required_tag(
+                exported_soup.select_one(".report-table tbody .report-index-cell")
+            ).get_text(strip=True),
             "1",
         )
 
@@ -3371,7 +4048,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -3394,16 +4076,29 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         exported = self.client.get(f"/admin/tasks/{task_id}/export")
         exported_soup = BeautifulSoup(exported.get_data(as_text=True), "html.parser")
-        exported_acceptance = _required_tag(exported_soup.select_one(".report-table tbody .report-acceptance-cell"))
-        self.assertEqual(exported_acceptance.get_text(" ", strip=True), "不接纳 模型误报：上下文可解释")
+        exported_acceptance = _required_tag(
+            exported_soup.select_one(".report-table tbody .report-acceptance-cell")
+        )
+        self.assertEqual(
+            exported_acceptance.get_text(" ", strip=True),
+            "不接纳 模型误报：上下文可解释",
+        )
         self.assertIsNone(exported_soup.select_one(".report-rejection-cell"))
 
         response = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        self.assertIn(f'document-check-report-{task_id}.xlsx', response.headers["Content-Disposition"])
-        workbook = load_workbook(io.BytesIO(response.data), read_only=True, data_only=True)
+        self.assertEqual(
+            response.mimetype,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn(
+            f"document-check-report-{task_id}.xlsx",
+            response.headers["Content-Disposition"],
+        )
+        workbook = load_workbook(
+            io.BytesIO(response.data), read_only=True, data_only=True
+        )
         try:
             self.assertEqual(workbook.sheetnames, ["报告条目", "统计"])
             report_rows = list(workbook["报告条目"].iter_rows(values_only=True))
@@ -3459,8 +4154,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         detail = self.client.get(f"/admin/tasks/{task_id}")
         detail_soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         import_form = _required_tag(detail_soup.select_one(".report-import-form"))
-        self.assertEqual(import_form.get("action"), f"/admin/tasks/{task_id}/import.xlsx")
-        self.assertEqual(_required_tag(import_form.select_one("input")).get("accept").split(",")[0], ".xlsx")
+        self.assertEqual(
+            import_form.get("action"), f"/admin/tasks/{task_id}/import.xlsx"
+        )
+        self.assertEqual(
+            _required_tag(import_form.select_one("input")).get("accept").split(",")[0],
+            ".xlsx",
+        )
 
         exported = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
         workbook = load_workbook(io.BytesIO(exported.data))
@@ -3469,8 +4169,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
             headers = {cell.value: cell.column for cell in sheet[1]}
             result_code_column = headers["检查项编码（请勿修改）"]
             item_id_column = headers["条目标识（请勿修改）"]
-            self.assertTrue(sheet.column_dimensions[sheet.cell(1, result_code_column).column_letter].hidden)
-            self.assertTrue(sheet.column_dimensions[sheet.cell(1, item_id_column).column_letter].hidden)
+            self.assertTrue(
+                sheet.column_dimensions[
+                    sheet.cell(1, result_code_column).column_letter
+                ].hidden
+            )
+            self.assertTrue(
+                sheet.column_dimensions[
+                    sheet.cell(1, item_id_column).column_letter
+                ].hidden
+            )
             self.assertEqual(len(sheet.data_validations.dataValidation), 3)
 
             item_id = sheet.cell(2, item_id_column).value
@@ -3494,19 +4202,31 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("已从 Excel 回填 2 条报告标注", response.get_data(as_text=True))
         with self.app.app_context():
-            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,))
+                .fetchone()
+            )
             stored = json.loads(task["result_json"])
-            candidate = get_db().execute(
-                "SELECT reason FROM report_suppression_rules WHERE source_task_id = ? AND source_item_id = ?",
-                (task_id, item_id),
-            ).fetchone()
-            cached = get_db().execute(
-                """
+            candidate = (
+                get_db()
+                .execute(
+                    "SELECT reason FROM report_suppression_rules WHERE source_task_id = ? AND source_item_id = ?",
+                    (task_id, item_id),
+                )
+                .fetchone()
+            )
+            cached = (
+                get_db()
+                .execute(
+                    """
                 SELECT reviewed_item_count, pending_review_item_count
                 FROM task_report_stats WHERE task_id = ?
                 """,
-                (task_id,),
-            ).fetchone()
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
         self.assertEqual(
             stored[0]["item_acceptances"][item_id],
@@ -3545,7 +4265,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("第 3 行“条目判定”无效", response.get_data(as_text=True))
         with self.app.app_context():
-            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,))
+                .fetchone()
+            )
             stored = json.loads(task["result_json"])
         self.assertNotIn("item_classifications", stored[0])
         self.assertNotIn("item_acceptances", stored[0])
@@ -3585,7 +4309,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("已从 Excel 回填 2 条报告标注", response.get_data(as_text=True))
         with self.app.app_context():
-            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,))
+                .fetchone()
+            )
             stored = json.loads(task["result_json"])
         self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
 
@@ -3624,7 +4352,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         2048, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (VIDEO_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    VIDEO_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -3632,7 +4365,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         response = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
 
         self.assertEqual(response.status_code, 200)
-        workbook = load_workbook(io.BytesIO(response.data), read_only=True, data_only=True)
+        workbook = load_workbook(
+            io.BytesIO(response.data), read_only=True, data_only=True
+        )
         try:
             rows = list(workbook["报告条目"].iter_rows(values_only=True))
             self.assertEqual(
@@ -3674,7 +4409,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             now = "2026-05-23 12:25:00"
             upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "stored.mp4"
             upload_path.write_bytes(b"video-bytes")
-            image_root = Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            image_root = (
+                Path(self.app.config["UPLOAD_FOLDER"]).parent / "extracted_images"
+            )
             frame_dir = image_root / "task-video"
             frame_dir.mkdir(parents=True, exist_ok=True)
             (frame_dir / "0001_t000001000.jpg").write_bytes(_TINY_PNG)
@@ -3754,7 +4491,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
+        headers = [
+            node.get_text(strip=True) for node in soup.select(".report-table th")
+        ]
         self.assertEqual(
             headers,
             [
@@ -3846,7 +4585,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -3855,47 +4599,130 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(detail.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
-        headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
+        headers = [
+            node.get_text(strip=True) for node in soup.select(".report-table th")
+        ]
         self.assertEqual(
             headers,
-            ["条目", "严重程度", "证据可信度", "问题类型", "位置", "原文/证据", "问题描述", "影响", "修改建议", "条目判定", "是否认可 AI 结论"],
+            [
+                "条目",
+                "严重程度",
+                "证据可信度",
+                "问题类型",
+                "位置",
+                "原文/证据",
+                "问题描述",
+                "影响",
+                "修改建议",
+                "条目判定",
+                "是否认可 AI 结论",
+            ],
         )
-        self.assertIn("report-field-severity_label", _required_tag(soup.select_one(".report-table th:nth-child(2)")).get("class", []))
-        self.assertIn("report-field-confidence_label", _required_tag(soup.select_one(".report-table th:nth-child(3)")).get("class", []))
+        self.assertIn(
+            "report-field-severity_label",
+            _required_tag(soup.select_one(".report-table th:nth-child(2)")).get(
+                "class", []
+            ),
+        )
+        self.assertIn(
+            "report-field-confidence_label",
+            _required_tag(soup.select_one(".report-table th:nth-child(3)")).get(
+                "class", []
+            ),
+        )
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 1)
         item_type_radios = rows[0].select("input[type='radio'][data-report-item-type]")
-        self.assertEqual([radio.get("value") for radio in item_type_radios], ["issue", "suggestion", "non_issue"])
+        self.assertEqual(
+            [radio.get("value") for radio in item_type_radios],
+            ["issue", "suggestion", "non_issue"],
+        )
         self.assertEqual(len(rows[0].select(".report-status-cell select")), 0)
-        self.assertEqual([radio.get("value") for radio in item_type_radios if radio.has_attr("checked")], ["issue"])
-        acceptance = _required_tag(rows[0].select_one("[data-report-acceptance-status]"))
-        acceptance_radios = rows[0].select("input[type='radio'][data-report-acceptance-status]")
-        self.assertEqual([radio.get("value") for radio in acceptance_radios], ["pending", "accepted", "rejected"])
+        self.assertEqual(
+            [
+                radio.get("value")
+                for radio in item_type_radios
+                if radio.has_attr("checked")
+            ],
+            ["issue"],
+        )
+        acceptance = _required_tag(
+            rows[0].select_one("[data-report-acceptance-status]")
+        )
+        acceptance_radios = rows[0].select(
+            "input[type='radio'][data-report-acceptance-status]"
+        )
+        self.assertEqual(
+            [radio.get("value") for radio in acceptance_radios],
+            ["pending", "accepted", "rejected"],
+        )
         self.assertEqual(len(rows[0].select(".report-acceptance-cell select")), 0)
         rejection_reasons = rows[0].select("[data-report-rejection-reason]")
         self.assertEqual(len(rejection_reasons), 1)
         self.assertEqual(rejection_reasons[0].get("type"), "hidden")
         rejection_choices = soup.select("[data-report-rejection-choice]")
         self.assertEqual(
-            [choice.get("data-report-rejection-choice") for choice in rejection_choices],
-            ["false_positive", "model_hallucination", "evidence_insufficient", "not_applicable", "other"],
+            [
+                choice.get("data-report-rejection-choice")
+                for choice in rejection_choices
+            ],
+            [
+                "false_positive",
+                "model_hallucination",
+                "evidence_insufficient",
+                "not_applicable",
+                "other",
+            ],
         )
-        self.assertIn("找不到模型引用的原文、位置或事实", _required_tag(soup.select_one(".rejection-reason-model_hallucination")).get_text(" ", strip=True))
-        self.assertEqual([radio.get("value") for radio in acceptance_radios if radio.has_attr("checked")], ["pending"])
+        self.assertIn(
+            "找不到模型引用的原文、位置或事实",
+            _required_tag(
+                soup.select_one(".rejection-reason-model_hallucination")
+            ).get_text(" ", strip=True),
+        )
+        self.assertEqual(
+            [
+                radio.get("value")
+                for radio in acceptance_radios
+                if radio.has_attr("checked")
+            ],
+            ["pending"],
+        )
         self.assertEqual(acceptance.get("data-saved-value"), "pending")
         reason = _required_tag(rows[0].select_one("[data-report-rejection-reason]"))
         note = _required_tag(rows[0].select_one("[data-report-rejection-note]"))
-        rejection_controls = _required_tag(rows[0].select_one("[data-report-rejection-controls]"))
-        self.assertIsNotNone(rejection_controls.find_parent(class_="report-acceptance-cell"))
+        rejection_controls = _required_tag(
+            rows[0].select_one("[data-report-rejection-controls]")
+        )
+        self.assertIsNotNone(
+            rejection_controls.find_parent(class_="report-acceptance-cell")
+        )
         self.assertTrue(rejection_controls.has_attr("hidden"))
         self.assertTrue(reason.has_attr("disabled"))
         self.assertTrue(note.has_attr("disabled"))
-        self.assertEqual(_required_tag(rows[0].select_one(".report-index-cell")).get_text(strip=True), "1")
+        self.assertEqual(
+            _required_tag(rows[0].select_one(".report-index-cell")).get_text(
+                strip=True
+            ),
+            "1",
+        )
         self.assertIsNone(rows[0].select_one(".report-rejection-cell"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
-        self.assertIn("报告硬限制保留前 1 条，省略 1 条", soup.get_text(" ", strip=True))
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(strip=True), "0")
+        self.assertIn(
+            "报告硬限制保留前 1 条，省略 1 条", soup.get_text(" ", strip=True)
+        )
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="issue"]')).get_text(
+                strip=True
+            ),
+            "1",
+        )
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(
+                strip=True
+            ),
+            "0",
+        )
 
     def test_media_task_detail_uses_compact_report_table(self):
         with self.app.app_context():
@@ -3932,7 +4759,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (IMAGE_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    IMAGE_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -3943,11 +4775,17 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(exported.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
-        headers = [node.get_text(strip=True) for node in soup.select(".report-table th")]
-        self.assertEqual(headers, ["条目", "AI检查结论", "条目判定", "是否认可 AI 结论"])
+        headers = [
+            node.get_text(strip=True) for node in soup.select(".report-table th")
+        ]
+        self.assertEqual(
+            headers, ["条目", "AI检查结论", "条目判定", "是否认可 AI 结论"]
+        )
         table = _required_tag(soup.select_one(".report-table-media"))
         self.assertIn("report-table-media", table.get("class", []))
-        row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(" ", strip=True)
+        row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(
+            " ", strip=True
+        )
         self.assertIn("图中配置项与步骤文字一致", row_text)
         self.assertIn("问题类型：界面步骤一致性", row_text)
         self.assertIn("位置/画面：第25页 / 图3-1", row_text)
@@ -3992,7 +4830,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (IMAGE_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    IMAGE_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4055,7 +4898,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (LANGUAGE_CONSISTENCY_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    LANGUAGE_CONSISTENCY_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4067,10 +4915,30 @@ class AdminSettingsRouteTest(unittest.TestCase):
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 1)
         self.assertIn("额定功率不一致", rows[0].get_text(" ", strip=True))
-        self.assertEqual(_required_tag(rows[0].select_one("[data-report-item-type]")).get("data-saved-value"), "issue")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(strip=True), "0")
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue_detection_rate"]')).get_text(strip=True), "100.0%")
+        self.assertEqual(
+            _required_tag(rows[0].select_one("[data-report-item-type]")).get(
+                "data-saved-value"
+            ),
+            "issue",
+        )
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="issue"]')).get_text(
+                strip=True
+            ),
+            "1",
+        )
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(
+                strip=True
+            ),
+            "0",
+        )
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-report-count="issue_detection_rate"]')
+            ).get_text(strip=True),
+            "100.0%",
+        )
 
     def test_task_detail_parses_double_encoded_structured_json_report(self):
         with self.app.app_context():
@@ -4093,7 +4961,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {
                     "code": "typo",
                     "name": "错别字检查",
-                    "result": json.dumps(json.dumps(structured_report, ensure_ascii=False), ensure_ascii=False),
+                    "result": json.dumps(
+                        json.dumps(structured_report, ensure_ascii=False),
+                        ensure_ascii=False,
+                    ),
                 }
             ]
             cursor = get_db().execute(
@@ -4107,7 +4978,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4123,7 +4999,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("[第9页] 章节：1 安全注意事项", row_text)
         self.assertIn("“或/和”中斜杠前后存在多余空格。", row_text)
         self.assertNotIn('"items"', row_text)
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="issue"]')).get_text(strip=True), "1")
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="issue"]')).get_text(
+                strip=True
+            ),
+            "1",
+        )
 
     def test_task_detail_parses_structured_json_with_raw_newline_in_string(self):
         with self.app.app_context():
@@ -4151,7 +5032,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4196,7 +5082,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4297,7 +5188,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4318,8 +5214,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         page_text = soup.get_text(" ", strip=True)
         self.assertIn("已合并 1 条重复问题", page_text)
         self.assertIn("硬限制保留前 2 条，省略 1 条", page_text)
-        self.assertNotIn("安全约束前后矛盾", " ".join(row.get_text(" ", strip=True) for row in rows))
-        self.assertNotIn("该项不是问题", " ".join(row.get_text(" ", strip=True) for row in rows))
+        self.assertNotIn(
+            "安全约束前后矛盾", " ".join(row.get_text(" ", strip=True) for row in rows)
+        )
+        self.assertNotIn(
+            "该项不是问题", " ".join(row.get_text(" ", strip=True) for row in rows)
+        )
 
     def test_report_hard_limit_keeps_top_thirty_likely_issues(self):
         raw_items = [
@@ -4353,7 +5253,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {
                     "code": "compliance",
                     "name": "文档规范性检查",
-                    "result": json.dumps({"summary": "检查完成", "items": raw_items}, ensure_ascii=False),
+                    "result": json.dumps(
+                        {"summary": "检查完成", "items": raw_items}, ensure_ascii=False
+                    ),
                     "issue_output_limit": 100,
                 }
             ]
@@ -4395,7 +5297,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {
                     "code": "compliance",
                     "name": "文档规范性检查",
-                    "result": json.dumps({"summary": "检查完成", "items": raw_items}, ensure_ascii=False),
+                    "result": json.dumps(
+                        {"summary": "检查完成", "items": raw_items}, ensure_ascii=False
+                    ),
                 }
             ],
             task_type=DOCUMENT_TASK_TYPE,
@@ -4427,7 +5331,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             {
                 "code": "completeness",
                 "name": "内容完整性检查",
-                "result": json.dumps({"summary": "发现 2 个问题", "items": raw_items}, ensure_ascii=False),
+                "result": json.dumps(
+                    {"summary": "发现 2 个问题", "items": raw_items}, ensure_ascii=False
+                ),
             }
         ]
 
@@ -4446,7 +5352,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             [item["category"] for item in text_prepared[0]["report_items"]],
             ["单位缺失"],
         )
-        self.assertEqual(text_prepared[0]["result_summary"], "检查完成，保留 1 条明确问题。")
+        self.assertEqual(
+            text_prepared[0]["result_summary"], "检查完成，保留 1 条明确问题。"
+        )
         self.assertEqual(len(image_prepared[0]["report_items"]), 2)
 
     def test_human_non_issue_classification_is_preserved(self):
@@ -4459,7 +5367,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             [
                 {
                     "code": "consistency",
-                    "result": json.dumps({"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False),
+                    "result": json.dumps(
+                        {"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False
+                    ),
                 }
             ]
         )
@@ -4469,7 +5379,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             [
                 {
                     "code": "consistency",
-                    "result": json.dumps({"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False),
+                    "result": json.dumps(
+                        {"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False
+                    ),
                     "item_classifications": {item_id: "non_issue"},
                 }
             ]
@@ -4506,7 +5418,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4520,7 +5437,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("结构层级", row_text)
         self.assertIn("文档名称和前言称谓不一致。", row_text)
         self.assertNotIn('"items"', row_text)
-        self.assertEqual(_required_tag(row.select_one("[data-report-item-type]")).get("data-saved-value"), "suggestion")
+        self.assertEqual(
+            _required_tag(row.select_one("[data-report-item-type]")).get(
+                "data-saved-value"
+            ),
+            "suggestion",
+        )
 
     def test_task_detail_splits_bold_numbered_compliance_items(self):
         with self.app.app_context():
@@ -4559,7 +5481,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -4573,7 +5500,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("技术信息呈现", items[0].get_text(" ", strip=True))
         self.assertIn("客户资料定位", items[1].get_text(" ", strip=True))
         self.assertNotIn("总体规范性结论", items[0].get_text(" ", strip=True))
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="total"]')).get_text(strip=True), "2")
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="total"]')).get_text(
+                strip=True
+            ),
+            "2",
+        )
 
     def test_admin_task_list_shows_report_item_totals(self):
         with self.app.app_context():
@@ -4604,7 +5536,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
 
@@ -4612,10 +5549,30 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="issue"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="suggestion"]')).get_text(strip=True), "1")
-        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="non_issue"]')).get_text(strip=True), "0")
-        self.assertEqual(_required_tag(soup.select_one('[data-admin-report-count="total"]')).get_text(strip=True), "2")
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-admin-report-count="issue"]')
+            ).get_text(strip=True),
+            "1",
+        )
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-admin-report-count="suggestion"]')
+            ).get_text(strip=True),
+            "1",
+        )
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-admin-report-count="non_issue"]')
+            ).get_text(strip=True),
+            "0",
+        )
+        self.assertEqual(
+            _required_tag(
+                soup.select_one('[data-admin-report-count="total"]')
+            ).get_text(strip=True),
+            "2",
+        )
 
     def test_user_task_list_pagination_allows_page_jump(self):
         for index in range(21):
@@ -4642,26 +5599,45 @@ class AdminSettingsRouteTest(unittest.TestCase):
         second_page_response = self.client.get("/?page=2&per_page=50")
 
         self.assertEqual(second_page_response.status_code, 200)
-        second_page_soup = BeautifulSoup(second_page_response.get_data(as_text=True), "html.parser")
+        second_page_soup = BeautifulSoup(
+            second_page_response.get_data(as_text=True), "html.parser"
+        )
         self.assertEqual(len(second_page_soup.select("tr[data-task-id]")), 25)
-        page_size_select = _required_tag(second_page_soup.select_one('select[name="per_page"]'))
+        page_size_select = _required_tag(
+            second_page_soup.select_one('select[name="per_page"]')
+        )
         self.assertEqual(
             [option.get("value") for option in page_size_select.select("option")],
             ["20", "50", "100"],
         )
-        self.assertEqual(_required_tag(page_size_select.select_one("option[selected]")).get("value"), "50")
+        self.assertEqual(
+            _required_tag(page_size_select.select_one("option[selected]")).get("value"),
+            "50",
+        )
         jump_form = _required_tag(second_page_soup.select_one(".page-jump-form"))
-        self.assertEqual(_required_tag(jump_form.select_one('input[name="per_page"]')).get("value"), "50")
-        previous_link = _required_tag(second_page_soup.select_one(".pagination-controls a:first-of-type"))
-        self.assertEqual(parse_qs(urlparse(str(previous_link.get("href"))).query), {"page": ["1"], "per_page": ["50"]})
+        self.assertEqual(
+            _required_tag(jump_form.select_one('input[name="per_page"]')).get("value"),
+            "50",
+        )
+        previous_link = _required_tag(
+            second_page_soup.select_one(".pagination-controls a:first-of-type")
+        )
+        self.assertEqual(
+            parse_qs(urlparse(str(previous_link.get("href"))).query),
+            {"page": ["1"], "per_page": ["50"]},
+        )
 
         hundred_item_response = self.client.get("/?per_page=100")
 
         self.assertEqual(hundred_item_response.status_code, 200)
-        hundred_item_soup = BeautifulSoup(hundred_item_response.get_data(as_text=True), "html.parser")
+        hundred_item_soup = BeautifulSoup(
+            hundred_item_response.get_data(as_text=True), "html.parser"
+        )
         self.assertEqual(len(hundred_item_soup.select("tr[data-task-id]")), 75)
         self.assertEqual(
-            _required_tag(hundred_item_soup.select_one('select[name="per_page"] option[selected]')).get("value"),
+            _required_tag(
+                hundred_item_soup.select_one('select[name="per_page"] option[selected]')
+            ).get("value"),
             "100",
         )
 
@@ -4675,7 +5651,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         self.assertEqual(len(soup.select("tr[data-task-id]")), 20)
         self.assertEqual(
-            _required_tag(soup.select_one('select[name="per_page"] option[selected]')).get("value"),
+            _required_tag(
+                soup.select_one('select[name="per_page"] option[selected]')
+            ).get("value"),
             "20",
         )
 
@@ -4683,7 +5661,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         task_routes = (
             (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
             (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
-            (LANGUAGE_CONSISTENCY_TASK_TYPE, "/language-consistency", "/admin/language-consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
             (IMAGE_TASK_TYPE, "/images", "/admin/images"),
             (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
         )
@@ -4695,25 +5677,38 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     response = self.client.get(f"{list_url}?per_page=50")
                     self.assertEqual(response.status_code, 200)
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                    page_size_form = _required_tag(soup.select_one(".pagination .page-size-form"))
-                    page_size_select = _required_tag(page_size_form.select_one('select[name="per_page"]'))
+                    page_size_form = _required_tag(
+                        soup.select_one(".pagination .page-size-form")
+                    )
+                    page_size_select = _required_tag(
+                        page_size_form.select_one('select[name="per_page"]')
+                    )
                     self.assertEqual(
-                        [option.get("value") for option in page_size_select.select("option")],
+                        [
+                            option.get("value")
+                            for option in page_size_select.select("option")
+                        ],
                         ["20", "50", "100"],
                     )
                     self.assertEqual(
-                        _required_tag(page_size_select.select_one("option[selected]")).get("value"),
+                        _required_tag(
+                            page_size_select.select_one("option[selected]")
+                        ).get("value"),
                         "50",
                     )
                     self.assertEqual(
-                        _required_tag(page_size_form.select_one('input[name="page"]')).get("value"),
+                        _required_tag(
+                            page_size_form.select_one('input[name="page"]')
+                        ).get("value"),
                         "1",
                     )
 
     def test_user_cancel_preserves_proxy_prefix_and_page(self):
         oldest_task_id = None
         for index in range(21):
-            task_id = self._insert_task(status="running", created_at=f"2026-05-01 10:{index:02d}:00")
+            task_id = self._insert_task(
+                status="running", created_at=f"2026-05-01 10:{index:02d}:00"
+            )
             if index == 0:
                 oldest_task_id = task_id
         with self.app.app_context():
@@ -4737,7 +5732,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         form = _required_tag(soup.select_one('form[action$="/cancel"]'))
         next_input = _required_tag(form.select_one('input[name="next"]'))
-        self.assertEqual(form.get("action"), f"/infoCheck/tasks/{oldest_task_id}/cancel")
+        self.assertEqual(
+            form.get("action"), f"/infoCheck/tasks/{oldest_task_id}/cancel"
+        )
         self.assertEqual(next_input.get("value"), "/infoCheck/?page=2")
 
         cancel_response = self.client.post(
@@ -4749,15 +5746,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(cancel_response.status_code, 302)
         self.assertEqual(cancel_response.headers["Location"], "/infoCheck/?page=2")
         with self.app.app_context():
-            canceled = get_db().execute(
-                """
+            canceled = (
+                get_db()
+                .execute(
+                    """
                 SELECT status, cancel_requested, progress, api_key,
                        claim_token, lease_expires_at, finished_at
                 FROM tasks
                 WHERE id = ?
                 """,
-                (oldest_task_id,),
-            ).fetchone()
+                    (oldest_task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(canceled["status"], "canceling")
         self.assertEqual(canceled["cancel_requested"], 1)
         self.assertEqual(canceled["progress"], 100)
@@ -4776,16 +5777,22 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         page_response = self.client.get("/?page=2")
         page_soup = BeautifulSoup(page_response.get_data(as_text=True), "html.parser")
-        stats_region = _required_tag(page_soup.select_one('[data-refresh-region="stats"]'))
+        stats_region = _required_tag(
+            page_soup.select_one('[data-refresh-region="stats"]')
+        )
         self.assertEqual(stats_region.get("data-refresh-active"), "1")
-        task_row = _required_tag(page_soup.select_one(f'tr[data-task-id="{oldest_task_id}"]'))
+        task_row = _required_tag(
+            page_soup.select_one(f'tr[data-task-id="{oldest_task_id}"]')
+        )
         self.assertEqual(task_row.get("data-task-status"), "canceling")
         self.assertIn("取消中", task_row.get_text(" ", strip=True))
         self.assertIsNone(task_row.select_one('form[action$="/cancel"]'))
         self.assertIsNone(task_row.select_one('form[action$="/delete"]'))
 
     def test_user_retry_queues_only_failed_items_and_preserves_task_snapshots(self):
-        task_id, provider_id, check_snapshot, original_results = self._insert_retryable_task()
+        task_id, provider_id, check_snapshot, original_results = (
+            self._insert_retryable_task()
+        )
         with self.app.app_context():
             get_db().execute(
                 """
@@ -4808,7 +5815,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/?status=partial&page=2")
         with self.app.app_context():
-            task = get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                .fetchone()
+            )
         self.assertEqual(task["status"], "queued")
         self.assertEqual(task["progress"], 0)
         self.assertEqual(json.loads(task["retry_check_codes_json"]), ["check-b"])
@@ -4837,10 +5848,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/admin/tasks")
         with self.app.app_context():
-            task = get_db().execute(
-                "SELECT status, api_key, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
-                (task_id,),
-            ).fetchone()
+            task = (
+                get_db()
+                .execute(
+                    "SELECT status, api_key, result_json, retry_check_codes_json FROM tasks WHERE id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(task["status"], "queued")
         self.assertEqual(task["api_key"], "")
         self.assertIsNone(task["result_json"])
@@ -4867,10 +5882,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute(
-                "SELECT result_json, retry_check_codes_json FROM tasks WHERE id = ?",
-                (task_id,),
-            ).fetchone()
+            task = (
+                get_db()
+                .execute(
+                    "SELECT result_json, retry_check_codes_json FROM tasks WHERE id = ?",
+                    (task_id,),
+                )
+                .fetchone()
+            )
         self.assertEqual(json.loads(task["result_json"]), [successful_result])
         self.assertEqual(json.loads(task["retry_check_codes_json"]), ["check-b"])
 
@@ -4888,26 +5907,36 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         missing_provider_id, provider_id, _, _ = self._insert_retryable_task()
         with self.app.app_context():
-            get_db().execute("DELETE FROM user_model_providers WHERE id = ?", (provider_id,))
+            get_db().execute(
+                "DELETE FROM user_model_providers WHERE id = ?", (provider_id,)
+            )
             get_db().commit()
         cases.append((missing_provider_id, "原任务使用的模型提供商已不存在"))
 
         completed_id, _, _, _ = self._insert_retryable_task()
         with self.app.app_context():
-            get_db().execute("UPDATE tasks SET status = 'completed' WHERE id = ?", (completed_id,))
+            get_db().execute(
+                "UPDATE tasks SET status = 'completed' WHERE id = ?", (completed_id,)
+            )
             get_db().commit()
         cases.append((completed_id, "仅失败或部分完成任务可重试"))
 
         for task_id, expected_message in cases:
             with self.subTest(task_id=task_id):
-                response = self.client.post(f"/tasks/{task_id}/retry", follow_redirects=True)
+                response = self.client.post(
+                    f"/tasks/{task_id}/retry", follow_redirects=True
+                )
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(expected_message, response.get_data(as_text=True))
                 with self.app.app_context():
-                    status = get_db().execute(
-                        "SELECT status FROM tasks WHERE id = ?",
-                        (task_id,),
-                    ).fetchone()["status"]
+                    status = (
+                        get_db()
+                        .execute(
+                            "SELECT status FROM tasks WHERE id = ?",
+                            (task_id,),
+                        )
+                        .fetchone()["status"]
+                    )
                 self.assertNotEqual(status, "queued")
 
     def test_user_retry_cannot_access_another_users_task(self):
@@ -4917,17 +5946,25 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         with self.app.app_context():
-            status = get_db().execute(
-                "SELECT status FROM tasks WHERE id = ?",
-                (task_id,),
-            ).fetchone()["status"]
+            status = (
+                get_db()
+                .execute(
+                    "SELECT status FROM tasks WHERE id = ?",
+                    (task_id,),
+                )
+                .fetchone()["status"]
+            )
         self.assertEqual(status, "partial")
 
     def test_retry_action_is_available_in_all_task_lists_and_details(self):
         task_routes = (
             (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
             (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
-            (LANGUAGE_CONSISTENCY_TASK_TYPE, "/language-consistency", "/admin/language-consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
             (IMAGE_TASK_TYPE, "/images", "/admin/images"),
             (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
         )
@@ -4962,7 +5999,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         detail_response = self.client.get(str(detail_link.get("href")))
 
         self.assertEqual(detail_response.status_code, 200)
-        detail_soup = BeautifulSoup(detail_response.get_data(as_text=True), "html.parser")
+        detail_soup = BeautifulSoup(
+            detail_response.get_data(as_text=True), "html.parser"
+        )
         back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
         self.assertEqual(back_link.get("href"), "/")
 
@@ -4970,7 +6009,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         task_routes = (
             (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
             (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
-            (LANGUAGE_CONSISTENCY_TASK_TYPE, "/language-consistency", "/admin/language-consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
             (IMAGE_TASK_TYPE, "/images", "/admin/images"),
             (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
         )
@@ -4993,9 +6036,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_task_list_page_jump_preserves_filters(self):
         for index in range(21):
-            self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
+            self._insert_task(
+                status="completed", created_at=f"2026-05-01 10:{index:02d}:00"
+            )
 
-        response = self.client.get("/admin/tasks?status=completed&owner=127.0.0.1&page=2&per_page=20")
+        response = self.client.get(
+            "/admin/tasks?status=completed&owner=127.0.0.1&page=2&per_page=20"
+        )
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
@@ -5009,18 +6056,29 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(page_input.get("max"), "2")
         self.assertEqual(status_input.get("value"), "completed")
         self.assertEqual(keyword_input.get("value"), "127.0.0.1")
-        self.assertEqual(_required_tag(form.select_one('input[name="per_page"]')).get("value"), "20")
+        self.assertEqual(
+            _required_tag(form.select_one('input[name="per_page"]')).get("value"), "20"
+        )
         page_size_form = _required_tag(soup.select_one(".pagination .page-size-form"))
         self.assertEqual(
-            _required_tag(page_size_form.select_one('input[name="status"]')).get("value"),
+            _required_tag(page_size_form.select_one('input[name="status"]')).get(
+                "value"
+            ),
             "completed",
         )
         self.assertEqual(
-            _required_tag(page_size_form.select_one('input[name="keyword"]')).get("value"),
+            _required_tag(page_size_form.select_one('input[name="keyword"]')).get(
+                "value"
+            ),
             "127.0.0.1",
         )
         filter_form = _required_tag(soup.select_one(".filter-bar"))
-        self.assertEqual(_required_tag(filter_form.select_one('input[name="per_page"]')).get("value"), "20")
+        self.assertEqual(
+            _required_tag(filter_form.select_one('input[name="per_page"]')).get(
+                "value"
+            ),
+            "20",
+        )
 
     def test_admin_task_lists_fuzzy_search_document_name_by_keyword(self):
         task_routes = (
@@ -5044,9 +6102,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 response = self.client.get(route, query_string={"keyword": "2000"})
                 self.assertEqual(response.status_code, 200)
                 soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                keyword_input = _required_tag(soup.select_one('.filter-bar input[name="keyword"]'))
+                keyword_input = _required_tag(
+                    soup.select_one('.filter-bar input[name="keyword"]')
+                )
                 keyword_label = _required_tag(keyword_input.find_parent("label"))
-                filenames = [link.get_text(strip=True) for link in soup.select("a.task-report-link")]
+                filenames = [
+                    link.get_text(strip=True)
+                    for link in soup.select("a.task-report-link")
+                ]
 
                 self.assertEqual(keyword_label.get_text(" ", strip=True), "关键词")
                 self.assertEqual(keyword_input.get("value"), "2000")
@@ -5075,7 +6138,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             document_meta_json=json.dumps(document_meta, ensure_ascii=False),
         )
 
-        response = self.client.get("/admin/consistency", query_string={"keyword": "隐藏参数"})
+        response = self.client.get(
+            "/admin/consistency", query_string={"keyword": "隐藏参数"}
+        )
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
@@ -5084,7 +6149,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):
-            self._insert_task(status="completed", created_at=f"2026-05-01 10:{index:02d}:00")
+            self._insert_task(
+                status="completed", created_at=f"2026-05-01 10:{index:02d}:00"
+            )
 
         list_url = "/admin/tasks?status=completed&owner=127.0.0.1&page=2"
         response = self.client.get(list_url)
@@ -5096,7 +6163,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         detail_response = self.client.get(str(detail_link.get("href")))
 
         self.assertEqual(detail_response.status_code, 200)
-        detail_soup = BeautifulSoup(detail_response.get_data(as_text=True), "html.parser")
+        detail_soup = BeautifulSoup(
+            detail_response.get_data(as_text=True), "html.parser"
+        )
         back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
         self.assertEqual(back_link.get("href"), "/admin/tasks")
 
@@ -5128,7 +6197,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -5161,7 +6235,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(payload["totals"]["issue_detection_rate"], "0.0%")
         self.assertEqual(payload["totals"]["issue_acceptance_rate"], "-")
         with self.app.app_context():
-            task = get_db().execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task = (
+                get_db()
+                .execute("SELECT result_json FROM tasks WHERE id = ?", (task_id,))
+                .fetchone()
+            )
             stored = json.loads(task["result_json"])
         self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
         self.assertEqual(
@@ -5191,7 +6269,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(accepted_payload["totals"]["issue_detection_rate"], "100.0%")
         self.assertEqual(accepted_payload["totals"]["issue_acceptance_rate"], "100.0%")
 
-    def test_report_review_keeps_limited_item_visible_and_returns_saved_acceptance(self):
+    def test_report_review_keeps_limited_item_visible_and_returns_saved_acceptance(
+        self,
+    ):
         with self.app.app_context():
             now = "2026-05-24 12:10:00"
             structured_report = {
@@ -5230,7 +6310,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -5242,7 +6327,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("第一条候选问题", initial_row.get_text(" ", strip=True))
         self.assertNotIn(
             "第二条候选问题",
-            " ".join(row.get_text(" ", strip=True) for row in soup.select("[data-report-item]")),
+            " ".join(
+                row.get_text(" ", strip=True)
+                for row in soup.select("[data-report-item]")
+            ),
         )
 
         type_response = self.client.post(
@@ -5268,7 +6356,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             " ".join(row.get_text(" ", strip=True) for row in refreshed_rows),
         )
         self.assertEqual(
-            _required_tag(refreshed_rows[0].select_one("[data-report-item-type][checked]"))["value"],
+            _required_tag(
+                refreshed_rows[0].select_one("[data-report-item-type][checked]")
+            )["value"],
             "non_issue",
         )
 
@@ -5329,7 +6419,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -5345,7 +6440,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
             }
         ]
 
-        with patch("app.routes._prepare_task_results", return_value=filtered_prepared):
+        with patch(
+            "app.reporting.excel._prepare_task_results",
+            return_value=filtered_prepared,
+        ):
             response = self.client.post(
                 f"/admin/tasks/{task_id}/report-items",
                 json={
@@ -5389,7 +6487,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             source_task_id = cursor.lastrowid
@@ -5413,9 +6516,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["suppression_candidate_created"])
         with self.app.app_context():
-            rule = get_db().execute(
-                "SELECT * FROM report_suppression_rules WHERE check_code = 'compliance'"
-            ).fetchone()
+            rule = (
+                get_db()
+                .execute(
+                    "SELECT * FROM report_suppression_rules WHERE check_code = 'compliance'"
+                )
+                .fetchone()
+            )
             self.assertIsNotNone(rule)
             self.assertEqual(rule["enabled"], 0)
             self.assertEqual(rule["reason"], "模型误报")
@@ -5473,13 +6580,25 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(future_result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(future_result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             future_task_id = cursor.lastrowid
 
         detail_before_enable = self.client.get(f"/admin/tasks/{future_task_id}")
-        self.assertEqual(len(BeautifulSoup(detail_before_enable.get_data(as_text=True), "html.parser").select("[data-report-item]")), 2)
+        self.assertEqual(
+            len(
+                BeautifulSoup(
+                    detail_before_enable.get_data(as_text=True), "html.parser"
+                ).select("[data-report-item]")
+            ),
+            2,
+        )
 
         enable_response = self.client.post(
             "/admin/settings",
@@ -5498,12 +6617,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
         visible_items = soup.select("[data-report-item]")
         self.assertEqual(len(visible_items), 1)
         self.assertIn("文档中缺少安全警告", visible_items[0].get_text(" ", strip=True))
-        self.assertEqual(_required_tag(soup.select_one('[data-report-count="suppressed"]')).get_text(strip=True), "1")
+        self.assertEqual(
+            _required_tag(soup.select_one('[data-report-count="suppressed"]')).get_text(
+                strip=True
+            ),
+            "1",
+        )
         self.assertIn("已忽略误报 1 条", detail_after_enable.get_data(as_text=True))
-        self.assertIn("客户交付文档仍保留研发内部备注", detail_after_enable.get_data(as_text=True))
+        self.assertIn(
+            "客户交付文档仍保留研发内部备注", detail_after_enable.get_data(as_text=True)
+        )
         self.assertIn("描述相似度 71%", detail_after_enable.get_data(as_text=True))
         with self.app.app_context():
-            updated_rule = get_db().execute("SELECT hit_count FROM report_suppression_rules WHERE id = ?", (rule_id,)).fetchone()
+            updated_rule = (
+                get_db()
+                .execute(
+                    "SELECT hit_count FROM report_suppression_rules WHERE id = ?",
+                    (rule_id,),
+                )
+                .fetchone()
+            )
             self.assertEqual(updated_rule["hit_count"], 1)
 
     def test_report_item_reject_requires_reason_and_other_requires_note(self):
@@ -5532,7 +6665,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
                         'completed', 100, ?, ?)
                 """,
-                (DOCUMENT_TASK_TYPE, json.dumps(result_json, ensure_ascii=False), now, now),
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             get_db().commit()
             task_id = cursor.lastrowid
@@ -5558,9 +6696,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(payload["error"], "选择不认可时必须选择原因。")
 
         updated_detail = self.client.get(f"/admin/tasks/{task_id}")
-        updated_soup = BeautifulSoup(updated_detail.get_data(as_text=True), "html.parser")
-        rejection_controls = _required_tag(updated_soup.select_one("[data-report-rejection-controls]"))
-        rejection_reason = _required_tag(rejection_controls.select_one("[data-report-rejection-reason]"))
+        updated_soup = BeautifulSoup(
+            updated_detail.get_data(as_text=True), "html.parser"
+        )
+        rejection_controls = _required_tag(
+            updated_soup.select_one("[data-report-rejection-controls]")
+        )
+        rejection_reason = _required_tag(
+            rejection_controls.select_one("[data-report-rejection-reason]")
+        )
         self.assertTrue(rejection_controls.has_attr("hidden"))
         self.assertTrue(rejection_reason.has_attr("disabled"))
         self.assertEqual(rejection_reason.name, "input")
@@ -5579,7 +6723,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(other_response.status_code, 400)
-        self.assertEqual(other_response.get_json()["error"], "选择其他原因时必须填写具体原因。")
+        self.assertEqual(
+            other_response.get_json()["error"], "选择其他原因时必须填写具体原因。"
+        )
 
     def test_create_task_uses_trusted_header_identity(self):
         model_id = self._configure_provider("trusted_header:100086")
@@ -5591,7 +6737,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
             },
         }
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
 
         response = self.client.post(
             "/",
@@ -5606,7 +6756,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source, ip FROM tasks").fetchone()
+            task = (
+                get_db()
+                .execute(
+                    "SELECT owner_subject, owner_name_snapshot, owner_source, ip FROM tasks"
+                )
+                .fetchone()
+            )
         self.assertEqual(task["owner_subject"], "trusted_header:100086")
         self.assertEqual(task["owner_name_snapshot"], "张三")
         self.assertEqual(task["owner_source"], "trusted_header")
@@ -5687,7 +6843,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         checkboxes = form.select('input[name="checks"]')
         self.assertTrue(checkboxes)
         self.assertTrue(all(checkbox.get("checked") is None for checkbox in checkboxes))
-        self.assertTrue(all(checkbox.get("autocomplete") == "off" for checkbox in checkboxes))
+        self.assertTrue(
+            all(checkbox.get("autocomplete") == "off" for checkbox in checkboxes)
+        )
 
     def test_language_consistency_check_items_are_checked_by_default(self):
         self._configure_provider()
@@ -5697,11 +6855,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         form = _required_tag(soup.find("form", {"data-require-checks": "true"}))
-        self.assertEqual(form.get("data-check-required-message"), "请至少选择一个跨语种检查项。")
+        self.assertEqual(
+            form.get("data-check-required-message"), "请至少选择一个跨语种检查项。"
+        )
         self.assertEqual(form.get("data-prevent-double-submit"), "true")
         self.assertEqual(form.get("data-submitting-label"), "提交中...")
         self.assertIn("请勿重复提交", form.get("data-submitting-message", ""))
-        submission_token = _required_tag(form.select_one('input[name="submission_token"]'))
+        submission_token = _required_tag(
+            form.select_one('input[name="submission_token"]')
+        )
         self.assertRegex(submission_token.get("value", ""), r"^[0-9a-f]{32}$")
         progress = _required_tag(form.select_one("[data-submit-progress]"))
         self.assertTrue(progress.has_attr("hidden"))
@@ -5709,7 +6871,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIsNotNone(form.select_one('input[name="document_b"]'))
         checkboxes = form.select('input[name="checks"]')
         self.assertTrue(checkboxes)
-        self.assertTrue(all(checkbox.get("checked") is not None for checkbox in checkboxes))
+        self.assertTrue(
+            all(checkbox.get("checked") is not None for checkbox in checkboxes)
+        )
 
     def test_saml_user_page_redirects_to_saml_login(self):
         self.app.config["AUTH"] = _saml_auth_config()
@@ -5727,7 +6891,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
             response = self.client.get("/auth/saml/login?next=/consistency")
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "https://sso.example.com/login?SAMLRequest=test")
+        self.assertEqual(
+            response.headers["Location"],
+            "https://sso.example.com/login?SAMLRequest=test",
+        )
         self.assertEqual(fake_auth.return_to, "/consistency")
         with self.client.session_transaction() as session:
             self.assertEqual(session["saml_request_id"], "REQ-1")
@@ -5748,7 +6915,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.headers["Location"], "/consistency")
         self.assertEqual(fake_auth.processed_request_id, "REQ-1")
         with self.client.session_transaction() as session:
-            self.assertEqual(session[SAML_USER_SESSION_KEY], {"user_id": "100086", "username": "张三"})
+            self.assertEqual(
+                session[SAML_USER_SESSION_KEY],
+                {"user_id": "100086", "username": "张三"},
+            )
             self.assertNotIn("saml_request_id", session)
 
     def test_create_task_uses_saml_session_identity(self):
@@ -5757,7 +6927,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             session[SAML_USER_SESSION_KEY] = {"user_id": "100086", "username": "张三"}
         with self.app.app_context():
-            item = get_db().execute("SELECT id FROM check_items WHERE code = 'compliance'").fetchone()
+            item = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()
+            )
 
         response = self.client.post(
             "/",
@@ -5771,7 +6945,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            task = get_db().execute("SELECT owner_subject, owner_name_snapshot, owner_source FROM tasks").fetchone()
+            task = (
+                get_db()
+                .execute(
+                    "SELECT owner_subject, owner_name_snapshot, owner_source FROM tasks"
+                )
+                .fetchone()
+            )
         self.assertEqual(task["owner_subject"], "saml:100086")
         self.assertEqual(task["owner_name_snapshot"], "张三")
         self.assertEqual(task["owner_source"], "saml")
@@ -5801,7 +6981,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         response = self.client.get("/admin/tasks")
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/auth/saml/login?next=/admin/tasks", response.headers["Location"])
+        self.assertIn(
+            "/auth/saml/login?next=/admin/tasks", response.headers["Location"]
+        )
 
     def test_create_consistency_task_rejects_missing_checks_before_saving_file(self):
         model_id = self._configure_provider()
@@ -5809,8 +6991,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         response = self.client.post(
             "/consistency",
             data={
-                "master_documents": (io.BytesIO("素材参数 10A".encode("utf-8")), "master.txt"),
-                "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
+                "master_documents": (
+                    io.BytesIO("素材参数 10A".encode("utf-8")),
+                    "master.txt",
+                ),
+                "related_documents": (
+                    io.BytesIO("资料参数 12A".encode("utf-8")),
+                    "related.txt",
+                ),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -5818,22 +7006,38 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_consistency_task_defers_combined_text_extraction(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id, code, name, prompt FROM check_items WHERE code = 'consistency-cross-document'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id, code, name, prompt FROM check_items WHERE code = 'consistency-cross-document'"
+                )
+                .fetchone()
+            )
 
         response = self.client.post(
             "/consistency",
             data={
-                "master_documents": (_xlsx_bytes([["项目", "参数"], ["素材参数", "10A"]], title="素材参数表"), "master.xlsx"),
-                "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
+                "master_documents": (
+                    _xlsx_bytes(
+                        [["项目", "参数"], ["素材参数", "10A"]], title="素材参数表"
+                    ),
+                    "master.xlsx",
+                ),
+                "related_documents": (
+                    io.BytesIO("资料参数 12A".encode("utf-8")),
+                    "related.txt",
+                ),
                 "checks": [str(item["id"])],
                 "model_id": model_id,
             },
@@ -5845,7 +7049,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task = get_db().execute("SELECT * FROM tasks").fetchone()
         self._assert_task_uses_provider_reference(task, model_id, "high")
         self.assertEqual(task["task_type"], "consistency_check")
-        self.assertEqual(task["original_filename"], "素材文档：master.xlsx / 资料：related.txt")
+        self.assertEqual(
+            task["original_filename"], "素材文档：master.xlsx / 资料：related.txt"
+        )
         self.assertIsNone(task["document_text"])
         meta = json.loads(task["document_meta_json"])
         self.assertEqual(meta["preprocessing"]["status"], "pending")
@@ -5862,21 +7068,33 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         page = self.client.get("/consistency")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("素材文档：master.xlsx / 资料：related.txt", page.get_data(as_text=True))
+        self.assertIn(
+            "素材文档：master.xlsx / 资料：related.txt", page.get_data(as_text=True)
+        )
 
     def test_create_consistency_task_removes_files_when_database_insert_fails(self):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'consistency-cross-document'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'consistency-cross-document'"
+                )
+                .fetchone()
+            )
         self._reject_task_inserts()
 
         response = self.client.post(
             "/consistency",
             data={
-                "master_documents": (io.BytesIO("素材参数 10A".encode("utf-8")), "master.txt"),
-                "related_documents": (io.BytesIO("资料参数 12A".encode("utf-8")), "related.txt"),
+                "master_documents": (
+                    io.BytesIO("素材参数 10A".encode("utf-8")),
+                    "master.txt",
+                ),
+                "related_documents": (
+                    io.BytesIO("资料参数 12A".encode("utf-8")),
+                    "related.txt",
+                ),
                 "checks": [str(item["id"])],
                 "model_id": model_id,
             },
@@ -5887,7 +7105,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("创建多文档对照任务失败", response.get_data(as_text=True))
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
@@ -5926,14 +7148,19 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "素材文档：需求说明.docx、参数表.xlsx、会议纪要.pdf / 资料：投标文件.docx",
         )
 
-    def test_create_language_consistency_task_rejects_missing_checks_before_saving_file(self):
+    def test_create_language_consistency_task_rejects_missing_checks_before_saving_file(
+        self,
+    ):
         model_id = self._configure_provider()
 
         response = self.client.post(
             "/language-consistency",
             data={
                 "document_a": (io.BytesIO("中文参数 10A".encode("utf-8")), "zh.txt"),
-                "document_b": (io.BytesIO("English parameter 10A".encode("utf-8")), "en.txt"),
+                "document_b": (
+                    io.BytesIO("English parameter 10A".encode("utf-8")),
+                    "en.txt",
+                ),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -5941,26 +7168,42 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_create_language_consistency_task_defers_static_precheck(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id, code, name, prompt FROM check_items WHERE code = 'language-consistency-cross-lingual'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id, code, name, prompt FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+                )
+                .fetchone()
+            )
 
         response = self.client.post(
             "/language-consistency",
             data={
                 "document_a": (
-                    io.BytesIO("1. 安装要求\n设备电流为 10A。\n访问 https://example.com/a。".encode("utf-8")),
+                    io.BytesIO(
+                        "1. 安装要求\n设备电流为 10A。\n访问 https://example.com/a。".encode(
+                            "utf-8"
+                        )
+                    ),
                     "zh.txt",
                 ),
                 "document_b": (
-                    io.BytesIO("1. Installation requirements\nThe device current is 12A.\nVisit https://example.com/b.".encode("utf-8")),
+                    io.BytesIO(
+                        "1. Installation requirements\nThe device current is 12A.\nVisit https://example.com/b.".encode(
+                            "utf-8"
+                        )
+                    ),
                     "en.txt",
                 ),
                 "checks": [str(item["id"])],
@@ -5978,7 +7221,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("跨语种检查：zh.txt / en.txt", task["original_filename"])
         self.assertIsNone(task["document_text"])
         meta = json.loads(task["document_meta_json"])
-        self.assertEqual([group["role"] for group in meta["groups"]], ["document_a", "document_b"])
+        self.assertEqual(
+            [group["role"] for group in meta["groups"]], ["document_a", "document_b"]
+        )
         self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertNotIn("static_precheck", meta)
         self.assertEqual(
@@ -5993,19 +7238,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ],
         )
 
-    def test_create_language_consistency_task_removes_files_when_database_insert_fails(self):
+    def test_create_language_consistency_task_removes_files_when_database_insert_fails(
+        self,
+    ):
         model_id = self._configure_provider()
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'language-consistency-cross-lingual'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+                )
+                .fetchone()
+            )
         self._reject_task_inserts()
 
         response = self.client.post(
             "/language-consistency",
             data={
                 "document_a": (io.BytesIO("中文参数 10A".encode("utf-8")), "zh.txt"),
-                "document_b": (io.BytesIO("English parameter 10A".encode("utf-8")), "en.txt"),
+                "document_b": (
+                    io.BytesIO("English parameter 10A".encode("utf-8")),
+                    "en.txt",
+                ),
                 "checks": [str(item["id"])],
                 "model_id": model_id,
                 "submission_token": "b" * 32,
@@ -6017,7 +7271,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("创建跨语种检查任务失败", response.get_data(as_text=True))
         with self.app.app_context():
-            total = get_db().execute("SELECT COUNT(*) AS total FROM tasks").fetchone()["total"]
+            total = (
+                get_db()
+                .execute("SELECT COUNT(*) AS total FROM tasks")
+                .fetchone()["total"]
+            )
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
@@ -6025,16 +7283,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
         model_id = self._configure_provider()
         submission_token = "a" * 32
         with self.app.app_context():
-            item = get_db().execute(
-                "SELECT id FROM check_items WHERE code = 'language-consistency-cross-lingual'"
-            ).fetchone()
+            item = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+                )
+                .fetchone()
+            )
 
         def submit():
             return self.client.post(
                 "/language-consistency",
                 data={
-                    "document_a": (io.BytesIO("中文参数 10A".encode("utf-8")), "zh.txt"),
-                    "document_b": (io.BytesIO("English parameter 10A".encode("utf-8")), "en.txt"),
+                    "document_a": (
+                        io.BytesIO("中文参数 10A".encode("utf-8")),
+                        "zh.txt",
+                    ),
+                    "document_b": (
+                        io.BytesIO("English parameter 10A".encode("utf-8")),
+                        "en.txt",
+                    ),
                     "checks": [str(item["id"])],
                     "model_id": model_id,
                     "submission_token": submission_token,
@@ -6048,13 +7316,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(first_response.status_code, 302)
         self.assertEqual(second_response.status_code, 302)
         with self.app.app_context():
-            tasks = get_db().execute(
-                "SELECT submission_token FROM tasks WHERE task_type = ?",
-                (LANGUAGE_CONSISTENCY_TASK_TYPE,),
-            ).fetchall()
+            tasks = (
+                get_db()
+                .execute(
+                    "SELECT submission_token FROM tasks WHERE task_type = ?",
+                    (LANGUAGE_CONSISTENCY_TASK_TYPE,),
+                )
+                .fetchall()
+            )
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["submission_token"], submission_token)
         self.assertEqual(len(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

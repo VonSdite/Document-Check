@@ -7,7 +7,6 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 
-
 HYPERLINK_CHECK_CODE = "hyperlink-validity"
 HYPERLINK_REQUEST_TIMEOUT = (5, 8)
 HYPERLINK_MAX_REDIRECTS = 5
@@ -257,13 +256,17 @@ def probe_http_url(target: str, network: dict | None = None) -> dict:
                     final_url=current_url,
                 )
             if status_code in {401, 403}:
-                detail = f"链接返回 HTTP {status_code}，可能需要登录、授权或特定网络权限。"
+                detail = (
+                    f"链接返回 HTTP {status_code}，可能需要登录、授权或特定网络权限。"
+                )
             elif status_code == 429:
                 detail = "链接返回 HTTP 429，目标服务当前限制了访问频率。"
             elif status_code >= 500:
                 detail = f"链接返回 HTTP {status_code}，目标服务当前异常。"
             else:
-                detail = f"链接返回 HTTP {status_code}，无法确认目标资源是否可正常获取。"
+                detail = (
+                    f"链接返回 HTTP {status_code}，无法确认目标资源是否可正常获取。"
+                )
             return _result(
                 "suggestion",
                 "外部链接需人工确认",
@@ -378,9 +381,13 @@ def _ensure_safe_http_destination(target: str) -> None:
         explicit_port = parsed.port
         port = explicit_port or (443 if parsed.scheme.lower() == "https" else 80)
     except ValueError as exc:
-        raise UnsafeHyperlinkTarget("链接的主机名或端口格式无效，系统未发起请求。") from exc
+        raise UnsafeHyperlinkTarget(
+            "链接的主机名或端口格式无效，系统未发起请求。"
+        ) from exc
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        raise UnsafeHyperlinkTarget("链接不是有效的 HTTP 或 HTTPS 地址，系统未发起请求。")
+        raise UnsafeHyperlinkTarget(
+            "链接不是有效的 HTTP 或 HTTPS 地址，系统未发起请求。"
+        )
     if parsed.username is not None or parsed.password is not None:
         raise UnsafeHyperlinkTarget("链接地址包含用户凭据，系统未发起请求。")
     if explicit_port == 0:
@@ -394,7 +401,9 @@ def _ensure_safe_http_destination(target: str) -> None:
         try:
             ip = ipaddress.ip_address(value)
         except ValueError as exc:
-            raise UnsafeHyperlinkTarget("域名解析结果不是有效 IP 地址，系统未发起请求。") from exc
+            raise UnsafeHyperlinkTarget(
+                "域名解析结果不是有效 IP 地址，系统未发起请求。"
+            ) from exc
         if not ip.is_global:
             raise UnsafeHyperlinkTarget(
                 "链接指向服务器本机、内网、链路本地或保留地址，系统按安全策略未访问。"
@@ -482,7 +491,9 @@ def _redacted_target(target: str) -> str:
         ],
         doseq=True,
     )
-    return urlunsplit((parsed.scheme, hostname, parsed.path, query, parsed.fragment))[:500]
+    return urlunsplit((parsed.scheme, hostname, parsed.path, query, parsed.fragment))[
+        :500
+    ]
 
 
 def _result(

@@ -4,12 +4,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from openpyxl import load_workbook
 import xlrd
+from openpyxl import load_workbook
 
 from .term_cache import load_cached_terms
-from .term_locations import DocumentLocationIndex, TERM_LOCATIONS_PER_ISSUE, excerpt_for
-
+from .term_locations import TERM_LOCATIONS_PER_ISSUE, DocumentLocationIndex, excerpt_for
 
 SENSITIVE_TERMS_CHECK_CODE = "sensitive-terms"
 SENSITIVE_TERMS_FILENAMES = (
@@ -41,6 +40,8 @@ _STANDARD_HEADER_NAMES = {
     "建议用语",
     "替换为",
 }
+
+
 @dataclass(frozen=True)
 class SensitiveTermRule:
     invalid: str
@@ -116,8 +117,7 @@ def build_sensitive_terms_report(
     if not matches:
         return {
             "summary": (
-                "敏感词检查结论：未发现词表中的不规范用语。\n"
-                f"词表文件：{source_path}"
+                f"敏感词检查结论：未发现词表中的不规范用语。\n词表文件：{source_path}"
             ),
             "items": [],
         }
@@ -225,7 +225,10 @@ def _load_xls_terms(path: Path) -> list[SensitiveTermRule]:
         rules = []
         for sheet in workbook.sheets():
             rows = (
-                [sheet.cell_value(row_index, column_index) for column_index in range(sheet.ncols)]
+                [
+                    sheet.cell_value(row_index, column_index)
+                    for column_index in range(sheet.ncols)
+                ]
                 for row_index in range(sheet.nrows)
             )
             rules.extend(_rules_from_rows(rows, sheet.name))
@@ -321,7 +324,9 @@ def _dedupe_rules(rules) -> list[SensitiveTermRule]:
     return result
 
 
-def _find_sensitive_term_matches(document_text: str, rules: list[SensitiveTermRule]) -> list[dict]:
+def _find_sensitive_term_matches(
+    document_text: str, rules: list[SensitiveTermRule]
+) -> list[dict]:
     text = str(document_text or "")
     document_index = DocumentLocationIndex(text)
     matches = []

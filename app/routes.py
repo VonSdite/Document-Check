@@ -1,39 +1,33 @@
 import hmac
-import hashlib
-import io
 import json
 import mimetypes
-import os
-import re
-import sqlite3
 import uuid
-from difflib import SequenceMatcher
-import zipfile
 from datetime import date, datetime, timedelta
 from functools import wraps
 from ipaddress import ip_address
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from flask import (
+    Response,
     abort,
     current_app,
     flash,
     redirect,
     render_template,
     request,
-    Response,
     send_file,
     session,
     url_for,
 )
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.datavalidation import DataValidation
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from .auth import SAML_USER_SESSION_KEY, AuthenticationRequired, UserIdentity, current_identity, subject_label
+from .auth import (
+    SAML_USER_SESSION_KEY,
+    AuthenticationRequired,
+    UserIdentity,
+    current_identity,
+    subject_label,
+)
 from .config import save_network_config
 from .db import (
     default_check_item_codes,
@@ -48,34 +42,121 @@ from .db import (
     set_ip_username,
     set_setting,
 )
-from .documents import allowed_file, extension_of
 from .file_cleanup import (
     describe_failures,
-    remove_directory_tree,
-    remove_empty_directory as cleanup_remove_empty_directory,
-    remove_file,
 )
 from .images import (
     DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES,
-    default_image_folder,
-    image_items_from_meta,
     image_path_from_item,
 )
-from .limits import DEFAULT_ISSUE_OUTPUT_LIMIT, MAX_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
+from .limits import (
+    DEFAULT_ISSUE_OUTPUT_LIMIT,
+    MAX_ISSUE_OUTPUT_LIMIT,
+    normalize_issue_output_limit,
+)
 from .llm import LLMError, normalize_reasoning_effort, test_model_connection
 from .model_discovery import ModelDiscoveryError, fetch_models
+from .model_service import _find_enabled_model as _find_enabled_model
+from .model_service import (
+    _model_management_response,
+    _model_page_identity,
+    _provider_connection_data,
+    get_enabled_models,
+)
 from .network import outbound_network_config
-from .report_guardrails import guarded_report_summary, is_unsupported_visual_missing_item
+from .reporting.constants import (
+    REPORT_ACCEPTANCE_STATUSES,
+    REPORT_COUNT_KEYS,
+    REPORT_ITEM_FIELDS,
+    REPORT_ITEM_TYPE_LABEL,
+    REPORT_ITEM_TYPE_ORDER,
+    REPORT_ITEM_TYPES,
+    REPORT_REJECTION_REASON_HINTS,
+    REPORT_REJECTION_REASONS,
+    REPORT_REVIEW_FILTERS,
+    REPORT_REVIEW_STATUSES,
+    REPORT_STATS_BACKGROUND_BATCH_SIZE,
+    REPORT_STATS_INLINE_REBUILD_LIMIT,
+)
+from .reporting.excel import (
+    _export_task_report_excel as _export_task_report_excel,
+)
+from .reporting.excel import (
+    _import_task_report_excel as _import_task_report_excel,
+)
+from .reporting.service import (
+    _empty_report_suppression_version as _empty_report_suppression_version,
+)
+from .reporting.service import (
+    _enabled_report_suppression_rules as _enabled_report_suppression_rules,
+)
+from .reporting.service import (
+    _export_task_report as _export_task_report,
+)
+from .reporting.service import (
+    _finalize_report_counts as _finalize_report_counts,
+)
+from .reporting.service import (
+    _parse_result_json as _parse_result_json,
+)
+from .reporting.service import (
+    _prepare_task_results as _prepare_task_results,
+)
+from .reporting.service import (
+    _report_item_fields_for_task as _report_item_fields_for_task,
+)
+from .reporting.service import (
+    _report_item_totals as _report_item_totals,
+)
+from .reporting.service import (
+    _report_suppression_versions as _report_suppression_versions,
+)
+from .reporting.service import (
+    _task_results as _task_results,
+)
+from .reporting.service import (
+    _update_report_item_type as _update_report_item_type,
+)
+from .reporting.service import (
+    _uses_compact_media_report as _uses_compact_media_report,
+)
+from .reporting.service import (
+    _write_task_report_stat_rows as _write_task_report_stat_rows,
+)
 from .saml import SamlConfigError, create_saml_auth, saml_sp_metadata
+from .task_files import (
+    UPLOAD_PATH_SAFE_CHARS as UPLOAD_PATH_SAFE_CHARS,
+)
+from .task_files import (
+    _download_task_documents_zip,
+    _image_folder,
+    _int_setting,
+    _remove_empty_directory,
+    _remove_uploaded_files,
+    _task_document_groups,
+    _task_image_items,
+    _task_source_files_available,
+    _task_upload_path,
+    _task_upload_paths,
+)
+from .task_files import (
+    _upload_destination as _upload_destination,
+)
+from .task_submission import (
+    _consistency_task_title,
+    _task_list_endpoint,
+    create_consistency_task_for_identity,
+    create_image_task_for_identity,
+    create_language_consistency_task_for_identity,
+    create_task_for_identity,
+    create_video_task_for_identity,
+)
 from .task_types import (
-    CONSISTENCY_MAX_DATA_FILES,
-    CONSISTENCY_MAX_MATERIAL_FILES,
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
-    document_groups_from_meta,
     task_type_label,
 )
 from .tasks import (
@@ -84,8 +165,6 @@ from .tasks import (
     task_file_cache_snapshot,
     task_file_cache_snapshot_async,
 )
-from .videos import allowed_video_file, video_extension_of
-
 
 STATUS_LABELS = {
     "queued": "排队中",
@@ -104,15 +183,7 @@ MAX_BULK_DELETE_TASKS = max(TASKS_PER_PAGE_OPTIONS)
 CHECK_ITEM_CONCURRENCY_DEFAULT = 1
 TASK_FILE_RETENTION_DAYS_DEFAULT = 0
 ISSUE_OUTPUT_LIMIT_DEFAULT = DEFAULT_ISSUE_OUTPUT_LIMIT
-UPLOAD_PATH_SAFE_CHARS = 240
-UPLOAD_FILENAME_SAFE_CHARS = 180
-PROVIDER_TIMEOUT_DEFAULT = 3600
-PROVIDER_TIMEOUT_MIN = 30
-PROVIDER_TIMEOUT_MAX = 7200
 MODEL_TEST_TIMEOUT_MAX = 60
-PROVIDER_INPUT_LIMIT_DEFAULT = 500000
-PROVIDER_INPUT_LIMIT_MIN = 5000
-PROVIDER_INPUT_LIMIT_MAX = 1000000
 CONSOLE_USER_ENDPOINTS = {
     "admin_tasks",
     "admin_new_task",
@@ -122,265 +193,17 @@ CONSOLE_USER_ENDPOINTS = {
     "admin_videos",
     "admin_models",
 }
-INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
-SUBMISSION_TOKEN_RE = re.compile(r"[0-9a-f]{32}")
-REPORT_ITEM_TYPES = {
-    "issue": "问题",
-    "suggestion": "建议",
-    "non_issue": "非问题",
-}
-REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
-REPORT_COUNT_KEYS = REPORT_ITEM_TYPE_ORDER + (
-    "accepted_issue",
-    "rejected_issue",
-    "pending_issue_acceptance",
-    "suppressed",
-    "reviewed",
-    "pending_review",
-)
-REPORT_REVIEW_STATUSES = {
-    "pending": "未标注",
-    "in_progress": "标注中",
-    "completed": "已标注",
-    "empty": "无可标注条目",
-    "unavailable": "—",
-}
-REPORT_REVIEW_FILTERS = {
-    "pending": "待标注",
-    "in_progress": "标注中",
-    "completed": "已标注",
-    "empty": "无可标注条目",
-}
-REPORT_ACCEPTANCE_STATUSES = {
-    "pending": "未确认",
-    "accepted": "接纳",
-    "rejected": "不接纳",
-}
-REPORT_REJECTION_REASONS = {
-    "false_positive": "模型误报",
-    "model_hallucination": "模型幻觉",
-    "evidence_insufficient": "证据不足",
-    "not_applicable": "不适用",
-    "other": "其他",
-}
-REPORT_REJECTION_REASON_HINTS = {
-    "false_positive": "能找到模型依据，但结论判断不成立",
-    "model_hallucination": "找不到模型引用的原文、位置或事实",
-    "evidence_insufficient": "信息不完整，暂时无法判断结论对错",
-    "not_applicable": "这条检查规则不适用于当前文档或场景",
-    "other": "无法归入以上原因，请补充说明",
-}
-REPORT_SUPPRESSION_REJECTION_REASONS = {"model_hallucination", "false_positive", "not_applicable"}
-REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
-REPORT_STATS_PREPARATION_VERSION = "3"
-# 报告统计格式升级后，历史任务可能需要重算数千条报告。请求线程只同步处理
-# 少量记录，其余记录由任务调度器在后台分批刷新，避免管理页被网关超时切断。
-REPORT_STATS_INLINE_REBUILD_LIMIT = 20
-REPORT_STATS_BACKGROUND_BATCH_SIZE = 100
-REPORT_SUPPRESSION_DESCRIPTION_REPLACEMENTS = (
-    ("不统一", "不一致"),
-    ("不相同", "不一致"),
-    ("存在差异", "不一致"),
-    ("矛盾", "冲突"),
-    ("有误", "错误"),
-    ("不正确", "错误"),
-    ("没有提供", "缺失"),
-    ("未提供", "缺失"),
-    ("没有说明", "缺失"),
-    ("未说明", "缺失"),
-    ("缺少", "缺失"),
-    ("遗留", "保留"),
-    ("残留", "保留"),
-    ("资料", "文档"),
-)
-REPORT_ITEM_FIELDS = (
-    ("severity_label", "严重程度"),
-    ("confidence_label", "证据可信度"),
-    ("category", "问题类型"),
-    ("location", "位置"),
-    ("excerpt", "原文/证据"),
-    ("description", "问题描述"),
-    ("impact", "影响"),
-    ("suggestion", "修改建议"),
-)
-REPORT_SUPPRESSION_FIELDS = ("category", "location", "excerpt", "description", "impact", "suggestion")
-REPORT_SEVERITY_LABELS = {
-    "critical": "致命",
-    "high": "高",
-    "medium": "中",
-    "low": "低",
-}
-REPORT_CONFIDENCE_LABELS = {
-    "high": "高",
-    "medium": "中",
-    "low": "低",
-}
-REPORT_SEVERITY_ORDER = {value: index for index, value in enumerate(REPORT_SEVERITY_LABELS)}
-REPORT_CONFIDENCE_ORDER = {value: index for index, value in enumerate(REPORT_CONFIDENCE_LABELS)}
-MEDIA_REPORT_ITEM_FIELDS = (("media_summary", "AI检查结论"),)
-MEDIA_REPORT_ITEM_DETAIL_FIELDS = (
-    ("category", "问题类型"),
-    ("location", "位置/画面"),
-    ("excerpt", "依据/证据"),
-    ("impact", "影响"),
-    ("suggestion", "建议"),
-)
-REPORT_EXPORT_MIMETYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-REPORT_EXPORT_SHEET_NAME = "报告条目"
-REPORT_EXPORT_RESULT_CODE_HEADER = "检查项编码（请勿修改）"
-REPORT_EXPORT_ITEM_ID_HEADER = "条目标识（请勿修改）"
-REPORT_IMPORT_MAX_BYTES = 10 * 1024 * 1024
-REPORT_IMPORT_MAX_ROWS = 5000
-REPORT_EXPORT_HEADER_FILL = PatternFill("solid", fgColor="EAF0F8")
-REPORT_EXPORT_HEADER_FONT = Font(bold=True)
-REPORT_EXPORT_EDITABLE_FILL = PatternFill("solid", fgColor="FFF4CC")
-REPORT_TOTAL_EXPORT_ROWS = (
-    ("问题", "issue"),
-    ("建议", "suggestion"),
-    ("非问题", "non_issue"),
-    ("接纳问题", "accepted_issue"),
-    ("不接纳问题", "rejected_issue"),
-    ("待确认问题", "pending_issue_acceptance"),
-    ("已忽略误报", "suppressed"),
-    ("问题检出率", "issue_detection_rate"),
-    ("问题接纳率", "issue_acceptance_rate"),
-    ("合计", "total"),
-)
 
 
-class ReportExcelImportError(ValueError):
-    pass
-
-
-REPORT_ITEM_TYPE_LABEL = "条目判定"
-REPORT_ITEM_START_RE = re.compile(
-    r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
-    r"(?:\d{1,3}[.、)]|\(\d{1,3}\)|（\d{1,3}）)\s*(?:[*_`~]{1,3}\s*)?\S)"
-)
-REPORT_ITEM_PREFIX_RE = re.compile(
-    r"^\s*(?:(?:[-+*]\s+)|(?:#{1,6}\s+)|(?:[*_`~]{1,3}\s*))*"
-)
-REPORT_JSON_ITEM_KEYS = ("items", "issues", "report_items", "findings", "problems")
-REPORT_JSON_SUMMARY_KEYS = ("summary", "overall", "conclusion", "总体结论", "总结")
-REPORT_STATUS_KEYS = ("status", "状态", "classification", "item_type", "结论类型", "问题状态", "type")
-REPORT_FIELD_ALIASES = {
-    "severity": ("severity", "priority", "risk_level", "严重程度", "风险等级", "优先级"),
-    "confidence": ("confidence", "certainty", "evidence_confidence", "可信度", "置信度", "证据可信度"),
-    "category": ("category", "issue_type", "problem_type", "type", "问题类型", "类型", "检查类型"),
-    "location": ("location", "position", "where", "位置", "位置线索", "页码", "章节", "图片位置"),
-    "excerpt": (
-        "excerpt",
-        "quote",
-        "original",
-        "evidence",
-        "document_a_evidence",
-        "document_b_evidence",
-        "原文摘录",
-        "原文",
-        "证据",
-        "文档A证据",
-        "文档B证据",
-        "文档线索",
-        "图片可见证据",
-        "可见线索",
-    ),
-    "description": ("description", "issue", "problem", "finding", "疑似问题", "问题描述", "偏差说明", "差异说明", "冲突或缺失说明", "问题判断"),
-    "impact": ("impact", "risk", "影响", "影响说明", "客户影响", "可能影响"),
-    "suggestion": ("suggestion", "recommendation", "fix", "修改建议", "建议修改", "建议处理方式", "需核对的依据"),
-}
-REPORT_NO_ACTION_IMPACT_MARKERS = (
-    "无实质影响",
-    "无实际影响",
-    "没有实质影响",
-    "没有实际影响",
-    "无明显影响",
-    "无明确影响",
-    "没有明确影响",
-    "未发现明确影响",
-    "不适用",
-    "不造成实质影响",
-    "影响不大",
-    "影响较小",
-    "影响很小",
-    "无影响",
-    "不影响理解",
-    "不影响使用",
-    "nosubstantiveimpact",
-    "nomaterialimpact",
-    "nosignificantimpact",
-    "norealimpact",
-    "noactualimpact",
-    "notapplicable",
-    "doesnotaffect",
-)
-REPORT_NO_ACTION_SUGGESTION_MARKERS = (
-    "无需修改",
-    "无须修改",
-    "不需修改",
-    "不需要修改",
-    "无需处理",
-    "无须处理",
-    "不需处理",
-    "不需要处理",
-    "无需调整",
-    "无须调整",
-    "不需调整",
-    "无需修正",
-    "保持不变",
-    "nomodificationrequired",
-    "nomodificationneeded",
-    "noneedtomodify",
-    "noneedtochange",
-    "nochangeneeded",
-    "noactionrequired",
-    "noactionneeded",
-)
-REPORT_LEGACY_LABEL_FIELDS = {
-    "问题类型": "category",
-    "类型": "category",
-    "对象类型": "category",
-    "位置": "location",
-    "位置线索": "location",
-    "图片名称或位置": "location",
-    "图片位置": "location",
-    "文档线索": "location",
-    "原文": "excerpt",
-    "原文摘录": "excerpt",
-    "文档A证据": "excerpt",
-    "文档B证据": "excerpt",
-    "资料表述": "excerpt",
-    "冲突表述": "excerpt",
-    "图片可见内容": "excerpt",
-    "图片可见证据": "excerpt",
-    "可见内容线索": "excerpt",
-    "可见线索": "excerpt",
-    "识别到的文字": "excerpt",
-    "问题": "description",
-    "问题描述": "description",
-    "疑似问题": "description",
-    "偏差说明": "description",
-    "差异说明": "description",
-    "冲突或缺失说明": "description",
-    "问题判断": "description",
-    "不匹配原因": "description",
-    "理由": "description",
-    "影响": "impact",
-    "影响说明": "impact",
-    "客户影响": "impact",
-    "可能影响": "impact",
-    "建议": "suggestion",
-    "修改建议": "suggestion",
-    "建议修改": "suggestion",
-    "建议处理方式": "suggestion",
-    "建议补充的标题形式": "suggestion",
-}
 def register_routes(app):
     app.add_template_global(STATUS_LABELS, "STATUS_LABELS")
     app.add_template_global(REPORT_ITEM_FIELDS, "REPORT_ITEM_FIELDS")
     app.add_template_global(REPORT_ITEM_TYPE_LABEL, "REPORT_ITEM_TYPE_LABEL")
     app.add_template_global(REPORT_ACCEPTANCE_STATUSES, "REPORT_ACCEPTANCE_STATUSES")
     app.add_template_global(REPORT_REJECTION_REASONS, "REPORT_REJECTION_REASONS")
-    app.add_template_global(REPORT_REJECTION_REASON_HINTS, "REPORT_REJECTION_REASON_HINTS")
+    app.add_template_global(
+        REPORT_REJECTION_REASON_HINTS, "REPORT_REJECTION_REASON_HINTS"
+    )
     app.add_template_global(lambda: app.config["ADMIN_URL"], "admin_url")
     app.add_template_global(subject_label, "subject_label")
     app.add_template_global(_owner_display, "owner_display")
@@ -414,7 +237,11 @@ def register_routes(app):
 
     @app.before_request
     def require_saml_user_session():
-        if not _platform_enabled() or not _saml_mode_enabled() or not _needs_saml_user_session(request.endpoint):
+        if (
+            not _platform_enabled()
+            or not _saml_mode_enabled()
+            or not _needs_saml_user_session(request.endpoint)
+        ):
             return None
         if _has_saml_user_session():
             return None
@@ -426,7 +253,9 @@ def register_routes(app):
             abort(404)
         try:
             auth = create_saml_auth()
-            redirect_url = auth.login(return_to=_safe_next_path(request.args.get("next")))
+            redirect_url = auth.login(
+                return_to=_safe_next_path(request.args.get("next"))
+            )
         except SamlConfigError as error:
             abort(503, description=str(error))
         except Exception:
@@ -450,13 +279,20 @@ def register_routes(app):
             abort(401, description="SAML 登录失败，请重新从公司统一入口访问。")
 
         if auth.get_errors() or not auth.is_authenticated():
-            current_app.logger.warning("SAML 回调校验失败：%s", ", ".join(auth.get_errors()))
+            current_app.logger.warning(
+                "SAML 回调校验失败：%s", ", ".join(auth.get_errors())
+            )
             abort(401, description="SAML 登录失败，请重新从公司统一入口访问。")
 
         user_id, username = _saml_user_from_response(auth)
         if not user_id:
-            abort(401, description="SAML 响应缺少用户 ID，请联系管理员检查 SSO 属性映射。")
-        session[SAML_USER_SESSION_KEY] = {"user_id": user_id, "username": username or user_id}
+            abort(
+                401, description="SAML 响应缺少用户 ID，请联系管理员检查 SSO 属性映射。"
+            )
+        session[SAML_USER_SESSION_KEY] = {
+            "user_id": user_id,
+            "username": username or user_id,
+        }
         return redirect(_safe_next_path(request.form.get("RelayState")))
 
     @app.get("/auth/saml/metadata")
@@ -490,7 +326,9 @@ def register_routes(app):
         identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
-        page, per_page, total, rows, stats = _user_task_list_data(identity, DOCUMENT_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(
+            identity, DOCUMENT_TASK_TYPE
+        )
         return render_template(
             "user_tasks.html",
             ip=identity.ip,
@@ -520,14 +358,18 @@ def register_routes(app):
     def user_consistency():
         if not _platform_enabled():
             if request.method == "POST":
-                return create_consistency_task_for_identity(current_identity(), admin_created=True)
+                return create_consistency_task_for_identity(
+                    current_identity(), admin_created=True
+                )
             return _render_admin_consistency_page()
 
         identity = _current_user_identity()
         if request.method == "POST":
             return create_consistency_task_for_identity(identity, admin_created=False)
 
-        page, per_page, total, rows, stats = _user_task_list_data(identity, CONSISTENCY_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(
+            identity, CONSISTENCY_TASK_TYPE
+        )
         return render_template(
             "user_consistency.html",
             ip=identity.ip,
@@ -545,14 +387,20 @@ def register_routes(app):
     def user_language_consistency():
         if not _platform_enabled():
             if request.method == "POST":
-                return create_language_consistency_task_for_identity(current_identity(), admin_created=True)
+                return create_language_consistency_task_for_identity(
+                    current_identity(), admin_created=True
+                )
             return _render_admin_language_consistency_page()
 
         identity = _current_user_identity()
         if request.method == "POST":
-            return create_language_consistency_task_for_identity(identity, admin_created=False)
+            return create_language_consistency_task_for_identity(
+                identity, admin_created=False
+            )
 
-        page, per_page, total, rows, stats = _user_task_list_data(identity, LANGUAGE_CONSISTENCY_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(
+            identity, LANGUAGE_CONSISTENCY_TASK_TYPE
+        )
         return render_template(
             "user_language_consistency.html",
             ip=identity.ip,
@@ -563,7 +411,9 @@ def register_routes(app):
             check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
             models=get_enabled_models(identity.subject),
             submission_token=uuid.uuid4().hex,
-            refresh_url=url_for("user_task_statuses", task_type=LANGUAGE_CONSISTENCY_TASK_TYPE),
+            refresh_url=url_for(
+                "user_task_statuses", task_type=LANGUAGE_CONSISTENCY_TASK_TYPE
+            ),
             active_nav=LANGUAGE_CONSISTENCY_TASK_TYPE,
         )
 
@@ -571,14 +421,18 @@ def register_routes(app):
     def user_images():
         if not _platform_enabled():
             if request.method == "POST":
-                return create_image_task_for_identity(current_identity(), admin_created=True)
+                return create_image_task_for_identity(
+                    current_identity(), admin_created=True
+                )
             return _render_admin_images_page()
 
         identity = _current_user_identity()
         if request.method == "POST":
             return create_image_task_for_identity(identity, admin_created=False)
 
-        page, per_page, total, rows, stats = _user_task_list_data(identity, IMAGE_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(
+            identity, IMAGE_TASK_TYPE
+        )
         return render_template(
             "user_images.html",
             ip=identity.ip,
@@ -596,14 +450,18 @@ def register_routes(app):
     def user_videos():
         if not _platform_enabled():
             if request.method == "POST":
-                return create_video_task_for_identity(current_identity(), admin_created=True)
+                return create_video_task_for_identity(
+                    current_identity(), admin_created=True
+                )
             return _render_admin_videos_page()
 
         identity = _current_user_identity()
         if request.method == "POST":
             return create_video_task_for_identity(identity, admin_created=False)
 
-        page, per_page, total, rows, stats = _user_task_list_data(identity, VIDEO_TASK_TYPE)
+        page, per_page, total, rows, stats = _user_task_list_data(
+            identity, VIDEO_TASK_TYPE
+        )
         return render_template(
             "user_videos.html",
             ip=identity.ip,
@@ -646,7 +504,12 @@ def register_routes(app):
             media_report=_uses_compact_media_report(task["task_type"]),
             video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
             video_stream_url=_task_video_stream_url(task, "user_task_video"),
-            report_classification_url=url_for("admin_update_report_item_type" if not _platform_enabled() else "user_update_report_item_type", task_id=task_id),
+            report_classification_url=url_for(
+                "admin_update_report_item_type"
+                if not _platform_enabled()
+                else "user_update_report_item_type",
+                task_id=task_id,
+            ),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_url=_safe_next_path(request.args.get("next"), url_for(back_endpoint)),
@@ -698,7 +561,9 @@ def register_routes(app):
     def user_retry_task(task_id):
         task = _get_user_task(task_id)
         _retry_task(task)
-        return redirect(_task_action_redirect(_task_list_endpoint(False, task["task_type"])))
+        return redirect(
+            _task_action_redirect(_task_list_endpoint(False, task["task_type"]))
+        )
 
     @app.post("/tasks/<int:task_id>/delete")
     def user_delete_task(task_id):
@@ -758,9 +623,13 @@ def register_routes(app):
                 proxy_mode=network["proxy_mode"],
                 proxy=network["proxy"],
                 ssl_verify=network["ssl_verify"],
-                request_timeout=min(provider_data["request_timeout"], MODEL_TEST_TIMEOUT_MAX),
+                request_timeout=min(
+                    provider_data["request_timeout"], MODEL_TEST_TIMEOUT_MAX
+                ),
                 model_name=model_name,
-                reasoning_effort=normalize_reasoning_effort(data.get("reasoning_effort")),
+                reasoning_effort=normalize_reasoning_effort(
+                    data.get("reasoning_effort")
+                ),
                 force_disable_thinking=_form_bool(data.get("force_disable_thinking")),
             )
         except LLMError as exc:
@@ -776,9 +645,9 @@ def register_routes(app):
         if request.method == "POST":
             username = request.form.get("username", "")
             password = request.form.get("password", "")
-            ok = hmac.compare_digest(username, current_app.config["ADMIN_USERNAME"]) and hmac.compare_digest(
-                password, current_app.config["ADMIN_PASSWORD"]
-            )
+            ok = hmac.compare_digest(
+                username, current_app.config["ADMIN_USERNAME"]
+            ) and hmac.compare_digest(password, current_app.config["ADMIN_PASSWORD"])
             if ok:
                 session["admin_logged_in"] = True
                 flash("管理员已登录。", "success")
@@ -800,7 +669,9 @@ def register_routes(app):
         if not _platform_enabled():
             return redirect(url_for("user_tasks"))
         selected_range = _admin_overview_range()
-        overview = _admin_overview_data(selected_range["start_at"], selected_range["end_at"])
+        overview = _admin_overview_data(
+            selected_range["start_at"], selected_range["end_at"]
+        )
         return render_template(
             "admin_overview.html",
             selected_range=selected_range,
@@ -814,14 +685,18 @@ def register_routes(app):
     @admin_required
     def admin_tasks():
         if request.method == "POST":
-            return create_task_for_identity(_console_user_identity(), admin_created=True)
+            return create_task_for_identity(
+                _console_user_identity(), admin_created=True
+            )
         return _render_admin_tasks_page()
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
     @admin_required
     def admin_new_task():
         if request.method == "POST":
-            return create_task_for_identity(_console_user_identity(), admin_created=True)
+            return create_task_for_identity(
+                _console_user_identity(), admin_created=True
+            )
         return redirect(url_for("admin_tasks"))
 
     @app.get(f"{admin_prefix}/task-statuses")
@@ -831,34 +706,44 @@ def register_routes(app):
         if task_type is None:
             return {"error": "任务类型无效。"}, 400
         mode_clause, mode_params = _mode_subject_filter("t")
-        return _task_status_payload(task_type, owner_clause=mode_clause, owner_params=mode_params)
+        return _task_status_payload(
+            task_type, owner_clause=mode_clause, owner_params=mode_params
+        )
 
     @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
     @admin_required
     def admin_consistency():
         if request.method == "POST":
-            return create_consistency_task_for_identity(_console_user_identity(), admin_created=True)
+            return create_consistency_task_for_identity(
+                _console_user_identity(), admin_created=True
+            )
         return _render_admin_consistency_page()
 
     @app.route(f"{admin_prefix}/language-consistency", methods=["GET", "POST"])
     @admin_required
     def admin_language_consistency():
         if request.method == "POST":
-            return create_language_consistency_task_for_identity(_console_user_identity(), admin_created=True)
+            return create_language_consistency_task_for_identity(
+                _console_user_identity(), admin_created=True
+            )
         return _render_admin_language_consistency_page()
 
     @app.route(f"{admin_prefix}/images", methods=["GET", "POST"])
     @admin_required
     def admin_images():
         if request.method == "POST":
-            return create_image_task_for_identity(_console_user_identity(), admin_created=True)
+            return create_image_task_for_identity(
+                _console_user_identity(), admin_created=True
+            )
         return _render_admin_images_page()
 
     @app.route(f"{admin_prefix}/videos", methods=["GET", "POST"])
     @admin_required
     def admin_videos():
         if request.method == "POST":
-            return create_video_task_for_identity(_console_user_identity(), admin_created=True)
+            return create_video_task_for_identity(
+                _console_user_identity(), admin_created=True
+            )
         return _render_admin_videos_page()
 
     @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
@@ -886,7 +771,9 @@ def register_routes(app):
             media_report=_uses_compact_media_report(task["task_type"]),
             video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
             video_stream_url=_task_video_stream_url(task, "admin_task_video"),
-            report_classification_url=url_for("admin_update_report_item_type", task_id=task_id),
+            report_classification_url=url_for(
+                "admin_update_report_item_type", task_id=task_id
+            ),
             document_groups=_task_document_groups(task),
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_url=_safe_next_path(request.args.get("next"), url_for(back_endpoint)),
@@ -947,7 +834,9 @@ def register_routes(app):
     def admin_retry_task(task_id):
         task = _get_task_or_404(task_id)
         _retry_task(task)
-        return redirect(_task_action_redirect(_task_list_endpoint(True, task["task_type"])))
+        return redirect(
+            _task_action_redirect(_task_list_endpoint(True, task["task_type"]))
+        )
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/delete")
     @admin_required
@@ -979,7 +868,10 @@ def register_routes(app):
         items = []
         for item in snapshot["items"]:
             row = dict(item)
-            if row["task_type"] in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
+            if row["task_type"] in {
+                CONSISTENCY_TASK_TYPE,
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+            }:
                 row["title"] = _consistency_task_title(row)
             else:
                 row["title"] = str(row["original_filename"] or f"任务 #{row['id']}")
@@ -1017,29 +909,58 @@ def register_routes(app):
             action = request.form.get("action", "concurrency")
             if action == "concurrency":
                 try:
-                    global_concurrency = int(request.form.get("global_concurrency", "3"))
-                    user_concurrency = max(1, int(request.form.get("user_concurrency", "1")))
+                    global_concurrency = int(
+                        request.form.get("global_concurrency", "3")
+                    )
+                    user_concurrency = max(
+                        1, int(request.form.get("user_concurrency", "1"))
+                    )
                     check_item_concurrency = max(
                         1,
-                        int(request.form.get("check_item_concurrency", str(CHECK_ITEM_CONCURRENCY_DEFAULT))),
+                        int(
+                            request.form.get(
+                                "check_item_concurrency",
+                                str(CHECK_ITEM_CONCURRENCY_DEFAULT),
+                            )
+                        ),
                     )
                     image_page_check_max_pages = max(
                         1,
-                        int(request.form.get("image_page_check_max_pages", str(DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES))),
+                        int(
+                            request.form.get(
+                                "image_page_check_max_pages",
+                                str(DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES),
+                            )
+                        ),
                     )
                     issue_output_limit = normalize_issue_output_limit(
-                        int(request.form.get("issue_output_limit", str(ISSUE_OUTPUT_LIMIT_DEFAULT)))
+                        int(
+                            request.form.get(
+                                "issue_output_limit", str(ISSUE_OUTPUT_LIMIT_DEFAULT)
+                            )
+                        )
                     )
                     task_file_retention_days = max(
                         0,
-                        int(request.form.get("task_file_retention_days", str(TASK_FILE_RETENTION_DAYS_DEFAULT))),
+                        int(
+                            request.form.get(
+                                "task_file_retention_days",
+                                str(TASK_FILE_RETENTION_DAYS_DEFAULT),
+                            )
+                        ),
                     )
                 except ValueError:
-                    flash("任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。", "error")
+                    flash(
+                        "任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。",
+                        "error",
+                    )
                     return redirect(url_for("admin_settings"))
                 max_task_processes = _max_task_processes()
                 if not 1 <= global_concurrency <= max_task_processes:
-                    flash(f"系统同时执行任务数必须在 1 到 {max_task_processes} 之间。", "error")
+                    flash(
+                        f"系统同时执行任务数必须在 1 到 {max_task_processes} 之间。",
+                        "error",
+                    )
                     return redirect(url_for("admin_settings"))
                 set_setting("global_concurrency", global_concurrency)
                 set_setting("user_concurrency", user_concurrency)
@@ -1051,7 +972,9 @@ def register_routes(app):
                 return redirect(url_for("admin_settings"))
 
             if action == "diagnostics":
-                llm_stream_trace_enabled = request.form.get("llm_stream_trace_enabled") == "on"
+                llm_stream_trace_enabled = (
+                    request.form.get("llm_stream_trace_enabled") == "on"
+                )
                 set_setting("llm_stream_trace_enabled", llm_stream_trace_enabled)
                 if _wants_json_response():
                     return {"llm_stream_trace_enabled": llm_stream_trace_enabled}
@@ -1089,7 +1012,9 @@ def register_routes(app):
                 set_ip_username(ip, username)
                 if _wants_json_response():
                     return {"ok": True, "ip": ip, "username": username}
-                flash("IP 用户名已保存。" if username else "IP 用户名已清除。", "success")
+                flash(
+                    "IP 用户名已保存。" if username else "IP 用户名已清除。", "success"
+                )
                 return redirect(url_for("admin_settings", tab="ip_users"))
 
             if action == "report_suppression_rule":
@@ -1115,7 +1040,10 @@ def register_routes(app):
                     flash("误报忽略规则已停用。", "success")
                     return _report_suppression_rules_redirect()
                 if operation == "delete":
-                    db.execute("DELETE FROM report_suppression_rules WHERE id = ?", (int(rule_id),))
+                    db.execute(
+                        "DELETE FROM report_suppression_rules WHERE id = ?",
+                        (int(rule_id),),
+                    )
                     db.commit()
                     flash("误报忽略规则已删除。", "success")
                     return _report_suppression_rules_redirect()
@@ -1130,7 +1058,10 @@ def register_routes(app):
                 enabled = 1 if request.form.get("enabled") == "on" else 0
                 if not name or not prompt:
                     if _wants_json_response():
-                        return {"ok": False, "error": "检查项名称和提示词不能为空。"}, 400
+                        return {
+                            "ok": False,
+                            "error": "检查项名称和提示词不能为空。",
+                        }, 400
                     flash("检查项名称和提示词不能为空。", "error")
                     return redirect(url_for("admin_settings"))
                 now = now_text()
@@ -1153,19 +1084,27 @@ def register_routes(app):
                 )
                 db.commit()
                 if _wants_json_response():
-                    item = db.execute("SELECT * FROM check_items WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                    item = db.execute(
+                        "SELECT * FROM check_items WHERE id = ?", (cursor.lastrowid,)
+                    ).fetchone()
                     return {
                         "ok": True,
                         "message": "扩展检查项已创建，可继续添加。",
                         "item_id": int(cursor.lastrowid),
-                        "html": render_template("_check_item_rows.html", item=item, is_builtin=False),
+                        "html": render_template(
+                            "_check_item_rows.html", item=item, is_builtin=False
+                        ),
                     }
                 flash("扩展检查项已创建。", "success")
                 return redirect(url_for("admin_settings"))
 
             if action == "reorder_check_items":
                 task_type = _check_item_task_type(request.form.get("task_type"))
-                item_ids = [int(value) for value in request.form.getlist("item_ids") if value.isdigit()]
+                item_ids = [
+                    int(value)
+                    for value in request.form.getlist("item_ids")
+                    if value.isdigit()
+                ]
                 if not item_ids:
                     if request.headers.get("X-Requested-With") == "fetch":
                         return Response("检查项顺序不能为空。", status=400)
@@ -1185,7 +1124,9 @@ def register_routes(app):
                         return {"ok": False, "error": "检查项不存在，无法删除。"}, 400
                     flash("检查项不存在，无法删除。", "error")
                     return redirect(url_for("admin_settings"))
-                item = db.execute("SELECT code FROM check_items WHERE id = ?", (item_id,)).fetchone()
+                item = db.execute(
+                    "SELECT code FROM check_items WHERE id = ?", (item_id,)
+                ).fetchone()
                 if item is None:
                     if _wants_json_response():
                         return {"ok": False, "error": "检查项不存在，无法删除。"}, 404
@@ -1230,7 +1171,12 @@ def register_routes(app):
             if not item_id or not item_id.isdigit() or not name or not prompt:
                 flash("检查项名称和提示词不能为空。", "error")
                 return redirect(url_for("admin_settings"))
-            if db.execute("SELECT 1 FROM check_items WHERE id = ?", (item_id,)).fetchone() is None:
+            if (
+                db.execute(
+                    "SELECT 1 FROM check_items WHERE id = ?", (item_id,)
+                ).fetchone()
+                is None
+            ):
                 flash("检查项不存在，无法保存。", "error")
                 return redirect(url_for("admin_settings"))
             db.execute(
@@ -1247,11 +1193,15 @@ def register_routes(app):
 
         document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
         consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
-        language_consistency_check_items = _check_items_for_task_type(db, LANGUAGE_CONSISTENCY_TASK_TYPE)
+        language_consistency_check_items = _check_items_for_task_type(
+            db, LANGUAGE_CONSISTENCY_TASK_TYPE
+        )
         image_check_items = _check_items_for_task_type(db, IMAGE_TASK_TYPE)
         video_check_items = _check_items_for_task_type(db, VIDEO_TASK_TYPE)
         settings_tab = _settings_tab()
-        report_suppression_keyword, report_suppression_status = _report_suppression_filter_values(request.args)
+        report_suppression_keyword, report_suppression_status = (
+            _report_suppression_filter_values(request.args)
+        )
         return render_template(
             "admin_settings.html",
             check_item_groups=[
@@ -1277,7 +1227,9 @@ def register_routes(app):
                     "description_placeholder": "用于说明该多文档对照项的比对范围",
                     "prompt_placeholder": "描述素材与资料的比对规则、关注范围和输出要求",
                     "items": consistency_check_items,
-                    "default_check_codes": default_check_item_codes(CONSISTENCY_TASK_TYPE),
+                    "default_check_codes": default_check_item_codes(
+                        CONSISTENCY_TASK_TYPE
+                    ),
                 },
                 {
                     "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
@@ -1289,7 +1241,9 @@ def register_routes(app):
                     "description_placeholder": "用于说明该跨语种检查项的范围",
                     "prompt_placeholder": "描述两份不同语种文档的比对规则、关注范围和中文输出要求",
                     "items": language_consistency_check_items,
-                    "default_check_codes": default_check_item_codes(LANGUAGE_CONSISTENCY_TASK_TYPE),
+                    "default_check_codes": default_check_item_codes(
+                        LANGUAGE_CONSISTENCY_TASK_TYPE
+                    ),
                 },
                 {
                     "task_type": IMAGE_TASK_TYPE,
@@ -1322,16 +1276,28 @@ def register_routes(app):
             ),
             max_task_processes=_max_task_processes(),
             user_concurrency=get_setting("user_concurrency", 1),
-            check_item_concurrency=get_setting("check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT),
-            image_page_check_max_pages=get_setting("image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES),
-            issue_output_limit=get_setting("issue_output_limit", ISSUE_OUTPUT_LIMIT_DEFAULT),
+            check_item_concurrency=get_setting(
+                "check_item_concurrency", CHECK_ITEM_CONCURRENCY_DEFAULT
+            ),
+            image_page_check_max_pages=get_setting(
+                "image_page_check_max_pages", DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES
+            ),
+            issue_output_limit=get_setting(
+                "issue_output_limit", ISSUE_OUTPUT_LIMIT_DEFAULT
+            ),
             max_issue_output_limit=MAX_ISSUE_OUTPUT_LIMIT,
-            task_file_retention_days=get_setting("task_file_retention_days", TASK_FILE_RETENTION_DAYS_DEFAULT),
+            task_file_retention_days=get_setting(
+                "task_file_retention_days", TASK_FILE_RETENTION_DAYS_DEFAULT
+            ),
             network=current_app.config["NETWORK"],
-            llm_stream_trace_enabled=get_bool_setting("llm_stream_trace_enabled", False),
+            llm_stream_trace_enabled=get_bool_setting(
+                "llm_stream_trace_enabled", False
+            ),
             settings_tab=settings_tab,
             ip_username_management_enabled=_ip_username_management_enabled(),
-            ip_username_rows=_ip_username_rows() if _ip_username_management_enabled() else [],
+            ip_username_rows=_ip_username_rows()
+            if _ip_username_management_enabled()
+            else [],
             report_suppression_rules=_report_suppression_rule_rows(),
             report_suppression_keyword=report_suppression_keyword,
             report_suppression_status=report_suppression_status,
@@ -1345,7 +1311,10 @@ def _identity_label(identity: UserIdentity) -> str:
 
 
 def _wants_json_response() -> bool:
-    return request.headers.get("X-Requested-With") == "fetch" or request.accept_mimetypes.best == "application/json"
+    return (
+        request.headers.get("X-Requested-With") == "fetch"
+        or request.accept_mimetypes.best == "application/json"
+    )
 
 
 def _report_suppression_filter_values(values) -> tuple[str, str]:
@@ -1367,14 +1336,18 @@ def _report_suppression_rules_redirect():
 
 
 def _report_suppression_rule_rows() -> list[dict]:
-    rows = get_db().execute(
-        """
+    rows = (
+        get_db()
+        .execute(
+            """
         SELECT r.*, c.name AS check_name
         FROM report_suppression_rules r
         LEFT JOIN check_items c ON c.code = r.check_code
         ORDER BY r.enabled ASC, r.updated_at DESC, r.id DESC
         """
-    ).fetchall()
+        )
+        .fetchall()
+    )
     result = []
     for row in rows:
         snapshot = _parse_report_suppression_item_json(row["item_json"])
@@ -1487,7 +1460,9 @@ def _owner_subject_expr(table_alias: str = "t") -> str:
 
 
 def _mode_subject_filter(table_alias: str = "t") -> tuple[str, tuple[str]]:
-    return f"instr({_owner_subject_expr(table_alias)}, ?) = 1", (_mode_subject_prefix(),)
+    return f"instr({_owner_subject_expr(table_alias)}, ?) = 1", (
+        _mode_subject_prefix(),
+    )
 
 
 def _ip_username_management_enabled() -> bool:
@@ -1510,8 +1485,10 @@ def _valid_ip(value: str) -> bool:
 
 
 def _ip_username_rows():
-    return get_db().execute(
-        """
+    return (
+        get_db()
+        .execute(
+            """
         WITH known_ips AS (
             SELECT ip
             FROM tasks
@@ -1534,7 +1511,9 @@ def _ip_username_rows():
         GROUP BY k.ip, u.username
         ORDER BY COALESCE(MAX(t.created_at), '') DESC, k.ip ASC
         """
-    ).fetchall()
+        )
+        .fetchall()
+    )
 
 
 def _saml_mode_enabled() -> bool:
@@ -1553,7 +1532,9 @@ def _needs_saml_user_session(endpoint: str | None) -> bool:
 
 def _has_saml_user_session() -> bool:
     saml_user = session.get(SAML_USER_SESSION_KEY)
-    return isinstance(saml_user, dict) and bool(str(saml_user.get("user_id") or "").strip())
+    return isinstance(saml_user, dict) and bool(
+        str(saml_user.get("user_id") or "").strip()
+    )
 
 
 def _current_relative_url() -> str:
@@ -1568,7 +1549,12 @@ def _safe_next_path(value, fallback: str | None = None) -> str:
     if not value:
         return fallback
     parsed = urlsplit(value)
-    if parsed.scheme or parsed.netloc or not value.startswith("/") or value.startswith("//"):
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or not value.startswith("/")
+        or value.startswith("//")
+    ):
         return fallback
     script_root = request.script_root.rstrip("/")
     if script_root and value != script_root and not value.startswith(f"{script_root}/"):
@@ -1581,19 +1567,21 @@ def _saml_user_from_response(auth) -> tuple[str, str]:
     user_id_attribute = str(saml_config.get("user_id_attribute") or "").strip()
     username_attribute = str(saml_config.get("username_attribute") or "").strip()
     attributes = auth.get_attributes() or {}
-    friendly_attributes = getattr(auth, "get_friendlyname_attributes", lambda: {})() or {}
+    friendly_attributes = (
+        getattr(auth, "get_friendlyname_attributes", lambda: {})() or {}
+    )
 
     if user_id_attribute:
-        user_id = _saml_attribute_value(attributes, user_id_attribute) or _saml_attribute_value(
-            friendly_attributes, user_id_attribute
-        )
+        user_id = _saml_attribute_value(
+            attributes, user_id_attribute
+        ) or _saml_attribute_value(friendly_attributes, user_id_attribute)
     else:
         user_id = str(auth.get_nameid() or "").strip()
     username = ""
     if username_attribute:
-        username = _saml_attribute_value(attributes, username_attribute) or _saml_attribute_value(
-            friendly_attributes, username_attribute
-        )
+        username = _saml_attribute_value(
+            attributes, username_attribute
+        ) or _saml_attribute_value(friendly_attributes, username_attribute)
     return user_id, username or user_id
 
 
@@ -1678,33 +1666,6 @@ def _row_value(row, key: str, default=None):
     return default
 
 
-def _consistency_task_title(task, include_all: bool = False) -> str:
-    groups = document_groups_from_meta(_row_value(task, "document_meta_json"))
-    title = _consistency_title_from_groups(groups, include_all=include_all)
-    if title:
-        return title
-    return str(_row_value(task, "original_filename", "多文档对照检查") or "多文档对照检查")
-
-
-def _consistency_title_from_groups(groups: list[dict], *, include_all: bool = False) -> str:
-    parts = []
-    for group in groups:
-        names = [
-            Path(str(file_info.get("original_filename") or "")).name.strip()
-            for file_info in group.get("files", [])
-        ]
-        names = [name for name in names if name]
-        if not names:
-            continue
-        label = str(group.get("label") or "文档").strip() or "文档"
-        if include_all or len(names) <= 2:
-            summary = "、".join(names)
-        else:
-            summary = f"{'、'.join(names[:2])} 等{len(names)}个"
-        parts.append(f"{label}：{summary}")
-    return " / ".join(parts)
-
-
 def _render_admin_tasks_page():
     return _render_admin_task_list(
         task_type=DOCUMENT_TASK_TYPE,
@@ -1719,13 +1680,19 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
     per_page = _per_page_arg()
     owner_clause = "t.owner_subject = ?"
     params = (identity.subject, task_type)
-    total = get_db().execute(
-        f"SELECT COUNT(*) AS total FROM tasks t WHERE {owner_clause} AND t.task_type = ?",
-        params,
-    ).fetchone()["total"]
+    total = (
+        get_db()
+        .execute(
+            f"SELECT COUNT(*) AS total FROM tasks t WHERE {owner_clause} AND t.task_type = ?",
+            params,
+        )
+        .fetchone()["total"]
+    )
     page = _bounded_page(page, total, per_page)
-    rows = get_db().execute(
-        f"""
+    rows = (
+        get_db()
+        .execute(
+            f"""
         SELECT t.id, t.task_type, t.ip,
                t.original_filename, t.stored_filename, t.file_type, t.file_size,
                t.provider_name, t.model_name, t.status, t.progress,
@@ -1735,8 +1702,10 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ? OFFSET ?
         """,
-        (*params, per_page, (page - 1) * per_page),
-    ).fetchall()
+            (*params, per_page, (page - 1) * per_page),
+        )
+        .fetchall()
+    )
     rows = _task_rows_with_review_progress(rows)
     stats = _task_stats_for_where(
         "owner_subject = ? AND task_type = ?",
@@ -1767,8 +1736,10 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
     rows = []
     if task_ids:
         placeholders = ",".join("?" for _ in task_ids)
-        rows = get_db().execute(
-            f"""
+        rows = (
+            get_db()
+            .execute(
+                f"""
             SELECT
                 t.id, t.status, t.progress, t.updated_at,
                 CASE WHEN t.result_json IS NOT NULL AND t.result_json != '' THEN 1 ELSE 0 END AS has_result,
@@ -1782,13 +1753,17 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
             LEFT JOIN task_report_stats s ON s.task_id = t.id
             WHERE t.task_type = ? AND {owner_clause} AND t.id IN ({placeholders})
             """,
-            (task_type, *owner_params, *task_ids),
-        ).fetchall()
+                (task_type, *owner_params, *task_ids),
+            )
+            .fetchall()
+        )
     suppression_version = _report_suppression_versions({task_type}).get(
         task_type, _empty_report_suppression_version()
     )
-    counts = get_db().execute(
-        f"""
+    counts = (
+        get_db()
+        .execute(
+            f"""
         SELECT
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN t.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
@@ -1798,8 +1773,10 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
         FROM tasks t
         WHERE t.task_type = ? AND {owner_clause}
         """,
-        (task_type, *owner_params),
-    ).fetchone()
+            (task_type, *owner_params),
+        )
+        .fetchone()
+    )
     return {
         "active": bool(counts["queued"] or counts["running"]),
         "counts": {
@@ -1852,15 +1829,23 @@ def _task_rows_with_review_progress(rows: list) -> list[dict]:
     for row in rows:
         task = dict(row)
         stats = stats_by_task.get(int(row["id"]))
-        total = sum(int(_row_value(stats, key, 0) or 0) for key in REPORT_ITEM_TYPE_ORDER)
+        total = sum(
+            int(_row_value(stats, key, 0) or 0) for key in REPORT_ITEM_TYPE_ORDER
+        )
         reviewed = int(_row_value(stats, "reviewed", 0) or 0)
         pending_review = int(_row_value(stats, "pending_review", 0) or 0)
-        task.update(_task_review_progress(str(task.get("status") or ""), total, reviewed, pending_review))
+        task.update(
+            _task_review_progress(
+                str(task.get("status") or ""), total, reviewed, pending_review
+            )
+        )
         prepared_rows.append(task)
     return prepared_rows
 
 
-def _task_review_progress(task_status: str, total: int, reviewed: int, pending_review: int) -> dict:
+def _task_review_progress(
+    task_status: str, total: int, reviewed: int, pending_review: int
+) -> dict:
     total = max(0, int(total or 0))
     reviewed = min(total, max(0, int(reviewed or 0)))
     pending_review = min(total, max(0, int(pending_review or 0)))
@@ -1920,7 +1905,9 @@ def _render_admin_videos_page():
     )
 
 
-def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_type: str, check_items):
+def _render_admin_task_list(
+    *, task_type: str, template_name: str, totals_task_type: str, check_items
+):
     identity = _console_user_identity()
     status = request.args.get("status", "")
     review_status = str(request.args.get("review_status") or "").strip()
@@ -1936,14 +1923,18 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
     clauses = []
     totals = _admin_totals(totals_task_type)
     join_ip_usernames = _auth_mode() == "ip"
-    ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    ip_username_join = (
+        "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    )
     report_stats_join = "LEFT JOIN task_report_stats trs ON trs.task_id = t.id"
     owner_name_expr = (
         "COALESCE(NULLIF(iu.username, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
         if join_ip_usernames
         else "COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
     )
-    current_ip_username_expr = "COALESCE(iu.username, '')" if join_ip_usernames else "''"
+    current_ip_username_expr = (
+        "COALESCE(iu.username, '')" if join_ip_usernames else "''"
+    )
     mode_clause, mode_params = _mode_subject_filter("t")
     clauses.append(mode_clause)
     params.extend(mode_params)
@@ -1952,18 +1943,26 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         params.append(status)
     report_total_expr = "(COALESCE(trs.issue_count, 0) + COALESCE(trs.suggestion_count, 0) + COALESCE(trs.non_issue_count, 0))"
     if review_status == "pending":
-        clauses.append(f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) = 0")
+        clauses.append(
+            f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) = 0"
+        )
     elif review_status == "in_progress":
         clauses.append(
             f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) > 0 "
             "AND COALESCE(trs.pending_review_item_count, 0) > 0"
         )
     elif review_status == "completed":
-        clauses.append(f"{report_total_expr} > 0 AND COALESCE(trs.pending_review_item_count, 0) = 0")
+        clauses.append(
+            f"{report_total_expr} > 0 AND COALESCE(trs.pending_review_item_count, 0) = 0"
+        )
     elif review_status == "empty":
-        clauses.append(f"t.status NOT IN ('queued', 'running', 'canceling') AND {report_total_expr} = 0")
+        clauses.append(
+            f"t.status NOT IN ('queued', 'running', 'canceling') AND {report_total_expr} = 0"
+        )
     if keyword:
-        owner_name_filter = "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
+        owner_name_filter = (
+            "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
+        )
         clauses.append(
             f"""
             (
@@ -1977,25 +1976,33 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
             """
         )
         keyword_like = f"%{keyword}%"
-        params.extend([keyword_like, keyword_like, keyword_like, keyword_like, keyword_like])
+        params.extend(
+            [keyword_like, keyword_like, keyword_like, keyword_like, keyword_like]
+        )
         if join_ip_usernames:
             params.append(keyword_like)
     clauses.append("t.task_type = ?")
     params.append(task_type)
     where = f"WHERE {' AND '.join(clauses)}"
-    total = get_db().execute(
-        f"""
+    total = (
+        get_db()
+        .execute(
+            f"""
         SELECT COUNT(*) AS total
         FROM tasks t
         {ip_username_join}
         {report_stats_join}
         {where}
         """,
-        tuple(params),
-    ).fetchone()["total"]
+            tuple(params),
+        )
+        .fetchone()["total"]
+    )
     page = _bounded_page(page, total, per_page)
-    rows = get_db().execute(
-        f"""
+    rows = (
+        get_db()
+        .execute(
+            f"""
         SELECT
                t.id, t.task_type, t.ip, t.username_snapshot,
                t.owner_subject, t.owner_name_snapshot, t.owner_source,
@@ -2014,8 +2021,10 @@ def _render_admin_task_list(*, task_type: str, template_name: str, totals_task_t
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ? OFFSET ?
         """,
-        tuple(params + [per_page, (page - 1) * per_page]),
-    ).fetchall()
+            tuple(params + [per_page, (page - 1) * per_page]),
+        )
+        .fetchall()
+    )
     rows = _task_rows_with_review_progress(rows)
     return render_template(
         template_name,
@@ -2073,46 +2082,19 @@ def _check_items_for_task_type(db, task_type: str):
 
 
 def get_enabled_check_items(task_type: str = DOCUMENT_TASK_TYPE):
-    return get_db().execute(
-        """
+    return (
+        get_db()
+        .execute(
+            """
         SELECT *
         FROM check_items
         WHERE task_type = ? AND enabled = 1
         ORDER BY sort_order ASC, id ASC
         """,
-        (task_type,),
-    ).fetchall()
-
-
-def _enabled_check_item_snapshots(db, check_ids: list[int], task_type: str) -> list[dict]:
-    unique_ids = []
-    seen = set()
-    for check_id in check_ids:
-        if check_id not in seen:
-            unique_ids.append(check_id)
-            seen.add(check_id)
-    if not unique_ids:
-        return []
-
-    placeholders = ",".join("?" for _ in unique_ids)
-    rows = db.execute(
-        f"""
-        SELECT id, code, name, prompt
-        FROM check_items
-        WHERE id IN ({placeholders}) AND task_type = ? AND enabled = 1
-        ORDER BY sort_order ASC, id ASC
-        """,
-        tuple(unique_ids + [task_type]),
-    ).fetchall()
-    return [
-        {
-            "id": row["id"],
-            "code": row["code"],
-            "name": row["name"],
-            "prompt": row["prompt"],
-        }
-        for row in rows
-    ]
+            (task_type,),
+        )
+        .fetchall()
+    )
 
 
 def _next_check_item_sort_order(db, task_type: str = DOCUMENT_TASK_TYPE) -> int:
@@ -2125,7 +2107,9 @@ def _next_check_item_sort_order(db, task_type: str = DOCUMENT_TASK_TYPE) -> int:
     return int(row["value"]) - 10
 
 
-def _reorder_check_items(db, item_ids: list[int], task_type: str = DOCUMENT_TASK_TYPE) -> list[int]:
+def _reorder_check_items(
+    db, item_ids: list[int], task_type: str = DOCUMENT_TASK_TYPE
+) -> list[int]:
     rows = db.execute(
         """
         SELECT id
@@ -2152,414 +2136,6 @@ def _reorder_check_items(db, item_ids: list[int], task_type: str = DOCUMENT_TASK
             (index * 10, updated_at, item_id),
         )
     return ordered_ids
-
-
-def _model_page_identity() -> UserIdentity:
-    if _platform_enabled():
-        return _current_user_identity()
-    return current_identity()
-
-
-def _model_management_response(identity: UserIdentity, redirect_endpoint: str):
-    if request.method == "POST":
-        action = request.form.get("action", "save")
-        provider_id = request.form.get("provider_id")
-        if action == "delete" and provider_id:
-            _delete_user_model_provider(identity.subject, provider_id)
-            flash("模型提供商已删除。", "success")
-            return redirect(url_for(redirect_endpoint))
-
-        provider_data = _provider_form_data()
-        if isinstance(provider_data, str):
-            flash(provider_data, "error")
-            return redirect(url_for(redirect_endpoint))
-
-        if provider_id and not _user_provider_exists(identity.subject, provider_id):
-            flash("模型提供商不存在。", "error")
-            return redirect(url_for(redirect_endpoint))
-
-        _save_user_model_provider(identity.subject, provider_id, provider_data)
-        flash("模型提供商已保存。", "success")
-        return redirect(url_for(redirect_endpoint))
-
-    providers = _load_user_model_providers(identity.subject)
-    models_by_provider = {
-        provider["id"]: sorted(
-            _provider_model_options(provider),
-            key=lambda model: (model["model_name"], model["force_disable_thinking"]),
-        )
-        for provider in providers
-    }
-    return render_template(
-        "user_models.html",
-        providers=providers,
-        models_by_provider=models_by_provider,
-        active_nav="models",
-    )
-
-
-def _provider_form_data() -> dict | str:
-    return _normalize_provider_input(
-        {
-            "name": request.form.get("name", ""),
-            "api_base": request.form.get("api_base", ""),
-            "api_key": request.form.get("api_key", ""),
-            "request_timeout": request.form.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
-            "max_input_chars": request.form.get("max_input_chars", str(PROVIDER_INPUT_LIMIT_DEFAULT)),
-            "is_active": request.form.get("is_active") == "on",
-            "models": _parse_model_configs(
-                request.form.get("model_configs", ""),
-                request.form.get("models", ""),
-            ),
-        },
-        require_models=True,
-    )
-
-
-def _provider_connection_data(data: dict, name: str) -> dict | str:
-    return _normalize_provider_input(
-        {
-            "name": name,
-            "api_base": data.get("api_base", ""),
-            "api_key": data.get("api_key", ""),
-            "request_timeout": data.get("request_timeout", str(PROVIDER_TIMEOUT_DEFAULT)),
-            "max_input_chars": str(PROVIDER_INPUT_LIMIT_DEFAULT),
-            "is_active": True,
-            "models": [{"model_name": "placeholder", "force_disable_thinking": False}],
-        },
-        require_models=False,
-    )
-
-
-def _normalize_provider_input(value: dict, *, require_models: bool) -> dict | str:
-    name = str(value.get("name") or "").strip()
-    api_base = str(value.get("api_base") or "").strip().rstrip("/")
-    api_key = str(value.get("api_key") or "").strip()
-    if not name or not api_base:
-        return "提供商名称和 API 地址不能为空。"
-    if not _is_chat_completions_endpoint(api_base):
-        return "API 地址必须填写完整的 /chat/completions 请求地址。"
-    try:
-        request_timeout = int(value.get("request_timeout") or PROVIDER_TIMEOUT_DEFAULT)
-    except (TypeError, ValueError):
-        return "超时时间必须是整数秒。"
-    try:
-        max_input_chars = int(value.get("max_input_chars") or PROVIDER_INPUT_LIMIT_DEFAULT)
-    except (TypeError, ValueError):
-        return "文本上限必须是整数。"
-    if request_timeout < PROVIDER_TIMEOUT_MIN or request_timeout > PROVIDER_TIMEOUT_MAX:
-        return f"超时时间需在 {PROVIDER_TIMEOUT_MIN}-{PROVIDER_TIMEOUT_MAX} 秒之间。"
-    if max_input_chars < PROVIDER_INPUT_LIMIT_MIN or max_input_chars > PROVIDER_INPUT_LIMIT_MAX:
-        return f"文本上限需在 {PROVIDER_INPUT_LIMIT_MIN}-{PROVIDER_INPUT_LIMIT_MAX} 字之间。"
-    model_configs = value.get("models") or []
-    if require_models and not model_configs:
-        return "至少需要填写一个模型 ID。"
-    return {
-        "name": name,
-        "api_base": api_base,
-        "api_key": api_key,
-        "request_timeout": request_timeout,
-        "max_input_chars": max_input_chars,
-        "is_active": bool(value.get("is_active")),
-        "models": model_configs,
-    }
-
-
-def _load_user_model_providers(owner_subject: str) -> list[dict]:
-    rows = get_db().execute(
-        """
-        SELECT *
-        FROM user_model_providers
-        WHERE owner_subject = ?
-        ORDER BY updated_at DESC, id DESC
-        """,
-        (owner_subject,),
-    ).fetchall()
-    return [_provider_from_row(row, _load_user_model_configs(row["id"])) for row in rows]
-
-
-def _load_user_model_configs(provider_id: int) -> list[dict]:
-    rows = get_db().execute(
-        """
-        SELECT model_name, force_disable_thinking, reasoning_effort
-        FROM user_model_configs
-        WHERE provider_id = ?
-        ORDER BY sort_order ASC, id ASC
-        """,
-        (provider_id,),
-    ).fetchall()
-    return [
-        {
-            "model_name": row["model_name"],
-            "force_disable_thinking": bool(row["force_disable_thinking"]),
-            "reasoning_effort": normalize_reasoning_effort(row["reasoning_effort"]) or "",
-        }
-        for row in rows
-    ]
-
-
-def _provider_from_row(row, models: list[dict]) -> dict:
-    return {
-        "id": row["id"],
-        "owner_subject": row["owner_subject"],
-        "name": row["name"],
-        "api_base": row["api_base"],
-        "api_key": row["api_key"] or "",
-        "request_timeout": row["request_timeout"],
-        "max_input_chars": row["max_input_chars"],
-        "is_active": bool(row["is_active"]),
-        "models": models,
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-def _user_provider_exists(owner_subject: str, provider_id) -> bool:
-    return (
-        get_db()
-        .execute(
-            "SELECT 1 FROM user_model_providers WHERE id = ? AND owner_subject = ?",
-            (provider_id, owner_subject),
-        )
-        .fetchone()
-        is not None
-    )
-
-
-def _save_user_model_provider(owner_subject: str, provider_id, provider_data: dict):
-    db = get_db()
-    now = now_text()
-    if provider_id:
-        db.execute(
-            """
-            UPDATE user_model_providers
-            SET name = ?, api_base = ?, api_key = ?,
-                request_timeout = ?, max_input_chars = ?, is_active = ?, updated_at = ?
-            WHERE id = ? AND owner_subject = ?
-            """,
-            (
-                provider_data["name"],
-                provider_data["api_base"],
-                provider_data["api_key"],
-                provider_data["request_timeout"],
-                provider_data["max_input_chars"],
-                1 if provider_data["is_active"] else 0,
-                now,
-                provider_id,
-                owner_subject,
-            ),
-        )
-        saved_provider_id = int(provider_id)
-    else:
-        cursor = db.execute(
-            """
-            INSERT INTO user_model_providers(
-                owner_subject, name, api_base, api_key,
-                request_timeout, max_input_chars, is_active, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                owner_subject,
-                provider_data["name"],
-                provider_data["api_base"],
-                provider_data["api_key"],
-                provider_data["request_timeout"],
-                provider_data["max_input_chars"],
-                1 if provider_data["is_active"] else 0,
-                now,
-                now,
-            ),
-        )
-        saved_provider_id = cursor.lastrowid
-        if saved_provider_id is None:
-            raise RuntimeError("模型提供商保存失败，请稍后重试。")
-    _replace_user_model_configs(saved_provider_id, provider_data["models"], now)
-    db.commit()
-
-
-def _replace_user_model_configs(provider_id: int, model_configs: list[dict], updated_at: str):
-    db = get_db()
-    db.execute("DELETE FROM user_model_configs WHERE provider_id = ?", (provider_id,))
-    for index, model_config in enumerate(model_configs, start=1):
-        db.execute(
-            """
-            INSERT INTO user_model_configs(
-                provider_id, model_name, force_disable_thinking, reasoning_effort,
-                sort_order, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                provider_id,
-                model_config["model_name"],
-                1 if model_config["force_disable_thinking"] else 0,
-                normalize_reasoning_effort(model_config.get("reasoning_effort")),
-                index * 10,
-                updated_at,
-                updated_at,
-            ),
-        )
-
-
-def _delete_user_model_provider(owner_subject: str, provider_id):
-    get_db().execute(
-        "DELETE FROM user_model_providers WHERE id = ? AND owner_subject = ?",
-        (provider_id, owner_subject),
-    )
-    get_db().commit()
-
-
-def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list[dict]:
-    configs = []
-    try:
-        value = json.loads(model_configs_json) if model_configs_json else []
-    except json.JSONDecodeError:
-        value = []
-
-    if isinstance(value, list):
-        for item in value:
-            if isinstance(item, dict):
-                model_name = str(item.get("model_name") or item.get("id") or "").strip()
-                force_disable_thinking = _form_bool(item.get("force_disable_thinking", False))
-                reasoning_effort = normalize_reasoning_effort(item.get("reasoning_effort")) or ""
-            else:
-                model_name = str(item or "").strip()
-                force_disable_thinking = False
-                reasoning_effort = ""
-            configs.append(
-                {
-                    "model_name": model_name,
-                    "force_disable_thinking": force_disable_thinking,
-                    "reasoning_effort": reasoning_effort,
-                }
-            )
-
-    if not configs:
-        configs = [
-            {
-                "model_name": line.strip(),
-                "force_disable_thinking": False,
-                "reasoning_effort": "",
-            }
-            for line in str(models_text or "").splitlines()
-            if line.strip()
-        ]
-
-    result = []
-    seen = set()
-    for config in configs:
-        model_name = str(config.get("model_name") or "").strip()
-        force_disable_thinking = bool(config.get("force_disable_thinking"))
-        key = (model_name, force_disable_thinking)
-        if not model_name or key in seen:
-            continue
-        seen.add(key)
-        result.append(
-            {
-                "model_name": model_name,
-                "force_disable_thinking": force_disable_thinking,
-                "reasoning_effort": normalize_reasoning_effort(config.get("reasoning_effort")) or "",
-            }
-        )
-    return result
-
-
-def _provider_model_options(provider: dict) -> list[dict]:
-    return [
-        {
-            "model_name": _model_config_name(model_config),
-            "force_disable_thinking": _model_config_force_disable_thinking(model_config),
-            "reasoning_effort": _model_config_reasoning_effort(model_config),
-            "enabled": True,
-        }
-        for model_config in provider["models"]
-        if _model_config_name(model_config)
-    ]
-
-
-def _model_config_name(model_config) -> str:
-    if isinstance(model_config, dict):
-        return str(model_config.get("model_name") or model_config.get("id") or "").strip()
-    return str(model_config or "").strip()
-
-
-def _model_config_force_disable_thinking(model_config) -> bool:
-    if not isinstance(model_config, dict):
-        return False
-    return _form_bool(model_config.get("force_disable_thinking", False))
-
-
-def _model_config_reasoning_effort(model_config) -> str:
-    if not isinstance(model_config, dict):
-        return ""
-    return normalize_reasoning_effort(model_config.get("reasoning_effort")) or ""
-
-
-def get_enabled_models(owner_subject: str | None = None):
-    if owner_subject is None:
-        owner_subject = current_identity().subject
-    models = []
-    for provider in _load_user_model_providers(owner_subject):
-        if not provider["is_active"]:
-            continue
-        for model_config in provider["models"]:
-            models.append(_model_option(provider, model_config))
-    return sorted(models, key=lambda model: (model["provider_name"], model["model_name"], model["force_disable_thinking"]))
-
-
-def _model_option(provider: dict, model_name) -> dict:
-    if isinstance(model_name, dict):
-        model_config = model_name
-        model_name = str(model_config.get("model_name") or model_config.get("id") or "").strip()
-        force_disable_thinking = bool(model_config.get("force_disable_thinking"))
-        reasoning_effort = _model_config_reasoning_effort(model_config)
-    else:
-        model_name = str(model_name or "").strip()
-        force_disable_thinking = False
-        reasoning_effort = ""
-    return {
-        "id": f"{provider['id']}:{1 if force_disable_thinking else 0}:{model_name}",
-        "provider_id": provider["id"],
-        "provider_name": provider["name"],
-        "model_name": model_name,
-        "force_disable_thinking": force_disable_thinking,
-        "reasoning_effort": reasoning_effort,
-        "api_base": provider["api_base"],
-        "api_key": provider["api_key"],
-        "request_timeout": provider["request_timeout"],
-        "max_input_chars": provider["max_input_chars"],
-    }
-
-
-def _is_chat_completions_endpoint(value: str) -> bool:
-    endpoint = str(value or "").strip().rstrip("/")
-    return endpoint.startswith(("http://", "https://")) and endpoint.endswith("/chat/completions")
-
-
-def _find_enabled_model(model_id: str, owner_subject: str | None = None) -> dict | None:
-    if ":" not in model_id:
-        return None
-    if owner_subject is None:
-        owner_subject = current_identity().subject
-    force_disable_thinking = None
-    parts = model_id.split(":", 2)
-    if len(parts) == 3 and parts[1] in {"0", "1"}:
-        provider_id, thinking_flag, model_name = parts
-        force_disable_thinking = thinking_flag == "1"
-    else:
-        provider_id, model_name = model_id.split(":", 1)
-    for provider in _load_user_model_providers(owner_subject):
-        if str(provider["id"]) != str(provider_id) or not provider["is_active"]:
-            continue
-        for model_config in provider["models"]:
-            option = _model_option(provider, model_config)
-            if option["model_name"] == model_name and (
-                force_disable_thinking is None or option["force_disable_thinking"] == force_disable_thinking
-            ):
-                return option
-        return None
-    return None
 
 
 def _admin_overview_range() -> dict:
@@ -2659,7 +2235,9 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         ),
     ).fetchall()
     join_ip_usernames = _auth_mode() == "ip"
-    ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    ip_username_join = (
+        "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    )
     username_expr = (
         "COALESCE(NULLIF(MAX(iu.username), ''), NULLIF(MAX(t.owner_name_snapshot), ''), NULLIF(MAX(t.username_snapshot), ''))"
         if join_ip_usernames
@@ -2723,11 +2301,15 @@ def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
     ).fetchone()
     totals = dict(row or {})
     totals["ips"] = totals.get("users", 0)
-    totals["report_items"] = _admin_report_item_totals(task_type, mode_clause, mode_params)
+    totals["report_items"] = _admin_report_item_totals(
+        task_type, mode_clause, mode_params
+    )
     return totals
 
 
-def _admin_report_item_totals(task_type: str, mode_clause: str, mode_params: tuple[str, ...]) -> dict:
+def _admin_report_item_totals(
+    task_type: str, mode_clause: str, mode_params: tuple[str, ...]
+) -> dict:
     return _admin_report_item_totals_for_where(
         f"task_type = ? AND {mode_clause}",
         (task_type, *mode_params),
@@ -2752,7 +2334,8 @@ def _task_report_stat_rows_for_where(where_clause: str, params: tuple) -> list:
         for row in rows
         if not (
             row["source_updated_at"] == row["updated_at"]
-            and row["suppression_version"] == suppression_versions.get(
+            and row["suppression_version"]
+            == suppression_versions.get(
                 str(row["task_type"] or DOCUMENT_TASK_TYPE), empty_version
             )
         )
@@ -2760,9 +2343,7 @@ def _task_report_stat_rows_for_where(where_clause: str, params: tuple) -> list:
     if not stale_ids:
         return rows
 
-    # 报告统计版本变更时，历史任务可能全部过期。不要在一次 HTTP 请求中
-    # 解析整张任务表；调度器会通过 refresh_stale_report_stats_batch() 持续
-    # 后台刷新，当前请求最多同步处理少量记录以保持小数据集的即时一致性。
+    # 统计缓存按批次刷新，页面请求保持轻量。
     if len(stale_ids) > REPORT_STATS_INLINE_REBUILD_LIMIT:
         stale_ids = stale_ids[:REPORT_STATS_INLINE_REBUILD_LIMIT]
 
@@ -2801,12 +2382,10 @@ def _task_report_stat_rows_for_where(where_clause: str, params: tuple) -> list:
     return _select_task_report_stat_rows(where_clause, params)
 
 
-def refresh_stale_report_stats_batch(limit: int = REPORT_STATS_BACKGROUND_BATCH_SIZE) -> int:
-    """在当前应用上下文中刷新一小批过期的报告统计缓存。
-
-    该函数由任务调度器调用，不依赖请求上下文。每次只读取并解析有限条
-    ``result_json``，避免报告统计迁移期间阻塞正常的 HTTP 请求。
-    """
+def refresh_stale_report_stats_batch(
+    limit: int = REPORT_STATS_BACKGROUND_BATCH_SIZE,
+) -> int:
+    """在当前应用上下文中刷新一小批报告统计缓存。"""
 
     try:
         batch_size = max(1, int(limit))
@@ -2834,23 +2413,29 @@ def refresh_stale_report_stats_batch(limit: int = REPORT_STATS_BACKGROUND_BATCH_
             [
                 DOCUMENT_TASK_TYPE,
                 task_type,
-                suppression_versions.get(task_type, _empty_report_suppression_version()),
+                suppression_versions.get(
+                    task_type, _empty_report_suppression_version()
+                ),
             ]
         )
 
-    rows = get_db().execute(
-        f"""
+    rows = (
+        get_db()
+        .execute(
+            f"""
         SELECT t.id, t.task_type, t.updated_at, t.result_json
         FROM tasks t
         LEFT JOIN task_report_stats s ON s.task_id = t.id
         WHERE t.result_json IS NOT NULL
           AND t.result_json != ''
-          AND ({' OR '.join(stale_clauses)})
+          AND ({" OR ".join(stale_clauses)})
         ORDER BY t.id ASC
         LIMIT ?
         """,
-        (*stale_params, batch_size),
-    ).fetchall()
+            (*stale_params, batch_size),
+        )
+        .fetchall()
+    )
     if not rows:
         return 0
 
@@ -2872,7 +2457,9 @@ def refresh_stale_report_stats_batch(limit: int = REPORT_STATS_BACKGROUND_BATCH_
             (
                 row["id"],
                 row["updated_at"] or "",
-                suppression_versions.get(task_type, _empty_report_suppression_version()),
+                suppression_versions.get(
+                    task_type, _empty_report_suppression_version()
+                ),
                 *[int(item_totals.get(key) or 0) for key in REPORT_COUNT_KEYS],
                 now_text(),
             )
@@ -2882,8 +2469,10 @@ def refresh_stale_report_stats_batch(limit: int = REPORT_STATS_BACKGROUND_BATCH_
 
 
 def _select_task_report_stat_rows(where_clause: str, params: tuple) -> list:
-    return get_db().execute(
-        f"""
+    return (
+        get_db()
+        .execute(
+            f"""
         SELECT
             t.id,
             t.task_type,
@@ -2905,783 +2494,15 @@ def _select_task_report_stat_rows(where_clause: str, params: tuple) -> list:
           AND t.result_json != ''
           AND {where_clause}
         """,
-        params,
-    ).fetchall()
-
-
-def _write_task_report_stat_rows(cache_rows: list[tuple]) -> None:
-    if not cache_rows:
-        return
-    db = get_db()
-    db.executemany(
-        """
-            INSERT INTO task_report_stats(
-                task_id, source_updated_at, suppression_version,
-                issue_count, suggestion_count, non_issue_count,
-                accepted_issue_count, rejected_issue_count,
-                pending_issue_acceptance_count, suppressed_count,
-                reviewed_item_count, pending_review_item_count, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(task_id) DO UPDATE SET
-                source_updated_at = excluded.source_updated_at,
-                suppression_version = excluded.suppression_version,
-                issue_count = excluded.issue_count,
-                suggestion_count = excluded.suggestion_count,
-                non_issue_count = excluded.non_issue_count,
-                accepted_issue_count = excluded.accepted_issue_count,
-                rejected_issue_count = excluded.rejected_issue_count,
-                pending_issue_acceptance_count = excluded.pending_issue_acceptance_count,
-                suppressed_count = excluded.suppressed_count,
-                reviewed_item_count = excluded.reviewed_item_count,
-                pending_review_item_count = excluded.pending_review_item_count,
-                updated_at = excluded.updated_at
-        """,
-        cache_rows,
-    )
-    db.commit()
-
-
-def _cache_prepared_task_report_stats(task, prepared_results: list[dict], source_updated_at: str) -> None:
-    task_type = str(task["task_type"] or DOCUMENT_TASK_TYPE)
-    suppression_version = _report_suppression_versions({task_type}).get(
-        task_type, _empty_report_suppression_version()
-    )
-    item_totals = _report_item_totals(prepared_results)
-    _write_task_report_stat_rows(
-        [
-            (
-                task["id"],
-                source_updated_at,
-                suppression_version,
-                *[int(item_totals.get(key) or 0) for key in REPORT_COUNT_KEYS],
-                now_text(),
-            )
-        ]
-    )
-
-
-def _report_suppression_versions(task_types: set[str]) -> dict[str, str]:
-    versions = {task_type: _empty_report_suppression_version() for task_type in task_types}
-    if not task_types:
-        return versions
-    placeholders = ",".join("?" for _ in task_types)
-    rows = get_db().execute(
-        f"""
-        SELECT task_type, COUNT(*) AS total, COALESCE(SUM(id), 0) AS id_sum, MAX(updated_at) AS latest
-        FROM report_suppression_rules
-        WHERE enabled = 1 AND task_type IN ({placeholders})
-        GROUP BY task_type
-        """,
-        tuple(sorted(task_types)),
-    ).fetchall()
-    for row in rows:
-        versions[str(row["task_type"])] = (
-            f"{REPORT_STATS_PREPARATION_VERSION}|"
-            f"{int(row['total'] or 0)}:{int(row['id_sum'] or 0)}:{row['latest'] or ''}"
+            params,
         )
-    return versions
-
-
-def _empty_report_suppression_version() -> str:
-    return f"{REPORT_STATS_PREPARATION_VERSION}|0:0:"
+        .fetchall()
+    )
 
 
 def _add_report_counts(target: dict, source) -> None:
     for key in REPORT_COUNT_KEYS:
         target[key] += int(_row_value(source, key, 0) or 0)
-
-
-def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):
-    db = get_db()
-    uploads = _selected_uploads("document")
-    if not uploads:
-        flash("请选择要上传的文档。", "error")
-        return _back_to_task_form(admin_created)
-    for upload in uploads:
-        if not allowed_file(upload.filename):
-            flash(
-                f"“{upload.filename}”不是支持的文件类型，仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。",
-                "error",
-            )
-            return _back_to_task_form(admin_created)
-
-    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
-    if not check_ids:
-        flash("请至少选择一个检查项。", "error")
-        return _back_to_task_form(admin_created)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, DOCUMENT_TASK_TYPE)
-    if len(check_snapshots) != len(set(check_ids)):
-        flash("请选择当前可用的检查项。", "error")
-        return _back_to_task_form(admin_created)
-
-    model_id = request.form.get("model_id", "")
-    model = _find_enabled_model(model_id, identity.subject)
-    if model is None:
-        flash("请选择可用模型。", "error")
-        return _back_to_task_form(admin_created)
-
-    saved_paths: list[Path] = []
-    try:
-        rows = [
-            _prepare_document_task_row(upload, identity, model, check_ids, check_snapshots, saved_paths)
-            for upload in uploads
-        ]
-    except Exception as exc:
-        _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("准备单文档检查任务失败")
-        flash(_unexpected_upload_preparation_message(exc), "error")
-        return _back_to_task_form(admin_created)
-
-    try:
-        db.executemany(
-            """
-            INSERT INTO tasks(
-                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-                original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
-                api_base, api_key, request_timeout, max_input_chars, force_disable_thinking, reasoning_effort,
-                status, progress, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-            """,
-            rows,
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("创建单文档检查任务失败")
-        flash("创建任务失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created)
-    if admin_created:
-        return redirect(url_for("admin_tasks"))
-    return redirect(url_for("user_tasks"))
-
-
-def _prepare_document_task_row(
-    upload,
-    identity: UserIdentity,
-    model: dict,
-    check_ids: list[int],
-    check_snapshots: list[dict],
-    saved_paths: list[Path],
-):
-    file_type = extension_of(upload.filename)
-    original_filename = _clean_upload_filename(upload.filename, file_type)
-    created_at = now_text()
-    stored_filename, destination = _upload_destination(
-        original_filename,
-        identity.subject,
-        created_at,
-        file_type,
-    )
-    file_size = _save_uploaded_file(upload, destination)
-    saved_paths.append(destination)
-    owner_name = identity.display_name or None
-    return (
-        DOCUMENT_TASK_TYPE,
-        identity.ip,
-        owner_name,
-        identity.subject,
-        owner_name,
-        identity.source,
-        original_filename,
-        stored_filename,
-        file_type,
-        file_size,
-        None,
-        json.dumps({"preprocessing": {"status": "pending"}}, ensure_ascii=False),
-        json.dumps(check_ids, ensure_ascii=False),
-        json.dumps(check_snapshots, ensure_ascii=False),
-        model["provider_id"],
-        model["provider_name"],
-        model["model_name"],
-        model["api_base"],
-        model["api_key"],
-        model["request_timeout"],
-        model["max_input_chars"],
-        1 if model["force_disable_thinking"] else 0,
-        model["reasoning_effort"] or None,
-        created_at,
-        created_at,
-    )
-
-
-def _unexpected_upload_preparation_message(error: Exception) -> str:
-    detail = _compact_user_error(error)
-    if detail:
-        return f"文档上传或读取失败：{detail}。如持续出现请联系管理员查看日志。"
-    return "文档上传或读取失败，请稍后重试；如持续出现请联系管理员查看日志。"
-
-
-def _compact_user_error(error: Exception, limit: int = 180) -> str:
-    text = re.sub(r"\s+", " ", str(error or "").strip())
-    if not text:
-        return ""
-    text = re.sub(r"[A-Za-z]:[\\/][^，。；;]*", "[本地路径]", text)
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}..."
-
-
-def create_image_task_for_identity(identity: UserIdentity, *, admin_created: bool):
-    db = get_db()
-    upload = request.files.get("document")
-    if upload is None or not upload.filename:
-        flash("请选择要提取图片的文档。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-    file_type = extension_of(upload.filename)
-    if file_type != "pdf":
-        flash("图片检查仅支持 PDF 文件。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-
-    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
-    if not check_ids:
-        flash("请至少选择一个图片检查项。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, IMAGE_TASK_TYPE)
-    if len(check_snapshots) != len(set(check_ids)):
-        flash("请选择当前可用的图片检查项。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-
-    model_id = request.form.get("model_id", "")
-    model = _find_enabled_model(model_id, identity.subject)
-    if model is None:
-        flash("请选择可用模型。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-
-    original_filename = _clean_upload_filename(upload.filename, file_type)
-    created_at = now_text()
-    stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
-    try:
-        file_size = _save_uploaded_file(upload, destination)
-    except Exception:
-        current_app.logger.exception("保存图片检查文档失败")
-        flash("PDF 上传失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-
-    document_meta = {
-        "source_document": {
-            "original_filename": original_filename,
-            "stored_filename": stored_filename,
-            "file_type": file_type,
-            "file_size": file_size,
-        },
-        "preprocessing": {"status": "pending"},
-    }
-    owner_name = identity.display_name or None
-    try:
-        db.execute(
-            """
-            INSERT INTO tasks(
-                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-                original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
-                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
-                status, progress, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-            """,
-            (
-                IMAGE_TASK_TYPE,
-                identity.ip,
-                owner_name,
-                identity.subject,
-                owner_name,
-                identity.source,
-                original_filename,
-                stored_filename,
-                file_type,
-                file_size,
-                None,
-                json.dumps(document_meta, ensure_ascii=False),
-                json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
-                model["provider_id"],
-                model["provider_name"],
-                model["model_name"],
-                model["api_base"],
-                model["api_key"],
-                model["request_timeout"],
-                model["max_input_chars"],
-                1 if model["force_disable_thinking"] else 0,
-                model["reasoning_effort"] or None,
-                created_at,
-                created_at,
-            ),
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        _remove_uploaded_file(destination)
-        current_app.logger.exception("创建图片检查任务失败")
-        flash("创建图片检查任务失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, IMAGE_TASK_TYPE)
-    return redirect(url_for(_task_list_endpoint(admin_created, IMAGE_TASK_TYPE)))
-
-
-def create_video_task_for_identity(identity: UserIdentity, *, admin_created: bool):
-    db = get_db()
-    uploads = _selected_uploads("video")
-    if not uploads:
-        flash("请至少选择一个要质检的视频。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
-
-    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
-    if not check_ids:
-        flash("请至少选择一个视频检查项。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, VIDEO_TASK_TYPE)
-    if len(check_snapshots) != len(set(check_ids)):
-        flash("请选择当前可用的视频检查项。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
-
-    model_id = request.form.get("model_id", "")
-    model = _find_enabled_model(model_id, identity.subject)
-    if model is None:
-        flash("请选择可用模型。", "error")
-        return _back_to_task_form(admin_created, VIDEO_TASK_TYPE)
-
-    created_count = 0
-    failures = []
-    for upload in uploads:
-        filename = Path(str(upload.filename or "").replace("\\", "/")).name or "未命名视频"
-        error = _create_video_task_from_upload(
-            db,
-            upload,
-            identity,
-            model,
-            check_ids,
-            check_snapshots,
-        )
-        if error:
-            failures.append((filename, error))
-        else:
-            created_count += 1
-
-    if created_count:
-        flash(f"已创建 {created_count} 个视频检查任务。", "success")
-    if failures:
-        flash(_video_task_failure_summary(failures), "error")
-    return redirect(url_for(_task_list_endpoint(admin_created, VIDEO_TASK_TYPE)))
-
-
-def _create_video_task_from_upload(
-    db,
-    upload,
-    identity: UserIdentity,
-    model: dict,
-    check_ids: list[int],
-    check_snapshots: list[dict],
-) -> str | None:
-    upload_filename = Path(str(upload.filename or "").replace("\\", "/")).name or "未命名视频"
-    if not allowed_video_file(upload_filename):
-        return "不是支持的视频类型，仅支持 mp4、mov、mkv、webm、avi、m4v 文件。"
-
-    file_type = video_extension_of(upload_filename)
-    original_filename = _clean_upload_filename(upload_filename, file_type)
-    try:
-        created_at = now_text()
-        stored_filename, destination = _upload_destination(original_filename, identity.subject, created_at, file_type)
-    except Exception:
-        current_app.logger.exception("准备视频检查上传路径失败 file=%s", original_filename)
-        return "视频上传准备失败，请稍后再试。"
-    try:
-        file_size = _save_uploaded_file(upload, destination)
-    except Exception:
-        current_app.logger.exception("保存视频检查文件失败 file=%s", original_filename)
-        return "视频上传失败，请稍后再试。"
-
-    try:
-        document_meta = {
-            "source_video": {
-                "original_filename": original_filename,
-                "stored_filename": stored_filename,
-                "file_type": file_type,
-                "file_size": file_size,
-            },
-            "preprocessing": {"status": "pending"},
-        }
-        owner_name = identity.display_name or None
-        db.execute(
-            """
-            INSERT INTO tasks(
-                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-                original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
-                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
-                status, progress, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-            """,
-            (
-                VIDEO_TASK_TYPE,
-                identity.ip,
-                owner_name,
-                identity.subject,
-                owner_name,
-                identity.source,
-                original_filename,
-                stored_filename,
-                file_type,
-                file_size,
-                None,
-                json.dumps(document_meta, ensure_ascii=False),
-                json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
-                model["provider_id"],
-                model["provider_name"],
-                model["model_name"],
-                model["api_base"],
-                model["api_key"],
-                model["request_timeout"],
-                model["max_input_chars"],
-                1 if model["force_disable_thinking"] else 0,
-                model["reasoning_effort"] or None,
-                created_at,
-                created_at,
-            ),
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        _remove_uploaded_file(destination)
-        current_app.logger.exception("创建视频检查任务失败 file=%s", original_filename)
-        return "创建视频检查任务失败，请稍后再试。"
-    return None
-
-
-def _video_task_failure_summary(failures: list[tuple[str, str]], max_items: int = 5) -> str:
-    details = []
-    for filename, error in failures[:max_items]:
-        compact_error = _compact_user_error(error, limit=240) or "处理失败"
-        details.append(f"“{filename}”：{compact_error}")
-    omitted_count = len(failures) - len(details)
-    suffix = f"；另有 {omitted_count} 个失败视频未展开" if omitted_count > 0 else ""
-    return f"{len(failures)} 个视频未创建：" + "；".join(details) + suffix
-
-
-def create_consistency_task_for_identity(identity: UserIdentity, *, admin_created: bool):
-    db = get_db()
-    master_uploads = _selected_uploads("master_documents")
-    related_uploads = _selected_uploads("related_documents")
-    if not _validate_consistency_uploads(master_uploads, "素材文档", CONSISTENCY_MAX_MATERIAL_FILES):
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-    if not _validate_consistency_uploads(related_uploads, "资料", CONSISTENCY_MAX_DATA_FILES):
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-
-    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
-    if not check_ids:
-        flash("请至少选择一个多文档对照项。", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, CONSISTENCY_TASK_TYPE)
-    if len(check_snapshots) != len(set(check_ids)):
-        flash("请选择当前可用的多文档对照项。", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-
-    model_id = request.form.get("model_id", "")
-    model = _find_enabled_model(model_id, identity.subject)
-    if model is None:
-        flash("请选择可用模型。", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-
-    created_at = now_text()
-    saved_paths = []
-    try:
-        master_files = _save_consistency_upload_group(master_uploads, identity.subject, created_at, saved_paths)
-        related_files = _save_consistency_upload_group(related_uploads, identity.subject, created_at, saved_paths)
-    except Exception:
-        _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("准备多文档对照任务失败")
-        flash("文档上传失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-
-    document_meta = {
-        "groups": [
-            {
-                "role": "master",
-                "label": "素材文档",
-                "files": [_persisted_file_info(file_info) for file_info in master_files],
-            },
-            {
-                "role": "related",
-                "label": "资料",
-                "files": [_persisted_file_info(file_info) for file_info in related_files],
-            },
-        ],
-        "preprocessing": {"status": "pending"},
-    }
-    all_files = master_files + related_files
-    first_file = all_files[0]
-    file_size = sum(file_info["file_size"] for file_info in all_files)
-    original_filename = _consistency_title_from_groups(document_meta["groups"])
-    owner_name = identity.display_name or None
-
-    try:
-        db.execute(
-            """
-            INSERT INTO tasks(
-                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-                original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
-                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
-                status, progress, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-            """,
-            (
-                CONSISTENCY_TASK_TYPE,
-                identity.ip,
-                owner_name,
-                identity.subject,
-                owner_name,
-                identity.source,
-                original_filename,
-                first_file["stored_filename"],
-                "多文档",
-                file_size,
-                None,
-                json.dumps(document_meta, ensure_ascii=False),
-                json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
-                model["provider_id"],
-                model["provider_name"],
-                model["model_name"],
-                model["api_base"],
-                model["api_key"],
-                model["request_timeout"],
-                model["max_input_chars"],
-                1 if model["force_disable_thinking"] else 0,
-                model["reasoning_effort"] or None,
-                created_at,
-                created_at,
-            ),
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("创建多文档对照任务失败")
-        flash("创建多文档对照任务失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, CONSISTENCY_TASK_TYPE)
-    return redirect(url_for(_task_list_endpoint(admin_created, CONSISTENCY_TASK_TYPE)))
-
-
-def create_language_consistency_task_for_identity(identity: UserIdentity, *, admin_created: bool):
-    db = get_db()
-    submission_token = _request_submission_token()
-    if _language_consistency_submission_exists(db, identity.subject, submission_token):
-        flash("该跨语种检查任务已提交，无需重复提交。", "success")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-
-    document_a = request.files.get("document_a")
-    document_b = request.files.get("document_b")
-    if not _validate_language_consistency_upload(document_a, "文档A"):
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-    if not _validate_language_consistency_upload(document_b, "文档B"):
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-
-    check_ids = [int(value) for value in request.form.getlist("checks") if value.isdigit()]
-    if not check_ids:
-        flash("请至少选择一个跨语种检查项。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, LANGUAGE_CONSISTENCY_TASK_TYPE)
-    if len(check_snapshots) != len(set(check_ids)):
-        flash("请选择当前可用的跨语种检查项。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-
-    model_id = request.form.get("model_id", "")
-    model = _find_enabled_model(model_id, identity.subject)
-    if model is None:
-        flash("请选择可用模型。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-
-    created_at = now_text()
-    saved_paths = []
-    try:
-        file_a = _save_consistency_upload_group([document_a], identity.subject, created_at, saved_paths)[0]
-        file_b = _save_consistency_upload_group([document_b], identity.subject, created_at, saved_paths)[0]
-    except Exception:
-        _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("准备跨语种检查任务失败")
-        flash("文档上传失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-
-    document_meta = {
-        "groups": [
-            {
-                "role": "document_a",
-                "label": "文档A",
-                "files": [_persisted_file_info(file_a)],
-            },
-            {
-                "role": "document_b",
-                "label": "文档B",
-                "files": [_persisted_file_info(file_b)],
-            },
-        ],
-        "preprocessing": {"status": "pending"},
-    }
-    file_size = file_a["file_size"] + file_b["file_size"]
-    original_filename = f"跨语种检查：{file_a['original_filename']} / {file_b['original_filename']}"
-    owner_name = identity.display_name or None
-
-    try:
-        db.execute(
-            """
-            INSERT INTO tasks(
-                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source, submission_token,
-                original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
-                provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
-                status, progress, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-            """,
-            (
-                LANGUAGE_CONSISTENCY_TASK_TYPE,
-                identity.ip,
-                owner_name,
-                identity.subject,
-                owner_name,
-                identity.source,
-                submission_token,
-                original_filename,
-                file_a["stored_filename"],
-                "双文档",
-                file_size,
-                None,
-                json.dumps(document_meta, ensure_ascii=False),
-                json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
-                model["provider_id"],
-                model["provider_name"],
-                model["model_name"],
-                model["api_base"],
-                model["api_key"],
-                model["request_timeout"],
-                model["max_input_chars"],
-                1 if model["force_disable_thinking"] else 0,
-                model["reasoning_effort"] or None,
-                created_at,
-                created_at,
-            ),
-        )
-        db.commit()
-    except sqlite3.IntegrityError:
-        db.rollback()
-        duplicate = _language_consistency_submission_exists(db, identity.subject, submission_token)
-        _remove_uploaded_files(saved_paths)
-        if duplicate:
-            flash("该跨语种检查任务已提交，无需重复提交。", "success")
-            return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-        current_app.logger.exception("创建跨语种检查任务失败")
-        flash("创建跨语种检查任务失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-    except Exception:
-        db.rollback()
-        _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("创建跨语种检查任务失败")
-        flash("创建跨语种检查任务失败，请稍后再试。", "error")
-        return _back_to_task_form(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)
-    return redirect(url_for(_task_list_endpoint(admin_created, LANGUAGE_CONSISTENCY_TASK_TYPE)))
-
-
-def _request_submission_token() -> str:
-    value = str(request.form.get("submission_token") or "").strip().lower()
-    return value if SUBMISSION_TOKEN_RE.fullmatch(value) else uuid.uuid4().hex
-
-
-def _language_consistency_submission_exists(db, owner_subject: str, submission_token: str) -> bool:
-    return (
-        db.execute(
-            """
-            SELECT 1
-            FROM tasks
-            WHERE task_type = ? AND owner_subject = ? AND submission_token = ?
-            LIMIT 1
-            """,
-            (LANGUAGE_CONSISTENCY_TASK_TYPE, owner_subject, submission_token),
-        ).fetchone()
-        is not None
-    )
-
-
-def _back_to_task_form(admin_created: bool, task_type: str = DOCUMENT_TASK_TYPE):
-    return redirect(url_for(_task_list_endpoint(admin_created, task_type)))
-
-
-def _task_list_endpoint(admin_created: bool, task_type: str | None = DOCUMENT_TASK_TYPE) -> str:
-    if task_type == CONSISTENCY_TASK_TYPE:
-        return "admin_consistency" if admin_created else "user_consistency"
-    if task_type == LANGUAGE_CONSISTENCY_TASK_TYPE:
-        return "admin_language_consistency" if admin_created else "user_language_consistency"
-    if task_type == IMAGE_TASK_TYPE:
-        return "admin_images" if admin_created else "user_images"
-    if task_type == VIDEO_TASK_TYPE:
-        return "admin_videos" if admin_created else "user_videos"
-    return "admin_tasks" if admin_created else "user_tasks"
-
-
-def _selected_uploads(field_name: str):
-    return [upload for upload in request.files.getlist(field_name) if upload and upload.filename]
-
-
-def _validate_consistency_uploads(uploads: list, label: str, max_files: int) -> bool:
-    if not uploads:
-        flash(f"请至少选择 1 个{label}。", "error")
-        return False
-    if len(uploads) > max_files:
-        flash(f"{label}最多上传 {max_files} 个。", "error")
-        return False
-    for upload in uploads:
-        if not allowed_file(upload.filename):
-            flash(f"{label}仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
-            return False
-    return True
-
-
-def _validate_language_consistency_upload(upload, label: str) -> bool:
-    if upload is None or not upload.filename:
-        flash(f"请选择{label}。", "error")
-        return False
-    if not allowed_file(upload.filename):
-        flash(f"{label}仅支持 docx、pdf、txt、md、html、xlsx、xlsm、xls 文件。", "error")
-        return False
-    return True
-
-
-def _save_consistency_upload_group(uploads: list, ip: str, created_at: str, saved_paths: list[Path]) -> list[dict]:
-    files = []
-    for upload in uploads:
-        file_type = extension_of(upload.filename)
-        original_filename = _clean_upload_filename(upload.filename, file_type)
-        stored_filename, destination = _upload_destination(original_filename, ip, created_at, file_type)
-        file_size = _save_uploaded_file(upload, destination)
-        saved_paths.append(destination)
-        files.append(
-            {
-                "original_filename": original_filename,
-                "stored_filename": stored_filename,
-                "file_type": file_type,
-                "file_size": file_size,
-            }
-        )
-    return files
-
-
-def _persisted_file_info(file_info: dict) -> dict:
-    return {
-        "original_filename": file_info["original_filename"],
-        "stored_filename": file_info["stored_filename"],
-        "file_type": file_info["file_type"],
-        "file_size": file_info["file_size"],
-    }
 
 
 def admin_required(view):
@@ -3698,7 +2519,9 @@ def admin_required(view):
 
 def _get_task_or_404(task_id: int):
     join_ip_usernames = _auth_mode() == "ip"
-    ip_username_join = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    ip_username_join = (
+        "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    )
     owner_name_expr = (
         "COALESCE(NULLIF(iu.username, ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
         if join_ip_usernames
@@ -3710,8 +2533,10 @@ def _get_task_or_404(task_id: int):
         mode_clause, mode_params = _mode_subject_filter("t")
         clauses.append(mode_clause)
         params.extend(mode_params)
-    task = get_db().execute(
-        f"""
+    task = (
+        get_db()
+        .execute(
+            f"""
         SELECT t.*,
                live.result_json AS live_result_json,
                live.summary AS live_summary,
@@ -3721,10 +2546,12 @@ def _get_task_or_404(task_id: int):
         FROM tasks t
         LEFT JOIN task_live_results live ON live.task_id = t.id
         {ip_username_join}
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         """,
-        tuple(params),
-    ).fetchone()
+            tuple(params),
+        )
+        .fetchone()
+    )
     if task is None:
         abort(404)
     return _task_with_live_result(task)
@@ -3732,8 +2559,10 @@ def _get_task_or_404(task_id: int):
 
 def _get_user_task(task_id: int):
     identity = _current_user_identity()
-    task = get_db().execute(
-        """
+    task = (
+        get_db()
+        .execute(
+            """
         SELECT t.*,
                live.result_json AS live_result_json,
                live.summary AS live_summary,
@@ -3744,8 +2573,10 @@ def _get_user_task(task_id: int):
         LEFT JOIN task_live_results live ON live.task_id = t.id
         WHERE t.id = ? AND t.owner_subject = ?
         """,
-        (task_id, identity.subject),
-    ).fetchone()
+            (task_id, identity.subject),
+        )
+        .fetchone()
+    )
     if task is None:
         abort(404)
     return _task_with_live_result(task)
@@ -3867,7 +2698,9 @@ def _retry_task(task) -> bool:
 
     db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
     db.commit()
-    flash(f"已重新加入队列，将只重跑 {len(retry_check_codes)} 个失败检查项。", "success")
+    flash(
+        f"已重新加入队列，将只重跑 {len(retry_check_codes)} 个失败检查项。", "success"
+    )
     return True
 
 
@@ -3930,7 +2763,9 @@ def _bulk_delete_tasks(task_loader, *, admin_created: bool):
     raw_task_ids = request.form.getlist("task_ids")
     if len(raw_task_ids) > MAX_BULK_DELETE_TASKS:
         flash(f"每次最多批量删除 {MAX_BULK_DELETE_TASKS} 个任务。", "error")
-        return redirect(_task_action_redirect("admin_tasks" if admin_created else "user_tasks"))
+        return redirect(
+            _task_action_redirect("admin_tasks" if admin_created else "user_tasks")
+        )
 
     task_ids = []
     for raw_task_id in raw_task_ids:
@@ -3943,7 +2778,9 @@ def _bulk_delete_tasks(task_loader, *, admin_created: bool):
 
     if not task_ids:
         flash("请先选择需要删除的任务。", "error")
-        return redirect(_task_action_redirect("admin_tasks" if admin_created else "user_tasks"))
+        return redirect(
+            _task_action_redirect("admin_tasks" if admin_created else "user_tasks")
+        )
 
     tasks = [task_loader(task_id) for task_id in task_ids]
     fallback_endpoint = _task_list_endpoint(admin_created, tasks[0]["task_type"])
@@ -3968,10 +2805,17 @@ def _bulk_delete_tasks(task_loader, *, admin_created: bool):
             deleted_count += 1
 
     if deleted_count:
-        queued_message = f"，其中 {queued_deleted_count} 个排队任务已取消" if queued_deleted_count else ""
+        queued_message = (
+            f"，其中 {queued_deleted_count} 个排队任务已取消"
+            if queued_deleted_count
+            else ""
+        )
         flash(f"已批量删除 {deleted_count} 个任务{queued_message}。", "success")
     if skipped_count:
-        flash(f"已跳过 {skipped_count} 个状态已变化或正在运行的任务，请先取消后再删除。", "error")
+        flash(
+            f"已跳过 {skipped_count} 个状态已变化或正在运行的任务，请先取消后再删除。",
+            "error",
+        )
     return redirect(redirect_url)
 
 
@@ -3986,7 +2830,9 @@ def _download_task_document(task, fallback_endpoint: str):
     upload_path = _task_upload_path(task)
     if not upload_path.is_file():
         flash("原文件已清理或缺失，无法下载。", "error")
-        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
+        return redirect(
+            request.referrer or url_for(fallback_endpoint, task_id=task["id"])
+        )
     return send_file(
         upload_path,
         as_attachment=True,
@@ -4008,7 +2854,9 @@ def _stream_task_video(task):
     upload_path = _task_upload_path(task)
     if not upload_path.is_file():
         abort(404)
-    mimetype = mimetypes.guess_type(task["original_filename"])[0] or "application/octet-stream"
+    mimetype = (
+        mimetypes.guess_type(task["original_filename"])[0] or "application/octet-stream"
+    )
     return send_file(
         upload_path,
         mimetype=mimetype,
@@ -4053,7 +2901,8 @@ def _attach_report_media_urls(results: list[dict], task, endpoint: str) -> None:
     available_items = [
         item
         for item in _task_image_items(task)
-        if (media_path := image_path_from_item(_image_folder(), item)) is not None and media_path.is_file()
+        if (media_path := image_path_from_item(_image_folder(), item)) is not None
+        and media_path.is_file()
     ]
     available_ids = {
         value
@@ -4068,1977 +2917,15 @@ def _attach_report_media_urls(results: list[dict], task, endpoint: str) -> None:
     if not available_ids:
         return
     for result in results:
-        for report_item in list(result.get("report_items") or []) + list(result.get("suppressed_report_items") or []):
+        for report_item in list(result.get("report_items") or []) + list(
+            result.get("suppressed_report_items") or []
+        ):
             for ref in report_item.get("evidence_refs") or []:
                 media_id = str(ref.get("id") or ref.get("filename") or "").strip()
                 if media_id in available_ids:
-                    ref["url"] = url_for(endpoint, task_id=task["id"], media_id=media_id)
-
-
-def _remove_uploaded_file(path: Path):
-    ok, error = remove_file(path)
-    if not ok:
-        current_app.logger.warning("删除文件失败 path=%s error=%s", path, error)
-    return ok, error
-
-
-def _save_uploaded_file(upload, destination: Path) -> int:
-    try:
-        upload.save(destination)
-        return os.path.getsize(destination)
-    except Exception:
-        _remove_uploaded_file(destination)
-        raise
-
-
-def _remove_uploaded_files(paths: list[Path]):
-    failures = []
-    for path in paths:
-        ok, error = _remove_uploaded_file(path)
-        if not ok:
-            failures.append((path, error))
-    return failures
-
-
-def _remove_directory(path: Path):
-    ok, error = remove_directory_tree(path)
-    if not ok:
-        current_app.logger.warning("删除目录失败 path=%s error=%s", path, error)
-    return ok
-
-
-def _remove_empty_directory(path: Path):
-    return cleanup_remove_empty_directory(path)
-
-
-def _task_upload_path(task) -> Path:
-    return Path(current_app.config["UPLOAD_FOLDER"]) / Path(task["stored_filename"]).name
-
-
-def _task_upload_paths(task) -> list[Path]:
-    paths = _task_source_file_paths(task)
-    for image in _task_image_items(task):
-        image_path = image_path_from_item(_image_folder(), image)
-        if image_path is not None:
-            paths.append(image_path)
-    return paths
-
-
-def _task_source_file_paths(task) -> list[Path]:
-    groups = _task_document_groups(task)
-    upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
-    if not groups:
-        return [_task_upload_path(task)]
-
-    paths = []
-    for group in groups:
-        for file_info in group["files"]:
-            stored_filename = Path(str(file_info.get("stored_filename") or "")).name
-            if stored_filename:
-                paths.append(upload_folder / stored_filename)
-    return paths
-
-
-def _task_source_files_available(task) -> bool:
-    groups = _task_document_groups(task)
-    if task["task_type"] in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE} and not groups:
-        return False
-    if groups and any(
-        not Path(str(file_info.get("stored_filename") or "")).name
-        for group in groups
-        for file_info in group["files"]
-    ):
-        return False
-    paths = _task_source_file_paths(task)
-    return bool(paths) and all(path.is_file() for path in paths)
-
-
-def _task_document_groups(task) -> list[dict]:
-    return document_groups_from_meta(task["document_meta_json"])
-
-
-def _task_image_items(task) -> list[dict]:
-    raw = task["document_meta_json"]
-    return image_items_from_meta(raw) + image_items_from_meta(raw, "page_images") + image_items_from_meta(raw, "frames")
-
-
-def _image_folder() -> Path:
-    configured = current_app.config.get("IMAGE_FOLDER")
-    if configured:
-        return Path(configured)
-    return default_image_folder(current_app.config["UPLOAD_FOLDER"])
-
-
-def _int_setting(key: str, default: int) -> int:
-    value = get_setting(key, default)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _download_task_documents_zip(task, fallback_endpoint: str):
-    groups = _task_document_groups(task)
-    if not groups:
-        flash("文档信息缺失，无法下载。", "error")
-        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
-    if not _task_source_files_available(task):
-        flash("部分或全部原文件已清理或缺失，无法完整下载。", "error")
-        return redirect(request.referrer or url_for(fallback_endpoint, task_id=task["id"]))
-
-    upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        used_names = set()
-        for group in groups:
-            for file_info in group["files"]:
-                stored_filename = Path(str(file_info.get("stored_filename") or "")).name
-                if not stored_filename:
-                    continue
-                upload_path = upload_folder / stored_filename
-                archive_name = _unique_archive_name(
-                    used_names,
-                    f"{group['label']}/{Path(str(file_info.get('original_filename') or stored_filename)).name}",
-                )
-                archive.write(upload_path, archive_name)
-    buffer.seek(0)
-    return send_file(
-        buffer,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"{task['task_type'] or 'document-check'}-{task['id']}-documents.zip",
-    )
-
-
-def _unique_archive_name(used_names: set[str], archive_name: str) -> str:
-    archive_name = archive_name.strip("/\\") or "document"
-    if archive_name not in used_names:
-        used_names.add(archive_name)
-        return archive_name
-    path = Path(archive_name)
-    parent = str(path.parent)
-    stem = path.stem or "document"
-    suffix = path.suffix
-    for index in range(2, 1000):
-        candidate_name = f"{stem}-{index}{suffix}"
-        candidate = f"{parent}/{candidate_name}" if parent and parent != "." else candidate_name
-        if candidate not in used_names:
-            used_names.add(candidate)
-            return candidate
-    raise RuntimeError("压缩包内文件名过多，无法生成唯一名称")
-
-
-def _clean_upload_filename(filename: str, file_type: str) -> str:
-    name = Path(filename.replace("\\", "/")).name.strip()
-    name = _safe_filename_part(name, f"document.{file_type}")
-    if "." not in name:
-        name = f"{name}.{file_type}"
-    return name
-
-
-def _upload_destination(original_filename: str, ip: str, created_at: str, file_type: str) -> tuple[str, Path]:
-    upload_dir = Path(current_app.config["UPLOAD_FOLDER"])
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = re.sub(r"\D", "", created_at) or now_text().replace("-", "").replace(":", "").replace(" ", "")
-    raw_stem = _limit_utf8_bytes(_safe_filename_part(Path(original_filename).stem, "document"), 140)
-    raw_ip_part = _limit_utf8_bytes(_safe_filename_part(ip, "0.0.0.0"), 80)
-    token = uuid.uuid4().hex[:12]
-    stored_filename = _stored_upload_filename(raw_stem, raw_ip_part, timestamp, token, file_type, upload_dir)
-    destination = upload_dir / stored_filename
-    if not destination.exists():
-        return stored_filename, destination
-
-    for index in range(2, 1000):
-        candidate = _stored_upload_filename(raw_stem, raw_ip_part, timestamp, token, file_type, upload_dir, index=index)
-        destination = upload_dir / candidate
-        if not destination.exists():
-            return candidate, destination
-    raise RuntimeError("无法保存上传文档，请稍后再试")
-
-
-def _stored_upload_filename(
-    stem: str,
-    ip_part: str,
-    timestamp: str,
-    token: str,
-    file_type: str,
-    upload_dir: Path,
-    *,
-    index: int | None = None,
-) -> str:
-    budget = _upload_filename_char_budget(upload_dir)
-    index_suffix = f"-{index}" if index else ""
-    fixed_suffix = f"__{timestamp}_{token}{index_suffix}.{file_type}"
-    if budget < len(fixed_suffix) + 2:
-        raise RuntimeError("上传目录路径过长，无法生成可保存文件名，请将项目目录移动到更短路径后重试。")
-    max_ip_chars = max(1, budget - len(fixed_suffix) - 1)
-    ip_part = _limit_chars(ip_part, max_ip_chars)
-    suffix = f"_{ip_part}_{timestamp}_{token}{index_suffix}.{file_type}"
-    max_stem_chars = max(1, budget - len(suffix))
-    return f"{_limit_chars(stem, max_stem_chars)}{suffix}"
-
-
-def _upload_filename_char_budget(upload_dir: Path) -> int:
-    try:
-        upload_dir_text = str(upload_dir.resolve())
-    except OSError:
-        upload_dir_text = str(upload_dir.absolute())
-    path_budget = UPLOAD_PATH_SAFE_CHARS - len(upload_dir_text) - 1
-    return min(UPLOAD_FILENAME_SAFE_CHARS, path_budget)
-
-
-def _safe_filename_part(value: str, fallback: str) -> str:
-    value = INVALID_FILENAME_CHARS.sub("_", value).strip(" ._")
-    value = re.sub(r"_+", "_", value)
-    return value or fallback
-
-
-def _limit_chars(value: str, max_chars: int) -> str:
-    value = str(value or "").strip(" ._")
-    if max_chars <= 0:
-        return "d"
-    value = value[:max_chars].strip(" ._")
-    if value:
-        return value
-    return "document"[:max_chars] or "d"
-
-
-def _limit_utf8_bytes(value: str, max_bytes: int) -> str:
-    while len(value.encode("utf-8")) > max_bytes:
-        value = value[:-1]
-    return value or "document"
-
-
-def _is_media_report_task_type(task_type: str | None) -> bool:
-    return (task_type or DOCUMENT_TASK_TYPE) in {IMAGE_TASK_TYPE, VIDEO_TASK_TYPE}
-
-
-def _uses_compact_media_report(task_type: str | None) -> bool:
-    return (task_type or DOCUMENT_TASK_TYPE) == IMAGE_TASK_TYPE
-
-
-def _report_item_fields_for_task(task_type: str | None) -> tuple[tuple[str, str], ...]:
-    if _uses_compact_media_report(task_type):
-        return MEDIA_REPORT_ITEM_FIELDS
-    return REPORT_ITEM_FIELDS
-
-
-def _media_report_item_text(item: dict) -> str:
-    description = str(item.get("description") or "").strip()
-    parts = [description] if description else []
-    for field, label in MEDIA_REPORT_ITEM_DETAIL_FIELDS:
-        value = str(item.get(field) or "").strip()
-        if value:
-            parts.append(f"{label}：{value}")
-    return "\n".join(parts).strip()
-
-
-def _task_results(task):
-    return _prepare_task_results(
-        _raw_task_results(task),
-        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
-        task_id=task["id"],
-        record_suppression_hits=True,
-    )
-
-
-def _raw_task_results(task) -> list[dict]:
-    return _parse_result_json(task["result_json"])
-
-
-def _parse_result_json(result_json) -> list[dict]:
-    if not result_json:
-        return []
-    try:
-        data = json.loads(result_json)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, list):
-        return []
-    return [item for item in data if isinstance(item, dict)]
-
-
-def _prepare_task_results(
-    results: list[dict],
-    *,
-    task_type: str | None = None,
-    task_id: int | None = None,
-    record_suppression_hits: bool = False,
-    suppression_rules: dict[str, list[dict]] | None = None,
-) -> list[dict]:
-    prepared = []
-    if suppression_rules is None:
-        suppression_rules = _enabled_report_suppression_rules(task_type) if task_type else {}
-    for result in results:
-        item = dict(result)
-        result_code = str(item.get("code") or "")
-        structured_report = _result_structured_report(item)
-        report_items = _result_report_items(item, structured_report)
-        filtered_visual_missing_count = 0
-        if task_type in {DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
-            retained_report_items = []
-            for report_item in report_items:
-                if is_unsupported_visual_missing_item(report_item):
-                    filtered_visual_missing_count += 1
-                else:
-                    retained_report_items.append(report_item)
-            report_items = retained_report_items
-        classifications = item.get("item_classifications")
-        if not isinstance(classifications, dict):
-            classifications = {}
-        report_items = [
-            report_item
-            for report_item in report_items
-            if report_item.get("type") != "non_issue"
-            or _normalize_report_item_type(classifications.get(report_item.get("id"))) is not None
-        ]
-        original_report_item_count = len(report_items)
-        report_items = _deduplicate_report_items(report_items)
-        report_items.sort(key=_report_item_priority_key)
-        duplicate_count = original_report_item_count - len(report_items)
-        report_items, suppressed_items = _apply_report_suppression(
-            task_type=task_type,
-            task_id=task_id,
-            result_code=result_code,
-            report_items=report_items,
-            suppression_rules=suppression_rules,
-            record_hits=record_suppression_hits,
-        )
-        report_items, report_limit = _limit_ranked_report_items(
-            report_items,
-            issue_output_limit=item.get("issue_output_limit"),
-            original_count=original_report_item_count,
-            duplicate_count=duplicate_count,
-        )
-        acceptances = item.get("item_acceptances")
-        if not isinstance(acceptances, dict):
-            acceptances = {}
-        for report_item in report_items + suppressed_items:
-            saved_type = classifications.get(report_item["id"])
-            report_item["type"] = _normalize_report_item_type(saved_type) or report_item["type"]
-            report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
-            acceptance = _normalize_report_acceptance(acceptances.get(report_item["id"]))
-            report_item.update(acceptance)
-            report_item["media_summary"] = _media_report_item_text(report_item)
-        for display_index, report_item in enumerate(report_items, start=1):
-            report_item["index"] = display_index
-        item["result_summary"] = (
-            guarded_report_summary(report_items)
-            if filtered_visual_missing_count
-            else _result_report_summary(item, structured_report)
-        )
-        item["report_items"] = report_items
-        item["report_limit"] = report_limit
-        item["suppressed_report_items"] = suppressed_items
-        item["report_counts"] = _count_report_items(report_items, suppressed_count=len(suppressed_items))
-        prepared.append(item)
-    return prepared
-
-
-def _enabled_report_suppression_rules(task_type: str | None) -> dict[str, list[dict]]:
-    if not task_type:
-        return {}
-    rows = get_db().execute(
-        """
-        SELECT id, check_code, reason, item_json
-        FROM report_suppression_rules
-        WHERE task_type = ? AND enabled = 1
-        """,
-        (task_type,),
-    ).fetchall()
-    rules = {}
-    for row in rows:
-        snapshot = _parse_report_suppression_item_json(row["item_json"])
-        description = _report_suppression_description(snapshot)
-        if not description:
-            continue
-        rules.setdefault(row["check_code"], []).append(
-            {
-                "id": row["id"],
-                "reason": row["reason"] or "",
-                "description": description,
-            }
-        )
-    return rules
-
-
-def _apply_report_suppression(
-    *,
-    task_type: str | None,
-    task_id: int | None,
-    result_code: str,
-    report_items: list[dict],
-    suppression_rules: dict[str, list[dict]],
-    record_hits: bool,
-) -> tuple[list[dict], list[dict]]:
-    if not task_type or not suppression_rules:
-        return report_items, []
-
-    visible_items = []
-    suppressed_items = []
-    db = get_db() if record_hits and task_id is not None else None
-    for item in report_items:
-        rule, similarity = _matching_report_suppression_rule(
-            item,
-            suppression_rules.get(result_code, []),
-        )
-        if rule is None:
-            visible_items.append(item)
-            continue
-        suppressed = dict(item)
-        suppressed["suppression_rule_id"] = rule["id"]
-        suppressed["suppression_reason"] = rule["reason"]
-        suppressed["suppression_similarity"] = similarity
-        suppressed_items.append(suppressed)
-        if db is not None:
-            _record_report_suppression_hit(
-                db,
-                rule_id=int(rule["id"]),
-                task_id=int(task_id),
-                result_code=result_code,
-                item=suppressed,
-            )
-    return visible_items, suppressed_items
-
-
-def _matching_report_suppression_rule(item: dict, rules: list[dict]) -> tuple[dict | None, float]:
-    description = _report_suppression_description(item)
-    if not description:
-        return None, 0.0
-    best_rule = None
-    best_similarity = 0.0
-    for rule in rules:
-        similarity = _report_description_similarity(description, rule.get("description"))
-        if similarity > best_similarity:
-            best_rule = rule
-            best_similarity = similarity
-    if best_similarity < REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD:
-        return None, best_similarity
-    return best_rule, best_similarity
-
-
-def _report_description_similarity(left, right) -> float:
-    left_text = _normalize_report_description(left)
-    right_text = _normalize_report_description(right)
-    if not left_text or not right_text:
-        return 0.0
-    if left_text == right_text:
-        return 1.0
-    shorter, longer = sorted((left_text, right_text), key=len)
-    if len(shorter) >= 6 and shorter in longer:
-        return 0.95
-    if len(shorter) < 4:
-        return 0.0
-    sequence_score = SequenceMatcher(None, left_text, right_text).ratio()
-    character_score = _report_description_dice(set(left_text), set(right_text)) * 0.9
-    bigram_score = _report_description_dice(
-        _report_description_ngrams(left_text, 2),
-        _report_description_ngrams(right_text, 2),
-    )
-    return max(sequence_score, character_score, bigram_score)
-
-
-def _normalize_report_description(value) -> str:
-    text = str(value or "").strip().lower()
-    for source, replacement in REPORT_SUPPRESSION_DESCRIPTION_REPLACEMENTS:
-        text = text.replace(source, replacement)
-    return re.sub(r"[\W_]+", "", text)
-
-
-def _report_description_ngrams(text: str, size: int) -> set[str]:
-    if len(text) < size:
-        return {text} if text else set()
-    return {text[index : index + size] for index in range(len(text) - size + 1)}
-
-
-def _report_description_dice(left: set[str], right: set[str]) -> float:
-    if not left or not right:
-        return 0.0
-    return 2 * len(left & right) / (len(left) + len(right))
-
-
-def _record_report_suppression_hit(db, *, rule_id: int, task_id: int, result_code: str, item: dict):
-    now = now_text()
-    cursor = db.execute(
-        """
-        INSERT OR IGNORE INTO report_suppression_hits(rule_id, task_id, result_code, item_id, item_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            rule_id,
-            task_id,
-            result_code,
-            str(item.get("id") or ""),
-            json.dumps(_report_suppression_item_snapshot(item), ensure_ascii=False),
-            now,
-        ),
-    )
-    if cursor.rowcount:
-        db.execute(
-            """
-            UPDATE report_suppression_rules
-            SET hit_count = hit_count + 1, last_hit_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (now, now, rule_id),
-        )
-        db.commit()
-
-
-def _maybe_create_report_suppression_candidate(
-    db,
-    *,
-    task,
-    result_code: str,
-    result: dict,
-    item_id: str,
-    item_type: str,
-    acceptance_status: str | None,
-    rejection_reason: str,
-    rejection_note: str,
-) -> bool:
-    if (
-        item_type != "non_issue"
-        or acceptance_status != "rejected"
-        or rejection_reason not in REPORT_SUPPRESSION_REJECTION_REASONS
-    ):
-        return False
-
-    report_item = next((item for item in _result_report_items(result) if item.get("id") == item_id), None)
-    if report_item is None:
-        return False
-
-    task_type = task["task_type"] or DOCUMENT_TASK_TYPE
-    fingerprint = _report_item_suppression_fingerprint(task_type, result_code, report_item)
-    now = now_text()
-    reason = REPORT_REJECTION_REASONS.get(rejection_reason, "") or rejection_note
-    snapshot = _report_suppression_item_snapshot(report_item)
-    db.execute(
-        """
-        INSERT INTO report_suppression_rules(
-            task_type, check_code, fingerprint, item_json, reason, enabled,
-            source_task_id, source_result_code, source_item_id,
-            hit_count, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?)
-        ON CONFLICT(task_type, check_code, fingerprint) DO UPDATE SET
-            item_json = excluded.item_json,
-            reason = CASE
-                WHEN report_suppression_rules.reason IS NULL OR report_suppression_rules.reason = ''
-                THEN excluded.reason
-                ELSE report_suppression_rules.reason
-            END,
-            updated_at = excluded.updated_at
-        """,
-        (
-            task_type,
-            result_code,
-            fingerprint,
-            json.dumps(snapshot, ensure_ascii=False),
-            reason,
-            task["id"],
-            result_code,
-            item_id,
-            now,
-            now,
-        ),
-    )
-    return True
-
-
-def _report_item_suppression_fingerprint(task_type: str, result_code: str, item: dict) -> str:
-    source = {
-        "task_type": str(task_type or ""),
-        "check_code": str(result_code or ""),
-        "description": _report_suppression_description(item),
-    }
-    raw = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _report_suppression_description(item: dict) -> str:
-    return _normalize_suppression_text(item.get("description") or item.get("text"))
-
-
-def _report_suppression_item_snapshot(item: dict) -> dict:
-    fields = _report_suppression_item_fields(item)
-    return {
-        **fields,
-        "text": _normalize_suppression_text(item.get("text")),
-        "type": _normalize_report_item_type(item.get("type")) or "issue",
-    }
-
-
-def _report_suppression_item_fields(item: dict) -> dict:
-    return {
-        field: _normalize_suppression_text(item.get(field))
-        for field in REPORT_SUPPRESSION_FIELDS
-    }
-
-
-def _normalize_suppression_text(value) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip())
-
-
-def _result_report_items(result: dict, structured_report: dict | None = None) -> list[dict]:
-    code = str(result.get("code") or "")
-    if structured_report is None:
-        structured_report = _result_structured_report(result)
-    if structured_report is not None:
-        return _structured_report_items(code, structured_report)
-
-    text = str(result.get("result") or "").strip()
-    if not text:
-        return []
-    chunks = _extract_report_item_chunks(text) or [text]
-    items = []
-    for index, chunk in enumerate(chunks, start=1):
-        item_text = chunk.strip()
-        if not item_text:
-            continue
-        fields = _legacy_report_item_fields(item_text)
-        items.append(
-            {
-                "id": _report_item_id(code, index, item_text),
-                "index": index,
-                "text": item_text,
-                **fields,
-                "type": _infer_report_item_type(item_text),
-            }
-        )
-    return items
-
-
-def _result_structured_report(result: dict) -> dict | None:
-    for key in ("structured_report", "report_json"):
-        structured = _normalize_structured_report_payload(result.get(key))
-        if structured is not None:
-            return structured
-
-    structured_items = result.get("structured_items")
-    if isinstance(structured_items, list):
-        summary = _first_report_field(result, REPORT_JSON_SUMMARY_KEYS)
-        return {"summary": summary, "items": structured_items}
-
-    return _normalize_structured_report_payload(result.get("result"))
-
-
-def _result_report_summary(result: dict, structured_report: dict | None) -> str:
-    if structured_report is not None:
-        return str(structured_report.get("summary") or "").strip()
-    return ""
-
-
-def _normalize_structured_report_payload(value) -> dict | None:
-    payload = value
-    if isinstance(value, str):
-        payload = _parse_structured_report_json(value)
-    if isinstance(payload, list):
-        return {"summary": "", "items": payload}
-    if not isinstance(payload, dict):
-        return None
-
-    items = None
-    for key in REPORT_JSON_ITEM_KEYS:
-        candidate = payload.get(key)
-        if isinstance(candidate, list):
-            items = candidate
-            break
-        if isinstance(candidate, str):
-            parsed_items = _parse_structured_report_json(candidate)
-            if isinstance(parsed_items, list):
-                items = parsed_items
-                break
-    summary = _first_report_field(payload, REPORT_JSON_SUMMARY_KEYS)
-    if items is None:
-        if any(_first_report_field(payload, aliases) for aliases in REPORT_FIELD_ALIASES.values()):
-            items = [payload]
-        elif summary:
-            items = []
-        else:
-            return None
-    return {"summary": summary, "items": items}
-
-
-def _parse_structured_report_json(text: str, depth: int = 0):
-    text = str(text or "").strip()
-    if not text:
-        return None
-    for candidate in _structured_json_candidates(text):
-        parsed = _load_structured_json_candidate(candidate, depth)
-        if isinstance(parsed, (dict, list)):
-            return parsed
-    return None
-
-
-def _load_structured_json_candidate(candidate: str, depth: int):
-    if depth > 3:
-        return None
-    variants = _json_candidate_variants(candidate)
-    for variant in variants:
-        try:
-            parsed = json.loads(variant)
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if isinstance(parsed, str):
-            nested = _parse_structured_report_json(parsed, depth + 1)
-            if nested is not None:
-                return nested
-            continue
-        return parsed
-    for variant in variants:
-        parsed = _parse_truncated_structured_report_candidate(variant)
-        if parsed is not None:
-            return parsed
-    return None
-
-
-def _parse_truncated_structured_report_candidate(candidate: str) -> dict | None:
-    text = str(candidate or "").strip()
-    object_start = text.find("{")
-    if object_start < 0:
-        return None
-    text = text[object_start:]
-
-    item_array_matches = []
-    for key in REPORT_JSON_ITEM_KEYS:
-        match = re.search(rf'"{re.escape(key)}"\s*:\s*\[', text)
-        if match:
-            item_array_matches.append((match.start(), match.end() - 1, key))
-    if not item_array_matches:
-        return None
-
-    _, array_start, item_key = min(item_array_matches)
-    try:
-        payload = json.loads(f"{text[:array_start + 1]}]}}")
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-
-    decoder = json.JSONDecoder()
-    items = []
-    position = array_start + 1
-    while position < len(text):
-        while position < len(text) and (text[position].isspace() or text[position] == ","):
-            position += 1
-        if position >= len(text) or text[position] == "]":
-            break
-        try:
-            item, end = decoder.raw_decode(text, position)
-        except json.JSONDecodeError:
-            break
-        if isinstance(item, (dict, str)):
-            items.append(item)
-        position = end
-
-    if not items:
-        return None
-    payload[item_key] = items
-    return payload
-
-
-def _json_candidate_variants(candidate: str) -> list[str]:
-    raw = str(candidate or "").strip()
-    if not raw:
-        return []
-    variants = [raw]
-    repaired = _escape_json_string_control_chars(raw)
-    if repaired != raw:
-        variants.append(repaired)
-    for variant in tuple(variants):
-        repaired = _repair_common_json_model_errors(variant)
-        if repaired != variant and repaired not in variants:
-            variants.append(repaired)
-    return variants
-
-
-def _repair_common_json_model_errors(text: str) -> str:
-    status_values = "|".join(re.escape(value) for value in REPORT_ITEM_TYPES)
-    status_keys = r"status|classification|item_type|type"
-    return re.sub(
-        rf'("(?:(?:{status_keys}))"\s*:\s*")({status_values})"\s*:\s*"({status_values})(")',
-        r"\1\3\4",
-        str(text or ""),
-    )
-
-
-def _escape_json_string_control_chars(text: str) -> str:
-    result = []
-    in_string = False
-    escaped = False
-    for char in str(text or ""):
-        if escaped:
-            result.append(char)
-            escaped = False
-            continue
-        if char == "\\":
-            result.append(char)
-            escaped = True
-            continue
-        if char == '"':
-            in_string = not in_string
-            result.append(char)
-            continue
-        if in_string and char in {"\n", "\r", "\t"}:
-            result.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[char])
-            continue
-        result.append(char)
-    return "".join(result)
-
-
-def _structured_json_candidates(text: str) -> list[str]:
-    candidates = [text]
-    for match in re.finditer(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL):
-        candidates.append(match.group(1).strip())
-    object_start = text.find("{")
-    object_end = text.rfind("}")
-    if object_start >= 0 and object_end > object_start:
-        candidates.append(text[object_start : object_end + 1])
-    array_start = text.find("[")
-    array_end = text.rfind("]")
-    if array_start >= 0 and array_end > array_start:
-        candidates.append(text[array_start : array_end + 1])
-
-    seen = set()
-    unique = []
-    for candidate in candidates:
-        candidate = str(candidate or "").strip()
-        if candidate and candidate not in seen:
-            seen.add(candidate)
-            unique.append(candidate)
-    return unique
-
-
-def _structured_report_items(result_code: str, structured_report: dict) -> list[dict]:
-    raw_items = structured_report.get("items")
-    if not isinstance(raw_items, list):
-        return []
-
-    items = []
-    for raw_item in raw_items:
-        fields = _normalize_structured_report_item(raw_item)
-        if not fields:
-            continue
-        index = len(items) + 1
-        item_text = _structured_report_item_text(fields)
-        item_type = fields.pop("type", "") or _infer_report_item_type(item_text)
-        explicit_id = _structured_report_item_id(raw_item)
-        items.append(
-            {
-                "id": explicit_id or _report_item_id(result_code, index, item_text),
-                "index": index,
-                "text": item_text,
-                **fields,
-                "type": item_type,
-            }
-        )
-    return items
-
-
-def _normalize_structured_report_item(raw_item) -> dict:
-    if isinstance(raw_item, str):
-        text = raw_item.strip()
-        parsed = _parse_structured_report_json(text)
-        if isinstance(parsed, dict):
-            return _normalize_structured_report_item(parsed)
-        return {
-            "severity": "",
-            "severity_label": "",
-            "confidence": "",
-            "confidence_label": "",
-            "category": "",
-            "location": "",
-            "excerpt": "",
-            "description": text,
-            "impact": "",
-            "suggestion": "",
-            "evidence_refs": [],
-            "type": _infer_report_item_type(text),
-        } if text else {}
-    if not isinstance(raw_item, dict):
-        return {}
-
-    status = _normalize_report_item_status(_first_report_field(raw_item, REPORT_STATUS_KEYS))
-    fields = {
-        field: _first_report_field(raw_item, aliases)
-        for field, aliases in REPORT_FIELD_ALIASES.items()
-    }
-    fields["severity"] = _normalize_report_severity(fields.get("severity"))
-    fields["severity_label"] = REPORT_SEVERITY_LABELS.get(fields["severity"], "")
-    fields["confidence"] = _normalize_report_confidence(fields.get("confidence"))
-    fields["confidence_label"] = REPORT_CONFIDENCE_LABELS.get(fields["confidence"], "")
-    fields["evidence_refs"] = _normalize_report_evidence_refs(raw_item.get("evidence_refs"))
-    if _looks_like_status_only(fields["category"]):
-        status = status or _normalize_report_item_status(fields["category"])
-        fields["category"] = ""
-    if not any(fields.get(field) for field in REPORT_SUPPRESSION_FIELDS):
-        fields["description"] = _report_field_text(raw_item)
-    item_text = _structured_report_item_text(fields)
-    fields["type"] = "non_issue" if _is_no_action_report_item(fields) else status or _infer_report_item_type(item_text)
-    return fields
-
-
-def _structured_report_item_id(raw_item) -> str:
-    if not isinstance(raw_item, dict):
-        return ""
-    value = str(raw_item.get("id") or raw_item.get("item_id") or raw_item.get("report_item_id") or "").strip()
-    if not value or len(value) > 128:
-        return ""
-    return value if re.fullmatch(r"[A-Za-z0-9._:-]+", value) else ""
-
-
-def _normalize_report_evidence_refs(value) -> list[dict]:
-    if not isinstance(value, list):
-        return []
-    refs = []
-    seen = set()
-    for raw_ref in value:
-        if not isinstance(raw_ref, dict):
-            continue
-        media_id = str(raw_ref.get("id") or raw_ref.get("frame_id") or raw_ref.get("filename") or "").strip()
-        filename = str(raw_ref.get("filename") or "").strip()
-        position = str(raw_ref.get("position") or raw_ref.get("timestamp") or "").strip()
-        if not media_id and not filename and not position:
-            continue
-        key = media_id or filename or position
-        if key in seen:
-            continue
-        seen.add(key)
-        timestamp_seconds = raw_ref.get("timestamp_seconds")
-        try:
-            timestamp_seconds = None if timestamp_seconds is None else max(0.0, float(timestamp_seconds))
-        except (TypeError, ValueError):
-            timestamp_seconds = None
-        refs.append(
-            {
-                "id": media_id,
-                "filename": filename,
-                "position": position,
-                "timestamp_seconds": timestamp_seconds,
-                "relative_path": str(raw_ref.get("relative_path") or "").strip(),
-                "mime_type": str(raw_ref.get("mime_type") or "").strip(),
-                "kind": str(raw_ref.get("kind") or "").strip(),
-            }
-        )
-    refs.sort(
-        key=lambda ref: (
-            ref.get("timestamp_seconds") is None,
-            float(ref.get("timestamp_seconds") or 0),
-            str(ref.get("filename") or ""),
-        )
-    )
-    return refs
-
-
-def _normalize_report_severity(value) -> str:
-    compact = _compact_report_text(value)
-    aliases = {
-        "critical": "critical",
-        "fatal": "critical",
-        "blocker": "critical",
-        "致命": "critical",
-        "灾难性": "critical",
-        "极高": "critical",
-        "high": "high",
-        "严重": "high",
-        "重大": "high",
-        "高": "high",
-        "medium": "medium",
-        "middle": "medium",
-        "moderate": "medium",
-        "一般": "medium",
-        "中": "medium",
-        "low": "low",
-        "minor": "low",
-        "轻微": "low",
-        "低": "low",
-    }
-    return aliases.get(compact, "")
-
-
-def _normalize_report_confidence(value) -> str:
-    compact = _compact_report_text(value)
-    aliases = {
-        "high": "high",
-        "certain": "high",
-        "明确": "high",
-        "高": "high",
-        "medium": "medium",
-        "middle": "medium",
-        "moderate": "medium",
-        "较高": "medium",
-        "中": "medium",
-        "low": "low",
-        "uncertain": "low",
-        "较低": "low",
-        "低": "low",
-    }
-    return aliases.get(compact, "")
-
-
-def _deduplicate_report_items(report_items: list[dict]) -> list[dict]:
-    unique_items = []
-    items_by_key = {}
-    for report_item in report_items:
-        key = (
-            _normalize_suppression_text(report_item.get("type")),
-            _normalize_suppression_text(report_item.get("category")),
-            _normalize_suppression_text(report_item.get("excerpt")),
-            _normalize_suppression_text(report_item.get("description")),
-            _normalize_suppression_text(report_item.get("impact")),
-            _normalize_suppression_text(report_item.get("suggestion")),
-        )
-        if not any(key[1:]):
-            unique_items.append(report_item)
-            continue
-        existing = items_by_key.get(key)
-        if existing is None:
-            items_by_key[key] = report_item
-            unique_items.append(report_item)
-            continue
-        existing["location"] = _merge_report_field_values(existing.get("location"), report_item.get("location"))
-        existing["evidence_refs"] = _merge_report_evidence_refs(
-            existing.get("evidence_refs"),
-            report_item.get("evidence_refs"),
-        )
-        if _report_item_priority_key(report_item) < _report_item_priority_key(existing):
-            existing["severity"] = report_item.get("severity", "")
-            existing["severity_label"] = report_item.get("severity_label", "")
-            existing["confidence"] = report_item.get("confidence", "")
-            existing["confidence_label"] = report_item.get("confidence_label", "")
-    return unique_items
-
-
-def _merge_report_field_values(left, right) -> str:
-    left_text = str(left or "").strip()
-    right_text = str(right or "").strip()
-    if not left_text:
-        return right_text
-    if not right_text or right_text in left_text:
-        return left_text
-    return f"{left_text}；{right_text}"
-
-
-def _merge_report_evidence_refs(left, right) -> list[dict]:
-    return _normalize_report_evidence_refs(list(left or []) + list(right or []))
-
-
-def _report_item_priority_key(report_item: dict) -> tuple[int, int, int, int]:
-    item_type_order = {"issue": 0, "suggestion": 1, "non_issue": 2}
-    item_type = str(report_item.get("type") or "")
-    return (
-        item_type_order.get(item_type, len(item_type_order)),
-        REPORT_CONFIDENCE_ORDER.get(str(report_item.get("confidence") or ""), len(REPORT_CONFIDENCE_ORDER)),
-        REPORT_SEVERITY_ORDER.get(str(report_item.get("severity") or ""), len(REPORT_SEVERITY_ORDER)),
-        int(report_item.get("index") or 0),
-    )
-
-
-def _limit_ranked_report_items(
-    report_items: list[dict],
-    *,
-    issue_output_limit,
-    original_count: int,
-    duplicate_count: int,
-) -> tuple[list[dict], dict | None]:
-    limit = normalize_issue_output_limit(issue_output_limit)
-
-    before_limit_count = len(report_items)
-    omitted_count = 0
-    limit_applied = False
-    if before_limit_count > limit:
-        omitted_count = before_limit_count - limit
-        report_items = report_items[:limit]
-        limit_applied = True
-
-    if not duplicate_count and not omitted_count:
-        return report_items, None
-    return report_items, {
-        "limit": limit,
-        "original_count": original_count,
-        "duplicate_count": duplicate_count,
-        "deduplicated_count": original_count - duplicate_count,
-        "displayed_count": len(report_items),
-        "omitted_count": omitted_count,
-        "limit_applied": limit_applied,
-        "missing_ranking": False,
-    }
-
-
-def _first_report_field(source: dict, aliases: tuple[str, ...]) -> str:
-    if not isinstance(source, dict):
-        return ""
-    for key in aliases:
-        if key in source:
-            text = _report_field_text(source.get(key))
-            if text:
-                return text
-    return ""
-
-
-def _report_field_text(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    if isinstance(value, list):
-        parts = []
-        for item in value:
-            text = _report_field_text(item)
-            if text:
-                parts.append(text)
-        return "；".join(parts)
-    if isinstance(value, dict):
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
-    return str(value).strip()
-
-
-def _structured_report_item_text(fields: dict) -> str:
-    lines = []
-    for key, label in REPORT_ITEM_FIELDS:
-        value = str(fields.get(key) or "").strip()
-        if value:
-            lines.append(f"{label}：{value}")
-    return "\n".join(lines).strip()
-
-
-def _is_no_action_report_item(fields: dict) -> bool:
-    impact = _compact_report_text(fields.get("impact"))
-    suggestion = _compact_report_text(fields.get("suggestion"))
-    return _has_report_marker(impact, REPORT_NO_ACTION_IMPACT_MARKERS) and _has_report_marker(
-        suggestion,
-        REPORT_NO_ACTION_SUGGESTION_MARKERS,
-    )
-
-
-def _compact_report_text(value) -> str:
-    return re.sub(r"[\s，。；、,.!！?？:：;；/\\|()（）【】\\[\\]\"'“”‘’_-]+", "", str(value or "")).lower()
-
-
-def _has_report_marker(text: str, markers: tuple[str, ...]) -> bool:
-    return any(marker in text for marker in markers)
-
-
-def _legacy_report_item_fields(text: str) -> dict:
-    fields = {key: "" for key, _ in REPORT_ITEM_FIELDS}
-    body_lines = []
-    for raw_line in str(text or "").splitlines():
-        line = _clean_report_item_line(raw_line)
-        if not line:
-            continue
-        match = re.match(r"^([^:：]{1,28})[:：]\s*(.*)$", line)
-        if match:
-            label = match.group(1).strip()
-            value = match.group(2).strip()
-            field = REPORT_LEGACY_LABEL_FIELDS.get(label)
-            if field and value:
-                fields[field] = _append_report_field(fields[field], value)
-                continue
-        body_lines.append(line)
-    if not fields["description"]:
-        fields["description"] = "\n".join(body_lines).strip() or fields["suggestion"] or str(text or "").strip()
-    return fields
-
-
-def _clean_report_item_line(line: str) -> str:
-    stripped = REPORT_ITEM_PREFIX_RE.sub("", str(line or "").strip()).strip()
-    stripped = re.sub(r"^(?:\d{1,3}[.、)]|\(\d{1,3}\)|（\d{1,3}）)\s*", "", stripped)
-    return stripped.strip("*_`~ ")
-
-
-def _append_report_field(current: str, value: str) -> str:
-    current = str(current or "").strip()
-    value = str(value or "").strip()
-    if not current:
-        return value
-    if not value or value in current.split("；"):
-        return current
-    return f"{current}；{value}"
-
-
-def _looks_like_status_only(value: str) -> bool:
-    compact = re.sub(r"\s+", "", str(value or "")).strip()
-    return compact.lower() in {"issue", "problem", "suggestion", "advice", "non_issue", "nonissue", "not_issue"} or compact in {
-        "问题",
-        "明确问题",
-        "建议",
-        "需人工确认",
-        "非问题",
-        "不是问题",
-    }
-
-
-def _extract_report_item_chunks(text: str) -> list[str]:
-    chunks = []
-    current = []
-    for line in str(text or "").splitlines():
-        if _is_report_item_start(line):
-            if current:
-                chunks.append("\n".join(current).strip())
-            current = [line]
-            continue
-        if current and _is_report_auxiliary_section_start(line):
-            chunks.append("\n".join(current).strip())
-            current = []
-            continue
-        if current:
-            current.append(line)
-    if current:
-        chunks.append("\n".join(current).strip())
-    return [chunk for chunk in chunks if chunk]
-
-
-def _is_report_item_start(line: str) -> bool:
-    stripped = str(line or "").strip()
-    if not stripped:
-        return False
-    if stripped.startswith(("|", "```", ">")):
-        return False
-    match_text = REPORT_ITEM_PREFIX_RE.sub("", stripped).strip()
-    return bool(REPORT_ITEM_START_RE.match(match_text))
-
-
-def _is_report_auxiliary_section_start(line: str) -> bool:
-    stripped = REPORT_ITEM_PREFIX_RE.sub("", str(line or "").strip()).strip("*_`~ ")
-    if not stripped:
-        return False
-    if stripped in {"总体判断", "明确问题", "需人工确认"}:
-        return True
-    return stripped.startswith(
-        (
-            "页面级检查结果",
-            "图文联合检查结果",
-            "图片检查结果",
-            "视频帧检查结果",
-            "检查汇总",
-            "覆盖图片",
-            "覆盖视频帧",
-            "已跳过的图片",
-            "系统需人工确认",
-        )
-    )
-
-
-def _report_item_id(result_code: str, index: int, text: str) -> str:
-    source = f"{result_code}\n{index}\n{text}"
-    return hashlib.sha1(source.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
-
-
-def _infer_report_item_type(text: str) -> str:
-    compact = re.sub(r"\s+", "", str(text or ""))
-    if any(marker in compact for marker in ("非问题", "未发现", "无明显", "未见明显", "无需修改", "未见异常", "无异常")):
-        return "non_issue"
-    if any(marker in compact for marker in ("需人工确认", "人工确认", "疑似", "不确定", "证据不足", "建议核实", "建议复核", "看不清", "无法确认")):
-        return "suggestion"
-    issue_markers = (
-        "问题",
-        "错误",
-        "不一致",
-        "矛盾",
-        "冲突",
-        "缺失",
-        "风险",
-        "不规范",
-        "不匹配",
-        "异常",
-    )
-    if "建议" in compact and not any(marker in compact for marker in issue_markers):
-        return "suggestion"
-    if any(marker in compact for marker in issue_markers):
-        return "issue"
-    return "suggestion"
-
-
-def _normalize_report_item_status(value) -> str | None:
-    exact = _normalize_report_item_type(value)
-    if exact:
-        return exact
-    compact = re.sub(r"\s+", "", str(value or "")).strip().lower()
-    if not compact:
-        return None
-    if any(marker in compact for marker in ("non_issue", "nonissue", "not_issue", "非问题", "不是问题", "无需修改", "无问题")):
-        return "non_issue"
-    if any(marker in compact for marker in ("suggestion", "advise", "manual", "uncertain", "建议", "需人工确认", "人工确认", "疑似", "不确定", "证据不足")):
-        return "suggestion"
-    if any(marker in compact for marker in ("issue", "problem", "明确问题", "问题", "错误", "不一致", "缺失", "冲突")):
-        return "issue"
-    return None
-
-
-def _normalize_report_item_type(value) -> str | None:
-    value = str(value or "").strip()
-    return value if value in REPORT_ITEM_TYPES else None
-
-
-def _normalize_report_acceptance_status(value) -> str | None:
-    value = str(value or "").strip()
-    return value if value in REPORT_ACCEPTANCE_STATUSES else None
-
-
-def _normalize_report_rejection_reason(value) -> str:
-    value = str(value or "").strip()
-    return value if value in REPORT_REJECTION_REASONS else ""
-
-
-def _normalize_report_acceptance(value) -> dict:
-    if not isinstance(value, dict):
-        status = _normalize_report_acceptance_status(value) or "pending"
-        return {
-            "acceptance_status": status,
-            "acceptance_label": REPORT_ACCEPTANCE_STATUSES[status],
-            "rejection_reason": "",
-            "rejection_reason_label": "",
-            "rejection_note": "",
-        }
-
-    status = _normalize_report_acceptance_status(value.get("status")) or "pending"
-    reason = _normalize_report_rejection_reason(value.get("rejection_reason")) if status == "rejected" else ""
-    note = str(value.get("rejection_note") or "").strip() if status == "rejected" else ""
-    return {
-        "acceptance_status": status,
-        "acceptance_label": REPORT_ACCEPTANCE_STATUSES[status],
-        "rejection_reason": reason,
-        "rejection_reason_label": REPORT_REJECTION_REASONS.get(reason, ""),
-        "rejection_note": note,
-    }
-
-
-def _report_rate_label(numerator: int, denominator: int) -> str:
-    if denominator <= 0:
-        return "-"
-    return f"{numerator / denominator * 100:.1f}%"
-
-
-def _finalize_report_counts(counts: dict) -> dict:
-    counts["total"] = sum(int(counts.get(key) or 0) for key in REPORT_ITEM_TYPE_ORDER)
-    confirmed_issues = int(counts.get("accepted_issue") or 0) + int(counts.get("rejected_issue") or 0)
-    counts["issue_detection_rate"] = _report_rate_label(int(counts.get("issue") or 0), counts["total"])
-    counts["issue_acceptance_rate"] = _report_rate_label(int(counts.get("accepted_issue") or 0), confirmed_issues)
-    return counts
-
-
-def _count_report_items(items: list[dict], *, suppressed_count: int = 0) -> dict:
-    counts = {key: 0 for key in REPORT_COUNT_KEYS}
-    counts["suppressed"] = max(0, int(suppressed_count or 0))
-    for item in items:
-        item_type = _normalize_report_item_type(item.get("type")) or "issue"
-        counts[item_type] += 1
-        acceptance_status = _normalize_report_acceptance_status(item.get("acceptance_status")) or "pending"
-        if acceptance_status == "pending":
-            counts["pending_review"] += 1
-        else:
-            counts["reviewed"] += 1
-        if item_type == "issue":
-            if acceptance_status == "accepted":
-                counts["accepted_issue"] += 1
-            elif acceptance_status == "rejected":
-                counts["rejected_issue"] += 1
-            else:
-                counts["pending_issue_acceptance"] += 1
-    return _finalize_report_counts(counts)
-
-
-def _report_item_totals(results: list[dict]) -> dict:
-    totals = {key: 0 for key in REPORT_COUNT_KEYS}
-    for result in results:
-        counts = result.get("report_counts") or {}
-        for key in REPORT_COUNT_KEYS:
-            totals[key] += int(counts.get(key) or 0)
-    return _finalize_report_counts(totals)
-
-
-def _update_report_item_type(task):
-    if task["status"] in {"queued", "running", "canceling"}:
-        return {"ok": False, "error": "任务尚未完成，暂不能修改报告条目判定。"}, 409
-    data = request.get_json(silent=True) if request.is_json else None
-    if not isinstance(data, dict):
-        data = request.form
-    result_code = str(data.get("result_code") or "").strip()
-    item_id = str(data.get("item_id") or "").strip()
-    item_type = _normalize_report_item_type(data.get("item_type"))
-    if not result_code or not item_id or not item_type:
-        return {"ok": False, "error": "报告条目判定数据无效。"}, 400
-    acceptance_supplied = "acceptance_status" in data
-    acceptance_status = None
-    rejection_reason = ""
-    rejection_note = ""
-    if acceptance_supplied:
-        acceptance_status = _normalize_report_acceptance_status(data.get("acceptance_status"))
-        rejection_reason = _normalize_report_rejection_reason(data.get("rejection_reason"))
-        rejection_note = str(data.get("rejection_note") or "").strip()
-        if acceptance_status is None:
-            return {"ok": False, "error": "接纳状态数据无效。"}, 400
-        if acceptance_status == "rejected":
-            if not rejection_reason:
-                return {"ok": False, "error": "选择不认可时必须选择原因。"}, 400
-            if rejection_reason == "other" and not rejection_note:
-                return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
-
-    results = _raw_task_results(task)
-    target = None
-    valid_item_ids = set()
-    for result in results:
-        if str(result.get("code") or "") != result_code:
-            continue
-        target = result
-        valid_item_ids = {item["id"] for item in _result_report_items(result)}
-        break
-    if target is None or item_id not in valid_item_ids:
-        return {"ok": False, "error": "报告条目不存在。"}, 404
-
-    db = get_db()
-    suppression_candidate_created = _apply_report_item_review(
-        db,
-        task=task,
-        result_code=result_code,
-        result=target,
-        item_id=item_id,
-        item_type=item_type,
-        acceptance_supplied=acceptance_supplied,
-        acceptance_status=acceptance_status,
-        rejection_reason=rejection_reason,
-        rejection_note=rejection_note,
-    )
-    task_updated_at = now_text()
-    db.execute(
-        "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
-        (json.dumps(results, ensure_ascii=False), task_updated_at, task["id"]),
-    )
-    db.commit()
-
-    prepared = _prepare_task_results(
-        results,
-        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
-        task_id=task["id"],
-    )
-    _cache_prepared_task_report_stats(task, prepared, task_updated_at)
-    updated_result = next((item for item in prepared if str(item.get("code") or "") == result_code), None)
-    saved_acceptances = target.get("item_acceptances")
-    if not isinstance(saved_acceptances, dict):
-        saved_acceptances = {}
-    updated_acceptance = _normalize_report_acceptance(saved_acceptances.get(item_id))
-    return {
-        "ok": True,
-        "item_id": item_id,
-        "item_type": item_type,
-        "item_type_label": REPORT_ITEM_TYPES[item_type],
-        **updated_acceptance,
-        "result_counts": (updated_result or {}).get("report_counts", {}),
-        "totals": _report_item_totals(prepared),
-        "suppression_candidate_created": suppression_candidate_created,
-    }
-
-
-def _apply_report_item_review(
-    db,
-    *,
-    task,
-    result_code: str,
-    result: dict,
-    item_id: str,
-    item_type: str,
-    acceptance_supplied: bool,
-    acceptance_status: str | None,
-    rejection_reason: str,
-    rejection_note: str,
-) -> bool:
-    classifications = result.get("item_classifications")
-    if not isinstance(classifications, dict):
-        classifications = {}
-    classifications[item_id] = item_type
-    result["item_classifications"] = classifications
-
-    if acceptance_supplied:
-        acceptances = result.get("item_acceptances")
-        if not isinstance(acceptances, dict):
-            acceptances = {}
-        if acceptance_status == "pending":
-            acceptances.pop(item_id, None)
-        else:
-            record = {"status": acceptance_status}
-            if acceptance_status == "rejected":
-                record["rejection_reason"] = rejection_reason
-                record["rejection_note"] = rejection_note
-            acceptances[item_id] = record
-        result["item_acceptances"] = acceptances
-
-    return _maybe_create_report_suppression_candidate(
-        db,
-        task=task,
-        result_code=result_code,
-        result=result,
-        item_id=item_id,
-        item_type=item_type,
-        acceptance_status=acceptance_status if acceptance_supplied else None,
-        rejection_reason=rejection_reason,
-        rejection_note=rejection_note,
-    )
-
-
-def _export_task_report(task):
-    static_folder = current_app.static_folder
-    if not static_folder:
-        raise RuntimeError("静态资源目录未配置，无法导出报告。")
-    app_css = (Path(static_folder) / "app.css").read_text(encoding="utf-8")
-    table_resize_js = (Path(static_folder) / "table-resize.js").read_text(encoding="utf-8")
-    results = _task_results(task)
-    html = render_template(
-        "task_report_export.html",
-        task=task,
-        results=results,
-        report_totals=_report_item_totals(results),
-        report_item_types=REPORT_ITEM_TYPES,
-        report_item_fields=_report_item_fields_for_task(task["task_type"]),
-        media_report=_uses_compact_media_report(task["task_type"]),
-        video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
-        video_stream_url="",
-        document_groups=_task_document_groups(task),
-        app_css=app_css,
-        table_resize_js=table_resize_js,
-    )
-    filename = f"document-check-report-{task['id']}.html"
-    return Response(
-        html,
-        mimetype="text/html",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-def _export_task_report_excel(task):
-    results = _task_results(task)
-    report_totals = _report_item_totals(results)
-    document_groups = _task_document_groups(task)
-    workbook = Workbook()
-    report_sheet = workbook.active
-    report_sheet.title = REPORT_EXPORT_SHEET_NAME
-
-    _fill_report_items_sheet(report_sheet, task, results, document_groups)
-    _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
-
-    output = io.BytesIO()
-    workbook.save(output)
-    workbook.close()
-    output.seek(0)
-    filename = f"document-check-report-{task['id']}.xlsx"
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name=filename,
-        mimetype=REPORT_EXPORT_MIMETYPE,
-    )
-
-
-def _import_task_report_excel(task, detail_endpoint: str):
-    redirect_response = redirect(url_for(detail_endpoint, task_id=task["id"]))
-    if task["status"] not in {"completed", "partial"}:
-        flash("任务尚未完成，暂不能回填报告标注。", "error")
-        return redirect_response
-
-    upload = request.files.get("report_excel")
-    filename = str(upload.filename or "").strip() if upload is not None else ""
-    if upload is None or not filename:
-        flash("请选择需要回填的 Excel 报告。", "error")
-        return redirect_response
-    if Path(filename).suffix.lower() != ".xlsx":
-        flash("回填文件仅支持系统导出的 xlsx 格式报告。", "error")
-        return redirect_response
-
-    payload = upload.stream.read(REPORT_IMPORT_MAX_BYTES + 1)
-    if len(payload) > REPORT_IMPORT_MAX_BYTES:
-        flash("回填文件不能超过 10MB。", "error")
-        return redirect_response
-
-    try:
-        imported_count = _load_report_excel_reviews(task, payload)
-    except ReportExcelImportError as exc:
-        flash(str(exc), "error")
-        return redirect_response
-
-    flash(f"已从 Excel 回填 {imported_count} 条报告标注。", "success")
-    return redirect_response
-
-
-def _load_report_excel_reviews(task, payload: bytes) -> int:
-    try:
-        workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=False, keep_links=False)
-    except Exception as exc:
-        current_app.logger.warning("打开报告回填文件失败 task_id=%s error=%s", task["id"], exc)
-        raise ReportExcelImportError("无法读取回填文件，请上传系统导出的有效 xlsx 报告。") from exc
-
-    try:
-        if REPORT_EXPORT_SHEET_NAME not in workbook.sheetnames:
-            raise ReportExcelImportError(f"回填文件缺少“{REPORT_EXPORT_SHEET_NAME}”工作表。")
-        reviews = _parse_report_excel_reviews(task, workbook[REPORT_EXPORT_SHEET_NAME])
-    except ReportExcelImportError:
-        raise
-    except Exception as exc:
-        current_app.logger.warning("解析报告回填文件失败 task_id=%s error=%s", task["id"], exc)
-        raise ReportExcelImportError("无法读取回填文件，请上传系统导出的有效 xlsx 报告。") from exc
-    finally:
-        workbook.close()
-
-    results = _raw_task_results(task)
-    result_targets = _report_excel_item_targets(results)
-    db = get_db()
-    for review in reviews:
-        result = result_targets[(review["result_code"], review["item_id"])]
-        _apply_report_item_review(
-            db,
-            task=task,
-            result_code=review["result_code"],
-            result=result,
-            item_id=review["item_id"],
-            item_type=review["item_type"],
-            acceptance_supplied=review["acceptance_supplied"],
-            acceptance_status=review["acceptance_status"],
-            rejection_reason=review["rejection_reason"],
-            rejection_note=review["rejection_note"],
-        )
-    task_updated_at = now_text()
-    db.execute(
-        "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
-        (json.dumps(results, ensure_ascii=False), task_updated_at, task["id"]),
-    )
-    db.commit()
-    prepared = _prepare_task_results(
-        results,
-        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
-        task_id=task["id"],
-    )
-    _cache_prepared_task_report_stats(task, prepared, task_updated_at)
-    return len(reviews)
-
-
-def _parse_report_excel_reviews(task, sheet) -> list[dict]:
-    if sheet.max_row > REPORT_IMPORT_MAX_ROWS + 1:
-        raise ReportExcelImportError(f"回填文件最多允许 {REPORT_IMPORT_MAX_ROWS} 行报告条目。")
-
-    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
-    columns = {}
-    for index, value in enumerate(header_row):
-        header = _excel_import_text(value)
-        if not header:
-            continue
-        if header in columns:
-            raise ReportExcelImportError(f"“{REPORT_EXPORT_SHEET_NAME}”工作表存在重复列“{header}”。")
-        columns[header] = index
-
-    for required_header in ("任务ID", REPORT_ITEM_TYPE_LABEL):
-        if required_header not in columns:
-            raise ReportExcelImportError(f"回填文件缺少“{required_header}”列。")
-
-    metadata_headers = (REPORT_EXPORT_RESULT_CODE_HEADER, REPORT_EXPORT_ITEM_ID_HEADER)
-    has_metadata = all(header in columns for header in metadata_headers)
-    if any(header in columns for header in metadata_headers) and not has_metadata:
-        raise ReportExcelImportError("回填文件的隐藏条目标识列不完整，请重新导出报告。")
-    if not has_metadata and not all(header in columns for header in ("检查项", "条目")):
-        raise ReportExcelImportError("回填文件缺少条目标识列，无法匹配报告条目。")
-
-    results = _raw_task_results(task)
-    item_targets = _report_excel_item_targets(results)
-    legacy_targets = _legacy_report_excel_item_targets(task, results)
-    type_values = {**{code: code for code in REPORT_ITEM_TYPES}, **{label: code for code, label in REPORT_ITEM_TYPES.items()}}
-    acceptance_values = {
-        **{code: code for code in REPORT_ACCEPTANCE_STATUSES},
-        **{label: code for code, label in REPORT_ACCEPTANCE_STATUSES.items()},
-    }
-    rejection_values = {
-        **{code: code for code in REPORT_REJECTION_REASONS},
-        **{label: code for code, label in REPORT_REJECTION_REASONS.items()},
-    }
-
-    reviews = []
-    seen_targets = set()
-    for row_number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-        item_marker = _excel_import_text(_excel_row_value(row, columns, "条目"))
-        metadata_item_id = _excel_import_text(_excel_row_value(row, columns, REPORT_EXPORT_ITEM_ID_HEADER))
-        if not item_marker and not metadata_item_id:
-            continue
-
-        item_type_text = _excel_import_text(_excel_row_value(row, columns, REPORT_ITEM_TYPE_LABEL))
-        if not item_type_text:
-            continue
-        item_type = type_values.get(item_type_text)
-        if item_type is None:
-            raise ReportExcelImportError(
-                f"第 {row_number} 行“{REPORT_ITEM_TYPE_LABEL}”无效，请选择问题、建议或非问题。"
-            )
-
-        task_id = _excel_import_task_id(_excel_row_value(row, columns, "任务ID"))
-        if task_id != str(task["id"]):
-            raise ReportExcelImportError(f"第 {row_number} 行任务ID与当前报告不一致。")
-
-        if has_metadata:
-            result_code = _excel_import_text(_excel_row_value(row, columns, REPORT_EXPORT_RESULT_CODE_HEADER))
-            item_id = metadata_item_id
-            if not result_code or not item_id:
-                raise ReportExcelImportError(f"第 {row_number} 行条目标识缺失，请重新导出报告。")
-            target_key = (result_code, item_id)
-        else:
-            result_name = _excel_import_text(_excel_row_value(row, columns, "检查项"))
-            candidates = legacy_targets.get((result_name, item_marker), [])
-            if len(candidates) != 1:
-                raise ReportExcelImportError(
-                    f"第 {row_number} 行无法唯一匹配当前报告条目，请重新导出报告后标注。"
-                )
-            target_key = candidates[0]
-
-        if target_key not in item_targets:
-            raise ReportExcelImportError(f"第 {row_number} 行报告条目不存在或已发生变化，请重新导出报告。")
-        if target_key in seen_targets:
-            raise ReportExcelImportError(f"第 {row_number} 行与前面的行重复指向同一报告条目。")
-        seen_targets.add(target_key)
-
-        acceptance_supplied = False
-        acceptance_status = None
-        rejection_reason = ""
-        rejection_note = ""
-        if "是否接纳" in columns:
-            acceptance_text = _excel_import_text(_excel_row_value(row, columns, "是否接纳"))
-            if acceptance_text:
-                acceptance_status = acceptance_values.get(acceptance_text)
-                if acceptance_status is None:
-                    raise ReportExcelImportError(
-                        f"第 {row_number} 行“是否接纳”无效，请选择未确认、接纳或不接纳。"
+                    ref["url"] = url_for(
+                        endpoint, task_id=task["id"], media_id=media_id
                     )
-                acceptance_supplied = True
-                if acceptance_status == "rejected":
-                    reason_text = _excel_import_text(_excel_row_value(row, columns, "不接纳原因"))
-                    if not reason_text:
-                        raise ReportExcelImportError(f"第 {row_number} 行选择不接纳时必须填写“不接纳原因”。")
-                    rejection_reason = rejection_values.get(reason_text, "")
-                    if not rejection_reason:
-                        raise ReportExcelImportError(f"第 {row_number} 行“不接纳原因”无效。")
-                    rejection_note = _excel_import_text(_excel_row_value(row, columns, "人工原因"))
-                    if rejection_reason == "other" and not rejection_note:
-                        raise ReportExcelImportError(f"第 {row_number} 行选择其他原因时必须填写人工原因。")
-
-        reviews.append(
-            {
-                "result_code": target_key[0],
-                "item_id": target_key[1],
-                "item_type": item_type,
-                "acceptance_supplied": acceptance_supplied,
-                "acceptance_status": acceptance_status,
-                "rejection_reason": rejection_reason,
-                "rejection_note": rejection_note,
-            }
-        )
-
-    if not reviews:
-        raise ReportExcelImportError("回填文件中没有可识别的报告标注。")
-    return reviews
-
-
-def _report_excel_item_targets(results: list[dict]) -> dict[tuple[str, str], dict]:
-    targets = {}
-    for result in results:
-        result_code = str(result.get("code") or "")
-        for item in _result_report_items(result):
-            targets[(result_code, str(item.get("id") or ""))] = result
-    return targets
-
-
-def _legacy_report_excel_item_targets(task, results: list[dict]) -> dict[tuple[str, str], list[tuple[str, str]]]:
-    prepared = _prepare_task_results(
-        results,
-        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
-        task_id=task["id"],
-    )
-    targets = {}
-    for result in prepared:
-        result_name = str(result.get("name") or "").strip()
-        result_code = str(result.get("code") or "")
-        for item in result.get("report_items") or []:
-            key = (result_name, f"条目 {item.get('index')}")
-            targets.setdefault(key, []).append((result_code, str(item.get("id") or "")))
-    return targets
-
-
-def _excel_row_value(row: tuple, columns: dict[str, int], header: str):
-    index = columns.get(header)
-    if index is None or index >= len(row):
-        return None
-    return row[index]
-
-
-def _excel_import_text(value) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def _excel_import_task_id(value) -> str:
-    if isinstance(value, bool):
-        return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return _excel_import_text(value)
-
-
-def _fill_report_items_sheet(sheet, task, results: list[dict], document_groups: list[dict]) -> None:
-    report_item_fields = _report_item_fields_for_task(task["task_type"])
-    headers = [
-        "任务ID",
-        "任务类型",
-        "文件名称",
-        "检查项",
-        "条目",
-        *[label for _, label in report_item_fields],
-        REPORT_ITEM_TYPE_LABEL,
-        "是否接纳",
-        "不接纳原因",
-        "人工原因",
-        REPORT_EXPORT_RESULT_CODE_HEADER,
-        REPORT_EXPORT_ITEM_ID_HEADER,
-    ]
-    sheet.append(headers)
-    context = _excel_task_context(task, document_groups)
-    for result in results:
-        report_items = result.get("report_items") or []
-        if not report_items:
-            sheet.append(
-                [
-                    *context,
-                    _excel_cell_text(result.get("name")),
-                    "",
-                    *["" for _ in report_item_fields],
-                    "未拆分",
-                    "",
-                    "",
-                    "",
-                    _excel_cell_text(result.get("code")),
-                    "",
-                ]
-            )
-            continue
-        for item in report_items:
-            sheet.append(
-                [
-                    *context,
-                    _excel_cell_text(result.get("name")),
-                    f"条目 {item.get('index')}",
-                    *[
-                        _excel_report_item_field(item, field, task["task_type"])
-                        for field, _ in report_item_fields
-                    ],
-                    _excel_cell_text(item.get("type_label")),
-                    _excel_cell_text(item.get("acceptance_label")),
-                    _excel_cell_text(item.get("rejection_reason_label")) if item.get("acceptance_status") == "rejected" else "",
-                    _excel_cell_text(item.get("rejection_note")) if item.get("acceptance_status") == "rejected" else "",
-                    _excel_cell_text(result.get("code")),
-                    _excel_cell_text(item.get("id")),
-                ]
-            )
-    _style_excel_sheet(sheet)
-    _configure_report_review_sheet(sheet, headers)
-
-
-def _excel_report_item_field(item: dict, field: str, task_type: str | None):
-    value = _excel_cell_text(item.get(field))
-    if (task_type or DOCUMENT_TASK_TYPE) != VIDEO_TASK_TYPE or field != "excerpt":
-        return value
-    evidence_lines = []
-    for ref in item.get("evidence_refs") or []:
-        position = str(ref.get("position") or "").strip()
-        filename = str(ref.get("filename") or "").strip()
-        label = position
-        if filename:
-            label = f"{label}（{filename}）" if label else filename
-        if label and label not in evidence_lines:
-            evidence_lines.append(label)
-    if not evidence_lines:
-        return value
-    evidence_text = "关键帧：" + "、".join(evidence_lines)
-    return f"{value}\n{evidence_text}" if value else evidence_text
-
-
-def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
-    columns = {header: index + 1 for index, header in enumerate(headers)}
-    last_row = max(sheet.max_row, 2)
-    validation_choices = (
-        (REPORT_ITEM_TYPE_LABEL, tuple(REPORT_ITEM_TYPES.values())),
-        ("是否接纳", tuple(REPORT_ACCEPTANCE_STATUSES.values())),
-        ("不接纳原因", tuple(REPORT_REJECTION_REASONS.values())),
-    )
-    for header, choices in validation_choices:
-        column = columns[header]
-        column_letter = get_column_letter(column)
-        validation = DataValidation(
-            type="list",
-            formula1=f'"{",".join(choices)}"',
-            allow_blank=header == "不接纳原因",
-        )
-        validation.error = f"请从下拉列表中选择有效的{header}。"
-        validation.errorTitle = "标注值无效"
-        validation.prompt = f"请选择{header}。"
-        validation.promptTitle = "报告标注"
-        validation.showErrorMessage = True
-        validation.showInputMessage = True
-        sheet.add_data_validation(validation)
-        validation.add(f"{column_letter}2:{column_letter}{last_row}")
-        for row in range(2, sheet.max_row + 1):
-            sheet.cell(row=row, column=column).fill = REPORT_EXPORT_EDITABLE_FILL
-
-    for header in (REPORT_EXPORT_RESULT_CODE_HEADER, REPORT_EXPORT_ITEM_ID_HEADER):
-        sheet.column_dimensions[get_column_letter(columns[header])].hidden = True
-    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{sheet.max_row}"
-
-
-def _fill_report_totals_sheet(sheet, report_totals: dict) -> None:
-    sheet.append(["指标", "值"])
-    for label, key in REPORT_TOTAL_EXPORT_ROWS:
-        sheet.append([label, report_totals.get(key, 0)])
-    _style_excel_sheet(sheet)
-
-
-def _excel_task_context(task, document_groups: list[dict]) -> list:
-    return [
-        _row_value(task, "id", ""),
-        task_type_label(_row_value(task, "task_type", DOCUMENT_TASK_TYPE)),
-        _excel_document_names(task, document_groups),
-    ]
-
-
-def _excel_document_names(task, document_groups: list[dict]) -> str:
-    names = []
-    for group in document_groups:
-        for file in group.get("files", []):
-            name = str(file.get("original_filename") or "").strip()
-            if name:
-                names.append(name)
-    if names:
-        return "\n".join(names)
-    return _excel_cell_text(_row_value(task, "original_filename", ""))
-
-
-def _excel_cell_text(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float)):
-        return value
-    return str(value).strip()
-
-
-def _style_excel_sheet(sheet) -> None:
-    sheet.freeze_panes = "A2"
-    for cell in sheet[1]:
-        cell.font = REPORT_EXPORT_HEADER_FONT
-        cell.fill = REPORT_EXPORT_HEADER_FILL
-        cell.alignment = Alignment(vertical="top", wrap_text=True)
-    for row in sheet.iter_rows(min_row=2):
-        for cell in row:
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-    for column_cells in sheet.columns:
-        width = max(len(str(cell.value or "")) for cell in column_cells[:200]) + 2
-        sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(width, 10), 60)
 
 
 def _page_arg() -> int:
@@ -6089,10 +2976,14 @@ def _task_stats_for_where(where: str, params: tuple) -> dict:
         "failed": 0,
         "canceled": 0,
     }
-    rows = get_db().execute(
-        f"SELECT status, COUNT(*) AS total FROM tasks WHERE {where} GROUP BY status",
-        params,
-    ).fetchall()
+    rows = (
+        get_db()
+        .execute(
+            f"SELECT status, COUNT(*) AS total FROM tasks WHERE {where} GROUP BY status",
+            params,
+        )
+        .fetchall()
+    )
     for row in rows:
         count = row["total"]
         stats["total"] += count
