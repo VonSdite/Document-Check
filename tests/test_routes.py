@@ -16,36 +16,27 @@ from flask import Flask
 from openpyxl import Workbook, load_workbook
 from werkzeug.datastructures import FileStorage
 
-from app.auth import SAML_USER_SESSION_KEY
-from app.config import CONFIG_FILENAME
-from app.db import (
-    get_db,
-    get_ip_username,
-    get_setting,
-    init_db,
-    seed_defaults,
-    set_setting,
-)
-from app.documents import DocumentReadError
-from app.formatting import render_markdown
-from app.routes import (
-    UPLOAD_PATH_SAFE_CHARS,
-    _consistency_task_title,
-    _delete_queued_task,
-    _find_enabled_model,
-    _parse_result_json,
-    _prepare_task_results,
-    _upload_destination,
-    get_enabled_models,
-    register_routes,
-)
-from app.task_types import (
+from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
 )
+from app.documents.extraction.common import DocumentReadError
+from app.identity.service import SAML_USER_SESSION_KEY
+from app.infrastructure.config import CONFIG_FILENAME
+from app.models.service import _find_enabled_model, get_enabled_models
+from app.persistence.connection import get_db
+from app.persistence.defaults import seed_defaults
+from app.persistence.schema import init_db
+from app.persistence.settings import get_ip_username, get_setting, set_setting
+from app.reporting.service import _parse_result_json, _prepare_task_results
+from app.tasks.files import UPLOAD_PATH_SAFE_CHARS, _upload_destination
+from app.tasks.submission import _consistency_task_title
+from app.web import register_routes
+from app.web.formatting import render_markdown
+from app.web.task_actions import _delete_queued_task
 
 _TINY_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -139,8 +130,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[1]
         self.app = Flask(
             __name__,
-            template_folder=str(project_root / "app" / "templates"),
-            static_folder=str(project_root / "app" / "static"),
+            template_folder=str(project_root / "app" / "web" / "templates"),
+            static_folder=str(project_root / "app" / "web" / "static"),
         )
         self.app.add_template_filter(render_markdown, "markdown")
         self.app.config.update(
@@ -451,7 +442,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_files.remove_file",
+            "app.tasks.files.remove_file",
             return_value=(False, "[WinError 32] 文件正被占用"),
         ):
             response = self.client.post(
@@ -1517,7 +1508,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         with patch(
-            "app.task_runtime.artifacts.remove_file",
+            "app.tasks.runtime.artifacts.remove_file",
             return_value=(False, "[WinError 32] 文件正被占用"),
         ):
             response = self.client.post(
@@ -1912,7 +1903,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
             get_db().commit()
 
-        with patch("app.routes._parse_result_json", wraps=_parse_result_json) as parser:
+        with patch(
+            "app.reporting.statistics._parse_result_json", wraps=_parse_result_json
+        ) as parser:
             first = self.client.get("/admin/tasks")
             second = self.client.get("/admin/tasks")
 
@@ -2181,7 +2174,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(first_review.get_json()["totals"]["pending_review"], 1)
 
         with patch(
-            "app.routes._parse_result_json",
+            "app.reporting.statistics._parse_result_json",
             side_effect=AssertionError("轻量接口不应解析报告正文"),
         ):
             status_response = self.client.get(
@@ -2666,7 +2659,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "ssl_verify": True,
         }
         with patch(
-            "app.routes.test_model_connection", return_value="模型连通性测试通过。"
+            "app.web.models.test_model_connection", return_value="模型连通性测试通过。"
         ) as mocked_test:
             response = self.client.post(
                 "/models/test",
@@ -2702,7 +2695,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "proxy": "",
             "ssl_verify": True,
         }
-        with patch("app.routes.fetch_models", return_value=["model-a"]) as mocked_fetch:
+        with patch(
+            "app.web.models.fetch_models", return_value=["model-a"]
+        ) as mocked_fetch:
             response = self.client.post(
                 "/models/fetch",
                 json={
@@ -3252,7 +3247,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_runtime.preprocessing.extract_text",
+            "app.tasks.runtime.preprocessing.extract_text",
             side_effect=ValueError("company parser failed"),
         ) as extract_mock:
             response = self.client.post(
@@ -3411,7 +3406,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_runtime.preprocessing.extract_images",
+            "app.tasks.runtime.preprocessing.extract_images",
             side_effect=AssertionError("不应在请求中提取"),
         ) as extract_mock:
             response = self.client.post(
@@ -3475,7 +3470,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_runtime.preprocessing.extract_video_frames",
+            "app.tasks.runtime.preprocessing.extract_video_frames",
             side_effect=AssertionError("不应在请求中抽帧"),
         ) as extract_mock:
             response = self.client.post(
@@ -3555,7 +3550,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_runtime.preprocessing.extract_video_frames",
+            "app.tasks.runtime.preprocessing.extract_video_frames",
             side_effect=fake_extract_video_frames,
         ) as extract_mock:
             response = self.client.post(
@@ -3637,7 +3632,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_runtime.preprocessing.extract_video_frames",
+            "app.tasks.runtime.preprocessing.extract_video_frames",
             side_effect=fake_extract_video_frames,
         ) as extract_mock:
             response = self.client.post(
@@ -3703,7 +3698,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_runtime.preprocessing.extract_video_frames",
+            "app.tasks.runtime.preprocessing.extract_video_frames",
             side_effect=fake_extract_video_frames,
         ) as extract_mock:
             response = self.client.post(
@@ -6887,7 +6882,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.app.config["AUTH"] = _saml_auth_config()
         fake_auth = _FakeSamlAuth()
 
-        with patch("app.routes.create_saml_auth", return_value=fake_auth):
+        with patch("app.web.auth.create_saml_auth", return_value=fake_auth):
             response = self.client.get("/auth/saml/login?next=/consistency")
 
         self.assertEqual(response.status_code, 302)
@@ -6905,7 +6900,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             session["saml_request_id"] = "REQ-1"
 
-        with patch("app.routes.create_saml_auth", return_value=fake_auth):
+        with patch("app.web.auth.create_saml_auth", return_value=fake_auth):
             response = self.client.post(
                 "/auth/saml/acs",
                 data={"SAMLResponse": "test", "RelayState": "/consistency"},

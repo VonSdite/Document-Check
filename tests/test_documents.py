@@ -15,16 +15,18 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from openpyxl import Workbook
 
-from app.documents import (
-    _extract_pymupdf_page_with_tables,
-    _pdf_should_try_pypdf,
-    _select_pdf_page_text,
+from app.documents.extraction import (
     allowed_file,
     extract_document,
     extract_text,
     format_document_text,
 )
-from app.images import (
+from app.documents.extraction.pdf import (
+    _extract_pymupdf_page_with_tables,
+    _pdf_should_try_pypdf,
+    _select_pdf_page_text,
+)
+from app.documents.images import (
     candidate_pdf_pages_for_image_check,
     extract_images,
     format_image_document_text,
@@ -32,7 +34,7 @@ from app.images import (
     image_path_from_item,
     select_pdf_page_numbers,
 )
-from app.videos import (
+from app.documents.videos import (
     VideoFrameExtractionError,
     _decode_process_output,
     _extract_frame,
@@ -236,7 +238,7 @@ class DocumentFormattingTest(unittest.TestCase):
             document.close()
 
             with patch(
-                "app.extraction.pdf.PdfReader",
+                "app.documents.extraction.pdf.PdfReader",
                 side_effect=AssertionError("不应加载 pypdf"),
             ):
                 text = extract_text(path, "pdf")
@@ -257,7 +259,7 @@ class DocumentFormattingTest(unittest.TestCase):
             document.close()
 
             with patch(
-                "app.extraction.pdf._extract_pymupdf_page_with_tables"
+                "app.documents.extraction.pdf._extract_pymupdf_page_with_tables"
             ) as table_extractor:
                 text = extract_text(path, "pdf", include_tables=False)
 
@@ -397,7 +399,7 @@ class DocumentFormattingTest(unittest.TestCase):
         }
 
         with patch(
-            "app.extraction.pdf._pdf_table_model",
+            "app.documents.extraction.pdf._pdf_table_model",
             side_effect=(RuntimeError("malformed table"), valid_model),
         ):
             text = _extract_pymupdf_page_with_tables(page, 1, {}, "")
@@ -629,7 +631,9 @@ class DocumentFormattingTest(unittest.TestCase):
             stderr=b"",
         )
 
-        with patch("app.videos.subprocess.run", return_value=completed) as runner:
+        with patch(
+            "app.documents.videos.subprocess.run", return_value=completed
+        ) as runner:
             duration = _probe_video_duration(Path("video.mp4"))
 
         self.assertEqual(duration, 131.057)
@@ -643,7 +647,9 @@ class DocumentFormattingTest(unittest.TestCase):
             args=[], returncode=0, stdout=b"", stderr=b""
         )
 
-        with patch("app.videos.subprocess.run", return_value=completed) as runner:
+        with patch(
+            "app.documents.videos.subprocess.run", return_value=completed
+        ) as runner:
             _extract_frame(Path("video.mp4"), Path("frame.jpg"), 131.057)
 
         command = runner.call_args.args[0]
@@ -663,8 +669,11 @@ class DocumentFormattingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             with (
-                patch("app.videos._probe_video_duration", return_value=5.2),
-                patch("app.videos._extract_frame", side_effect=fake_extract_frame),
+                patch("app.documents.videos._probe_video_duration", return_value=5.2),
+                patch(
+                    "app.documents.videos._extract_frame",
+                    side_effect=fake_extract_frame,
+                ),
             ):
                 frames, selection = extract_video_frames(
                     root / "video.mp4",
@@ -701,9 +710,9 @@ class DocumentFormattingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             with (
-                patch("app.videos._probe_video_duration", return_value=9.2),
+                patch("app.documents.videos._probe_video_duration", return_value=9.2),
                 patch(
-                    "app.videos._extract_frame_with_fallback",
+                    "app.documents.videos._extract_frame_with_fallback",
                     side_effect=fake_extract_frame,
                 ),
             ):
@@ -728,8 +737,11 @@ class DocumentFormattingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             with (
-                patch("app.videos._probe_video_duration", return_value=5.2),
-                patch("app.videos._extract_frame", side_effect=fake_extract_frame),
+                patch("app.documents.videos._probe_video_duration", return_value=5.2),
+                patch(
+                    "app.documents.videos._extract_frame",
+                    side_effect=fake_extract_frame,
+                ),
             ):
                 frames, selection = extract_video_frames(
                     root / "video.mp4",
@@ -750,8 +762,11 @@ class DocumentFormattingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             with (
-                patch("app.videos._probe_video_duration", return_value=5.2),
-                patch("app.videos._extract_frame", side_effect=fake_extract_frame),
+                patch("app.documents.videos._probe_video_duration", return_value=5.2),
+                patch(
+                    "app.documents.videos._extract_frame",
+                    side_effect=fake_extract_frame,
+                ),
             ):
                 with self.assertRaisesRegex(
                     VideoFrameExtractionError, "仅成功抽取 1/3 帧"

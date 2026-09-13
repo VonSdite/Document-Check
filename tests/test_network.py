@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app import network
+import app.infrastructure.network as network
 
 
 class NetworkAccessUrlsTest(unittest.TestCase):

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from flask import Flask
 
-from app.task_types import (
+from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
@@ -13,7 +13,7 @@ from app.task_types import (
     document_groups_from_meta,
     task_type_label,
 )
-from app.tasks import _extract_consistency_document_text
+from app.tasks.runtime.preprocessing import _extract_consistency_document_text
 
 
 class TaskTypesTest(unittest.TestCase):

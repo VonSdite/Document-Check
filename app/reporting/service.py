@@ -2,22 +2,13 @@ import hashlib
 import json
 import re
 from difflib import SequenceMatcher
-from pathlib import Path
 
-from flask import (
-    Response,
-    current_app,
-    render_template,
-    request,
-)
-
-from ..db import get_db, now_text
-from ..limits import normalize_issue_output_limit
-from ..report_guardrails import (
+from app.checks.guardrails import (
     guarded_report_summary,
     is_unsupported_visual_missing_item,
 )
-from ..task_types import (
+from app.contracts.limits import normalize_issue_output_limit
+from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
@@ -25,7 +16,8 @@ from ..task_types import (
     VIDEO_TASK_TYPE,
     document_groups_from_meta,
 )
-from .constants import (
+from app.persistence.connection import get_db, now_text
+from app.reporting.constants import (
     MEDIA_REPORT_ITEM_DETAIL_FIELDS,
     MEDIA_REPORT_ITEM_FIELDS,
     REPORT_ACCEPTANCE_STATUSES,
@@ -1473,12 +1465,9 @@ def _report_item_totals(results: list[dict]) -> dict:
     return _finalize_report_counts(totals)
 
 
-def _update_report_item_type(task):
+def update_report_item_type(task, data):
     if task["status"] in {"queued", "running", "canceling"}:
         return {"ok": False, "error": "任务尚未完成，暂不能修改报告条目判定。"}, 409
-    data = request.get_json(silent=True) if request.is_json else None
-    if not isinstance(data, dict):
-        data = request.form
     result_code = str(data.get("result_code") or "").strip()
     item_id = str(data.get("item_id") or "").strip()
     item_type = _normalize_report_item_type(data.get("item_type"))
@@ -1604,35 +1593,4 @@ def _apply_report_item_review(
         acceptance_status=acceptance_status if acceptance_supplied else None,
         rejection_reason=rejection_reason,
         rejection_note=rejection_note,
-    )
-
-
-def _export_task_report(task):
-    static_folder = current_app.static_folder
-    if not static_folder:
-        raise RuntimeError("静态资源目录未配置，无法导出报告。")
-    app_css = (Path(static_folder) / "app.css").read_text(encoding="utf-8")
-    table_resize_js = (Path(static_folder) / "table-resize.js").read_text(
-        encoding="utf-8"
-    )
-    results = _task_results(task)
-    html = render_template(
-        "task_report_export.html",
-        task=task,
-        results=results,
-        report_totals=_report_item_totals(results),
-        report_item_types=REPORT_ITEM_TYPES,
-        report_item_fields=_report_item_fields_for_task(task["task_type"]),
-        media_report=_uses_compact_media_report(task["task_type"]),
-        video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
-        video_stream_url="",
-        document_groups=_task_document_groups(task),
-        app_css=app_css,
-        table_resize_js=table_resize_js,
-    )
-    filename = f"document-check-report-{task['id']}.html"
-    return Response(
-        html,
-        mimetype="text/html",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

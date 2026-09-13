@@ -4,10 +4,10 @@ import sys
 
 from gunicorn.app.base import BaseApplication
 
-from app import create_app
-from app.network import access_urls
-from app.observability import log_startup_self_check
-from app.task_supervisor import wait_for_supervisor
+from app.bootstrap.factory import create_app
+from app.infrastructure.network import access_urls
+from app.tasks.supervisor import wait_for_supervisor
+from app.web.observability import log_startup_self_check
 
 SUPERVISOR_STOP_TIMEOUT_SECONDS = 20
 
@@ -80,7 +80,7 @@ def _start_task_supervisor(app):
         [
             sys.executable,
             "-m",
-            "app.task_supervisor",
+            "app.bootstrap.supervisor",
             "--parent-pid",
             str(os.getpid()),
         ],

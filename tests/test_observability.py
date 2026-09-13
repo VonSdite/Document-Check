@@ -5,8 +5,8 @@ from pathlib import Path
 
 from flask import Flask
 
-from app.db import init_db
-from app.observability import (
+from app.persistence.schema import init_db
+from app.web.observability import (
     configure_access_logging,
     log_startup_self_check,
     register_observability,
@@ -39,7 +39,7 @@ class ObservabilityTest(unittest.TestCase):
             DATABASE=str(instance_dir / "test.sqlite3"),
             UPLOAD_FOLDER=str(uploads_dir),
             IMAGE_FOLDER=str(images_dir),
-            LOG_FILE=str(logs_dir / "app.log"),
+            LOG_FILE=str(logs_dir / "app.infrastructure.runtime.log"),
             ACCESS_LOG_FILE=str(self.access_log_file),
             PLATFORM=True,
             LISTEN_HOST="0.0.0.0",

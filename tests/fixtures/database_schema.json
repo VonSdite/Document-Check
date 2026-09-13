@@ -1,0 +1,170 @@
+[
+  [
+    "index",
+    "idx_report_suppression_hits_rule",
+    "report_suppression_hits",
+    "CREATE INDEX idx_report_suppression_hits_rule\n            ON report_suppression_hits(rule_id, created_at DESC)"
+  ],
+  [
+    "index",
+    "idx_report_suppression_rules_lookup",
+    "report_suppression_rules",
+    "CREATE INDEX idx_report_suppression_rules_lookup\n            ON report_suppression_rules(task_type, check_code, fingerprint, enabled)"
+  ],
+  [
+    "index",
+    "idx_tasks_ip_created",
+    "tasks",
+    "CREATE INDEX idx_tasks_ip_created ON tasks(ip, created_at DESC)"
+  ],
+  [
+    "index",
+    "idx_tasks_owner_created",
+    "tasks",
+    "CREATE INDEX idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)"
+  ],
+  [
+    "index",
+    "idx_tasks_provider",
+    "tasks",
+    "CREATE INDEX idx_tasks_provider ON tasks(provider_id)"
+  ],
+  [
+    "index",
+    "idx_tasks_status",
+    "tasks",
+    "CREATE INDEX idx_tasks_status ON tasks(status)"
+  ],
+  [
+    "index",
+    "idx_tasks_status_created_id",
+    "tasks",
+    "CREATE INDEX idx_tasks_status_created_id ON tasks(status, created_at ASC, id ASC)"
+  ],
+  [
+    "index",
+    "idx_tasks_status_lease",
+    "tasks",
+    "CREATE INDEX idx_tasks_status_lease ON tasks(status, lease_expires_at)"
+  ],
+  [
+    "index",
+    "idx_tasks_status_owner",
+    "tasks",
+    "CREATE INDEX idx_tasks_status_owner ON tasks(status, owner_subject)"
+  ],
+  [
+    "index",
+    "idx_tasks_status_owner_created_id",
+    "tasks",
+    "CREATE INDEX idx_tasks_status_owner_created_id ON tasks(status, owner_subject, created_at ASC, id ASC)"
+  ],
+  [
+    "index",
+    "idx_tasks_submission_token",
+    "tasks",
+    "CREATE UNIQUE INDEX idx_tasks_submission_token ON tasks(task_type, owner_subject, submission_token) WHERE submission_token IS NOT NULL"
+  ],
+  [
+    "index",
+    "idx_tasks_type_created",
+    "tasks",
+    "CREATE INDEX idx_tasks_type_created ON tasks(task_type, created_at DESC, id DESC)"
+  ],
+  [
+    "index",
+    "idx_tasks_type_owner_created",
+    "tasks",
+    "CREATE INDEX idx_tasks_type_owner_created ON tasks(task_type, owner_subject, created_at DESC, id DESC)"
+  ],
+  [
+    "index",
+    "idx_tasks_type_status",
+    "tasks",
+    "CREATE INDEX idx_tasks_type_status ON tasks(task_type, status)"
+  ],
+  [
+    "index",
+    "idx_user_model_configs_provider",
+    "user_model_configs",
+    "CREATE INDEX idx_user_model_configs_provider ON user_model_configs(provider_id, sort_order ASC, id ASC)"
+  ],
+  [
+    "index",
+    "idx_user_model_providers_owner",
+    "user_model_providers",
+    "CREATE INDEX idx_user_model_providers_owner ON user_model_providers(owner_subject, updated_at DESC)"
+  ],
+  [
+    "table",
+    "check_items",
+    "check_items",
+    "CREATE TABLE check_items (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL DEFAULT 'document_check',\n            code TEXT NOT NULL UNIQUE,\n            name TEXT NOT NULL,\n            description TEXT,\n            prompt TEXT NOT NULL,\n            enabled INTEGER NOT NULL DEFAULT 1,\n            sort_order INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
+    "ip_usernames",
+    "ip_usernames",
+    "CREATE TABLE ip_usernames (\n            ip TEXT PRIMARY KEY,\n            username TEXT NOT NULL,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
+    "report_suppression_hits",
+    "report_suppression_hits",
+    "CREATE TABLE report_suppression_hits (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            rule_id INTEGER NOT NULL,\n            task_id INTEGER NOT NULL,\n            result_code TEXT NOT NULL,\n            item_id TEXT NOT NULL,\n            item_json TEXT NOT NULL,\n            created_at TEXT NOT NULL,\n            FOREIGN KEY(rule_id) REFERENCES report_suppression_rules(id) ON DELETE CASCADE,\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,\n            UNIQUE(rule_id, task_id, result_code, item_id)\n        )"
+  ],
+  [
+    "table",
+    "report_suppression_rules",
+    "report_suppression_rules",
+    "CREATE TABLE report_suppression_rules (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL,\n            check_code TEXT NOT NULL,\n            fingerprint TEXT NOT NULL,\n            item_json TEXT NOT NULL,\n            reason TEXT,\n            enabled INTEGER NOT NULL DEFAULT 0,\n            source_task_id INTEGER,\n            source_result_code TEXT,\n            source_item_id TEXT,\n            hit_count INTEGER NOT NULL DEFAULT 0,\n            last_hit_at TEXT,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            UNIQUE(task_type, check_code, fingerprint)\n        )"
+  ],
+  [
+    "table",
+    "settings",
+    "settings",
+    "CREATE TABLE settings (\n            key TEXT PRIMARY KEY,\n            value TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
+    "sqlite_sequence",
+    "sqlite_sequence",
+    "CREATE TABLE sqlite_sequence(name,seq)"
+  ],
+  [
+    "table",
+    "task_live_results",
+    "task_live_results",
+    "CREATE TABLE task_live_results (\n            task_id INTEGER PRIMARY KEY,\n            result_json TEXT,\n            summary TEXT,\n            progress INTEGER NOT NULL DEFAULT 0,\n            updated_at TEXT NOT NULL,\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE\n        )"
+  ],
+  [
+    "table",
+    "task_report_stats",
+    "task_report_stats",
+    "CREATE TABLE task_report_stats (\n            task_id INTEGER PRIMARY KEY,\n            source_updated_at TEXT NOT NULL,\n            suppression_version TEXT NOT NULL DEFAULT '',\n            issue_count INTEGER NOT NULL DEFAULT 0,\n            suggestion_count INTEGER NOT NULL DEFAULT 0,\n            non_issue_count INTEGER NOT NULL DEFAULT 0,\n            accepted_issue_count INTEGER NOT NULL DEFAULT 0,\n            rejected_issue_count INTEGER NOT NULL DEFAULT 0,\n            pending_issue_acceptance_count INTEGER NOT NULL DEFAULT 0,\n            suppressed_count INTEGER NOT NULL DEFAULT 0,\n            reviewed_item_count INTEGER NOT NULL DEFAULT 0,\n            pending_review_item_count INTEGER NOT NULL DEFAULT 0,\n            updated_at TEXT NOT NULL,\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE\n        )"
+  ],
+  [
+    "table",
+    "tasks",
+    "tasks",
+    "CREATE TABLE tasks (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL DEFAULT 'document_check',\n            ip TEXT NOT NULL,\n            username_snapshot TEXT,\n            owner_subject TEXT,\n            owner_name_snapshot TEXT,\n            owner_source TEXT,\n            submission_token TEXT,\n            original_filename TEXT NOT NULL,\n            stored_filename TEXT NOT NULL,\n            file_type TEXT NOT NULL,\n            file_size INTEGER NOT NULL,\n            document_text TEXT,\n            document_meta_json TEXT,\n            checks_json TEXT NOT NULL,\n            checks_snapshot_json TEXT,\n            retry_check_codes_json TEXT,\n            provider_id INTEGER,\n            provider_name TEXT,\n            model_name TEXT NOT NULL,\n            api_base TEXT NOT NULL,\n            api_key TEXT,\n            request_timeout INTEGER NOT NULL DEFAULT 3600,\n            max_input_chars INTEGER NOT NULL DEFAULT 80000,\n            force_disable_thinking INTEGER NOT NULL DEFAULT 0,\n            reasoning_effort TEXT,\n            status TEXT NOT NULL DEFAULT 'queued',\n            progress INTEGER NOT NULL DEFAULT 0,\n            cancel_requested INTEGER NOT NULL DEFAULT 0,\n            claim_token TEXT,\n            lease_expires_at TEXT,\n            result_json TEXT,\n            summary TEXT,\n            error TEXT,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            started_at TEXT,\n            finished_at TEXT,\n            source_files_cleaned_at TEXT\n        )"
+  ],
+  [
+    "table",
+    "user_model_configs",
+    "user_model_configs",
+    "CREATE TABLE user_model_configs (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            provider_id INTEGER NOT NULL,\n            model_name TEXT NOT NULL,\n            force_disable_thinking INTEGER NOT NULL DEFAULT 0,\n            reasoning_effort TEXT,\n            sort_order INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            FOREIGN KEY(provider_id) REFERENCES user_model_providers(id) ON DELETE CASCADE,\n            UNIQUE(provider_id, model_name, force_disable_thinking)\n        )"
+  ],
+  [
+    "table",
+    "user_model_providers",
+    "user_model_providers",
+    "CREATE TABLE user_model_providers (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_subject TEXT NOT NULL,\n            name TEXT NOT NULL,\n            api_base TEXT NOT NULL,\n            api_key TEXT,\n            request_timeout INTEGER NOT NULL DEFAULT 3600,\n            max_input_chars INTEGER NOT NULL DEFAULT 500000,\n            is_active INTEGER NOT NULL DEFAULT 1,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "trigger",
+    "trg_tasks_report_stats_invalidate",
+    "tasks",
+    "CREATE TRIGGER trg_tasks_report_stats_invalidate\n        AFTER UPDATE OF result_json ON tasks\n        BEGIN\n            DELETE FROM task_report_stats WHERE task_id = NEW.id;\n        END"
+  ]
+]

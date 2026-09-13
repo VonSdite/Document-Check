@@ -1,25 +1,26 @@
 import io
 import json
-from pathlib import Path
 
-from flask import current_app, flash, redirect, request, send_file, url_for
+from flask import current_app
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from ..db import get_db, now_text
-from ..task_types import DOCUMENT_TASK_TYPE, VIDEO_TASK_TYPE, task_type_label
-from .constants import (
+from app.contracts.task_types import (
+    DOCUMENT_TASK_TYPE,
+    VIDEO_TASK_TYPE,
+    task_type_label,
+)
+from app.persistence.connection import get_db, now_text
+from app.reporting.constants import (
     REPORT_ACCEPTANCE_STATUSES,
     REPORT_EXPORT_EDITABLE_FILL,
     REPORT_EXPORT_HEADER_FILL,
     REPORT_EXPORT_HEADER_FONT,
     REPORT_EXPORT_ITEM_ID_HEADER,
-    REPORT_EXPORT_MIMETYPE,
     REPORT_EXPORT_RESULT_CODE_HEADER,
     REPORT_EXPORT_SHEET_NAME,
-    REPORT_IMPORT_MAX_BYTES,
     REPORT_IMPORT_MAX_ROWS,
     REPORT_ITEM_TYPE_LABEL,
     REPORT_ITEM_TYPES,
@@ -27,7 +28,7 @@ from .constants import (
     REPORT_TOTAL_EXPORT_ROWS,
     ReportExcelImportError,
 )
-from .service import (
+from app.reporting.service import (
     _apply_report_item_review,
     _cache_prepared_task_report_stats,
     _prepare_task_results,
@@ -41,7 +42,7 @@ from .service import (
 )
 
 
-def _export_task_report_excel(task):
+def build_report_workbook(task):
     results = _task_results(task)
     report_totals = _report_item_totals(results)
     document_groups = _task_document_groups(task)
@@ -56,43 +57,7 @@ def _export_task_report_excel(task):
     workbook.save(output)
     workbook.close()
     output.seek(0)
-    filename = f"document-check-report-{task['id']}.xlsx"
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name=filename,
-        mimetype=REPORT_EXPORT_MIMETYPE,
-    )
-
-
-def _import_task_report_excel(task, detail_endpoint: str):
-    redirect_response = redirect(url_for(detail_endpoint, task_id=task["id"]))
-    if task["status"] not in {"completed", "partial"}:
-        flash("任务尚未完成，暂不能回填报告标注。", "error")
-        return redirect_response
-
-    upload = request.files.get("report_excel")
-    filename = str(upload.filename or "").strip() if upload is not None else ""
-    if upload is None or not filename:
-        flash("请选择需要回填的 Excel 报告。", "error")
-        return redirect_response
-    if Path(filename).suffix.lower() != ".xlsx":
-        flash("回填文件仅支持系统导出的 xlsx 格式报告。", "error")
-        return redirect_response
-
-    payload = upload.stream.read(REPORT_IMPORT_MAX_BYTES + 1)
-    if len(payload) > REPORT_IMPORT_MAX_BYTES:
-        flash("回填文件不能超过 10MB。", "error")
-        return redirect_response
-
-    try:
-        imported_count = _load_report_excel_reviews(task, payload)
-    except ReportExcelImportError as exc:
-        flash(str(exc), "error")
-        return redirect_response
-
-    flash(f"已从 Excel 回填 {imported_count} 条报告标注。", "success")
-    return redirect_response
+    return output
 
 
 def _load_report_excel_reviews(task, payload: bytes) -> int:

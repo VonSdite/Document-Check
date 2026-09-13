@@ -5,14 +5,15 @@ from unittest.mock import patch
 
 from openpyxl import Workbook
 
-from app import common_terms, sensitive_terms
-from app.common_terms import (
+import app.checks.common_terms as common_terms
+import app.checks.sensitive_terms as sensitive_terms
+from app.checks.common_terms import (
     CommonTermRule,
     build_common_terms_report,
     load_common_terms,
 )
-from app.sensitive_terms import load_sensitive_terms
-from app.term_cache import clear_term_file_cache
+from app.checks.sensitive_terms import load_sensitive_terms
+from app.checks.term_cache import clear_term_file_cache
 
 
 class CommonTermsTest(unittest.TestCase):

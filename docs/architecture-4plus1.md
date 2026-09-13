@@ -1,6 +1,6 @@
 # 4+1 架构视图
 
-本文描述文档智能门禁当前的运行架构。系统保持现有 HTTP 接口、页面行为和任务状态接口不变。
+本文描述文档智能门禁的场景、模块职责、依赖、进程与部署。HTTP 路由和 SQLite 结构以自动化兼容契约验证。
 
 ## 总览
 
@@ -61,88 +61,161 @@ run.py 主进程
 
 ## 逻辑视图
 
-### Web 应用
+### 模块职责
 
-- `app/__init__.py` 创建 Web 应用、配置日志、初始化数据库和注册路由。
-- `app/routes.py` 注册用户页面、管理员页面、任务接口和健康检查接口，并编排请求参数、权限与响应。
-- `app/model_service.py` 负责用户模型提供商、模型配置和可用模型快照。
-- `app/task_submission.py` 负责各类任务的请求校验、文件入库和任务快照事务。
-- `app/task_files.py` 负责上传路径、文件访问、下载打包和文件清理辅助。
-- `app/reporting/constants.py` 定义报告字段、标注状态、统计口径和 Excel 格式。
-- `app/reporting/service.py` 负责报告解析、去重排序、误报规则、人工复核和统计缓存。
-- `app/reporting/excel.py` 负责报告工作簿导出与离线标注回填。
-- `app/observability.py` 提供访问日志、启动自检和就绪探针。
-- `app/config.py` 读取并规范化 `config.yaml`。
+| 模块 | 职责与入口 |
+| --- | --- |
+| `bootstrap` | `factory.create_app` 装配 Web 应用；`supervisor` 提供监督器进程入口 |
+| `contracts` | 任务类型、文件数量和输出条目限制等公共约束 |
+| `infrastructure` | 本地配置、网络、日志、文件操作；`runtime` 创建进程应用上下文 |
+| `persistence` | `connection` 管理连接，`schema` 管理初始化，`settings` 管理设置，`defaults` 管理默认检查项 |
+| `identity` | 独立身份数据类型、IP/可信请求头身份解析与 SAML 适配 |
+| `models` | 提供商与模型配置、模型发现、模型请求和流式协议 |
+| `documents` | PDF、DOCX、表格和标记文本提取，图片提取、页面渲染与视频抽帧 |
+| `checks` | 检查项目录、词表检查、链接校验、语种分析、报告证据约束 |
+| `tasks` | 提交参数与结果、上传事务、调度认领、TaskRunner、进度、租约与文件生命周期 |
+| `reporting` | 报告解析与规则过滤、人工复核、工作簿导入导出、统计缓存刷新 |
+| `web` | 请求与响应适配、认证和权限编排、页面路由、模板和静态资源 |
 
-### 任务执行
+### 服务与适配
 
-- `app/task_supervisor.py` 负责单实例监督、任务认领、任务进程生命周期、租约恢复和后台维护。
-- `app/tasks.py` 的 `TaskRunner` 编排单个任务并执行文本检查项。
-- `app/task_runtime/preprocessing.py` 负责文档读取、图片准备、视频抽帧、多文档组装和预处理结果持久化。
-- `app/task_runtime/image_checks.py` 和 `video_checks.py` 分别编排图片与视频检查。
-- `app/task_runtime/multimodal_protocol.py` 负责多检查项模型请求和结构化返回解析。
-- `app/task_runtime/multimodal_common.py` 提供批次、上下文、图片输入和结果摘要辅助。
-- `app/task_runtime/common.py` 提供任务数据、结果合并和通用配置辅助。
-- `app/task_runtime/state.py` 负责任务租约、取消、进度、中间结果和最终状态。
-- `app/task_runtime/artifacts.py` 负责任务文件统计、缓存快照和清理。
-- `app/llm.py` 负责模型请求、流式响应、重试、取消检查和输出解析。
-- `app/documents.py` 提供稳定的文档提取入口，`app/extraction/` 按 PDF、DOCX、表格和文本标记格式实现解析。
-- `app/images.py` 和 `app/videos.py` 负责图片提取、页面渲染和视频抽帧。
-- PDF 文本优先由 PyMuPDF 提取，文本为空或包含异常字符时按页使用 pypdf 回退；表格识别只在页面包含候选向量边线时执行。
-- 图片检查提取 PDF 文本上下文时跳过表格结构化，随后独立执行内嵌图片提取和页面截图渲染。
-- 视频采样使用有界的两路 `ffmpeg` 并行抽帧，保留采样顺序和单帧失败回退策略。
+Web 层将请求解析为 `TaskSubmission`，将提交服务返回的 `SubmissionResult` 转换为页面消息和跳转。模型服务显式接收用户主体，报告复核服务接收数据参数，工作簿服务返回文件内容。后台服务使用应用上下文访问数据库和日志。
 
-### 持久化和文件
+用户任务、管理任务、模型管理、管理概览和系统设置分别注册路由。`web/__init__.py` 汇总注册过程；HTTP 路径、端点名称、认证、代理前缀和静态资源地址由兼容测试覆盖。
 
-- `app/db.py` 管理 SQLite 连接、表结构、迁移、设置和默认数据。
-- SQLite 使用 WAL 和每个应用上下文独立连接，支持多个 Web worker、任务 supervisor 和任务进程并发访问。
-- `instance/document_check.sqlite3` 保存任务、配置、状态和报告数据。
-- `instance/uploads/` 与 `instance/extracted_images/` 保存任务文件和处理产物。
-- `instance/logs/` 保存应用日志和访问日志。
+任务监督器直接调用 `tasks.runner.TaskRunner` 和 `reporting.statistics`。任务执行按文本、图片和视频分工，文档提取和检查规则具有独立模块入口。
+
+```mermaid
+flowchart TD
+    bootstrap[bootstrap 应用装配] --> web[web HTTP 适配]
+    bootstrap --> tasks[tasks 任务生命周期]
+    web --> tasks
+    web --> identity[identity 用户身份]
+    web --> reporting[reporting 报告]
+    web --> models[models 模型服务]
+    tasks --> reporting
+    tasks --> models
+    tasks --> documents[documents 文档处理]
+    tasks --> checks[checks 检查规则]
+    tasks --> infrastructure[infrastructure 运行基础]
+    models --> checks
+    reporting --> checks
+    checks --> persistence[persistence 持久化]
+    models --> persistence
+    reporting --> persistence
+    infrastructure --> persistence
+    identity --> persistence
+    persistence --> contracts[contracts 公共约束]
+```
+
+完整依赖允许范围见 [开发与模块边界](development.md)。模块依赖保持单向，后台导入独立性由自动化测试验证。
+
+### 持久化与查询
+
+SQLite 使用 WAL，每个应用上下文持有独立连接，连接设置为外键约束开启、`synchronous=NORMAL`。数据库保存任务队列、配置、进度、报告、规则和复核统计；上传文件与提取产物保存在 `instance/`。
+
+- 用户列表使用类型、用户主体与创建时间组合索引；状态轮询按最多 100 个任务 ID 查询轻量状态和统计。
+- 管理日期统计按支持的任务类型与日期范围使用现有索引。
+- 模型配置按用户批量读取，模型选择按提供商主键与用户归属定位。
+- 任务认领先通过状态与用户索引定位各用户的有限候选，再执行并发限制与全局排序。
+- 报告汇总在 SQLite 内聚合统计字段，页面同步准备最近最多 20 个任务；监督器使用主键游标，每轮检查最多 512 个任务、刷新最多 100 个过期报告。
+- 文件清理读取文件元数据，按批次处理。
+
+详细查询边界与验证方法见 [性能与容量验证](performance.md)。数据库的表、字段、索引和触发器以结构契约约束。
+
+### 文档处理
+
+PDF 文本优先通过 PyMuPDF 提取，按页按需使用 pypdf 回退；候选向量边线触发表格识别。PDF 空格修正使用线性字符遍历，词条位置查找使用页面和工作表标记的二分索引。
+
+图片检查的 PDF 文本提取跳过表格结构化，内嵌图片提取和页面截图按各自步骤执行。Excel 使用只读工作簿迭代；视频采样使用有界的两路 `ffmpeg` 抽帧，保留采样顺序和单帧失败回退。预处理结果持久化后供检查项和重试使用。
 
 ## 开发视图
 
 ```text
-app/
-  __init__.py            应用工厂与日志
-  config.py              本地配置
-  routes.py              HTTP 路由与请求编排
-  model_service.py       用户模型配置服务
-  task_submission.py     任务提交事务
-  task_files.py          任务文件与上传路径
-  observability.py       日志与健康检查
-  db.py                  SQLite 连接与数据模型
-  task_supervisor.py     任务监督器与任务进程入口
-  tasks.py               TaskRunner 与检查项编排
-  task_runtime/
-    common.py            任务数据与结果辅助
-    preprocessing.py     任务输入预处理
-    image_checks.py      图片检查编排
-    video_checks.py      视频检查编排
-    multimodal_protocol.py  多模态请求与返回协议
-    multimodal_common.py 多模态批次与结果辅助
-    state.py             租约、取消、进度与结果状态
-    artifacts.py         任务文件统计与清理
+app/                              Python 命名空间包
+  bootstrap/
+    factory.py                    Web 应用装配
+    supervisor.py                 监督器进程入口
+  contracts/
+    task_types.py                 任务类型与文档数量约束
+    limits.py                     输出数量约束
+  infrastructure/
+    config.py                     本地配置读写
+    runtime.py                    配置、资源定位与进程应用上下文
+    logging.py                    应用日志
+    network.py                    网络配置与访问地址
+    files.py                      文件系统操作
+  persistence/
+    connection.py                 SQLite 连接与时间
+    schema.py                     表结构初始化
+    settings.py                   设置、用户名与任务记录操作
+    defaults.py                   默认检查项与配置同步
+  identity/
+    models.py                     用户身份数据
+    service.py                    IP、可信请求头与会话身份
+    saml.py                       SAML 协议适配
+  models/
+    service.py                    提供商与模型配置
+    discovery.py                  模型发现
+    client.py                     推理请求、流式响应与取消
+  documents/
+    extraction/                   PDF、DOCX、表格与标记文本解析
+    images.py                     图片提取与页面渲染
+    videos.py                     视频抽帧
+  checks/
+    catalog.py                    检查项目录与排序
+    common_terms.py               常用词规则
+    sensitive_terms.py            敏感词规则
+    term_cache.py                 词表缓存
+    term_locations.py             文档位置索引
+    hyperlinks.py                 链接校验
+    text_language.py              语种判断
+    language_consistency.py       跨语种静态分析
+    guardrails.py                 证据约束
+  tasks/
+    submission.py                 提交数据、验证、文件入库与任务事务
+    files.py                      上传路径、任务文件与清理辅助
+    supervisor.py                 调度、租约恢复与任务进程管理
+    runner.py                     TaskRunner 与文本检查编排
+    runtime/
+      preprocessing.py            文档、图片、视频与多文档预处理
+      image_checks.py             图片检查编排
+      video_checks.py             视频检查编排
+      multimodal_protocol.py      多模态请求与结构化结果
+      multimodal_common.py        批次、输入与摘要
+      common.py                   配置和结果合并
+      state.py                    进度、取消、租约与结果状态
+      artifacts.py                产物统计与清理
   reporting/
-    constants.py         报告字段与状态定义
-    service.py           报告解析、复核与统计
-    excel.py             报告导出与离线回填
-  llm.py                 模型客户端
-  documents.py           文档提取入口
-  extraction/
-    pdf.py               PDF 文本与表格提取
-    docx.py              DOCX 文本与链接提取
-    spreadsheets.py      XLSX、XLSM 与 XLS 提取
-    markup.py            TXT、Markdown 与 HTML 提取
-  images.py              图片提取与页面渲染
-  videos.py              视频抽帧
-  templates/             Jinja 页面模板
-  static/                前端脚本与样式
-run.py                   Gunicorn 启动入口
-tests/                   单元测试与并发行为测试
+    constants.py                  报告字段、状态和导出定义
+    service.py                    报告解析、规则与复核
+    excel.py                      工作簿生成与标注回填
+    statistics.py                 统计聚合与后台刷新
+  web/
+    auth.py                       认证路由与权限
+    user_tasks.py                 用户任务路由
+    admin_tasks.py                管理任务路由
+    models.py                     模型配置请求适配
+    settings.py                   系统设置
+    overview.py                   管理概览
+    task_lists.py                 分页列表与状态响应
+    task_actions.py               任务访问与操作响应
+    task_media.py                 文件下载、媒体与视频响应
+    submission.py                 上传请求与提交结果适配
+    reports.py                    报告复核、导出与回填响应
+    presentation.py               模板上下文与异常响应
+    observability.py              访问日志与健康检查
+    formatting.py                 Markdown 展示
+    common.py                     请求辅助
+    constants.py                  展示约定
+    templates/                    Jinja 模板
+    static/                       脚本与样式
+run.py                            Gunicorn 启动入口
+scripts/benchmark_internal.py     临时环境 HTTP 并发压测
+tests/                            行为、兼容、依赖和性能回归
 ```
 
-依赖方向为：路由调用报告与任务领域模块，任务监督器调用 `TaskRunner`，`TaskRunner` 调用任务运行和输入提取模块，持久化模块通过 `db.py` 访问 SQLite。Web worker 处理 HTTP 请求和轻量数据库操作，后台任务由 supervisor 和任务进程执行。
+所有 Python 源码归属模块目录。Web 工厂以明确资源路径加载 `web/templates/` 和 `web/static/`；后台进程只装配运行上下文。源码、模板和运行数据目录分别承担代码、展示和持久化职责。
 
 ## 进程视图
 
@@ -157,7 +230,7 @@ tests/                   单元测试与并发行为测试
 | 任务进程 | 最多 4 | 一个进程执行一个任务 |
 | 任务内检查线程 | 按 `check_item_concurrency` | 一个任务内并行执行检查项 |
 
-任务 supervisor 由 `run.py` 创建为独立 Python 子进程，再启动 Gunicorn master。任务进程使用 `spawn` 创建，任务进程只接收任务 ID 和租约令牌；每个进程自行创建应用对象和数据库连接。
+任务 supervisor 由 `run.py` 通过 `app.bootstrap.supervisor` 创建为独立 Python 子进程，再启动 Gunicorn master。任务进程使用 `spawn` 创建，任务进程接收任务 ID、租约令牌和运行根目录；每个进程自行创建应用对象和数据库连接。
 
 Web 请求线程、任务进程和任务内检查线程都使用 Python 原生线程或进程。外部模型请求属于 I/O 操作，线程在等待网络响应时释放执行资源；文档解析和视频处理在独立任务进程中运行。
 

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.hyperlinks import (
+from app.checks.hyperlinks import (
     HYPERLINK_CHECK_CODE,
     UnsafeHyperlinkTarget,
     _ensure_safe_http_destination,
@@ -63,7 +63,7 @@ class HyperlinkRuleTest(unittest.TestCase):
         self.assertEqual(report["items"][0]["category"], "超链接格式错误")
 
     def test_probe_blocks_private_destination_before_request(self):
-        with patch("app.hyperlinks.requests.Session.request") as request:
+        with patch("app.checks.hyperlinks.requests.Session.request") as request:
             result = probe_http_url("http://127.0.0.1:8080")
 
         request.assert_not_called()
@@ -91,8 +91,8 @@ class HyperlinkRuleTest(unittest.TestCase):
 
         session = FakeSession()
         with (
-            patch("app.hyperlinks._ensure_safe_http_destination"),
-            patch("app.hyperlinks._http_session", return_value=session),
+            patch("app.checks.hyperlinks._ensure_safe_http_destination"),
+            patch("app.checks.hyperlinks._http_session", return_value=session),
         ):
             result = probe_http_url("https://docs.example.com/missing")
 
@@ -123,13 +123,13 @@ class HyperlinkRuleTest(unittest.TestCase):
         session = FakeSession()
         with (
             patch(
-                "app.hyperlinks._ensure_safe_http_destination",
+                "app.checks.hyperlinks._ensure_safe_http_destination",
                 side_effect=[
                     None,
                     UnsafeHyperlinkTarget("重定向指向内网，系统未访问。"),
                 ],
             ) as safety_check,
-            patch("app.hyperlinks._http_session", return_value=session),
+            patch("app.checks.hyperlinks._http_session", return_value=session),
         ):
             result = probe_http_url("https://docs.example.com/redirect")
 
@@ -167,7 +167,7 @@ class HyperlinkRuleTest(unittest.TestCase):
 
     def test_safe_destination_rejects_non_global_dns_answer(self):
         with patch(
-            "app.hyperlinks.socket.getaddrinfo",
+            "app.checks.hyperlinks.socket.getaddrinfo",
             return_value=[(2, 1, 6, "", ("10.0.0.5", 443))],
         ):
             with self.assertRaisesRegex(ValueError, "内网"):

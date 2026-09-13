@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 import yaml
 
-from app import create_app
-from app.config import (
+from app.bootstrap.factory import create_app
+from app.infrastructure.config import (
     CONFIG_FILENAME,
     DEFAULT_MAX_UPLOAD_MB,
     load_local_config,
@@ -25,7 +25,7 @@ def _write_config(root_dir: str, config: dict):
 
 class ProviderConfigTest(unittest.TestCase):
     def test_all_table_templates_load_column_resize_support(self):
-        template_dir = Path(__file__).resolve().parents[1] / "app" / "templates"
+        template_dir = Path(__file__).resolve().parents[1] / "app" / "web" / "templates"
         table_templates = []
         for template_path in template_dir.glob("*.html"):
             source = template_path.read_text(encoding="utf-8")
@@ -407,8 +407,11 @@ class ProviderConfigTest(unittest.TestCase):
             )
 
             with (
-                patch("app._runtime_root_dir", return_value=Path(temp_dir)),
-                patch("app._configure_logging"),
+                patch(
+                    "app.infrastructure.runtime._runtime_root_dir",
+                    return_value=Path(temp_dir),
+                ),
+                patch("app.infrastructure.runtime._configure_logging"),
             ):
                 created_app = create_app()
             self.assertFalse(created_app.config["PLATFORM"])
@@ -426,8 +429,11 @@ class ProviderConfigTest(unittest.TestCase):
     def test_app_without_config_defaults_to_non_platform(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
-                patch("app._runtime_root_dir", return_value=Path(temp_dir)),
-                patch("app._configure_logging"),
+                patch(
+                    "app.infrastructure.runtime._runtime_root_dir",
+                    return_value=Path(temp_dir),
+                ),
+                patch("app.infrastructure.runtime._configure_logging"),
             ):
                 created_app = create_app()
             config = load_local_config(Path(temp_dir))
@@ -460,8 +466,11 @@ class ProviderConfigTest(unittest.TestCase):
             )
 
             with (
-                patch("app._runtime_root_dir", return_value=Path(temp_dir)),
-                patch("app._configure_logging"),
+                patch(
+                    "app.infrastructure.runtime._runtime_root_dir",
+                    return_value=Path(temp_dir),
+                ),
+                patch("app.infrastructure.runtime._configure_logging"),
             ):
                 created_app = create_app()
             response = created_app.test_client().get("/")

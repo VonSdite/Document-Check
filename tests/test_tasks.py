@@ -9,38 +9,45 @@ from unittest.mock import patch
 from flask import Flask
 from openpyxl import Workbook
 
-from app.common_terms import COMMON_TERMS_CHECK_CODE
-from app.db import get_db, init_db, now_text, set_setting
-from app.hyperlinks import HYPERLINK_CHECK_CODE
-from app.llm import LLMError
-from app.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
-from app.task_supervisor import TaskSupervisor
-from app.task_types import (
+from app.checks.common_terms import COMMON_TERMS_CHECK_CODE
+from app.checks.hyperlinks import HYPERLINK_CHECK_CODE
+from app.checks.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
+from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
 )
-from app.tasks import (
+from app.models.client import LLMError
+from app.persistence.connection import get_db, now_text
+from app.persistence.schema import init_db
+from app.persistence.settings import set_setting
+from app.tasks.runner import (
     TaskRunner,
-    _check_item_groups,
     _document_check_items,
-    _document_text_for_image_batch,
-    _format_image_check_issue_summary,
-    _image_check_target,
-    _mark_failed,
-    _merge_check_results,
-    _merge_video_batch_reports,
     _run_check_items_concurrently,
-    _run_combined_multimodal_check_with_repair,
-    _save_intermediate_results,
-    _split_combined_check_output,
-    _split_combined_structured_output,
+)
+from app.tasks.runtime.artifacts import (
     cleanup_expired_task_files,
     cleanup_task_file_cache,
     task_file_cache_snapshot,
 )
+from app.tasks.runtime.common import _merge_check_results
+from app.tasks.runtime.image_checks import _image_check_target
+from app.tasks.runtime.multimodal_common import (
+    _check_item_groups,
+    _document_text_for_image_batch,
+    _format_image_check_issue_summary,
+)
+from app.tasks.runtime.multimodal_protocol import (
+    _run_combined_multimodal_check_with_repair,
+    _split_combined_check_output,
+    _split_combined_structured_output,
+)
+from app.tasks.runtime.state import _mark_failed, _save_intermediate_results
+from app.tasks.runtime.video_checks import _merge_video_batch_reports
+from app.tasks.supervisor import TaskSupervisor
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -474,7 +481,7 @@ class TaskExecutionTest(unittest.TestCase):
             lease_expires_at="2999-01-01 00:00:00",
         )
 
-        with patch("app.tasks.run_check") as mocked_run_check:
+        with patch("app.tasks.runner.run_check") as mocked_run_check:
             TaskRunner(self.app).run(task_id, "stale-claim")
 
         mocked_run_check.assert_not_called()
@@ -552,7 +559,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "不应完成"
 
         with patch(
-            "app.tasks.run_check", side_effect=wait_for_cancel
+            "app.tasks.runner.run_check", side_effect=wait_for_cancel
         ) as mocked_run_check:
             worker = Thread(
                 target=runner.run,
@@ -720,7 +727,7 @@ class TaskExecutionTest(unittest.TestCase):
         calls = []
 
         with patch(
-            "app.tasks.run_check",
+            "app.tasks.runner.run_check",
             side_effect=lambda **kwargs: calls.append(kwargs) or "完成",
         ):
             TaskRunner(self.app).run(task_id)
@@ -915,7 +922,7 @@ class TaskExecutionTest(unittest.TestCase):
         db.commit()
 
         with patch(
-            "app.task_runtime.artifacts.remove_file",
+            "app.tasks.runtime.artifacts.remove_file",
             return_value=(False, "[WinError 32] 文件正被占用"),
         ):
             self.assertEqual(cleanup_expired_task_files(self.app), 0)
@@ -1071,7 +1078,7 @@ class TaskExecutionTest(unittest.TestCase):
             kwargs["on_content"]("流式结果")
             return "最终结果"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             results = _run_check_items_concurrently(
                 self.app,
                 task,
@@ -1139,7 +1146,7 @@ class TaskExecutionTest(unittest.TestCase):
         }
 
         with patch(
-            "app.tasks.run_check",
+            "app.tasks.runner.run_check",
             return_value=json.dumps(model_result, ensure_ascii=False),
         ):
             results = _run_check_items_concurrently(
@@ -1207,7 +1214,7 @@ class TaskExecutionTest(unittest.TestCase):
                     calls.append(kwargs)
                     return "完整对照结果"
 
-                with patch("app.tasks.run_check", side_effect=fake_run_check):
+                with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
                     results = _run_check_items_concurrently(
                         self.app,
                         task,
@@ -1273,7 +1280,8 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         with patch(
-            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+            "app.tasks.runner.run_check",
+            side_effect=AssertionError("should not call llm"),
         ):
             results = _run_check_items_concurrently(
                 self.app,
@@ -1336,7 +1344,8 @@ class TaskExecutionTest(unittest.TestCase):
         document_text = "file: doc.txt\n\n[第2页]\nOpenAI 正确，openai 错误，Open AI 不推荐，请勿写成登陆。"
 
         with patch(
-            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+            "app.tasks.runner.run_check",
+            side_effect=AssertionError("should not call llm"),
         ):
             results = _run_check_items_concurrently(
                 self.app,
@@ -1398,7 +1407,8 @@ class TaskExecutionTest(unittest.TestCase):
         ]
 
         with patch(
-            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+            "app.tasks.runner.run_check",
+            side_effect=AssertionError("should not call llm"),
         ):
             results = _run_check_items_concurrently(
                 self.app,
@@ -1441,7 +1451,7 @@ class TaskExecutionTest(unittest.TestCase):
             calls.append(kwargs)
             return "完成"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             _run_check_items_concurrently(
                 self.app,
                 task,
@@ -1485,7 +1495,7 @@ class TaskExecutionTest(unittest.TestCase):
             calls.append(kwargs)
             return "完成"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             _run_check_items_concurrently(
                 self.app,
                 task,
@@ -1588,7 +1598,7 @@ class TaskExecutionTest(unittest.TestCase):
             calls.append(kwargs)
             return "完成"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id, "test-claim")
 
         updated = db.execute(
@@ -1624,7 +1634,7 @@ class TaskExecutionTest(unittest.TestCase):
             calls.append(kwargs)
             return "完成"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id)
 
         updated = (
@@ -1662,7 +1672,8 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         with patch(
-            "app.tasks.run_check", side_effect=AssertionError("should not call llm")
+            "app.tasks.runner.run_check",
+            side_effect=AssertionError("should not call llm"),
         ):
             TaskRunner(self.app).run(task_id)
 
@@ -1702,7 +1713,7 @@ class TaskExecutionTest(unittest.TestCase):
             max_input_chars=20,
         )
 
-        with patch("app.tasks.run_check") as run_check_mock:
+        with patch("app.tasks.runner.run_check") as run_check_mock:
             TaskRunner(self.app).run(task_id)
 
         updated = (
@@ -1767,15 +1778,15 @@ class TaskExecutionTest(unittest.TestCase):
 
         with (
             patch(
-                "app.task_runtime.preprocessing.extract_text",
+                "app.tasks.runtime.preprocessing.extract_text",
                 return_value="[第1页]\n图 1 是接线图。",
             ),
             patch(
-                "app.task_runtime.preprocessing.extract_images",
+                "app.tasks.runtime.preprocessing.extract_images",
                 side_effect=fake_extract_images,
             ),
             patch(
-                "app.task_runtime.preprocessing.render_pdf_page_images",
+                "app.tasks.runtime.preprocessing.render_pdf_page_images",
                 return_value=(
                     [],
                     {
@@ -1787,7 +1798,7 @@ class TaskExecutionTest(unittest.TestCase):
                 ),
             ),
             patch(
-                "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+                "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
                 return_value="未发现问题",
             ),
         ):
@@ -1870,11 +1881,11 @@ class TaskExecutionTest(unittest.TestCase):
 
         with (
             patch(
-                "app.task_runtime.preprocessing.extract_video_frames",
+                "app.tasks.runtime.preprocessing.extract_video_frames",
                 side_effect=fake_extract_video_frames,
             ),
             patch(
-                "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+                "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
                 return_value="未发现问题",
             ),
         ):
@@ -1952,7 +1963,7 @@ class TaskExecutionTest(unittest.TestCase):
             },
         )
 
-        with patch("app.tasks.run_check", return_value="完成"):
+        with patch("app.tasks.runner.run_check", return_value="完成"):
             TaskRunner(self.app).run(task_id)
 
         updated = (
@@ -2000,7 +2011,7 @@ class TaskExecutionTest(unittest.TestCase):
                 raise LLMError("模型流式正文疑似重复输出")
             return "易理解性检查完成"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id)
 
         updated = (
@@ -2043,7 +2054,9 @@ class TaskExecutionTest(unittest.TestCase):
         ]
         task_id = self._insert_running_document_task(check_items)
 
-        with patch("app.tasks.run_check", side_effect=LLMError("模型服务不可用")):
+        with patch(
+            "app.tasks.runner.run_check", side_effect=LLMError("模型服务不可用")
+        ):
             TaskRunner(self.app).run(task_id)
 
         updated = (
@@ -2121,7 +2134,7 @@ class TaskExecutionTest(unittest.TestCase):
             live_snapshots.append(json.loads(live["result_json"]))
             return "重试成功结果"
 
-        with patch("app.tasks.run_check", side_effect=run_retry):
+        with patch("app.tasks.runner.run_check", side_effect=run_retry):
             TaskRunner(self.app).run(task_id)
 
         updated = (
@@ -2185,7 +2198,7 @@ class TaskExecutionTest(unittest.TestCase):
         get_db().commit()
 
         with patch(
-            "app.tasks.run_check", side_effect=LLMError("重试仍失败")
+            "app.tasks.runner.run_check", side_effect=LLMError("重试仍失败")
         ) as run_check_mock:
             TaskRunner(self.app).run(task_id)
 
@@ -2261,7 +2274,7 @@ class TaskExecutionTest(unittest.TestCase):
             calls.append(kwargs)
             return "发现参数不一致"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id)
 
         updated = db.execute(
@@ -2309,7 +2322,7 @@ class TaskExecutionTest(unittest.TestCase):
             calls.append(kwargs)
             return "完成"
 
-        with patch("app.tasks.run_check", side_effect=fake_run_check):
+        with patch("app.tasks.runner.run_check", side_effect=fake_run_check):
             TaskRunner(self.app).run(task_id)
 
         self.assertEqual(calls[0]["check_name"], "多文档对照检查")
@@ -2388,7 +2401,7 @@ class TaskExecutionTest(unittest.TestCase):
             return "图文最终结果\n发现问题：图片中中文说明与英文文档语种不一致。\n需人工确认：截图底部文字较小。"
 
         with patch(
-            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
             side_effect=fake_run_multimodal_document_check,
         ):
             TaskRunner(self.app).run(task_id)
@@ -2547,7 +2560,7 @@ class TaskExecutionTest(unittest.TestCase):
             )
 
         with patch(
-            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
             side_effect=fake_run_multimodal_document_check,
         ):
             TaskRunner(self.app).run(task_id)
@@ -2760,7 +2773,7 @@ class TaskExecutionTest(unittest.TestCase):
         ]
 
         with patch(
-            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
             side_effect=responses,
         ) as runner:
             sections = _run_combined_multimodal_check_with_repair(
@@ -2787,7 +2800,7 @@ class TaskExecutionTest(unittest.TestCase):
 
         with (
             patch(
-                "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+                "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
                 side_effect=["无法解析", "仍然无法解析"],
             ) as runner,
             self.assertRaisesRegex(RuntimeError, "连续两次未返回可识别"),
@@ -2814,7 +2827,7 @@ class TaskExecutionTest(unittest.TestCase):
         )
 
         with patch(
-            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
             side_effect=[first_response, "无法解析"],
         ):
             sections = _run_combined_multimodal_check_with_repair(
@@ -2912,7 +2925,7 @@ class TaskExecutionTest(unittest.TestCase):
 - 未发现其他安装顺序问题。"""
 
         with patch(
-            "app.task_runtime.multimodal_protocol.run_multimodal_document_check",
+            "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
             side_effect=fake_run_multimodal_document_check,
         ):
             TaskRunner(self.app).run(task_id)

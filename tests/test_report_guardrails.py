@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from app.report_guardrails import (
+from app.checks.guardrails import (
     build_pdf_table_evidence_index,
     filter_unsupported_visual_missing_items,
     is_unsupported_visual_missing_item,

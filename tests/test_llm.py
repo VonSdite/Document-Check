@@ -3,7 +3,7 @@ import unittest
 from threading import Event, Thread
 from unittest.mock import call, patch
 
-from app import llm
+import app.models.client as llm
 
 
 class FakeResponse:
@@ -611,7 +611,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         with (
             patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT", 2),
             patch.object(llm, "_DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT", 10_000),
-            self.assertLogs("app.llm", level="WARNING") as logs,
+            self.assertLogs("app.models.client", level="WARNING") as logs,
             self.assertRaisesRegex(llm.LLMError, "忽略了关闭思考设置"),
         ):
             llm._read_stream_response(response, None, thinking_disabled=True)
@@ -814,7 +814,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         with (
             patch.object(llm.requests, "Session", return_value=fake_session),
             patch.object(llm.time, "sleep") as sleep,
-            self.assertLogs("app.llm", level="WARNING") as logs,
+            self.assertLogs("app.models.client", level="WARNING") as logs,
         ):
             result = llm.run_check(
                 api_base="https://llm.example.test/v1/chat/completions",
@@ -1443,7 +1443,7 @@ class LLMResponseParsingTest(unittest.TestCase):
 
         with (
             patch.object(llm.requests, "Session", return_value=fake_session),
-            self.assertLogs("app.llm", level="INFO") as logs,
+            self.assertLogs("app.models.client", level="INFO") as logs,
         ):
             result = llm.run_check(
                 api_base="http://example.test/v1/chat/completions",

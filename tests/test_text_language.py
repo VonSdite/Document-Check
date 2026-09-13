@@ -1,6 +1,6 @@
 import unittest
 
-from app.text_language import (
+from app.checks.text_language import (
     TEXT_LANGUAGE_CHINESE,
     TEXT_LANGUAGE_LATIN,
     TEXT_LANGUAGE_MIXED,

@@ -4,28 +4,32 @@ from pathlib import Path
 
 from flask import Flask
 
-from app.db import (
-    DEFAULT_CHECK_ITEMS_BY_CODE,
-    MODEL_THINKING_DEFAULT_MIGRATION_KEY,
-    default_check_item_codes,
-    get_bool_setting,
-    get_db,
-    get_ip_username,
-    get_setting,
-    init_db,
-    now_text,
-    reset_default_check_item_prompt,
-    seed_defaults,
-    set_ip_username,
-    set_setting,
-)
-from app.routes import _next_check_item_sort_order, _reorder_check_items
-from app.task_types import (
+from app.checks.catalog import _next_check_item_sort_order, _reorder_check_items
+from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
+)
+from app.persistence.connection import (
+    MODEL_THINKING_DEFAULT_MIGRATION_KEY,
+    get_db,
+    now_text,
+)
+from app.persistence.defaults import (
+    DEFAULT_CHECK_ITEMS_BY_CODE,
+    default_check_item_codes,
+    reset_default_check_item_prompt,
+    seed_defaults,
+)
+from app.persistence.schema import init_db
+from app.persistence.settings import (
+    get_bool_setting,
+    get_ip_username,
+    get_setting,
+    set_ip_username,
+    set_setting,
 )
 
 

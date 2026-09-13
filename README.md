@@ -15,13 +15,23 @@
 
 ## 代码结构
 
-- `app/routes.py` 负责 HTTP 端点、权限和请求编排。
-- `app/model_service.py`、`app/task_submission.py` 和 `app/task_files.py` 分别负责模型配置、任务提交与任务文件。
-- `app/reporting/` 分离报告定义、解析复核与 Excel 导入导出。
-- `app/task_supervisor.py` 负责任务认领和任务进程生命周期。
-- `app/tasks.py` 负责任务与文本检查编排，`app/task_runtime/` 负责预处理、多模态处理、状态与任务文件。
-- `app/documents.py` 提供文档提取入口，`app/extraction/` 按 PDF、DOCX、表格和文本标记格式实现解析。
-- `app/llm.py`、`app/images.py` 和 `app/videos.py` 提供模型、图片和视频处理能力。
+`app/` 使用 Python 命名空间包，根目录只包含模块目录。应用工厂位于 `app.bootstrap.factory`，启动入口为 `run.py`。
+
+| 模块 | 职责 |
+| --- | --- |
+| `app/bootstrap/` | Web 应用装配、监督器进程入口 |
+| `app/contracts/` | 任务类型、数量和输出限制等公共约束 |
+| `app/infrastructure/` | 本地配置、网络、日志、文件操作和进程应用上下文 |
+| `app/persistence/` | SQLite 连接、表结构初始化、设置和默认检查项 |
+| `app/identity/` | 用户身份数据、IP/请求头认证和 SAML 适配 |
+| `app/models/` | 模型配置、模型发现和推理客户端 |
+| `app/documents/` | 文档文本与链接提取、图片处理和视频抽帧 |
+| `app/checks/` | 检查项目录、词表检查、链接校验、语种分析和证据规则 |
+| `app/tasks/` | 任务提交、调度认领、执行、进度和文件生命周期 |
+| `app/reporting/` | 报告解析、人工复核、统计缓存和 Excel 数据处理 |
+| `app/web/` | HTTP 路由、请求与响应适配、模板和静态资源 |
+
+模块依赖和扩展方式见 [开发与模块边界](docs/development.md)。数据库查询、并发配置和压测方法见 [性能与容量验证](docs/performance.md)。
 
 ## 快速启动
 

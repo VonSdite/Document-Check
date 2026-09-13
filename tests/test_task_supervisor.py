@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 from flask import Flask
 
-from app.db import get_db, init_db, now_text, set_setting
-from app.task_supervisor import (
+from app.persistence.connection import get_db, now_text
+from app.persistence.schema import init_db
+from app.persistence.settings import set_setting
+from app.tasks.supervisor import (
     SUPERVISOR_HEARTBEAT_STALE_SECONDS,
     TaskSupervisor,
     supervisor_is_ready,

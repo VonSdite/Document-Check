@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app import model_discovery
+import app.models.discovery as model_discovery
 
 
 class FakeResponse:
