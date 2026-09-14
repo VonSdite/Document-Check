@@ -22,6 +22,10 @@ server:
 worker:
   # 管理页面中的“系统同时执行任务数”不能超过该机器级上限。
   max_task_processes: 4
+logging:
+  # 控制台级别：INFO、WARNING、ERROR、CRITICAL；启动摘要和访问地址始终显示。
+  # 文件固定保留 INFO 及以上日志，排查问题时可将控制台设为 INFO。
+  console_level: WARNING
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。

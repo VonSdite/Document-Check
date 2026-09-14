@@ -77,9 +77,13 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 
 ## 日志约定
 
-各模块使用 `logging.getLogger(__name__)` 记录日志。`app.infrastructure.logging` 集中配置 INFO 级别、模块名、进程 ID、控制台输出及多进程安全文件轮转。`app.tasks` 及其子模块写入 `task.log`，`app.models` 及其子模块写入 `llm.log`，其余 `app` 模块和 Werkzeug 写入 `app.log`。启动入口使用 `app.run` logger。每条业务记录写入所属文件，同时输出到控制台。
+各模块使用 `logging.getLogger(__name__)` 记录日志。`app.infrastructure.logging` 集中配置模块名、进程 ID、控制台过滤及多进程安全文件轮转。`app.tasks` 及其子模块写入 `task.log`，`app.models` 及其子模块写入 `llm.log`，其余 `app` 模块、Werkzeug 和 Uvicorn 写入 `app.log`。文件固定记录 INFO 及以上日志；`logging.console_level` 控制终端输出，默认 WARNING。启动入口使用 `app.run` logger，启动摘要和访问地址通过 `console_notice` 标记显示。
 
 `app.web.observability` 独立维护 `access.log`，记录 HTTP 请求生命周期。业务日志中的 `task_id` 用于关联任务过程和模型请求，模型 `request_id` 标识单次模型调用；访问日志中的 `request_id` 来自 HTTP 请求头或自动生成，标识一次 Web 请求。
+
+`app.bootstrap.diagnostics.run_entrypoint()` 使用标准库包裹入口，应用依赖在包裹范围内加载。主进程与 Web worker 的入口异常写入 `app.log`，调度器和任务进程的入口异常写入 `task.log`，退出码为 1。常规日志组件不可用时，诊断写入每进程独立的 `startup-<PID>.log`，并保留标准错误输出。任务标准输出传递启动阶段握手。
+
+Uvicorn 使用 `log_config=None` 保留应用日志配置，每个 Web worker 在应用工厂内初始化相同的日志策略。`uvicorn.error` 和 `uvicorn.asgi` 交给 `uvicorn` logger 输出；HTTP 访问日志由 Web 层统一记录。
 
 ## 扩展方式
 
@@ -111,7 +115,7 @@ uv run python -m unittest discover -s tests
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查认领、取消、执行权、存活过期任务防重入、进程名额及检查项执行。
 - `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可、入口与初始化超时、状态文件写入失败时终止进程，以及监督器被终止后的遗留进程恢复。`tests/test_server_runtime.py` 另验证 Windows 虚拟环境下监督器和任务进程的实际解释器命令。
 - `tests/test_document_cancellation.py` 检查 PDF 分页与表格取消、512 列 Excel 分行取消及异常传播。
-- `tests/test_logging.py` 检查业务日志分流、模块与进程标识、异常堆栈、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查。
+- `tests/test_logging.py` 检查日志分流、控制台级别、启动提示、Uvicorn 异常、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查；`tests/test_startup_diagnostics.py` 使用独立进程验证依赖与配置加载失败的诊断记录。
 
 项目直接导入的第三方库在 `pyproject.toml` 中显式声明，由 `uv.lock` 锁定完整依赖树。Python 标准库由解释器提供；功能扩展依赖通过 extras 声明，例如 `pypdf[image]`。`ffmpeg`、`ffprobe` 由运行环境安装并加入 `PATH`。
 

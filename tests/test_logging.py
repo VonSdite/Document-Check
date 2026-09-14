@@ -18,7 +18,15 @@ class LoggingTest(unittest.TestCase):
         self.addCleanup(temp_dir.cleanup)
         self.logs_dir = Path(temp_dir.name) / "logs"
         self.console = io.StringIO()
-        for name in ("app", "werkzeug", "app.tasks", "app.models"):
+        for name in (
+            "app",
+            "werkzeug",
+            "app.tasks",
+            "app.models",
+            "uvicorn",
+            "uvicorn.error",
+            "uvicorn.asgi",
+        ):
             target = logging.getLogger(name)
             previous = (target.handlers[:], target.level, target.propagate)
             target.handlers = []
@@ -52,12 +60,14 @@ class LoggingTest(unittest.TestCase):
         path = self.logs_dir / filename
         return path.read_text(encoding="utf-8") if path.exists() else ""
 
-    def test_events_are_written_once_to_their_file_and_console(self):
+    def test_info_events_are_written_once_to_files_and_console_stays_quiet(self):
         cases = (
             ("app", "app.log"),
             ("app.web.auth", "app.log"),
             ("app.reporting.excel", "app.log"),
             ("werkzeug", "app.log"),
+            ("uvicorn.error", "app.log"),
+            ("uvicorn.asgi", "app.log"),
             ("app.tasks.submission", "task.log"),
             ("app.tasks.supervisor", "task.log"),
             ("app.tasks.runner", "task.log"),
@@ -82,7 +92,48 @@ class LoggingTest(unittest.TestCase):
                 label = "access" if name == self.access_logger.name else name
                 self.assertIn(f"[{label}] pid={os.getpid()}", content)
                 self.assertIn("task_id=42 request_id=trace-42", content)
-                self.assertEqual(self.console.getvalue().count(marker), 1)
+                self.assertNotIn(marker, self.console.getvalue())
+
+    def test_console_level_changes_preserve_file_detail_and_startup_notices(self):
+        for level in ("INFO", "ERROR", "WARNING", "CRITICAL"):
+            with self.subTest(level=level):
+                self.app.config["CONSOLE_LOG_LEVEL"] = level
+                _configure_logging(self.app)
+                configure_access_logging(self.app)
+                for name, filename in (
+                    ("app.tasks.runner", "task.log"),
+                    ("uvicorn.error", "app.log"),
+                    (self.access_logger.name, "access.log"),
+                ):
+                    for event_level in (
+                        logging.INFO,
+                        logging.WARNING,
+                        logging.ERROR,
+                        logging.CRITICAL,
+                    ):
+                        marker = f"级别验证-{level}-{name}-{event_level}"
+                        logging.getLogger(name).log(event_level, marker)
+                        self.assertEqual(self._read_log(filename).count(marker), 1)
+                        self.assertEqual(
+                            self.console.getvalue().count(marker),
+                            int(event_level >= logging.getLevelNamesMapping()[level]),
+                        )
+                notice = f"服务地址验证-{level}"
+                logging.getLogger("app.run").info(
+                    notice, extra={"console_notice": True}
+                )
+                self.assertEqual(self.console.getvalue().count(notice), 1)
+                self.assertEqual(self._read_log("app.log").count(notice), 1)
+
+    def test_uvicorn_exception_is_written_once_with_traceback(self):
+        try:
+            raise RuntimeError("ASGI 异常验证")
+        except RuntimeError:
+            logging.getLogger("uvicorn.error").exception("Web 请求执行失败")
+        for output in (self._read_log("app.log"), self.console.getvalue()):
+            self.assertEqual(output.count("Web 请求执行失败"), 1)
+            self.assertIn("RuntimeError: ASGI 异常验证", output)
+            self.assertIn("Traceback (most recent call last)", output)
 
     def test_task_exception_keeps_traceback_in_task_log(self):
         try:

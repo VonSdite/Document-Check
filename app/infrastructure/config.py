@@ -16,6 +16,8 @@ DEFAULT_MAX_UPLOAD_MB = 1024
 DEFAULT_WEB_WORKERS = 1
 DEFAULT_WEB_THREADS = 16
 DEFAULT_MAX_TASK_PROCESSES = 4
+DEFAULT_CONSOLE_LOG_LEVEL = "WARNING"
+CONSOLE_LOG_LEVELS = {"INFO", "WARNING", "ERROR", "CRITICAL"}
 DEFAULT_AUTH_MODE = "ip"
 AUTH_MODES = {"ip", "trusted_header", "saml"}
 DEFAULT_PROXY_MODE = "direct"
@@ -82,6 +84,7 @@ def _default_config() -> dict:
         "worker": {
             "max_task_processes": DEFAULT_MAX_TASK_PROCESSES,
         },
+        "logging": {"console_level": DEFAULT_CONSOLE_LOG_LEVEL},
         "network": {
             "proxy_mode": DEFAULT_PROXY_MODE,
             "proxy": "",
@@ -168,6 +171,15 @@ def _normalize_config(config: dict) -> dict:
         worker.get("max_task_processes", DEFAULT_MAX_TASK_PROCESSES),
         DEFAULT_MAX_TASK_PROCESSES,
     )
+    log_config = config.get("logging")
+    if not isinstance(log_config, dict):
+        log_config = {}
+    console_level = str(log_config.get("console_level") or "").strip().upper()
+    config["logging"] = {
+        "console_level": console_level
+        if console_level in CONSOLE_LOG_LEVELS
+        else DEFAULT_CONSOLE_LOG_LEVEL,
+    }
     config["network"] = normalize_network_config(config.get("network", {}))
     config["auth"] = _normalize_auth(config.get("auth", {}))
     config.pop("providers", None)

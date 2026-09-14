@@ -3,12 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from app.bootstrap.factory import create_app
-from app.bootstrap.server import serve_application
-from app.infrastructure.network import access_urls
+from app.bootstrap.diagnostics import run_entrypoint
 from app.infrastructure.subprocesses import PROJECT_ROOT, python_module_command
-from app.tasks.supervisor import wait_for_supervisor
-from app.web.observability import log_startup_self_check
 
 logger = logging.getLogger("app.run")
 
@@ -17,6 +13,11 @@ SUPERVISOR_STOP_TIMEOUT_SECONDS = 20
 
 
 def main() -> None:
+    from app.bootstrap.factory import create_app
+    from app.bootstrap.server import serve_application
+    from app.infrastructure.network import access_urls
+    from app.web.observability import log_startup_self_check
+
     app = create_app()
     host = (
         os.environ.get("HOST", app.config["LISTEN_HOST"])
@@ -39,15 +40,18 @@ def main() -> None:
             app.config["WEB_WORKERS"],
             app.config["WEB_THREADS"],
             app.config["MAX_TASK_PROCESSES"],
+            extra={"console_notice": True},
         )
         for url in access_urls(host, port):
-            logger.info("可访问地址：%s", url)
+            logger.info("可访问地址：%s", url, extra={"console_notice": True})
         serve_application(app, host, port)
     finally:
         _stop_task_supervisor(supervisor)
 
 
 def _start_task_supervisor(app):
+    from app.tasks.supervisor import wait_for_supervisor
+
     command, environment = python_module_command(
         "app.bootstrap.supervisor", root_dir=app.config["ROOT_DIR"]
     )
@@ -90,4 +94,4 @@ def _stop_task_supervisor(supervisor) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_entrypoint(main)

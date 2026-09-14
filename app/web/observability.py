@@ -11,6 +11,8 @@ from pathlib import Path
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from flask import current_app, g, jsonify, request
 
+from app.infrastructure.config import DEFAULT_CONSOLE_LOG_LEVEL
+from app.infrastructure.logging import _ensure_console_handler
 from app.persistence.connection import get_db
 
 logger = logging.getLogger(__name__)
@@ -42,7 +44,11 @@ def configure_access_logging(app) -> None:
         file_handler.setFormatter(logging.Formatter(ACCESS_LOG_FORMAT))
         access_logger.addHandler(file_handler)
 
-    _ensure_console_handler(access_logger)
+    _ensure_console_handler(
+        access_logger,
+        level=app.config.get("CONSOLE_LOG_LEVEL", DEFAULT_CONSOLE_LOG_LEVEL),
+        log_format=ACCESS_LOG_FORMAT,
+    )
     access_logger.propagate = False
     app.extensions["access_logger"] = access_logger
     logger.info("访问日志已启用：%s", access_log_file)
@@ -231,18 +237,3 @@ def _has_file_handler(target_logger, log_file: Path) -> bool:
         and Path(handler.baseFilename) == log_file
         for handler in target_logger.handlers
     )
-
-
-def _ensure_console_handler(target_logger) -> None:
-    formatter = logging.Formatter(ACCESS_LOG_FORMAT)
-    for handler in target_logger.handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(
-            handler, logging.FileHandler
-        ):
-            handler.setLevel(logging.INFO)
-            handler.setFormatter(formatter)
-            return
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    target_logger.addHandler(console_handler)

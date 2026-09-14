@@ -110,6 +110,9 @@ server:
 worker:
   # 管理页面中的“系统同时执行任务数”不能超过该机器级上限。
   max_task_processes: 4
+logging:
+  # 控制台级别：INFO、WARNING、ERROR、CRITICAL；文件固定记录 INFO 及以上日志。
+  console_level: WARNING
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
@@ -176,6 +179,9 @@ server:
 worker:
   # 管理页面中的“系统同时执行任务数”不能超过该机器级上限。
   max_task_processes: 4
+logging:
+  # 控制台级别：INFO、WARNING、ERROR、CRITICAL；文件固定记录 INFO 及以上日志。
+  console_level: WARNING
 network:
   # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
   # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
@@ -402,16 +408,20 @@ PDF 表格使用已有字符边界索引定位文字候选，空白区域直接�
 
 ## 本地日志
 
-运行日志同时输出到 console 和 `instance/logs/`，按用途写入以下文件：
+控制台默认显示启动摘要、访问地址和 `WARNING` 及以上日志。运行日志以 `INFO` 及以上级别写入 `instance/logs/`，按用途分为以下文件：
 
 | 文件 | 内容 |
 | --- | --- |
-| `app.log` | 服务启动、就绪状态、认证、Web、文档与报告模块的应用事件及异常。 |
+| `app.log` | 服务启动、就绪状态、认证、Web、文档与报告模块的应用事件及异常，以及 Uvicorn 运行日志。 |
 | `task.log` | 任务提交、调度、执行、重试、取消、租约、任务文件清理及异常。 |
 | `llm.log` | 模型请求、HTTP 状态、流式响应统计、请求重试、超时和诊断。 |
 | `access.log` | HTTP 请求开始、结束、状态码、耗时及请求异常。 |
 
-`app.log`、`task.log` 和 `llm.log` 各自按 5MB 轮转，每类保留当前文件和 2 个历史文件。日志包含时间、级别、模块名和进程 ID，任务与模型请求记录携带对应的 `task_id`、`request_id`，便于跨文件关联。所有日志文件使用 UTF-8 编码，并支持多进程并发写入和轮转。
+`app.log`、`task.log` 和 `llm.log` 各自按 5MB 轮转，每类保留当前文件和 2 个历史文件。日志包含时间、级别、模块名和进程 ID，任务与模型请求记录携带对应的 `task_id`、`request_id`，便于跨文件关联。上述四类日志文件使用 UTF-8 编码，并支持多进程并发写入和轮转。
+
+本地 `config.yaml` 的 `logging.console_level` 支持 `INFO`、`WARNING`、`ERROR`、`CRITICAL`，默认值为 `WARNING`。启动时会为缺少该配置的文件补齐默认值，修改后重启生效。排查问题时设为 `INFO` 可在控制台查看详细日志；文件记录级别保持 `INFO`，启动摘要和访问地址始终显示。
+
+主进程和 Web worker 的入口异常写入 `app.log`，调度器和任务进程的入口异常写入 `task.log`，并在控制台保留异常堆栈。依赖加载失败且日志组件不可用时，标准库将诊断保存到 `instance/logs/startup-<PID>.log`；每个失败进程使用独立文件。日志目录不可写时，异常继续输出到标准错误。
 
 `llm.log` 记录模型名称、OpenAI Chat Completions 流式帧数量、`finish_reason`、`usage`、空响应诊断和截断后的响应帧样本。系统设置中的“模型流式定位日志”控制请求发送、响应建立、每个 chunk 短预览及结束标记的详细记录，默认关闭。模型日志只记录请求元信息和响应诊断，API Key 与完整文档正文作为请求数据处理。
 

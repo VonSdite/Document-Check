@@ -61,6 +61,25 @@ class ProviderConfigTest(unittest.TestCase):
             config["auth"]["trusted_header"], {"user_id": "", "username": ""}
         )
         self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "")
+        self.assertEqual(config["logging"], {"console_level": "WARNING"})
+
+    def test_console_logging_defaults_and_normalization_are_persisted(self):
+        for value, expected in (
+            (None, "WARNING"),
+            ([], "WARNING"),
+            ({}, "WARNING"),
+            ({"console_level": " info "}, "INFO"),
+            ({"console_level": "error"}, "ERROR"),
+            ({"console_level": "critical"}, "CRITICAL"),
+            ({"console_level": "invalid"}, "WARNING"),
+        ):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temp_dir:
+                config = {"secret_key": "test", "logging": value}
+                _write_config(temp_dir, config)
+                normalized = load_local_config(Path(temp_dir))
+                self.assertEqual(normalized["logging"], {"console_level": expected})
+                self.assertEqual(normalized["secret_key"], "test")
+                self.assertEqual(load_local_config(Path(temp_dir)), normalized)
 
     def test_server_proxy_config_is_normalized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -478,8 +497,8 @@ class ProviderConfigTest(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(created_app.config["APPLICATION_ROOT"], "/infoCheck")
-            self.assertIn('href="/infoCheck/static/app.css"', html)
-            self.assertIn('src="/infoCheck/static/app.js"', html)
+            self.assertRegex(html, r'href="/infoCheck/static/app\.css(?:\?[^\"]*)?"')
+            self.assertRegex(html, r'src="/infoCheck/static/app\.js(?:\?[^\"]*)?"')
             self.assertIn('src="/infoCheck/static/table-resize.js"', html)
 
     def test_config_drops_legacy_providers(self):

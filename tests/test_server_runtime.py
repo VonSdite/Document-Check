@@ -74,6 +74,7 @@ assert 'gunicorn' not in sys.modules
             ws="none",
             lifespan="off",
             access_log=False,
+            log_config=None,
             proxy_headers=False,
         )
 
@@ -82,7 +83,7 @@ assert 'gunicorn' not in sys.modules
         app.config["ROOT_DIR"] = Path(tempfile.gettempdir()).resolve()
         with (
             patch("run.subprocess.Popen") as start,
-            patch("run.wait_for_supervisor", return_value=True),
+            patch("app.tasks.supervisor.wait_for_supervisor", return_value=True),
         ):
             self.assertIs(_start_task_supervisor(app), start.return_value)
         options = start.call_args.kwargs
@@ -106,7 +107,7 @@ assert 'gunicorn' not in sys.modules
                 ),
             ),
             patch("run.subprocess.Popen") as start,
-            patch("run.wait_for_supervisor", return_value=True),
+            patch("app.tasks.supervisor.wait_for_supervisor", return_value=True),
         ):
             _start_task_supervisor(app)
         self.assertEqual(start.call_args.args[0][0], base_python)
@@ -130,7 +131,7 @@ assert 'gunicorn' not in sys.modules
                     ),
                 ),
                 patch("run.subprocess.Popen") as start,
-                patch("run.wait_for_supervisor", return_value=True),
+                patch("app.tasks.supervisor.wait_for_supervisor", return_value=True),
             ):
                 _start_task_supervisor(app)
             self.assertEqual(start.call_args.args[0][0], executable)
@@ -176,7 +177,7 @@ assert 'gunicorn' not in sys.modules
             with (
                 self.subTest(exit_code=exit_code),
                 patch("run.subprocess.Popen") as start,
-                patch("run.wait_for_supervisor", return_value=False),
+                patch("app.tasks.supervisor.wait_for_supervisor", return_value=False),
                 patch("run._stop_task_supervisor") as stop,
             ):
                 start.return_value.poll.return_value = exit_code
@@ -249,7 +250,7 @@ assert 'gunicorn' not in sys.modules
                 prefix=request.script_root,
             )
 
-        with patch("app.bootstrap.asgi.create_app", return_value=app):
+        with patch("app.bootstrap.factory.create_app", return_value=app):
             adapter = create_asgi_app()
         self.assertEqual(adapter.executor._max_workers, 3)
 

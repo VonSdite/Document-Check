@@ -3,11 +3,12 @@ import signal
 import sys
 import threading
 
-from app.tasks.supervisor import TaskSupervisor
+from app.bootstrap.diagnostics import run_entrypoint
 
 
 def run_task_supervisor(stop_event, parent_pid: int | None = None) -> None:
     from app.infrastructure.runtime import create_task_app
+    from app.tasks.supervisor import TaskSupervisor
 
     try:
         TaskSupervisor(create_task_app()).run(stop_event, parent_pid=parent_pid)
@@ -50,4 +51,4 @@ def _run_supervisor_cli() -> None:
 
 
 if __name__ == "__main__":
-    _run_supervisor_cli()
+    run_entrypoint(_run_supervisor_cli, logger_name="app.tasks.supervisor")

@@ -1,10 +1,16 @@
-from a2wsgi import WSGIMiddleware
-
-from app.bootstrap.factory import create_app
+from app.bootstrap.diagnostics import run_entrypoint
 
 
 def create_asgi_app():
     """为每个 Web 进程创建独立 Flask 应用和 WSGI 请求线程池。"""
+    return run_entrypoint(_create_asgi_app, logger_name="app.bootstrap.asgi")
+
+
+def _create_asgi_app():
+    from a2wsgi import WSGIMiddleware
+
+    from app.bootstrap.factory import create_app
+
     app = create_app()
 
     def wsgi_app(environ, start_response):

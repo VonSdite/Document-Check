@@ -19,6 +19,8 @@ def serve_application(app, host: str, port: int) -> None:
             ws="none",
             lifespan="off",
             access_log=False,
+            # 各进程的应用工厂统一初始化日志，保留文件与控制台各自的输出策略。
+            log_config=None,
             # 代理信任与身份策略统一由应用层配置处理。
             proxy_headers=False,
         )

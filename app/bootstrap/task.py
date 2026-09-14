@@ -4,6 +4,8 @@ import argparse
 import json
 import sys
 
+from app.bootstrap.diagnostics import run_entrypoint
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -32,4 +34,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_entrypoint(main, logger_name="app.tasks.process")

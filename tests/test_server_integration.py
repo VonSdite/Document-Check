@@ -84,6 +84,7 @@ class ServerIntegrationTest(unittest.TestCase):
                     )
                     self.assertEqual(normalized["server"]["web_threads"], 16)
                     self.assertEqual(normalized["worker"]["max_task_processes"], 4)
+                    self.assertEqual(normalized["logging"]["console_level"], "WARNING")
 
                     self._exercise_workers(base_url, root, workers)
                     if workers > 1:
@@ -91,9 +92,9 @@ class ServerIntegrationTest(unittest.TestCase):
                         psutil.Process(next(iter(original_pids))).terminate()
                         self._wait_until(
                             lambda: (
-                                output_path.read_text(encoding="utf-8").count(
-                                    "Started server process"
-                                )
+                                (root / "instance/logs/app.log")
+                                .read_text(encoding="utf-8")
+                                .count("Started server process")
                                 >= 3
                             )
                         )
@@ -168,7 +169,16 @@ class ServerIntegrationTest(unittest.TestCase):
                 process.wait(timeout=30)
                 self._wait_until(lambda: not self._alive(descendants), timeout=10)
                 self.assertFalse((root / "instance/task-supervisor.json").exists())
-                self.assertNotIn("Traceback", output_path.read_text(encoding="utf-8"))
+                console_text = output_path.read_text(encoding="utf-8")
+                self.assertNotIn("Traceback", console_text)
+                self.assertIn("可访问地址：", console_text)
+                self.assertNotIn("request_start", console_text)
+                self.assertNotIn("任务预处理开始", console_text)
+                self.assertNotIn("Started server process", console_text)
+                app_log = (root / "instance/logs/app.log").read_text(encoding="utf-8")
+                self.assertIn("[uvicorn.error]", app_log)
+                self.assertIn("Started server process", app_log)
+                self.assertIn("Finished server process", app_log)
             finally:
                 if process.poll() is None:
                     descendants.extend(

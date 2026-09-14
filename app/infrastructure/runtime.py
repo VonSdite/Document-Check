@@ -54,6 +54,7 @@ def _create_base_app(root_dir: Path | None = None):
         TASK_LOG_FILE=str(root_dir / "instance" / "logs" / "task.log"),
         LLM_LOG_FILE=str(root_dir / "instance" / "logs" / "llm.log"),
         ACCESS_LOG_FILE=str(root_dir / "instance" / "logs" / "access.log"),
+        CONSOLE_LOG_LEVEL=local_config["logging"]["console_level"],
         MAX_UPLOAD_MB=server_config["max_upload_mb"],
         MAX_CONTENT_LENGTH=server_config["max_upload_mb"] * 1024 * 1024,
         WEB_WORKERS=server_config["web_workers"],

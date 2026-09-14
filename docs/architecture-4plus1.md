@@ -140,6 +140,12 @@ PDF 表格复用页面已有字符边界建立文字存在性索引，仅对含�
 
 图片检查的 PDF 文本提取跳过表格结构化，内嵌图片提取和页面截图按各自步骤执行；视频采样使用有界的两路 `ffmpeg` 抽帧，保留采样顺序和单帧失败回退。预处理结果持久化后供检查项和重试使用。
 
+### 日志输出
+
+应用、任务、模型和访问日志分别写入 `app.log`、`task.log`、`llm.log`、`access.log`，文件保留 INFO 及以上日志并独立轮转。控制台级别由 `logging.console_level` 设置，默认 WARNING，启动摘要和访问地址始终显示。Uvicorn 运行事件及异常写入 `app.log`，HTTP 请求由 Web 层记录访问日志。
+
+各进程入口在应用依赖加载范围内记录未捕获异常。主进程和 Web worker 写入 `app.log`，调度器和任务进程写入 `task.log`；日志组件不可用时，标准库将诊断写入每进程独立的 `startup-<PID>.log`。进程异常同时输出到标准错误。
+
 ## 开发视图
 
 ```text
@@ -150,6 +156,7 @@ app/                              Python 命名空间包
     asgi.py                       Flask 工厂与 WSGI 请求线程池
     supervisor.py                 监督器进程入口
     task.py                       任务许可、初始化和业务就绪入口
+    diagnostics.py                入口异常记录与标准库启动诊断
   contracts/
     task_types.py                 任务类型与文档数量约束
     limits.py                     输出数量约束
