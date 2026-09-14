@@ -86,7 +86,7 @@
         if (event.kind === "end") stream.ended = true;
       });
       cursor = data.cursor;
-      finished = !data.active && !data.more;
+      finished = !data.active && !data.more && root.dataset.detailActive !== "1";
       opened().forEach(render);
       if (data.more) delay = 50;
     } catch (_error) {
@@ -103,4 +103,7 @@
     schedule();
   }, true);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) read(); else clearTimeout(timer); });
+  root.addEventListener("task-detail-updated", () => {
+    if (finished && root.dataset.detailActive === "1") { finished = false; read(); }
+  });
 })();

@@ -596,6 +596,187 @@ class AdminSettingsRouteTest(unittest.TestCase):
             200,
         )
 
+    def test_single_retry_uses_snapshot_when_current_model_is_removed(self):
+        from app.models.client import LLMError
+        from app.tasks.runner import TaskRunner
+        from app.tasks.supervisor import TaskSupervisor
+
+        for prefix in ("/tasks", "/admin/tasks"):
+            with self.subTest(prefix=prefix):
+                task_id, provider_id, _, previous = self._insert_retryable_task()
+                with self.app.app_context():
+                    db = get_db()
+                    db.execute(
+                        "DELETE FROM user_model_configs WHERE provider_id=?",
+                        (provider_id,),
+                    )
+                    db.execute(
+                        "UPDATE user_model_providers SET api_base='https://changed.invalid', request_timeout=1 WHERE id=?",
+                        (provider_id,),
+                    )
+                    db.execute(
+                        "UPDATE tasks SET document_text='快照正文' WHERE id=?",
+                        (task_id,),
+                    )
+                    db.commit()
+                url = f"{prefix}/{task_id}"
+                page = BeautifulSoup(
+                    self.client.get(url).get_data(as_text=True), "html.parser"
+                )
+                self.assertTrue(
+                    page.select_one('[data-retry-check="check-a"]').has_attr("hidden")
+                )
+                self.assertFalse(
+                    page.select_one('[data-retry-check="check-b"]').has_attr("hidden")
+                )
+                response = self.client.post(
+                    f"{url}/retry-check", json={"code": "check-b", "execution": 0}
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    self.client.post(
+                        f"{url}/retry-check", json={"code": "check-b", "execution": 0}
+                    ).status_code,
+                    409,
+                )
+                with self.app.app_context():
+                    [(claimed_id, token)] = TaskSupervisor(
+                        self.app
+                    )._claim_available_tasks()
+                    self.assertEqual(claimed_id, task_id)
+                with patch(
+                    "app.tasks.runner.run_check", side_effect=LLMError("模型不存在")
+                ) as model:
+                    TaskRunner(self.app).run(task_id, token)
+                model.assert_called_once()
+                args = model.call_args.kwargs
+                self.assertEqual(args["check_name"], "检查 B")
+                self.assertEqual(args["prompt"], "执行检查 B")
+                self.assertEqual(args["model_name"], "snapshot-model")
+                self.assertEqual(
+                    args["api_base"], "https://snapshot.test/v1/chat/completions"
+                )
+                self.assertEqual(args["request_timeout"], 77)
+                self.assertTrue(args["force_disable_thinking"])
+                self.assertEqual(args["reasoning_effort"], "high")
+                self.assertEqual(args["api_key"], "retry-secret")
+                with self.app.app_context():
+                    task = (
+                        get_db()
+                        .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                        .fetchone()
+                    )
+                    self.assertEqual(task["status"], "partial")
+                    self.assertIsNone(task["api_key"])
+                    results = json.loads(task["result_json"])
+                    self.assertEqual(results[0], previous[0])
+                    self.assertEqual(results[1]["error"], "模型不存在")
+                    self.assertEqual(results[1]["execution"], 1)
+                page = BeautifulSoup(
+                    self.client.get(url).get_data(as_text=True), "html.parser"
+                )
+                self.assertFalse(
+                    page.select_one('[data-retry-check="check-b"]').has_attr("hidden")
+                )
+
+    def test_single_retry_accepts_canceled_result_and_keeps_successful_result(self):
+        task_id, _, _, results = self._insert_retryable_task()
+        results[1]["canceled"] = True
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET status='canceled', result_json=? WHERE id=?",
+                (json.dumps(results), task_id),
+            )
+            get_db().commit()
+        url = f"/admin/tasks/{task_id}"
+        self.assertEqual(
+            self.client.post(
+                f"{url}/retry-check", json={"code": "check-b", "execution": 0}
+            ).status_code,
+            200,
+        )
+        page = BeautifulSoup(self.client.get(url).get_data(as_text=True), "html.parser")
+        pending = page.select_one('[data-detail-result="check-b"]')
+        self.assertEqual(
+            pending.select_one("[data-check-activity]").get_text(strip=True),
+            "状态：待执行",
+        )
+        self.assertFalse(pending.select_one("[data-cancel-check]").has_attr("hidden"))
+        self.assertTrue(pending.select_one("[data-retry-check]").has_attr("hidden"))
+        self.assertIsNone(pending.select_one(".report-error"))
+        with self.app.app_context():
+            task = (
+                get_db()
+                .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                .fetchone()
+            )
+            self.assertEqual(json.loads(task["retry_check_codes_json"]), ["check-b"])
+            self.assertEqual(json.loads(task["result_json"])[0], results[0])
+
+    def test_single_retry_validates_request_and_owner_and_keeps_media_grouped(self):
+        task_id, _, _, _ = self._insert_retryable_task()
+        for data in (
+            [],
+            {},
+            {"code": "check-b", "execution": True},
+            {"code": "check-b", "execution": -1},
+        ):
+            self.assertEqual(
+                self.client.post(
+                    f"/tasks/{task_id}/retry-check", json=data
+                ).status_code,
+                400,
+            )
+        for code in ("missing", "check-a"):
+            self.assertEqual(
+                self.client.post(
+                    f"/tasks/{task_id}/retry-check", json={"code": code, "execution": 0}
+                ).status_code,
+                409,
+            )
+        foreign_id, _, _, _ = self._insert_retryable_task(owner_subject="ip:10.0.0.9")
+        self._logout_test_client()
+        self.assertEqual(
+            self.client.post(
+                f"/tasks/{foreign_id}/retry-check",
+                json={"code": "check-b", "execution": 0},
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/admin/tasks/{foreign_id}/retry-check",
+                json={"code": "check-b", "execution": 0},
+            ).status_code,
+            302,
+        )
+        for task_type in (IMAGE_TASK_TYPE, VIDEO_TASK_TYPE):
+            media_id, _, _, _ = self._insert_retryable_task(task_type=task_type)
+            with self.app.app_context():
+                get_db().execute(
+                    "UPDATE tasks SET status='running' WHERE id=?", (media_id,)
+                )
+                get_db().commit()
+            self.assertEqual(
+                self.client.post(
+                    f"/tasks/{media_id}/retry-check",
+                    json={"code": "check-b", "execution": 0},
+                ).status_code,
+                409,
+            )
+            with self.app.app_context():
+                get_db().execute(
+                    "UPDATE tasks SET status='partial' WHERE id=?", (media_id,)
+                )
+                get_db().commit()
+            self.assertEqual(
+                self.client.post(
+                    f"/tasks/{media_id}/retry-check",
+                    json={"code": "check-b", "execution": 0},
+                ).status_code,
+                200,
+            )
+
     def test_user_cannot_poll_or_cancel_another_owners_check(self):
         from app.tasks.activity import (
             initialize_activity,

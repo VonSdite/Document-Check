@@ -46,6 +46,7 @@ from app.web.task_activity import (
     detail_progress,
     model_output_response,
     present_check_activity,
+    retry_check,
 )
 from app.web.task_lists import (
     _render_admin_consistency_page,
@@ -188,6 +189,7 @@ def register_user_tasks_routes(app):
                 request.endpoint, task_id=task_id, next=request.args.get("next")
             ),
             cancel_check_url=url_for("user_cancel_check", task_id=task_id),
+            retry_check_url=url_for("user_retry_check", task_id=task_id),
             model_output_url=url_for("user_model_output", task_id=task_id),
             mode="admin" if not _platform_enabled() else "user",
             task=task,
@@ -219,6 +221,11 @@ def register_user_tasks_routes(app):
             task_id, lightweight=True, include_revision=False
         )
         return model_output_response(task)
+
+    @app.post("/tasks/<int:task_id>/retry-check")
+    def user_retry_check(task_id):
+        task = _get_user_task_or_local_admin(task_id, lightweight=True)
+        return retry_check(task)
 
     @app.post("/tasks/<int:task_id>/cancel-check")
     def user_cancel_check(task_id):

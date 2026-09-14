@@ -1,6 +1,7 @@
 """任务的轻量运行状态；按任务主键读写，并通过执行令牌隔离每次运行。"""
 
 import json
+import threading
 
 from app.persistence.connection import get_db, now_text
 from app.tasks.selection import selected_check_items
@@ -19,10 +20,37 @@ PHASE_LABELS = {
 }
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
 CANCELABLE_PHASES = {"pending", "checking", "waiting", "thinking", "output", "retrying"}
+RETRYABLE_PHASES = {"failed", "canceled", "canceling"}
+
+
+class CheckCancelEvent(threading.Event):
+    def __init__(self, execution=0):
+        super().__init__()
+        self.execution = execution
 
 
 def activity_key(task_id: int) -> str:
     return f"{ACTIVITY_KEY_PREFIX}{task_id}"
+
+
+def load_activity(db, task_id, claim_token):
+    row = db.execute(
+        "SELECT value FROM settings WHERE key = ?", (activity_key(task_id),)
+    ).fetchone()
+    state = json.loads(row["value"]) if row else {}
+    if state.get("claim_token") != claim_token:
+        state = {}
+    state.setdefault("claim_token", claim_token)
+    state.setdefault("checks", {})
+    return state
+
+
+def save_activity(db, task_id, state):
+    db.execute(
+        "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (activity_key(task_id), json.dumps(state, ensure_ascii=False), now_text()),
+    )
 
 
 def _change_activity(task_id, claim_token, change, *, allow_queued=False):
@@ -40,20 +68,9 @@ def _change_activity(task_id, claim_token, change, *, allow_queued=False):
         ):
             db.rollback()
             return None
-        row = db.execute(
-            "SELECT value FROM settings WHERE key = ?", (activity_key(task_id),)
-        ).fetchone()
-        state = json.loads(row["value"]) if row else {}
-        if state.get("claim_token") != task["claim_token"]:
-            state = {}
-        state.setdefault("claim_token", task["claim_token"])
-        state.setdefault("checks", {})
+        state = load_activity(db, task_id, claim_token)
         result = change(state)
-        db.execute(
-            "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-            (activity_key(task_id), json.dumps(state, ensure_ascii=False), now_text()),
-        )
+        save_activity(db, task_id, state)
         db.commit()
         return result
     except Exception:
@@ -66,7 +83,12 @@ def initialize_activity(task_id, claim_token, *, phase="preparing", checks=()):
         state["phase"] = phase
         for item in checks:
             state["checks"].setdefault(
-                item["code"], {"name": item["name"], "phase": "pending"}
+                item["code"],
+                {
+                    "name": item["name"],
+                    "phase": "pending",
+                    "execution": item.get("execution", 0),
+                },
             )
 
     _change_activity(task_id, claim_token, change)
@@ -116,9 +138,13 @@ def start_check_activity(task_id, claim_token, code):
     return bool(_change_activity(task_id, claim_token, change))
 
 
-def request_check_cancellation(task_id, claim_token, code):
+def request_check_cancellation(task_id, claim_token, code, *, execution=None):
     def change(state):
         item = state["checks"].get(code)
+        if execution is not None and execution != (item or {}).get("execution", 0):
+            return False
+        if item and item.pop("retry_requested", False):
+            return True
         if item is None:
             db = get_db()
             task = db.execute(
@@ -140,6 +166,35 @@ def request_check_cancellation(task_id, claim_token, code):
         return True
 
     return bool(_change_activity(task_id, claim_token, change, allow_queued=True))
+
+
+def take_check_retries(task_id, claim_token, busy_codes):
+    """旧执行退出后接收单项重试；无待执行项时封闭本次任务。"""
+    if busy_codes:
+        state = task_activities([task_id]).get(task_id, {})
+        if not any(
+            item.get("retry_requested") and code not in busy_codes
+            for code, item in state.get("checks", {}).items()
+        ):
+            return []
+
+    def change(state):
+        ready = []
+        for code, item in state["checks"].items():
+            if code in busy_codes or not item.get("retry_requested"):
+                continue
+            replacement = {
+                "name": item["name"],
+                "phase": "pending",
+                "execution": item.get("execution", 0) + 1,
+            }
+            state["checks"][code] = replacement
+            ready.append({"code": code, **replacement})
+        if not busy_codes and not ready:
+            state["phase"] = "finalizing"
+        return ready
+
+    return _change_activity(task_id, claim_token, change)
 
 
 def task_activities(task_ids):

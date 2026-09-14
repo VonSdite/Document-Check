@@ -4349,7 +4349,8 @@ body.table-column-resize-active * {
 }
 
 [data-check-activity][hidden],
-[data-cancel-check][hidden] {
+[data-cancel-check][hidden],
+[data-retry-check][hidden] {
   display: none;
 }
 

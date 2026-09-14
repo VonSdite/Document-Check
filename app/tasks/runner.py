@@ -2,7 +2,7 @@ import json
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from app.checks.common_terms import (
@@ -47,10 +47,13 @@ from app.models.client import LLMError, run_check
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
 from app.tasks.activity import (
+    CheckCancelEvent,
     clear_activity,
     finish_check_activity,
     initialize_activity,
     start_check_activity,
+    take_check_retries,
+    task_activities,
     update_check_activity,
 )
 from app.tasks.model_output import ModelOutputRecorder
@@ -152,6 +155,7 @@ class TaskRunner:
                     if retry_check_codes is not None
                     else []
                 )
+                previous_by_code = {item.get("code"): item for item in original_results}
                 retry_code_set = set(retry_check_codes or [])
                 base_results = [
                     result
@@ -173,6 +177,14 @@ class TaskRunner:
                 )
                 if task_type not in {IMAGE_TASK_TYPE, VIDEO_TASK_TYPE}:
                     check_items = selected_check_items(db, task)
+                    if retry_check_codes is not None:
+                        for item in check_items:
+                            item["execution"] = (
+                                previous_by_code.get(item["code"], {}).get(
+                                    "execution", 0
+                                )
+                                + 1
+                            )
                     initialize_activity(task_id, claim_token, checks=check_items)
                 preprocessing_started = time.monotonic()
                 logger.info(
@@ -261,6 +273,18 @@ class TaskRunner:
                         check_events=check_events,
                         base_results=base_results,
                     )
+                execution_states = (
+                    task_activities([task_id]).get(task_id, {}).get("checks", {})
+                )
+                for result in retry_results:
+                    execution = execution_states.get(result.get("code"), {}).get(
+                        "execution", 0
+                    )
+                    if retry_check_codes is not None:
+                        previous = previous_by_code.get(result.get("code"), {})
+                        execution = max(execution, previous.get("execution", 0) + 1)
+                    if execution:
+                        result["execution"] = execution
                 results = (
                     _merge_check_results(original_results, retry_results)
                     if retry_check_codes is not None
@@ -487,7 +511,15 @@ def _run_check_items_concurrently(
     own_cancel_watcher = check_events is None
     if check_events is None:
         check_events = {}
-    check_events.update({item["code"]: threading.Event() for item in check_items})
+    initial_states = task_activities([task_id]).get(task_id, {}).get("checks", {})
+    check_events.update(
+        {
+            item["code"]: CheckCancelEvent(
+                initial_states.get(item["code"], {}).get("execution", 0)
+            )
+            for item in check_items
+        }
+    )
     cancel_stop, cancel_thread = (
         _start_task_cancel_watcher(
             app, task_id, claim_token, cancel_event, check_events
@@ -525,6 +557,10 @@ def _run_check_items_concurrently(
             _update_progress(db, task_id, 5, claim_token)
     heartbeat.start()
     task_type = _task_value(task, "task_type") or DOCUMENT_TASK_TYPE
+    catalog = {
+        item["code"]: item for item in _task_check_items(get_db(), task, task_type)
+    }
+    catalog.update({item["code"]: item for item in check_items})
 
     def save_snapshot(db, summary: str, progress: int):
         with result_lock:
@@ -556,6 +592,8 @@ def _run_check_items_concurrently(
             db = get_db()
 
             item_cancel_event = check_events[item["code"]]
+            execution = item_cancel_event.execution
+            execution_meta = {"execution": execution} if execution else {}
 
             def ensure_active():
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
@@ -594,6 +632,7 @@ def _run_check_items_concurrently(
                             "code": item["code"],
                             "name": item["name"],
                             "result": content,
+                            **execution_meta,
                         }
                     else:
                         partial_by_code.pop(item["code"], None)
@@ -649,7 +688,10 @@ def _run_check_items_concurrently(
                         ),
                         "task_id": task_id,
                         "stream_trace_enabled": stream_trace_enabled,
-                        "on_output": output_recorder.for_checks([item["code"]]),
+                        "on_output": output_recorder.for_checks(
+                            [item["code"]],
+                            label=f"第 {execution + 1} 次执行" if execution else "",
+                        ),
                         "on_activity": lambda phase, attempt: update_check_activity(
                             task_id, claim_token, [item["code"]], phase, attempt
                         ),
@@ -694,6 +736,7 @@ def _run_check_items_concurrently(
                             "name": item["name"],
                             "error": error,
                             "issue_output_limit": issue_output_limit,
+                            **execution_meta,
                         }
                     )
                     if canceled:
@@ -730,6 +773,7 @@ def _run_check_items_concurrently(
                 "name": item["name"],
                 "result": content,
                 "issue_output_limit": issue_output_limit,
+                **execution_meta,
             }
             if structured_report is not None:
                 result["structured_report"] = structured_report
@@ -751,18 +795,50 @@ def _run_check_items_concurrently(
             return result
 
     executor = ThreadPoolExecutor(
-        max_workers=max(1, min(max_workers, total)),
+        max_workers=max(1, max_workers),
         thread_name_prefix=f"task-check-{task_id}",
     )
-    futures = []
+    futures = {}
     try:
-        futures = [
-            executor.submit(run_item, index, item)
+        futures = {
+            executor.submit(run_item, index, item): item["code"]
             for index, item in enumerate(check_items, start=1)
-        ]
-        results = []
-        for future in as_completed(futures):
-            results.append(future.result())
+        }
+        while True:
+            if futures:
+                done, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
+                for future in done:
+                    future.result()
+                    del futures[future]
+            if cancel_event.is_set() or _cancel_requested(
+                get_db(), task_id, claim_token
+            ):
+                raise TaskCanceled
+            retries = take_check_retries(task_id, claim_token, set(futures.values()))
+            if retries is None:
+                raise TaskCanceled
+            if not futures and not retries:
+                break
+            for retry in retries:
+                code = retry["code"]
+                item = catalog[code]
+                with result_lock:
+                    if completed_by_code.pop(code, None) is not None:
+                        completed_units -= 1
+                    partial_by_code.pop(code, None)
+                    base_results[:] = [
+                        result for result in base_results if result.get("code") != code
+                    ]
+                    if not any(selected["code"] == code for selected in check_items):
+                        check_items.append(item)
+                        total = total_units = len(check_items)
+                check_events[code] = CheckCancelEvent(retry["execution"])
+                save_snapshot(
+                    get_db(), f"等待重新执行：{item['name']}。", current_progress()
+                )
+                futures[
+                    executor.submit(run_item, check_items.index(item) + 1, item)
+                ] = code
         with result_lock:
             ordered = _ordered_results(check_items, completed_by_code, {})
         if len(ordered) != total:

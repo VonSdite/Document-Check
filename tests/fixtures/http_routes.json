@@ -279,6 +279,14 @@
     ]
   ],
   [
+    "/console/tasks/<int:task_id>/retry-check",
+    "admin_retry_check",
+    [
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
     "/console/tasks/<int:task_id>/video",
     "admin_task_video",
     [
@@ -494,6 +502,14 @@
   [
     "/tasks/<int:task_id>/retry",
     "user_retry_task",
+    [
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
+    "/tasks/<int:task_id>/retry-check",
+    "user_retry_check",
     [
       "OPTIONS",
       "POST"

@@ -161,11 +161,12 @@
 
 <section class="result-stack" data-report-results data-report-classification-url="{{ report_classification_url }}">
   {% for result in results %}
-  <article class="panel result-panel" data-detail-result="{{ result.code }}" data-check-terminal="{{ '0' if result.execution_label else '1' }}">
+  <article class="panel result-panel" data-detail-result="{{ result.code }}" data-check-phase="{{ result.execution_phase }}" data-check-execution="{{ result.execution }}" data-check-terminal="{{ '0' if result.execution_label else '1' }}">
     <div class="panel-head">
       <div class="check-heading">
         <h2 class="check-title">{{ result.name }}</h2>
         <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消执行</button>
+        <button type="button" class="small-button" data-retry-check="{{ result.code }}"{% if not result.can_retry %} hidden{% endif %}>重试</button>
         <small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{% if result.execution_label %}状态：{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}{% endif %}</small>
       </div>
     </div>

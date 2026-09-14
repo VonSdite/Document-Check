@@ -305,6 +305,261 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(item["phase"], "pending")
         self.assertNotIn("cancel_requested", item)
 
+    def test_manual_retry_waits_for_canceled_request_and_keeps_other_check_running(
+        self,
+    ):
+        from app.tasks.activity import request_check_cancellation
+        from app.tasks.retries import request_check_retry
+
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "快照提示"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        set_setting("check_item_concurrency", 2)
+        started = Barrier(3)
+        release_old, release_second, restarted = Event(), Event(), Event()
+        calls = {"第一项": 0, "第二项": 0}
+        first_events = []
+        errors = []
+
+        def model(**kwargs):
+            name = kwargs["check_name"]
+            calls[name] += 1
+            kwargs["on_activity"]("thinking", 1)
+            if name == "第二项":
+                started.wait(5)
+                self.assertTrue(release_second.wait(8))
+                self.assertFalse(kwargs["cancel_event"].is_set())
+                return "第二项完成"
+            first_events.append(kwargs["cancel_event"])
+            if calls[name] == 1:
+                started.wait(5)
+                self.assertTrue(release_old.wait(5))
+                self.assertTrue(kwargs["cancel_event"].wait(3))
+                kwargs["check_canceled"]()
+            self.assertFalse(kwargs["cancel_event"].is_set())
+            self.assertEqual(kwargs["model_name"], "test-model")
+            self.assertEqual(kwargs["prompt"], "快照提示")
+            restarted.set()
+            return "重试成功"
+
+        def run():
+            try:
+                TaskRunner(self.app).run(task_id)
+            except BaseException as exc:
+                errors.append(exc)
+
+        with patch("app.tasks.runner.run_check", side_effect=model):
+            thread = Thread(target=run)
+            thread.start()
+            try:
+                started.wait(5)
+                self.assertTrue(request_check_cancellation(task_id, None, "first"))
+                request_check_retry(task_id, "first", 0)
+                request_check_retry(task_id, "first", 0)
+                self.assertFalse(restarted.wait(0.15))
+                release_old.set()
+                self.assertTrue(restarted.wait(5))
+                self.assertFalse(release_second.is_set())
+            finally:
+                release_old.set()
+                release_second.set()
+                thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(calls, {"第一项": 2, "第二项": 1})
+        self.assertIsNot(first_events[0], first_events[1])
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "completed")
+        results = json.loads(task["result_json"])
+        self.assertEqual(results[0]["result"], "重试成功")
+        self.assertEqual(results[0]["execution"], 1)
+        self.assertNotIn("canceled", results[0])
+        self.assertEqual(results[1]["result"], "第二项完成")
+
+    def test_manual_retry_after_failure_keeps_new_failure_and_rejects_stale_click(self):
+        from app.tasks.activity import finish_check_activity
+        from app.tasks.retries import CheckRetryError, request_check_retry
+
+        checks = [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        task_id = self._insert_running_document_task(checks)
+        retried = False
+
+        def finish(*args, **kwargs):
+            nonlocal retried
+            result = finish_check_activity(*args, **kwargs)
+            if kwargs.get("failed") and not retried:
+                retried = True
+                request_check_retry(task_id, "only", 0)
+            return result
+
+        with (
+            patch("app.tasks.runner.finish_check_activity", side_effect=finish),
+            patch(
+                "app.tasks.runner.run_check",
+                side_effect=[LLMError("请求失败"), LLMError("快照模型已不存在")],
+            ) as model,
+        ):
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(
+            model.call_args_list[0].kwargs["model_name"],
+            model.call_args_list[1].kwargs["model_name"],
+        )
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "failed")
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(result["error"], "快照模型已不存在")
+        self.assertEqual(result["execution"], 1)
+        with self.assertRaisesRegex(CheckRetryError, "状态已变化"):
+            request_check_retry(task_id, "only", 0)
+
+    def test_retry_of_queued_canceled_check_runs_once(self):
+        from app.tasks.activity import request_check_cancellation
+        from app.tasks.retries import CheckRetryError, request_check_retry
+
+        checks = [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        task_id = self._insert_running_document_task(checks)
+        get_db().execute("UPDATE tasks SET status='queued' WHERE id=?", (task_id,))
+        get_db().commit()
+        self.assertTrue(request_check_cancellation(task_id, None, "only"))
+        request_check_retry(task_id, "only", 0)
+        self.assertFalse(request_check_cancellation(task_id, None, "only", execution=0))
+        with self.assertRaises(CheckRetryError):
+            request_check_retry(task_id, "only", 0)
+        [(claimed_id, token)] = TaskSupervisor(self.app)._claim_available_tasks()
+        self.assertEqual(claimed_id, task_id)
+        with patch("app.tasks.runner.run_check", return_value="完成") as model:
+            TaskRunner(self.app).run(task_id, token)
+        model.assert_called_once()
+        self.assertFalse(model.call_args.kwargs["cancel_event"].is_set())
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "completed")
+        self.assertEqual(json.loads(task["result_json"])[0]["execution"], 1)
+
+    def test_manual_retry_can_pick_retained_failed_item_during_another_retry(self):
+        from app.tasks.retries import request_check_retry
+
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "检查"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        previous = [
+            {
+                "code": item["code"],
+                "name": item["name"],
+                "error": "原失败",
+                "result": "",
+            }
+            for item in checks
+        ]
+        get_db().execute(
+            "UPDATE tasks SET result_json=?, retry_check_codes_json=? WHERE id=?",
+            (json.dumps(previous), json.dumps(["second"]), task_id),
+        )
+        get_db().commit()
+        set_setting("check_item_concurrency", 2)
+        calls = []
+
+        def model(**kwargs):
+            calls.append(kwargs["check_name"])
+            if kwargs["check_name"] == "第二项":
+                request_check_retry(task_id, "first", 0)
+            return kwargs["check_name"] + "完成"
+
+        with patch("app.tasks.runner.run_check", side_effect=model):
+            TaskRunner(self.app).run(task_id)
+        self.assertCountEqual(calls, ["第一项", "第二项"])
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "completed")
+        self.assertTrue(
+            all(not result.get("error") for result in json.loads(task["result_json"]))
+        )
+
+    def test_cancel_watcher_matches_check_execution_number(self):
+        from app.tasks.activity import (
+            CheckCancelEvent,
+            initialize_activity,
+            request_check_cancellation,
+        )
+        from app.tasks.runtime.state import _start_task_cancel_watcher
+
+        checks = [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        task_id = self._insert_running_document_task(checks)
+        initialize_activity(task_id, None, checks=checks)
+        self.assertTrue(request_check_cancellation(task_id, None, "only"))
+        event, task_cancel = CheckCancelEvent(1), Event()
+        stop, thread = _start_task_cancel_watcher(
+            self.app, task_id, None, task_cancel, {"only": event}
+        )
+        try:
+            self.assertFalse(event.wait(1.2))
+            get_db().execute(
+                "UPDATE settings SET value=json_set(value, '$.checks.only.execution', 1) WHERE key=?",
+                (f"task_activity:{task_id}",),
+            )
+            get_db().commit()
+            self.assertTrue(event.wait(3))
+            self.assertFalse(task_cancel.is_set())
+        finally:
+            stop.set()
+            thread.join(2)
+
+    def test_media_task_retry_preserves_increasing_execution_number(self):
+        checks = [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        task_id = self._insert_running_document_task(checks)
+        previous = [
+            {
+                "code": "only",
+                "name": "唯一项",
+                "error": "原失败",
+                "result": "",
+                "execution": 2,
+            }
+        ]
+        get_db().execute(
+            "UPDATE tasks SET task_type=?, result_json=?, retry_check_codes_json=? WHERE id=?",
+            (IMAGE_TASK_TYPE, json.dumps(previous), json.dumps(["only"]), task_id),
+        )
+        get_db().commit()
+        with (
+            patch("app.tasks.runner._prepare_task_inputs", return_value=("文本", "{}")),
+            patch("app.tasks.runner.image_items_from_meta", return_value=[{}]),
+            patch(
+                "app.tasks.runner._run_image_check_items_concurrently",
+                return_value=[
+                    {
+                        "code": "only",
+                        "name": "唯一项",
+                        "result": "",
+                        "error": "模型不存在",
+                    }
+                ],
+            ),
+        ):
+            TaskRunner(self.app).run(task_id)
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(json.loads(task["result_json"])[0]["execution"], 3)
+
+    def test_finalizing_task_seals_manual_retries(self):
+        from app.tasks.activity import (
+            finish_check_activity,
+            initialize_activity,
+            take_check_retries,
+        )
+        from app.tasks.retries import CheckRetryError, request_check_retry
+
+        checks = [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        task_id = self._insert_running_document_task(checks)
+        initialize_activity(task_id, None, checks=checks)
+        finish_check_activity(task_id, None, "only", failed=True)
+        self.assertEqual(take_check_retries(task_id, None, set()), [])
+        with self.assertRaisesRegex(CheckRetryError, "整理结果"):
+            request_check_retry(task_id, "only", 0)
+
     def test_external_task_cancel_event_reaches_individual_model_request(self):
         from app.tasks.runtime.state import TaskCanceled
 

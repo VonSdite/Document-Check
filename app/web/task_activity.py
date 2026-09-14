@@ -15,12 +15,13 @@ from app.contracts.task_types import (
 from app.tasks.activity import (
     CANCELABLE_PHASES,
     PHASE_LABELS,
-    TERMINAL_PHASES,
+    RETRYABLE_PHASES,
     activity_label,
     request_check_cancellation,
     task_activities,
 )
 from app.tasks.model_output import read_model_output
+from app.tasks.retries import CheckRetryError, request_check_retry
 from app.web.constants import STATUS_LABELS
 
 SINGLE_CANCEL_TASK_TYPES = {
@@ -41,6 +42,7 @@ def detail_progress(task):
         else STATUS_LABELS[status],
         "progress": task["progress"],
         "checks": activity.get("checks", {}),
+        "phase": activity.get("phase", ""),
         "revision": ":".join(
             str(task.get(key) or "")
             for key in (
@@ -50,6 +52,15 @@ def detail_progress(task):
                 "finished_at",
                 "result_size",
             )
+        )
+        + ":"
+        + json.dumps(
+            {
+                code: item["execution"]
+                for code, item in activity.get("checks", {}).items()
+                if item.get("execution")
+            },
+            sort_keys=True,
         ),
     }
 
@@ -61,7 +72,7 @@ def present_check_activity(task, results, progress):
         retry_codes = json.loads(task.get("retry_check_codes_json") or "null")
     except (ValueError, TypeError):
         retry_codes = []
-    if progress["active"]:
+    if progress["active"] or task["status"] in {"failed", "canceled"}:
         try:
             snapshot = json.loads(task.get("checks_snapshot_json") or "[]")
         except (ValueError, TypeError):
@@ -100,6 +111,15 @@ def present_check_activity(task, results, progress):
         }
         state = checks.get(result.get("code"), {})
         phase = state.get("phase")
+        execution = state.get("execution", result.get("execution", 0))
+        if progress["active"] and execution > result.get("execution", 0):
+            code, name, uses_model = (
+                result["code"],
+                result["name"],
+                result["uses_model"],
+            )
+            result.clear()
+            result.update(code=code, name=name, uses_model=uses_model, result="")
         if (
             not phase
             and progress["active"]
@@ -110,16 +130,39 @@ def present_check_activity(task, results, progress):
             )
         ):
             phase = "pending"
+        if not phase:
+            phase = (
+                "canceled"
+                if result.get("canceled")
+                else "failed"
+                if result.get("error")
+                else "completed"
+            )
+            if (
+                not progress["active"]
+                and not result.get("result")
+                and task["status"] in {"failed", "canceled"}
+            ):
+                phase = task["status"]
+        result["execution_phase"] = "pending" if state.get("retry_requested") else phase
+        result["execution"] = execution
         result["execution_label"] = (
-            PHASE_LABELS.get(phase, "")
-            if progress["active"] and phase not in TERMINAL_PHASES
+            PHASE_LABELS.get(result["execution_phase"], "")
+            if progress["active"]
             else ""
         )
         result["execution_attempt"] = state.get("attempt", 0)
         result["can_cancel"] = (
             task["status"] in {"queued", "running"}
             and task["task_type"] in SINGLE_CANCEL_TASK_TYPES
-            and phase in CANCELABLE_PHASES
+            and (phase in CANCELABLE_PHASES or state.get("retry_requested"))
+        )
+        result["can_retry"] = (
+            (task["task_type"] in SINGLE_CANCEL_TASK_TYPES or not progress["active"])
+            and task["status"] != "canceling"
+            and progress["phase"] != "finalizing"
+            and phase in RETRYABLE_PHASES
+            and not state.get("retry_requested")
         )
     return results
 
@@ -131,9 +174,35 @@ def cancel_check(task):
     if not isinstance(data, dict):
         return {"error": "检查项取消请求格式无效。"}, 400
     code = str(data.get("code") or "")
-    if not request_check_cancellation(task["id"], task.get("claim_token"), code):
+    execution = data.get("execution")
+    if execution is not None and (type(execution) is not int or execution < 0):
+        return {"error": "检查项取消请求格式无效。"}, 400
+    if not request_check_cancellation(
+        task["id"], task.get("claim_token"), code, execution=execution
+    ):
         return {"error": "此检查项当前无法取消，请刷新状态。"}, 409
     return {"status": "canceling", "code": code}
+
+
+def retry_check(task):
+    if task["task_type"] not in SINGLE_CANCEL_TASK_TYPES and task["status"] in {
+        "queued",
+        "running",
+        "canceling",
+    }:
+        return {"error": "图片和视频请在任务结束后重试单项。"}, 409
+    data = request.get_json(silent=True)
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("code"), str)
+        or type(data.get("execution")) is not int
+        or data["execution"] < 0
+    ):
+        return {"error": "检查项重试请求格式无效。"}, 400
+    try:
+        return request_check_retry(task["id"], data["code"], data["execution"])
+    except CheckRetryError as exc:
+        return {"error": str(exc)}, 409
 
 
 def model_output_response(task):

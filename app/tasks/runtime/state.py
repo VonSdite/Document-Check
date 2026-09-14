@@ -108,7 +108,10 @@ def _watch_task_cancellation(
                         else {}
                     )
                     for code, event in list(check_events.items()):
-                        if checks.get(code, {}).get("cancel_requested"):
+                        item = checks.get(code, {})
+                        if item.get("cancel_requested") and item.get(
+                            "execution", 0
+                        ) == getattr(event, "execution", 0):
                             event.set()
         except Exception:
             logger.exception("任务取消状态读取失败 task_id=%s", task_id)
