@@ -416,6 +416,7 @@ def _render_admin_task_list(
     rows = _task_rows_with_review_progress(rows)
     return render_template(
         template_name,
+        identity=identity,
         tasks=rows,
         status=status,
         review_status=review_status,

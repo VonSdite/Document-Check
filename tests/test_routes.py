@@ -6825,24 +6825,41 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("model-a", html)
         self.assertIn(f'value="{model_id}"', html)
 
-    def test_consistency_check_items_are_unchecked_by_default(self):
+    def test_all_task_pages_only_preselect_a_single_available_check(self):
         self._configure_provider()
+        for route in (
+            "/",
+            "/consistency",
+            "/language-consistency",
+            "/images",
+            "/videos",
+            "/admin/tasks",
+            "/admin/consistency",
+            "/admin/language-consistency",
+            "/admin/images",
+            "/admin/videos",
+        ):
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                checkboxes = soup.select('form.create-panel input[name="checks"]')
+                self.assertTrue(checkboxes)
+                self.assertEqual(
+                    sum(checkbox.has_attr("checked") for checkbox in checkboxes),
+                    1 if len(checkboxes) == 1 else 0,
+                )
+                picker = _required_tag(soup.select_one("[data-check-picker]"))
+                self.assertEqual(picker.get("data-check-subject"), "ip:127.0.0.1")
+                self.assertTrue(picker.get("data-check-task-type"))
+                self.assertIsNotNone(picker.select_one("[data-check-select-all]"))
+                self.assertIsNotNone(picker.select_one("[data-check-clear]"))
+                self.assertIsNotNone(
+                    soup.select_one('form.create-panel[data-require-checks="true"]')
+                )
+                self.assertIsNone(soup.select_one("[data-default-unchecked-checks]"))
 
-        response = self.client.get("/consistency")
-
-        self.assertEqual(response.status_code, 200)
-        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        form = _required_tag(soup.find("form", {"data-require-checks": "true"}))
-        self.assertEqual(form.get("autocomplete"), "off")
-        self.assertEqual(form.get("data-default-unchecked-checks"), "true")
-        checkboxes = form.select('input[name="checks"]')
-        self.assertTrue(checkboxes)
-        self.assertTrue(all(checkbox.get("checked") is None for checkbox in checkboxes))
-        self.assertTrue(
-            all(checkbox.get("autocomplete") == "off" for checkbox in checkboxes)
-        )
-
-    def test_language_consistency_check_items_are_checked_by_default(self):
+    def test_language_consistency_form_validates_checks_and_protects_submission(self):
         self._configure_provider()
 
         response = self.client.get("/language-consistency")
@@ -6866,8 +6883,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIsNotNone(form.select_one('input[name="document_b"]'))
         checkboxes = form.select('input[name="checks"]')
         self.assertTrue(checkboxes)
-        self.assertTrue(
-            all(checkbox.get("checked") is not None for checkbox in checkboxes)
+        self.assertEqual(
+            sum(checkbox.has_attr("checked") for checkbox in checkboxes),
+            1 if len(checkboxes) == 1 else 0,
         )
 
     def test_saml_user_page_redirects_to_saml_login(self):

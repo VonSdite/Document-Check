@@ -1973,6 +1973,29 @@ body.table-column-resize-active * {
   font-weight: 700;
 }
 
+.check-picker-head,
+.check-picker-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.check-picker-head {
+  justify-content: space-between;
+}
+
+.check-picker-actions [hidden] {
+  display: none;
+}
+
+.check-selection-count,
+.check-selection-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .check-chip-grid {
   display: flex;
   flex-wrap: wrap;

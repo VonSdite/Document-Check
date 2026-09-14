@@ -55,21 +55,9 @@
     </div>
   </div>
 
-  <div class="check-row">
-    <div class="check-row-title">
-      <span>视频检查项</span>
-      <span class="help-tip" tabindex="0" data-tip="系统会把视频抽成采样帧分批送给多模态模型，重点检查硬件安装顺序、接线端子、安全防护、调测界面和视频完整性。">?</span>
-    </div>
-    <div class="check-chip-grid">
-      {% for item in check_items %}
-      <label class="check-chip">
-        <input type="checkbox" name="checks" value="{{ item.id }}" checked>
-        <span>{{ item.name }}</span>
-        <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
-      </label>
-      {% endfor %}
-    </div>
-  </div>
+  {% with check_label="视频检查项", check_help="系统会把视频抽成采样帧分批送给多模态模型，重点检查硬件安装顺序、接线端子、安全防护、调测界面和视频完整性。" %}
+    {% include "_task_check_picker.html" %}
+  {% endwith %}
 </form>
 
 <div class="admin-metric-groups" data-refresh-region="stats" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}" data-refresh-url="{{ refresh_url }}">

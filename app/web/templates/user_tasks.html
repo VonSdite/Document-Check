@@ -13,7 +13,7 @@
   </div>
 </section>
 
-<form method="post" enctype="multipart/form-data" class="panel create-panel"
+<form method="post" enctype="multipart/form-data" class="panel create-panel" data-require-checks="true" data-check-required-message="请至少选择一个检查项。"
   data-prevent-double-submit="true"
   data-submitting-label="提交中..."
   data-submitting-message="正在上传并读取文档，请勿重复提交。">
@@ -58,21 +58,9 @@
     </div>
   </div>
 
-  <div class="check-row">
-    <div class="check-row-title">
-      <span>检查项</span>
-      <span class="help-tip" tabindex="0" data-tip="可多选；系统会按检查项逐项调用模型。">?</span>
-    </div>
-    <div class="check-chip-grid">
-      {% for item in check_items %}
-      <label class="check-chip">
-        <input type="checkbox" name="checks" value="{{ item.id }}" checked>
-        <span>{{ item.name }}</span>
-        <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
-      </label>
-      {% endfor %}
-    </div>
-  </div>
+  {% with check_label="检查项", check_help="可多选；系统会按检查项逐项调用模型。" %}
+    {% include "_task_check_picker.html" %}
+  {% endwith %}
 </form>
 
 <section class="metric-grid five" data-refresh-region="stats" data-refresh-active="{{ '1' if stats.queued or stats.running else '0' }}" data-refresh-url="{{ refresh_url }}">

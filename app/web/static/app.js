@@ -2152,26 +2152,80 @@ function enhanceModelSelect(select) {
   updateModelSelectPresentation(select);
 }
 
-function resetDefaultUncheckedChecks(form) {
-  if (!(form instanceof HTMLFormElement) || form.dataset.defaultUncheckedChecks !== "true") {
-    return;
-  }
-  form.querySelectorAll('input[name="checks"]').forEach((input) => {
-    if (input instanceof HTMLInputElement) {
-      input.checked = false;
-      input.defaultChecked = false;
-    }
-  });
+function checkSelectionStorageKey(picker) {
+  return `document-check:last-checks:${JSON.stringify([picker.dataset.checkSubject, picker.dataset.checkTaskType])}`;
 }
 
-document.querySelectorAll("form[data-default-unchecked-checks='true']").forEach((form) => {
-  resetDefaultUncheckedChecks(form);
+function checkPickerInputs(picker) {
+  return Array.from(picker.querySelectorAll('input[name="checks"]:enabled'));
+}
+
+function updateCheckSelectionCount(picker) {
+  const inputs = checkPickerInputs(picker);
+  const selected = inputs.filter((input) => input.checked).length;
+  picker.querySelector("[data-check-selection-count]").textContent = `已选 ${selected} 项 / 共 ${inputs.length} 项`;
+  picker.querySelector("[data-check-select-all]").disabled = selected === inputs.length;
+  picker.querySelector("[data-check-clear]").disabled = selected === 0;
+}
+
+function restoreCheckSelection(picker) {
+  const inputs = checkPickerInputs(picker);
+  let savedIds = [];
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(checkSelectionStorageKey(picker)) || "null");
+    if (Array.isArray(saved) && saved.every((id) => typeof id === "string")) {
+      savedIds = saved;
+    }
+  } catch {
+    // 浏览器存储不可用时，使用单项默认选中、多项主动选择的规则。
+  }
+  const selectedIds = new Set(savedIds);
+  inputs.forEach((input) => {
+    input.checked = inputs.length === 1 || selectedIds.has(input.value);
+  });
+  const hint = picker.querySelector("[data-check-selection-hint]");
+  if (hint && inputs.length > 1 && inputs.some((input) => input.checked)) {
+    hint.textContent = "已恢复上次提交的选择，可按需调整；提交后在当前浏览器记住选择。";
+  }
+  updateCheckSelectionCount(picker);
+}
+
+document.querySelectorAll("[data-check-picker]").forEach((picker) => {
+  restoreCheckSelection(picker);
+  picker.querySelectorAll("[data-check-select-all], [data-check-clear]").forEach((button) => {
+    button.hidden = false;
+    button.addEventListener("click", () => {
+      const checked = button.hasAttribute("data-check-select-all");
+      checkPickerInputs(picker).forEach((input) => {
+        input.checked = checked;
+      });
+      updateCheckSelectionCount(picker);
+    });
+  });
+  picker.addEventListener("change", () => updateCheckSelectionCount(picker));
+});
+
+document.addEventListener("submit", (event) => {
+  if (event.defaultPrevented || !(event.target instanceof HTMLFormElement)) {
+    return;
+  }
+  const picker = event.target.querySelector("[data-check-picker]");
+  if (!picker) {
+    return;
+  }
+  const selectedIds = checkPickerInputs(picker).filter((input) => input.checked).map((input) => input.value);
+  if (!selectedIds.length) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(checkSelectionStorageKey(picker), JSON.stringify(selectedIds));
+  } catch {
+    // 选择记录保存失败时，表单继续正常提交。
+  }
 });
 
 window.addEventListener("pageshow", () => {
-  document.querySelectorAll("form[data-default-unchecked-checks='true']").forEach((form) => {
-    resetDefaultUncheckedChecks(form);
-  });
+  document.querySelectorAll("[data-check-picker]").forEach(updateCheckSelectionCount);
   document.querySelectorAll("form[data-prevent-double-submit='true']").forEach((form) => {
     resetDoubleSubmitForm(form);
   });
@@ -3122,7 +3176,7 @@ function startAutoRefresh() {
   if (autoRefreshTimer || !document.querySelector("[data-auto-refresh-toggle]") || !hasActiveRefreshTasks()) {
     return;
   }
-  autoRefreshTimer = window.setInterval(refreshTaskRegions, 2000);
+  autoRefreshTimer = window.setInterval(refreshTaskRegions, 10000);
 }
 
 function stopAutoRefresh() {
