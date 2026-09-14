@@ -3690,6 +3690,10 @@ body.table-column-resize-active * {
   vertical-align: middle;
 }
 
+.model-editor-table [data-model-row] > td {
+  vertical-align: baseline;
+}
+
 .model-editor-table th {
   background: #f8fbff;
   color: var(--muted);
