@@ -2397,9 +2397,16 @@ body.table-column-resize-active * {
   gap: 12px;
   margin-top: 14px;
   color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
   flex-wrap: wrap;
+}
+
+.pagination strong {
+  color: var(--text);
+  font-weight: inherit;
 }
 
 .pagination div {
@@ -2422,10 +2429,12 @@ body.table-column-resize-active * {
 
 .page-size-form label {
   color: var(--muted);
-  font-weight: 800;
+  font: inherit;
+  white-space: nowrap;
 }
 
 .page-size-form select {
+  width: 68px;
   min-height: 32px;
   padding: 5px 28px 5px 9px;
   border: 1px solid var(--line);
@@ -2433,7 +2442,6 @@ body.table-column-resize-active * {
   background-color: #fff;
   color: var(--text);
   font: inherit;
-  font-weight: 800;
   cursor: pointer;
 }
 
@@ -2449,7 +2457,8 @@ body.table-column-resize-active * {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-weight: 800;
+  font: inherit;
+  white-space: nowrap;
 }
 
 .page-jump-form input[type="number"] {
@@ -2461,22 +2470,23 @@ body.table-column-resize-active * {
   background: #fff;
   color: var(--text);
   font: inherit;
-  font-weight: 800;
 }
 
 .page-link {
   display: inline-flex;
   align-items: center;
   min-height: 32px;
-  padding: 6px 10px;
+  padding: 5px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #fff;
-  color: var(--primary-strong);
-  font-weight: 800;
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
 }
 
 .page-link:hover {
+  color: var(--primary-strong);
   background: #f0f6ff;
   border-color: #bfd2ec;
 }
@@ -4389,12 +4399,28 @@ body.table-column-resize-active * {
 }
 
 .task-refresh-button {
+  display: inline-grid;
+  place-items: center;
   width: 34px;
   min-width: 34px;
-  height: 32px;
-  padding: 6px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  color: var(--muted);
+  flex-shrink: 0;
 }
-.task-refresh-button svg { width: 18px; height: 18px; }
+.task-refresh-button:hover {
+  color: var(--primary-strong);
+}
+.task-refresh-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.task-refresh-button svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
 .task-refresh-button[aria-busy="true"] svg { animation: task-refresh-spin 1s linear infinite; }
 .task-list-feedback { color: var(--muted); font-size: 12px; }
 .task-list-feedback:empty { display: none; }
