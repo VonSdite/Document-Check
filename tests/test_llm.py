@@ -67,10 +67,12 @@ class LLMResponseParsingTest(unittest.TestCase):
             },
         )
 
-    def test_long_reasoning_stream_can_reach_content_after_eight_thousand_chunks(self):
+    def test_long_reasoning_stream_can_reach_content_after_thirty_two_thousand_chunks(
+        self,
+    ):
         phases = []
         response = FakeResponse(
-            lines=['data: {"choices":[{"delta":{"reasoning_content":"分析"}}]}'] * 8001
+            lines=['data: {"choices":[{"delta":{"reasoning_content":"分析"}}]}'] * 32001
             + ['data: {"choices":[{"delta":{"content":"检查完成"}}]}', "data: [DONE]"]
         )
         result = llm._read_stream_response(

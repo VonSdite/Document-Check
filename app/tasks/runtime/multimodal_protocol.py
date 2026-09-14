@@ -45,6 +45,12 @@ def _run_combined_multimodal_check_with_repair(
         )
         repair_kwargs = dict(run_kwargs)
         repair_kwargs.pop("on_content", None)
+        on_output = run_kwargs.get("on_output")
+        if on_output:
+            repair_codes = [item["code"] for item in missing_items]
+            repair_kwargs["on_output"] = lambda event: on_output(
+                dict(event, codes=repair_codes, label="缺项补偿")
+            )
         repair_kwargs.update(
             check_name=f"{check_name}补偿检查（{len(missing_items)}项）",
             prompt=(

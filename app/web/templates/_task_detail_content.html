@@ -170,6 +170,20 @@
     <div class="check-actions" data-check-actions>
       <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消此项</button>
     </div>
+    {% if result.uses_model %}
+    <details class="model-output-details" data-model-output="{{ result.code }}">
+      <summary>模型输出内容 <small data-output-status>展开查看</small></summary>
+      <div class="model-output-scroll" data-output-scroll>
+        <div data-output-requests></div>
+        <div data-output-fallback>
+          <h3>思考</h3>
+          <p class="muted">{% if task_progress.active %}等待模型输出。{% else %}此项没有保存思考内容。{% endif %}</p>
+          <h3>正文</h3>
+          <pre class="model-output-text">{{ result.result or '暂无正文。' }}</pre>
+        </div>
+      </div>
+    </details>
+    {% endif %}
     {% if result.error %}
     <div class="error-box report-error">{{ "本检查项已取消：" if result.canceled else "本检查项执行失败：" }}{{ result.error }}</div>
     {% endif %}
@@ -183,7 +197,7 @@
       已合并 {{ result.report_limit.duplicate_count }} 条重复问题，去重后共 {{ result.report_limit.deduplicated_count }} 条。
       {% endif %}
       {% if result.report_limit.limit_applied %}
-      已按问题判定、证据可信度和严重程度排序，报告硬限制保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条；原始模型文本仍可在下方查看。
+      已按问题判定、证据可信度和严重程度排序，报告硬限制保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条。{% if result.uses_model %}模型输出内容可在上方展开查看。{% endif %}
       {% endif %}
     </div>
     {% endif %}
@@ -245,11 +259,6 @@
         </tbody>
       </table>
     </div>
-    <details class="result-raw-details">
-      <summary>查看原始结果</summary>
-      <p class="muted">模型返回并由系统保存的正文，用于核对报告条目；不包含思考过程。图片和视频结果可能包含分批汇总内容。</p>
-      <div class="result-text markdown-body">{{ result.result|markdown }}</div>
-    </details>
     {% elif not result.suppressed_report_items %}
     <div class="result-text markdown-body">{{ (result.result_summary or result.result)|markdown }}</div>
     {% endif %}

@@ -30,7 +30,7 @@ _REASONING_FIELDS = (
     "reasoning_opaque",
 )
 
-_REASONING_ONLY_CHUNK_LIMIT = 32_000
+_REASONING_ONLY_CHUNK_LIMIT = 64_000
 _REASONING_ONLY_CHAR_LIMIT = 128_000
 _DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT = 64
 _DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT = 256
@@ -367,6 +367,7 @@ def run_check(
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
+    on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
@@ -444,6 +445,7 @@ def run_check(
         cancel_event=cancel_event,
         check_canceled=check_canceled,
         on_activity=on_activity,
+        on_output=on_output,
     )
 
 
@@ -471,6 +473,7 @@ def run_image_check(
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
+    on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
@@ -559,6 +562,7 @@ def run_image_check(
         cancel_event=cancel_event,
         check_canceled=check_canceled,
         on_activity=on_activity,
+        on_output=on_output,
     )
 
 
@@ -588,6 +592,7 @@ def run_multimodal_document_check(
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
+    on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
@@ -701,6 +706,7 @@ def run_multimodal_document_check(
         cancel_event=cancel_event,
         check_canceled=check_canceled,
         on_activity=on_activity,
+        on_output=on_output,
     )
 
 
@@ -750,6 +756,7 @@ def _run_payload_with_retries(
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
+    on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     last_error = None
     active_payload = dict(payload)
@@ -780,7 +787,15 @@ def _run_payload_with_retries(
             attempt_parts.append(delta)
             emit_attempt_content()
 
+        stream_id = uuid.uuid4().hex
+        stream_attempt = attempt
+
+        def emit_output(event):
+            if on_output:
+                on_output(dict(event, stream=stream_id, attempt=stream_attempt))
+
         try:
+            emit_output({"kind": "start"})
             if on_activity:
                 on_activity("waiting", attempt)
             content = _run_check_attempt(
@@ -799,6 +814,7 @@ def _run_payload_with_retries(
                 cancel_event=cancel_event,
                 check_canceled=check_canceled,
                 on_activity=on_activity,
+                on_output=emit_output if on_output else None,
             )
             if on_content and not attempt_parts and content:
                 on_content(content)
@@ -885,6 +901,8 @@ def _run_payload_with_retries(
             )
             _wait_before_retry(delay_seconds, cancel_event, check_canceled)
             attempt += 1
+        finally:
+            emit_output({"kind": "end"})
     raise last_error or LLMError("模型服务请求失败")
 
 
@@ -963,6 +981,7 @@ def _run_check_attempt(
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
+    on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     try:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
@@ -1029,6 +1048,7 @@ def _run_check_attempt(
                     cancel_event=cancel_event,
                     check_canceled=check_canceled,
                     on_activity=on_activity,
+                    on_output=on_output,
                 )
                 logger.info(
                     "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=stream output_chars=%s",
@@ -1403,6 +1423,7 @@ def _read_stream_response(
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
+    on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     _force_utf8_response(response)
@@ -1426,6 +1447,7 @@ def _read_stream_response(
         cancel_event=cancel_event,
         check_canceled=check_canceled,
         on_activity=on_activity,
+        on_output=on_output,
     )
 
 
@@ -1441,6 +1463,7 @@ def _read_stream_lines(
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
+    on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled)
     parts = []
@@ -1497,6 +1520,18 @@ def _read_stream_lines(
                 _short_text(line, 1000),
             )
             raise LLMError(f"模型服务返回错误：{service_error}")
+
+        if on_output:
+            choices = data.get("choices") if isinstance(data, dict) else None
+            if choices and isinstance(choices[0], dict):
+                message = choices[0].get("delta") or choices[0].get("message") or {}
+                if isinstance(message, dict):
+                    _, reasoning = _extract_reasoning(message)
+                    if reasoning:
+                        on_output({"kind": "thinking", "text": reasoning})
+            content_delta = _extract_chat_content(data)
+            if content_delta:
+                on_output({"kind": "content", "text": content_delta})
 
         diagnostics.observe(data, raw=line)
         phase = (
@@ -1830,7 +1865,20 @@ def _extract_reasoning(message: dict) -> tuple[str, str]:
         if isinstance(value, str) and value:
             return field, value
         if isinstance(value, list) and value:
-            return field, _short_text(value, 1000)
+            parts = []
+            for part in value:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    text = part.get("text") or part.get("summary")
+                    parts.append(
+                        text
+                        if isinstance(text, str)
+                        else json.dumps(part, ensure_ascii=False)
+                    )
+                else:
+                    parts.append(str(part))
+            return field, "".join(parts)
     return "", ""
 
 

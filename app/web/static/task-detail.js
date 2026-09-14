@@ -2,8 +2,8 @@
   const root = document.querySelector("[data-task-detail]");
   if (!root) return;
   const phaseLabels = {
-    pending: "等待执行", checking: "检查中", waiting: "等待模型响应",
-    thinking: "模型思考中", output: "模型输出中", retrying: "重试中", canceling: "取消中",
+    pending: "待执行", checking: "检查", waiting: "等待",
+    thinking: "思考", output: "输出", retrying: "重试", canceling: "取消中",
   };
   const singleCancel = ["document_check", "consistency_check", "language_consistency_check"].includes(root.dataset.taskType);
   const markup = new WeakMap();
@@ -23,7 +23,17 @@
     if (next.dataset.checkTerminal) current.dataset.checkTerminal = next.dataset.checkTerminal;
     if (markup.get(current) === html) return;
     const expanded = [...current.querySelectorAll("details")].map((node) => node.open);
+    const output = current.querySelector("[data-model-output]");
+    const outputScroll = output?.querySelector("[data-output-scroll]")?.scrollTop;
     current.innerHTML = html;
+    const nextOutput = current.querySelector("[data-model-output]");
+    if (output && nextOutput) {
+      if (!output.querySelector("[data-output-requests]").childElementCount) {
+        output.querySelector("[data-output-fallback]").replaceWith(nextOutput.querySelector("[data-output-fallback]"));
+      }
+      nextOutput.replaceWith(output);
+      output.querySelector("[data-output-scroll]").scrollTop = outputScroll;
+    }
     current.querySelectorAll("details").forEach((node, index) => { node.open = expanded[index] ?? node.open; });
     markup.set(current, html);
   }

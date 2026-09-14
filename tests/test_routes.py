@@ -156,6 +156,90 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_model_output_requires_task_access_and_reads_only_new_records(self):
+        from app.tasks.model_output import ModelOutputRecorder
+
+        task_id = self._insert_task(status="running")
+        other_id = self._insert_task(ip="10.0.0.8")
+        record = ModelOutputRecorder(self.app, task_id).for_checks(["check"])
+        record({"kind": "thinking", "text": "分析", "stream": "one", "attempt": 1})
+        record({"kind": "end", "stream": "one", "attempt": 1})
+        with patch(
+            "app.web.admin_tasks._task_results",
+            side_effect=AssertionError("loaded report"),
+        ):
+            response = self.client.get(f"/admin/tasks/{task_id}/model-output")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        payload = response.get_json()
+        self.assertEqual(payload["events"][0]["text"], "分析")
+        self.assertTrue(payload["active"])
+        self.assertEqual(
+            self.client.get(
+                f"/tasks/{task_id}/model-output?cursor={payload['cursor']}"
+            ).get_json()["events"],
+            [],
+        )
+        self.assertEqual(
+            self.client.get(f"/tasks/{other_id}/model-output").status_code, 404
+        )
+        self.assertEqual(
+            self.client.get("/admin/tasks/99999/model-output").status_code, 404
+        )
+        for cursor in ["-1", "9999999999999999999999999", "invalid"]:
+            self.assertEqual(
+                self.client.get(
+                    f"/admin/tasks/{task_id}/model-output?cursor={cursor}"
+                ).status_code,
+                400,
+            )
+        with self.client.session_transaction() as session:
+            session.clear()
+        self.assertEqual(
+            self.client.get(f"/admin/tasks/{task_id}/model-output").status_code, 302
+        )
+
+    def test_model_output_is_collapsed_above_report_and_escapes_text(self):
+        task_id = self._insert_task()
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=? WHERE id=?",
+                (
+                    json.dumps(
+                        [
+                            {
+                                "code": "demo",
+                                "name": "检查",
+                                "result": '<script>alert("output")</script>',
+                            }
+                        ]
+                    ),
+                    task_id,
+                ),
+            )
+            get_db().commit()
+        response = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        article = soup.select_one("[data-detail-result]")
+        output = article.select_one("[data-model-output]")
+        self.assertFalse(output.has_attr("open"))
+        self.assertIn("模型输出内容", output.select_one("summary").get_text())
+        self.assertIsNone(output.select_one("script"))
+        self.assertIn(
+            '<script>alert("output")</script>', output.select_one("pre").get_text()
+        )
+        self.assertNotIn("查看原始结果", article.get_text())
+        self.assertLess(
+            str(article).index("data-model-output"),
+            str(article).index(
+                str(
+                    article.select_one(
+                        ".report-table-wrap, .result-text, .result-summary"
+                    )
+                )
+            ),
+        )
+
     def test_detail_polls_activity_without_rerendering_unchanged_results(self):
         from app.tasks.activity import (
             finish_check_activity,
@@ -176,7 +260,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(page.get_data(as_text=True), "html.parser")
         self.assertIsNone(soup.select_one('meta[http-equiv="refresh"]'))
         self.assertEqual(
-            soup.select_one("[data-check-activity]").get_text(strip=True), "模型思考中"
+            soup.select_one("[data-check-activity]").get_text(strip=True), "思考"
         )
         self.assertFalse(soup.select_one("[data-cancel-check]").has_attr("hidden"))
         revision = soup.select_one("[data-task-detail]")["data-detail-revision"]
@@ -189,7 +273,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 query_string={"_poll": "1", "revision": revision},
             )
         payload = response.get_json()
-        self.assertEqual(payload["status_label"], "模型思考中")
+        self.assertEqual(payload["status_label"], "检查")
         self.assertNotIn("html", payload)
         with self.app.app_context():
             finish_check_activity(task_id, None, "demo")
@@ -2234,7 +2318,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "review_status_label": "—",
                     "reviewed_item_count": 0,
                     "status": "running",
-                    "status_label": "检查中",
+                    "status_label": "检查",
                 }
             ],
         )

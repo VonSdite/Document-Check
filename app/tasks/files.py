@@ -22,6 +22,7 @@ from app.infrastructure.files import (
 )
 from app.persistence.connection import now_text
 from app.persistence.settings import get_setting
+from app.tasks.model_output import model_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ def _task_upload_path(task) -> Path:
 
 def _task_upload_paths(task) -> list[Path]:
     paths = _task_source_file_paths(task)
+    paths.append(model_output_path(current_app, task["id"]))
     for image in _task_image_items(task):
         image_path = image_path_from_item(_image_folder(), image)
         if image_path is not None:

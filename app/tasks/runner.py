@@ -54,6 +54,7 @@ from app.tasks.activity import (
     initialize_activity,
     update_check_activity,
 )
+from app.tasks.model_output import ModelOutputRecorder
 from app.tasks.runtime.common import (
     STREAM_SNAPSHOT_INTERVAL_SECONDS,
     STREAM_SNAPSHOT_MIN_CHAR_GROWTH,
@@ -587,6 +588,7 @@ def _run_check_items_concurrently(
     check_events: dict[str, threading.Event] | None = None,
 ) -> list[dict]:
     task_id = task["id"]
+    output_recorder = ModelOutputRecorder(app, task_id)
     claim_token = _task_claim_token(task)
     total = len(check_items)
     total_units = max(1, total)
@@ -763,6 +765,7 @@ def _run_check_items_concurrently(
                         ),
                         "task_id": task_id,
                         "stream_trace_enabled": stream_trace_enabled,
+                        "on_output": output_recorder.for_checks([item["code"]]),
                         "on_activity": lambda phase, attempt: update_check_activity(
                             task_id, claim_token, [item["code"]], phase, attempt
                         ),

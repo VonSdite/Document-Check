@@ -6,14 +6,14 @@ from app.persistence.connection import get_db, now_text
 
 ACTIVITY_KEY_PREFIX = "task_activity:"
 PHASE_LABELS = {
-    "preparing": "解析文件中",
-    "pending": "等待执行",
-    "checking": "检查中",
-    "waiting": "等待模型响应",
-    "thinking": "模型思考中",
-    "output": "模型输出中",
-    "retrying": "重试中",
-    "finalizing": "整理结果中",
+    "preparing": "解析",
+    "pending": "待执行",
+    "checking": "检查",
+    "waiting": "等待",
+    "thinking": "思考",
+    "output": "输出",
+    "retrying": "重试",
+    "finalizing": "整理",
     "canceling": "取消中",
 }
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
@@ -128,19 +128,7 @@ def task_activities(task_ids):
 
 
 def activity_label(state):
-    if not state:
-        return "检查中"
-    phase = state.get("phase")
-    if phase in {"preparing", "finalizing"}:
-        return PHASE_LABELS[phase]
-    active = {
-        item.get("phase")
-        for item in state.get("checks", {}).values()
-        if item.get("phase") not in TERMINAL_PHASES | {"pending"}
-    }
-    return (
-        PHASE_LABELS.get(next(iter(active)), "检查中") if len(active) == 1 else "检查中"
-    )
+    return "解析" if state and state.get("phase") == "preparing" else "检查"
 
 
 def clear_activity(task_id, claim_token):

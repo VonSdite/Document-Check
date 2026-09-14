@@ -13,6 +13,7 @@ from app.tasks.activity import (
     initialize_activity,
     update_check_activity,
 )
+from app.tasks.model_output import ModelOutputRecorder
 from app.tasks.runtime.artifacts import _task_image_folder
 from app.tasks.runtime.common import (
     STREAM_SNAPSHOT_INTERVAL_SECONDS,
@@ -65,6 +66,7 @@ def _run_video_check_items_concurrently(
     base_results: list[dict] | None = None,
 ) -> list[dict]:
     task_id = task["id"]
+    output_recorder = ModelOutputRecorder(app, task_id)
     claim_token = _task_claim_token(task)
     total = len(check_items)
     initialize_activity(task_id, claim_token, phase="checking", checks=check_items)
@@ -300,6 +302,10 @@ def _run_video_check_items_concurrently(
                             ),
                             "task_id": task_id,
                             "stream_trace_enabled": stream_trace_enabled,
+                            "on_output": output_recorder.for_checks(
+                                [item["code"] for item in items],
+                                f"视频帧 · 批次 {batch_index}/{len(batches)}",
+                            ),
                             "on_activity": lambda phase, attempt: update_check_activity(
                                 task_id,
                                 claim_token,

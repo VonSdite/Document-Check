@@ -1,10 +1,10 @@
 from app.contracts.limits import DEFAULT_ISSUE_OUTPUT_LIMIT
 
 STATUS_LABELS = {
-    "queued": "排队中",
-    "running": "检查中",
+    "queued": "排队",
+    "running": "检查",
     "canceling": "取消中",
-    "completed": "已完成",
+    "completed": "完成",
     "partial": "部分完成",
     "failed": "失败",
     "canceled": "已取消",

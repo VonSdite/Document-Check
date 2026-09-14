@@ -30,20 +30,22 @@ from app.web.submission import _task_list_endpoint
 logger = logging.getLogger(__name__)
 
 
-def _task_detail_selection(lightweight):
+def _task_detail_selection(lightweight, include_revision=True):
     columns = (
         "t.id, t.status, t.task_type, t.progress, t.claim_token, t.finished_at"
         if lightweight
         else "t.*, live.result_json AS live_result_json, live.summary AS live_summary"
     )
+    if not include_revision:
+        return columns
     return (
         columns
         + ", live.updated_at AS live_updated_at, length(live.result_json) AS live_result_size, length(t.result_json) AS result_size"
     )
 
 
-def _get_task_or_404(task_id: int, *, lightweight=False):
-    selection = _task_detail_selection(lightweight)
+def _get_task_or_404(task_id: int, *, lightweight=False, include_revision=True):
+    selection = _task_detail_selection(lightweight, include_revision)
     join_ip_usernames = _auth_mode() == "ip"
     ip_username_join = (
         "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
@@ -81,8 +83,8 @@ def _get_task_or_404(task_id: int, *, lightweight=False):
     return _task_with_live_result(task)
 
 
-def _get_user_task(task_id: int, *, lightweight=False):
-    selection = _task_detail_selection(lightweight)
+def _get_user_task(task_id: int, *, lightweight=False, include_revision=True):
+    selection = _task_detail_selection(lightweight, include_revision)
     identity = _current_user_identity()
     task = (
         get_db()
@@ -117,10 +119,16 @@ def _task_with_live_result(task) -> dict:
     return value
 
 
-def _get_user_task_or_local_admin(task_id: int, *, lightweight=False):
+def _get_user_task_or_local_admin(
+    task_id: int, *, lightweight=False, include_revision=True
+):
     if not _platform_enabled():
-        return _get_task_or_404(task_id, lightweight=lightweight)
-    return _get_user_task(task_id, lightweight=lightweight)
+        return _get_task_or_404(
+            task_id, lightweight=lightweight, include_revision=include_revision
+        )
+    return _get_user_task(
+        task_id, lightweight=lightweight, include_revision=include_revision
+    )
 
 
 def _cancel_task(task):

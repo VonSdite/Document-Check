@@ -2,8 +2,11 @@
 
 import json
 
-from flask import request
+from flask import current_app, jsonify, request
 
+from app.checks.common_terms import COMMON_TERMS_CHECK_CODE
+from app.checks.hyperlinks import HYPERLINK_CHECK_CODE
+from app.checks.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -17,6 +20,7 @@ from app.tasks.activity import (
     request_check_cancellation,
     task_activities,
 )
+from app.tasks.model_output import read_model_output
 from app.web.constants import STATUS_LABELS
 
 SINGLE_CANCEL_TASK_TYPES = {
@@ -85,6 +89,11 @@ def present_check_activity(task, results, progress):
         }
         results.sort(key=lambda item: order.get(item.get("code"), len(order)))
     for result in results:
+        result["uses_model"] = result.get("code") not in {
+            COMMON_TERMS_CHECK_CODE,
+            HYPERLINK_CHECK_CODE,
+            SENSITIVE_TERMS_CHECK_CODE,
+        }
         state = checks.get(result.get("code"), {})
         phase = state.get("phase")
         if (
@@ -118,3 +127,17 @@ def cancel_check(task):
     if not request_check_cancellation(task["id"], task.get("claim_token"), code):
         return {"error": "此检查项已结束或尚未进入模型请求阶段，请刷新状态。"}, 409
     return {"status": "canceling", "code": code}
+
+
+def model_output_response(task):
+    try:
+        cursor = int(request.args.get("cursor", "0"))
+    except ValueError:
+        cursor = None
+    if cursor is None or not 0 <= cursor <= 2**63 - 1:
+        return {"error": "模型输出游标无效。"}, 400
+    payload = read_model_output(current_app, task["id"], cursor)
+    payload["active"] = task["status"] in {"queued", "running", "canceling"}
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response

@@ -18,6 +18,7 @@ from app.infrastructure.files import (
 )
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_setting
+from app.tasks.model_output import model_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -398,7 +399,7 @@ def _task_artifact_paths(app, task) -> list[Path]:
     upload_root = Path(app.config["UPLOAD_FOLDER"])
     image_root = _task_image_folder(app)
     raw_meta = _task_value(task, "document_meta_json")
-    paths = []
+    paths = [model_output_path(app, task["id"])]
     groups = document_groups_from_meta(raw_meta)
     if groups:
         for group in groups:

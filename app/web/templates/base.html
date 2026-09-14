@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}文档智能门禁{% endblock %}</title>
   {% block extra_head %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260914-2') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260914-3') }}">
 </head>
 <body>
   {% set is_admin = (not platform_mode) or (request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login') %}

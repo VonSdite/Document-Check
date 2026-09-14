@@ -4331,3 +4331,60 @@ body.table-column-resize-active * {
 [data-cancel-check][hidden] {
   display: none;
 }
+
+.model-output-details {
+  margin: 4px 0 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.model-output-details > summary {
+  padding: 12px 16px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.model-output-details > summary small {
+  margin-left: 8px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.model-output-scroll {
+  max-height: 480px;
+  overflow: auto;
+  padding: 0 16px 16px;
+  overflow-anchor: none;
+}
+
+.model-output-request + .model-output-request {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.model-output-heading {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.model-output-scroll h3 {
+  font-size: 13px;
+  margin: 12px 0 6px;
+}
+
+.model-output-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.model-output-thinking {
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+}

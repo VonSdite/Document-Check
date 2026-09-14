@@ -254,6 +254,15 @@
     ]
   ],
   [
+    "/console/tasks/<int:task_id>/model-output",
+    "admin_model_output",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ]
+  ],
+  [
     "/console/tasks/<int:task_id>/report-items",
     "admin_update_report_item_type",
     [
@@ -459,6 +468,15 @@
   [
     "/tasks/<int:task_id>/media/<media_id>",
     "user_task_media",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ]
+  ],
+  [
+    "/tasks/<int:task_id>/model-output",
+    "user_model_output",
     [
       "GET",
       "HEAD",
