@@ -45,6 +45,7 @@ from app.web.task_actions import (
     _retry_task,
     _task_action_redirect,
 )
+from app.web.task_activity import cancel_check, detail_progress, present_check_activity
 from app.web.task_lists import (
     _pagination,
     _render_admin_consistency_page,
@@ -239,12 +240,23 @@ def register_user_tasks_routes(app):
 
     @app.get("/tasks/<int:task_id>")
     def user_task_detail(task_id):
-        task = _get_user_task_or_local_admin(task_id)
-        results = _task_results(task)
+        polling = request.args.get("_poll") == "1"
+        task = _get_user_task_or_local_admin(task_id, lightweight=polling)
+        progress = detail_progress(task)
+        if polling and request.args.get("revision") == progress["revision"]:
+            return progress
+        if polling:
+            task = _get_user_task_or_local_admin(task_id)
+        results = present_check_activity(task, _task_results(task), progress)
         _attach_report_media_urls(results, task, "user_task_media")
         back_endpoint = _task_list_endpoint(not _platform_enabled(), task["task_type"])
-        return render_template(
-            "task_detail.html",
+        html = render_template(
+            "_task_detail_content.html" if polling else "task_detail.html",
+            task_progress=progress,
+            task_detail_url=url_for(
+                request.endpoint, task_id=task_id, next=request.args.get("next")
+            ),
+            cancel_check_url=url_for("user_cancel_check", task_id=task_id),
             mode="admin" if not _platform_enabled() else "user",
             task=task,
             results=results,
@@ -264,6 +276,15 @@ def register_user_tasks_routes(app):
             active_nav=task["task_type"] or DOCUMENT_TASK_TYPE,
             back_url=_safe_next_path(request.args.get("next"), url_for(back_endpoint)),
         )
+        if polling:
+            progress["html"] = html
+            return progress
+        return html
+
+    @app.post("/tasks/<int:task_id>/cancel-check")
+    def user_cancel_check(task_id):
+        task = _get_user_task_or_local_admin(task_id, lightweight=True)
+        return cancel_check(task)
 
     @app.post("/tasks/<int:task_id>/report-items")
     def user_update_report_item_type(task_id):

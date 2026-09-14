@@ -32,10 +32,20 @@ class ProviderConfigTest(unittest.TestCase):
             if "<table" not in source:
                 continue
             table_templates.append(template_path.name)
+            parents = [
+                parent.read_text(encoding="utf-8")
+                for parent in template_dir.glob("*.html")
+                if ('{% include "' + template_path.name + '" %}')
+                in parent.read_text(encoding="utf-8")
+            ]
             self.assertTrue(
                 '{% extends "base.html" %}' in source
-                or "{{ table_resize_js|safe }}" in source,
-                f"{template_path.name} 未加载表格列宽拖拽脚本",
+                or "{{ table_resize_js|safe }}" in source
+                or (
+                    parents
+                    and all('{% extends "base.html" %}' in parent for parent in parents)
+                ),
+                f"{template_path.name} 及其使用页面未加载表格列宽拖拽脚本",
             )
 
         self.assertGreater(len(table_templates), 0)

@@ -24,6 +24,7 @@ from app.reporting.service import (
     _report_suppression_versions,
 )
 from app.reporting.statistics import _task_report_stat_rows_for_where
+from app.tasks.activity import activity_label, task_activities
 from app.web.auth import _auth_mode, _console_user_identity, _mode_subject_filter
 from app.web.common import _row_value
 from app.web.constants import (
@@ -142,7 +143,13 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
                 tuple(stale_ids),
             )
         }
+    activities = task_activities([row["id"] for row in rows])
     for row in rows:
+        row["status_label"] = (
+            activity_label(activities.get(row["id"]))
+            if row["status"] == "running"
+            else STATUS_LABELS.get(row["status"], row["status"])
+        )
         row["has_result"] = has_results.get(row["id"], True)
     counts = (
         get_db()
@@ -176,7 +183,9 @@ def _task_status_payload_row(row, suppression_version: str) -> dict:
     payload = {
         "id": row["id"],
         "status": status,
-        "status_label": STATUS_LABELS.get(status, status),
+        "status_label": _row_value(
+            row, "status_label", STATUS_LABELS.get(status, status)
+        ),
         "progress": int(row["progress"] or 0),
     }
     if status in {"queued", "running", "canceling"}:
@@ -209,9 +218,15 @@ def _task_rows_with_review_progress(rows: list) -> list[dict]:
         tuple(task_ids),
     )
     stats_by_task = {int(row["id"]): row for row in stat_rows}
+    activities = task_activities(task_ids)
     prepared_rows = []
     for row in rows:
         task = dict(row)
+        task["status_label"] = (
+            activity_label(activities.get(task["id"]))
+            if task["status"] == "running"
+            else STATUS_LABELS.get(task["status"], task["status"])
+        )
         stats = stats_by_task.get(int(row["id"]))
         total = sum(
             int(_row_value(stats, key, 0) or 0) for key in REPORT_ITEM_TYPE_ORDER

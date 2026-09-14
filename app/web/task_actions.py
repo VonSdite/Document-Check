@@ -30,7 +30,20 @@ from app.web.submission import _task_list_endpoint
 logger = logging.getLogger(__name__)
 
 
-def _get_task_or_404(task_id: int):
+def _task_detail_selection(lightweight):
+    columns = (
+        "t.id, t.status, t.task_type, t.progress, t.claim_token, t.finished_at"
+        if lightweight
+        else "t.*, live.result_json AS live_result_json, live.summary AS live_summary"
+    )
+    return (
+        columns
+        + ", live.updated_at AS live_updated_at, length(live.result_json) AS live_result_size, length(t.result_json) AS result_size"
+    )
+
+
+def _get_task_or_404(task_id: int, *, lightweight=False):
+    selection = _task_detail_selection(lightweight)
     join_ip_usernames = _auth_mode() == "ip"
     ip_username_join = (
         "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
@@ -50,9 +63,7 @@ def _get_task_or_404(task_id: int):
         get_db()
         .execute(
             f"""
-        SELECT t.*,
-               live.result_json AS live_result_json,
-               live.summary AS live_summary,
+        SELECT {selection},
                {owner_name_expr} AS current_owner_name,
                {owner_name_expr} AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
@@ -70,15 +81,14 @@ def _get_task_or_404(task_id: int):
     return _task_with_live_result(task)
 
 
-def _get_user_task(task_id: int):
+def _get_user_task(task_id: int, *, lightweight=False):
+    selection = _task_detail_selection(lightweight)
     identity = _current_user_identity()
     task = (
         get_db()
         .execute(
-            """
-        SELECT t.*,
-               live.result_json AS live_result_json,
-               live.summary AS live_summary,
+            f"""
+        SELECT {selection},
                COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
                COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
@@ -107,10 +117,10 @@ def _task_with_live_result(task) -> dict:
     return value
 
 
-def _get_user_task_or_local_admin(task_id: int):
+def _get_user_task_or_local_admin(task_id: int, *, lightweight=False):
     if not _platform_enabled():
-        return _get_task_or_404(task_id)
-    return _get_user_task(task_id)
+        return _get_task_or_404(task_id, lightweight=lightweight)
+    return _get_user_task(task_id, lightweight=lightweight)
 
 
 def _cancel_task(task):

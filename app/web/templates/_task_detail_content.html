@@ -1,0 +1,323 @@
+{% set source_files_available = task_source_files_available(task) %}
+<div class="report-toolbar" data-detail-region="toolbar">
+  <a class="report-back-button" href="{{ back_url }}">
+    <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M19 12H5"></path>
+      <path d="m12 19-7-7 7-7"></path>
+    </svg>
+    <span>返回列表</span>
+  </a>
+  {% if task.status in ["completed", "partial", "failed"] %}
+  <div class="report-export-actions" aria-label="报告操作">
+    {% if task.status in ["completed", "partial"] %}
+    <a class="primary-button report-export-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">
+      <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 3v11"></path>
+        <path d="m7 10 5 5 5-5"></path>
+        <path d="M5 20h14"></path>
+      </svg>
+      <span>导出 HTML</span>
+    </a>
+    <a class="primary-button report-export-button" href="{{ url_for('admin_export_task_excel' if mode == 'admin' else 'user_export_task_excel', task_id=task.id) }}">
+      <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="4" y="3" width="16" height="18" rx="2"></rect>
+        <path d="M8 8h8M8 12h8M8 16h3M13 16h3"></path>
+      </svg>
+      <span>导出 EXCEL</span>
+    </a>
+    <form class="report-import-form" method="post" enctype="multipart/form-data" action="{{ url_for('admin_import_task_excel' if mode == 'admin' else 'user_import_task_excel', task_id=task.id) }}" data-prevent-double-submit="true">
+      <input class="report-import-input" name="report_excel" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-report-import-input required>
+      <button class="primary-button report-export-button report-import-button" type="button" data-report-import-trigger>
+        <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 21V10"></path>
+          <path d="m7 14 5-5 5 5"></path>
+          <path d="M5 4h14"></path>
+        </svg>
+        <span data-report-import-label>回填 EXCEL</span>
+      </button>
+    </form>
+    {% endif %}
+    {% if task.status in ["partial", "failed"] %}
+    <form class="report-import-form" method="post" action="{{ url_for('admin_retry_task' if mode == 'admin' else 'user_retry_task', task_id=task.id) }}" data-prevent-double-submit="true">
+      <input type="hidden" name="next" value="{{ task_detail_url }}">
+      <button class="primary-button report-export-button" type="submit">
+        <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M20 6v6h-6"></path>
+          <path d="M18.5 15a7 7 0 1 1-.7-7.8L20 9"></path>
+        </svg>
+        <span>重试失败项</span>
+      </button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<section class="panel report-status-panel" data-detail-region="status">
+  <div class="panel-head">
+    <div>
+      <h2>任务状态</h2>
+      <p>{{ task.provider_name or "-" }} / {{ task.model_name }}</p>
+    </div>
+    <span class="status-pill status-{{ task.status }}">{{ task_progress.status_label }}</span>
+  </div>
+  <p class="task-refresh-message" data-detail-refresh-message role="status">每 10 秒更新</p>
+  <div class="progress"><span style="width: {{ task.progress }}%"></span></div>
+  <dl class="meta-list report-meta-list">
+    <div><dt>任务类型</dt><dd>{{ task_type_label(task.task_type) }}</dd></div>
+    <div>
+      <dt>归属用户</dt>
+      <dd>
+        {{ owner_display(task) }}
+        {% set owner_meta_text = owner_meta(task) %}
+        {% if owner_meta_text %}<div class="subline">{{ owner_meta_text }}</div>{% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>原文件</dt>
+      <dd>
+        {% if source_files_available %}
+        <a class="source-file-status source-file-status-available source-file-download-link" href="{{ url_for('admin_download_task_document' if mode == 'admin' else 'user_download_task_document', task_id=task.id) }}" title="下载原文件">
+          <svg class="source-file-download-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3v11"></path>
+            <path d="m7 10 5 5 5-5"></path>
+            <path d="M5 20h14"></path>
+          </svg>
+          <span>下载原文件</span>
+        </a>
+        {% elif task.source_files_cleaned_at %}
+        <span class="source-file-status source-file-status-missing">已于 {{ task.source_files_cleaned_at }} 自动清理</span>
+        {% else %}
+        <span class="source-file-status source-file-status-missing">已清理或缺失</span>
+        {% endif %}
+      </dd>
+    </div>
+    {% if document_groups %}
+    <div class="report-document-groups-meta">
+      <dt>文档组</dt>
+      <dd>
+        <div class="report-document-groups">
+          {% for group in document_groups %}
+          <section>
+            <strong>{{ group.label }}</strong>
+            <ul class="report-file-list">
+              {% for file in group.files %}
+              <li>{{ file.original_filename }} <span>{{ file.file_type }} · {{ (file.file_size / 1024)|round(1) }} KB</span></li>
+              {% endfor %}
+            </ul>
+          </section>
+          {% endfor %}
+        </div>
+      </dd>
+    </div>
+    {% else %}
+    <div class="report-file-meta">
+      <dt>文件名称</dt>
+      <dd>{{ task.original_filename }}</dd>
+    </div>
+    <div><dt>文件信息</dt><dd>{{ task.file_type }} · {{ (task.file_size / 1024)|round(1) }} KB</dd></div>
+    {% endif %}
+    <div><dt>创建时间</dt><dd>{{ task.created_at }}</dd></div>
+    {% if task.started_at %}<div><dt>开始时间</dt><dd>{{ task.started_at }}</dd></div>{% endif %}
+    {% if task.finished_at %}<div><dt>结束时间</dt><dd>{{ task.finished_at }}</dd></div>{% endif %}
+  </dl>
+  {% if task.error %}
+  <div class="error-box report-error">{{ task.error }}</div>
+  {% endif %}
+</section>
+
+{% if video_report and video_stream_url %}
+<section class="panel report-video-panel" id="report-video-review">
+  <div class="panel-head">
+    <div>
+      <h2>原视频复核</h2>
+      <p>点击报告中的时间点或关键帧，可跳转到对应位置。</p>
+    </div>
+  </div>
+  <video class="report-video-player" controls preload="metadata" src="{{ video_stream_url }}" data-report-video-player>
+    当前浏览器不支持视频播放，请下载原文件复核。
+  </video>
+</section>
+{% endif %}
+
+{% if results %}
+<section class="panel report-classification-summary" data-report-summary data-detail-region="summary">
+  <div>
+    <h2>AI 检查条目统计</h2>
+  </div>
+  <div class="report-counts">
+    <span>问题<strong data-report-count="issue">{{ report_totals.issue }}</strong></span>
+    <span>建议<strong data-report-count="suggestion">{{ report_totals.suggestion }}</strong></span>
+    <span>非问题<strong data-report-count="non_issue">{{ report_totals.non_issue }}</strong></span>
+    <span>接纳问题<strong data-report-count="accepted_issue">{{ report_totals.accepted_issue }}</strong></span>
+    <span>不接纳问题<strong data-report-count="rejected_issue">{{ report_totals.rejected_issue }}</strong></span>
+    <span>待确认问题<strong data-report-count="pending_issue_acceptance">{{ report_totals.pending_issue_acceptance }}</strong></span>
+    <span>问题检出率<strong data-report-count="issue_detection_rate">{{ report_totals.issue_detection_rate }}</strong></span>
+    <span>问题接纳率<strong data-report-count="issue_acceptance_rate">{{ report_totals.issue_acceptance_rate }}</strong></span>
+    <span>已忽略误报<strong data-report-count="suppressed">{{ report_totals.suppressed or 0 }}</strong></span>
+    <span>合计<strong data-report-count="total">{{ report_totals.total }}</strong></span>
+  </div>
+</section>
+
+<section class="result-stack" data-report-results data-report-classification-url="{{ report_classification_url }}">
+  {% for result in results %}
+  <article class="panel result-panel" data-detail-result="{{ result.code }}" data-check-terminal="{{ '0' if result.execution_label else '1' }}">
+    <div class="panel-head">
+      <div>
+        <h2 class="check-title">{{ result.name }}<small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}</small></h2>
+      </div>
+    </div>
+    <div class="check-actions" data-check-actions>
+      <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消此项</button>
+    </div>
+    {% if result.error %}
+    <div class="error-box report-error">{{ "本检查项已取消：" if result.canceled else "本检查项执行失败：" }}{{ result.error }}</div>
+    {% endif %}
+    {% if result.report_items %}
+    {% if result.result_summary %}
+    <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
+    {% endif %}
+    {% if result.report_limit %}
+    <div class="report-limit-notice">
+      {% if result.report_limit.duplicate_count %}
+      已合并 {{ result.report_limit.duplicate_count }} 条重复问题，去重后共 {{ result.report_limit.deduplicated_count }} 条。
+      {% endif %}
+      {% if result.report_limit.limit_applied %}
+      已按问题判定、证据可信度和严重程度排序，报告硬限制保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条；原始模型文本仍可在下方查看。
+      {% endif %}
+    </div>
+    {% endif %}
+    <div class="report-table-wrap">
+      <table class="report-table{% if media_report %} report-table-media{% endif %}">
+        <thead>
+          <tr>
+            <th class="report-index-cell">条目</th>
+            {% for field, label in report_item_fields %}
+            <th class="report-field-{{ field }}">{{ label }}</th>
+            {% endfor %}
+            <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
+            <th class="report-acceptance-cell">是否认可 AI 结论</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in result.report_items %}
+          {% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
+          <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
+            <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span></td>
+            {% for field, label in report_item_fields %}
+            {% set field_value = item[field] %}
+            <td class="report-field report-field-{{ field }}">
+              {% include "_report_field_content.html" %}
+            </td>
+            {% endfor %}
+            <td class="report-status-cell">
+              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} {{ REPORT_ITEM_TYPE_LABEL }}">
+                {% for type, label in report_item_types.items() %}
+                <label class="report-radio-option report-radio-option-{{ type }}">
+                  <input type="radio" name="report-item-type-{{ item.id }}" value="{{ type }}" data-report-item-type data-saved-value="{{ item.type }}" aria-label="{{ label }}" {{ "checked" if item.type == type else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <span>{{ label }}</span>
+                </label>
+                {% endfor %}
+              </div>
+            </td>
+            <td class="report-acceptance-cell">
+              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">
+                {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
+                <label class="report-radio-option report-radio-option-{{ status }}">
+                  <input type="radio" name="report-acceptance-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ '认可' if status == 'accepted' else '不认可' if status == 'rejected' else label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <span>{{ "认可" if status == "accepted" else "不认可" if status == "rejected" else label }}</span>
+                </label>
+                {% if status == "rejected" %}
+                <div class="rejection-controls" data-report-rejection-controls {{ "hidden" if item.acceptance_status != "rejected" else "" }}>
+                  <input type="hidden" value="{{ item.rejection_reason }}" data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                  <button class="rejection-reason-trigger{{ ' has-value' if item.rejection_reason else '' }}" type="button" data-report-rejection-trigger {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                    <span data-report-rejection-trigger-label>{{ item.rejection_reason_label or "选择不认可原因" }}</span>
+                    <small data-report-rejection-trigger-hint>{{ REPORT_REJECTION_REASON_HINTS.get(item.rejection_reason, "查看判断标准后选择") }}</small>
+                  </button>
+                  <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="补充说明（选择“其他”时必填）" aria-label="条目 {{ item.index }} 人工填写不认可原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                </div>
+                {% endif %}
+                {% endfor %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <details class="result-raw-details">
+      <summary>查看原始结果</summary>
+      <p class="muted">模型返回并由系统保存的正文，用于核对报告条目；不包含思考过程。图片和视频结果可能包含分批汇总内容。</p>
+      <div class="result-text markdown-body">{{ result.result|markdown }}</div>
+    </details>
+    {% elif not result.suppressed_report_items %}
+    <div class="result-text markdown-body">{{ (result.result_summary or result.result)|markdown }}</div>
+    {% endif %}
+    {% if result.suppressed_report_items %}
+    <details class="result-raw-details">
+      <summary>已忽略误报 {{ result.suppressed_report_items|length }} 条</summary>
+      <div class="report-table-wrap">
+        <table class="report-table{% if media_report %} report-table-media{% endif %}">
+          <thead>
+            <tr>
+              <th class="report-index-cell">条目</th>
+              {% for field, label in report_item_fields %}
+              <th class="report-field-{{ field }}">{{ label }}</th>
+              {% endfor %}
+              <th>忽略规则</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in result.suppressed_report_items %}
+            <tr class="report-item is-suppressed">
+              <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span></td>
+              {% for field, label in report_item_fields %}
+              {% set field_value = item[field] %}
+              <td class="report-field report-field-{{ field }}">
+                {% include "_report_field_content.html" %}
+              </td>
+              {% endfor %}
+              <td class="report-status-cell">
+                规则 #{{ item.suppression_rule_id }}
+                {% if item.suppression_similarity is defined %}<div class="subline">描述相似度 {{ (item.suppression_similarity * 100)|round(0)|int }}%</div>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+
+<dialog class="modal report-rejection-modal" id="report-rejection-modal" data-report-rejection-modal>
+  <div class="modal-card report-rejection-modal-card">
+    <div class="modal-head">
+      <div>
+        <h2>选择不认可原因</h2>
+        <p>先判断模型给出的依据能否在文档或图片中找到。</p>
+      </div>
+      <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <div class="report-rejection-modal-body">
+      <div class="rejection-reason-list" role="list">
+        {% for reason, reason_label in REPORT_REJECTION_REASONS.items() %}
+        <button class="rejection-reason-option rejection-reason-{{ reason }}" type="button" data-report-rejection-choice="{{ reason }}" data-rejection-label="{{ reason_label }}" data-rejection-hint="{{ REPORT_REJECTION_REASON_HINTS[reason] }}">
+          <span class="rejection-reason-marker" aria-hidden="true"></span>
+          <span class="rejection-reason-copy">
+            <strong>{{ reason_label }}</strong>
+            <small>{{ REPORT_REJECTION_REASON_HINTS[reason] }}</small>
+          </span>
+        </button>
+        {% endfor %}
+      </div>
+      <div class="rejection-distinction">
+        <strong>误报和幻觉怎么区分？</strong>
+        <span>找得到原文但结论不成立，是模型误报；找不到模型声称存在的原文、位置或事实，才是模型幻觉。</span>
+      </div>
+    </div>
+  </div>
+</dialog>
+{% endif %}

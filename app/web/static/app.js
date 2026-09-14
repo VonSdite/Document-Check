@@ -3113,6 +3113,8 @@ async function refreshTaskStatuses(refreshUrl, forcePageRefresh = false) {
   }
   for (const row of taskRows) {
     const task = returnedById.get(row.dataset.taskId);
+    const label = row.querySelector(".task-status-cell .status-pill");
+    if (task && label) label.textContent = task.status_label;
     const progress = row.querySelector(".progress.mini span");
     if (task && progress) {
       progress.style.width = `${task.progress}%`;

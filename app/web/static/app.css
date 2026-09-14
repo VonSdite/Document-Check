@@ -4309,3 +4309,25 @@ body.table-column-resize-active * {
 .login-brand {
   margin-bottom: 24px;
 }
+
+.check-title small {
+  margin-left: 0.7rem;
+  color: var(--muted, #64748b);
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+.check-actions {
+  margin-bottom: 0.5rem;
+}
+.check-actions:has(button[hidden]) {
+  display: none;
+}
+.task-refresh-message {
+  color: var(--muted, #64748b);
+  font-size: 0.8rem;
+}
+
+[data-check-activity][hidden],
+[data-cancel-check][hidden] {
+  display: none;
+}

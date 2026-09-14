@@ -72,6 +72,170 @@ class TaskExecutionTest(unittest.TestCase):
         self.context.pop()
         self.temp_dir.cleanup()
 
+    def test_single_check_cancel_keeps_other_check_running_and_retains_results(self):
+        from app.tasks.activity import request_check_cancellation, task_activities
+
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "检查"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        set_setting("check_item_concurrency", 2)
+        started = Barrier(3)
+        canceled = Event()
+        release_second = Event()
+        failures = []
+        events = {}
+
+        def model(**kwargs):
+            name = kwargs["check_name"]
+            events[name] = kwargs["cancel_event"]
+            kwargs["on_activity"]("thinking", 1)
+            started.wait(timeout=5)
+            if name == "第一项":
+                self.assertTrue(kwargs["cancel_event"].wait(5))
+                canceled.set()
+                kwargs["check_canceled"]()
+                self.fail("canceled check resumed")
+            self.assertTrue(release_second.wait(5))
+            self.assertFalse(kwargs["cancel_event"].is_set())
+            return "第二项检查完成"
+
+        def run():
+            try:
+                TaskRunner(self.app).run(task_id)
+            except BaseException as exc:
+                failures.append(exc)
+
+        with patch("app.tasks.runner.run_check", side_effect=model):
+            thread = Thread(target=run)
+            thread.start()
+            try:
+                started.wait(timeout=5)
+                self.assertTrue(request_check_cancellation(task_id, None, "first"))
+                self.assertTrue(canceled.wait(5))
+                self.assertFalse(events["第二项"].is_set())
+            finally:
+                release_second.set()
+                thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        task = (
+            get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        )
+        self.assertEqual(task["status"], "partial")
+        results = json.loads(task["result_json"])
+        self.assertTrue(results[0]["canceled"])
+        self.assertEqual(results[1]["result"], "第二项检查完成")
+        self.assertIsNone(task["api_key"])
+        self.assertEqual(task_activities([task_id]), {})
+        self.assertIsNone(
+            get_db()
+            .execute(
+                "SELECT 1 FROM settings WHERE key = ?", (f"task_activity:{task_id}",)
+            )
+            .fetchone()
+        )
+
+    def test_cancel_all_checks_finishes_canceled_with_result_explanations(self):
+        from app.tasks.activity import request_check_cancellation
+
+        task_id = self._insert_running_document_task(
+            [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        )
+
+        def model(**kwargs):
+            kwargs["on_activity"]("output", 1)
+            self.assertTrue(request_check_cancellation(task_id, None, "only"))
+            return "已接收的部分结果"
+
+        with patch("app.tasks.runner.run_check", side_effect=model):
+            TaskRunner(self.app).run(task_id)
+        task = (
+            get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        )
+        self.assertEqual(task["status"], "canceled")
+        self.assertTrue(json.loads(task["result_json"])[0]["canceled"])
+        self.assertIsNone(task["api_key"])
+
+    def test_check_cancellation_is_fenced_and_survives_late_stage_updates(self):
+        from app.tasks.activity import (
+            finish_check_activity,
+            initialize_activity,
+            request_check_cancellation,
+            task_activities,
+            update_check_activity,
+        )
+
+        task_id = self._insert_scheduler_task(status="running", claim_token="current")
+        checks = [{"code": "demo", "name": "演示"}]
+        initialize_activity(task_id, "current", phase="checking", checks=checks)
+        update_check_activity(task_id, "current", ["demo"], "thinking", 1)
+        self.assertFalse(request_check_cancellation(task_id, "old", "demo"))
+        self.assertTrue(request_check_cancellation(task_id, "current", "demo"))
+        update_check_activity(task_id, "current", ["demo"], "output", 1)
+        self.assertEqual(
+            task_activities([task_id])[task_id]["checks"]["demo"]["phase"], "canceling"
+        )
+        self.assertTrue(finish_check_activity(task_id, "current", "demo"))
+        self.assertFalse(request_check_cancellation(task_id, "current", "demo"))
+        self.assertEqual(
+            task_activities([task_id])[task_id]["checks"]["demo"]["phase"], "canceled"
+        )
+        get_db().execute("UPDATE tasks SET claim_token='new' WHERE id=?", (task_id,))
+        get_db().commit()
+        self.assertEqual(task_activities([task_id]), {})
+        initialize_activity(task_id, "new", phase="checking", checks=checks)
+        self.assertNotIn(
+            "cancel_requested", task_activities([task_id])[task_id]["checks"]["demo"]
+        )
+        finish_check_activity(task_id, "new", "demo")
+        self.assertFalse(request_check_cancellation(task_id, "new", "demo"))
+
+    def test_external_task_cancel_event_reaches_individual_model_request(self):
+        from app.tasks.runtime.state import TaskCanceled
+
+        checks = [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        task_id = self._insert_running_document_task(checks)
+        task = dict(
+            get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        )
+        cancel_event = Event()
+        started = Event()
+        errors = []
+
+        def model(**kwargs):
+            started.set()
+            self.assertTrue(kwargs["cancel_event"].wait(4))
+            kwargs["check_canceled"]()
+
+        def run():
+            with self.app.app_context():
+                try:
+                    _run_check_items_concurrently(
+                        self.app,
+                        task,
+                        checks,
+                        "文档",
+                        max_workers=1,
+                        stream_trace_enabled=False,
+                        cancel_event=cancel_event,
+                    )
+                except Exception as exc:
+                    errors.append(exc)
+
+        with patch("app.tasks.runner.run_check", side_effect=model):
+            thread = Thread(target=run)
+            thread.start()
+            try:
+                self.assertTrue(started.wait(3))
+                cancel_event.set()
+            finally:
+                thread.join(6)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], TaskCanceled)
+
     def _insert_scheduler_task(
         self,
         *,

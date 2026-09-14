@@ -252,6 +252,14 @@ class TaskSupervisor:
                 """
             )
 
+            db.execute(
+                "DELETE FROM settings WHERE key >= 'task_activity:' AND key < 'task_activity;' "
+                "AND NOT EXISTS (SELECT 1 FROM tasks "
+                "WHERE id = CAST(substr(settings.key, 15) AS INTEGER) "
+                "AND status IN ('running', 'canceling') "
+                "AND claim_token IS json_extract(settings.value, '$.claim_token'))"
+            )
+
             global_limit = min(
                 self.max_processes,
                 max(1, _setting_int("global_concurrency", 3)),
@@ -689,6 +697,7 @@ def _recover_owned_task(
     )
     if updated.rowcount == 1:
         db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task_id,))
+        db.execute("DELETE FROM settings WHERE key = ?", (f"task_activity:{task_id}",))
     db.commit()
     return updated.rowcount == 1
 

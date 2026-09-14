@@ -4,6 +4,7 @@ from app.persistence.connection import get_db, now_text
 
 
 def delete_task_record(db, task_id: int):
+    db.execute("DELETE FROM settings WHERE key = ?", (f"task_activity:{task_id}",))
     db.execute("DELETE FROM report_suppression_hits WHERE task_id = ?", (task_id,))
     return db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 

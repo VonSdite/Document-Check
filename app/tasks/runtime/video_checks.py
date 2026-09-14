@@ -8,6 +8,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.infrastructure.network import outbound_network_config
 from app.models.client import MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK
 from app.persistence.connection import get_db
+from app.tasks.activity import (
+    finish_check_activity,
+    initialize_activity,
+    update_check_activity,
+)
 from app.tasks.runtime.artifacts import _task_image_folder
 from app.tasks.runtime.common import (
     STREAM_SNAPSHOT_INTERVAL_SECONDS,
@@ -62,6 +67,7 @@ def _run_video_check_items_concurrently(
     task_id = task["id"]
     claim_token = _task_claim_token(task)
     total = len(check_items)
+    initialize_activity(task_id, claim_token, phase="checking", checks=check_items)
     checkable_frames, skipped_frames = _split_checkable_image_items(frame_items)
     if not checkable_frames and not skipped_frames:
         raise RuntimeError("没有可检查的视频抽帧画面")
@@ -294,6 +300,13 @@ def _run_video_check_items_concurrently(
                             ),
                             "task_id": task_id,
                             "stream_trace_enabled": stream_trace_enabled,
+                            "on_activity": lambda phase, attempt: update_check_activity(
+                                task_id,
+                                claim_token,
+                                [item["code"] for item in items],
+                                phase,
+                                attempt,
+                            ),
                             "cancel_event": cancel_event,
                             "check_canceled": ensure_active,
                         },
@@ -391,6 +404,10 @@ def _run_video_check_items_concurrently(
         if incomplete_codes:
             raise RuntimeError(
                 f"部分视频检查项补偿后仍未返回有效结果：{','.join(sorted(incomplete_codes))}"
+            )
+        for result in ordered:
+            finish_check_activity(
+                task_id, claim_token, result["code"], failed=bool(result.get("error"))
             )
         return ordered
     except Exception:

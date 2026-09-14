@@ -194,6 +194,14 @@
     ]
   ],
   [
+    "/console/tasks/<int:task_id>/cancel-check",
+    "admin_cancel_check",
+    [
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
     "/console/tasks/<int:task_id>/delete",
     "admin_delete_task",
     [
@@ -392,6 +400,14 @@
   [
     "/tasks/<int:task_id>/cancel",
     "user_cancel_task",
+    [
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
+    "/tasks/<int:task_id>/cancel-check",
+    "user_cancel_check",
     [
       "OPTIONS",
       "POST"

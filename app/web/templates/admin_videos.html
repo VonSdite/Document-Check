@@ -170,7 +170,7 @@
           </td>
           <td class="task-model-cell">{{ task.provider_name or "-" }} / {{ task.model_name }}</td>
           <td class="task-status-cell">
-            <span class="status-pill status-{{ task.status }}">{{ status_labels[task.status] }}</span>
+            <span class="status-pill status-{{ task.status }}">{{ task.status_label or status_labels[task.status] }}</span>
             {% if task.status in ["running", "canceling"] %}<div class="progress mini"><span style="width: {{ task.progress }}%"></span></div>{% endif %}
           </td>
           {% include "_task_review_progress.html" %}

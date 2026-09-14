@@ -67,6 +67,62 @@ class LLMResponseParsingTest(unittest.TestCase):
             },
         )
 
+    def test_long_reasoning_stream_can_reach_content_after_eight_thousand_chunks(self):
+        phases = []
+        response = FakeResponse(
+            lines=['data: {"choices":[{"delta":{"reasoning_content":"分析"}}]}'] * 8001
+            + ['data: {"choices":[{"delta":{"content":"检查完成"}}]}', "data: [DONE]"]
+        )
+        result = llm._read_stream_response(
+            response, None, on_activity=lambda phase, attempt: phases.append(phase)
+        )
+        self.assertEqual(result, "检查完成")
+        self.assertEqual(phases, ["thinking", "output"])
+
+    def test_glm_53_reasoning_only_retry_disables_thinking_and_reports_activity(self):
+        session = FakeSession(
+            [
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"reasoning_content":"分析"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"检查完成"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+        phases = []
+        with (
+            patch.object(llm.requests, "Session", return_value=session),
+            patch.object(llm.time, "sleep"),
+        ):
+            result = llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key=None,
+                model_name="glm-5.3-flash",
+                check_name="规范",
+                prompt="检查",
+                document_text="文档",
+                on_activity=lambda phase, attempt: phases.append((phase, attempt)),
+            )
+        self.assertEqual(result, "检查完成")
+        self.assert_all_thinking_disable_flags(session.calls[1][1]["json"])
+        self.assertEqual(
+            phases,
+            [
+                ("waiting", 1),
+                ("thinking", 1),
+                ("retrying", 2),
+                ("waiting", 2),
+                ("output", 2),
+            ],
+        )
+
     def test_requires_full_chat_completions_endpoint(self):
         with self.assertRaisesRegex(llm.LLMError, "chat/completions"):
             llm._chat_completions_endpoint("http://example.test/v1")

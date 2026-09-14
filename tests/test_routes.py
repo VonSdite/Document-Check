@@ -156,6 +156,145 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_detail_polls_activity_without_rerendering_unchanged_results(self):
+        from app.tasks.activity import (
+            finish_check_activity,
+            initialize_activity,
+            update_check_activity,
+        )
+
+        task_id = self._insert_task(status="running")
+        with self.app.app_context():
+            initialize_activity(
+                task_id,
+                None,
+                phase="checking",
+                checks=[{"code": "demo", "name": "演示检查"}],
+            )
+            update_check_activity(task_id, None, ["demo"], "thinking", 1)
+        page = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(page.get_data(as_text=True), "html.parser")
+        self.assertIsNone(soup.select_one('meta[http-equiv="refresh"]'))
+        self.assertEqual(
+            soup.select_one("[data-check-activity]").get_text(strip=True), "模型思考中"
+        )
+        self.assertFalse(soup.select_one("[data-cancel-check]").has_attr("hidden"))
+        revision = soup.select_one("[data-task-detail]")["data-detail-revision"]
+        with patch(
+            "app.web.admin_tasks._task_results",
+            side_effect=AssertionError("report rerendered"),
+        ):
+            response = self.client.get(
+                f"/admin/tasks/{task_id}",
+                query_string={"_poll": "1", "revision": revision},
+            )
+        payload = response.get_json()
+        self.assertEqual(payload["status_label"], "模型思考中")
+        self.assertNotIn("html", payload)
+        with self.app.app_context():
+            finish_check_activity(task_id, None, "demo")
+        finished_item_page = self.client.get(f"/admin/tasks/{task_id}")
+        finished_soup = BeautifulSoup(
+            finished_item_page.get_data(as_text=True), "html.parser"
+        )
+        self.assertTrue(
+            finished_soup.select_one("[data-check-activity]").has_attr("hidden")
+        )
+
+    def test_cancel_check_is_scoped_to_active_supported_items(self):
+        from app.tasks.activity import (
+            finish_check_activity,
+            initialize_activity,
+            task_activities,
+            update_check_activity,
+        )
+
+        for task_type in (
+            DOCUMENT_TASK_TYPE,
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+        ):
+            with self.subTest(task_type=task_type):
+                task_id = self._insert_task(status="running", task_type=task_type)
+                with self.app.app_context():
+                    initialize_activity(
+                        task_id,
+                        None,
+                        phase="checking",
+                        checks=[{"code": "demo", "name": "演示检查"}],
+                    )
+                    update_check_activity(task_id, None, ["demo"], "output", 1)
+                self.assertEqual(
+                    self.client.post(
+                        f"/admin/tasks/{task_id}/cancel-check", json={"code": "missing"}
+                    ).status_code,
+                    409,
+                )
+                response = self.client.post(
+                    f"/admin/tasks/{task_id}/cancel-check", json={"code": "demo"}
+                )
+                self.assertEqual(response.status_code, 200)
+                with self.app.app_context():
+                    self.assertTrue(
+                        task_activities([task_id])[task_id]["checks"]["demo"][
+                            "cancel_requested"
+                        ]
+                    )
+                    self.assertEqual(
+                        get_db()
+                        .execute(
+                            "SELECT cancel_requested FROM tasks WHERE id = ?",
+                            (task_id,),
+                        )
+                        .fetchone()[0],
+                        0,
+                    )
+                    finish_check_activity(task_id, None, "demo")
+                self.assertEqual(
+                    self.client.post(
+                        f"/admin/tasks/{task_id}/cancel-check", json={"code": "demo"}
+                    ).status_code,
+                    409,
+                )
+        media_id = self._insert_task(status="running", task_type=IMAGE_TASK_TYPE)
+        self.assertEqual(
+            self.client.post(
+                f"/admin/tasks/{media_id}/cancel-check", json={"code": "demo"}
+            ).status_code,
+            400,
+        )
+
+    def test_user_cannot_poll_or_cancel_another_owners_check(self):
+        from app.tasks.activity import (
+            initialize_activity,
+            task_activities,
+            update_check_activity,
+        )
+
+        task_id = self._insert_task(status="running", owner_subject="ip:10.0.0.2")
+        with self.app.app_context():
+            initialize_activity(
+                task_id,
+                None,
+                phase="checking",
+                checks=[{"code": "demo", "name": "演示"}],
+            )
+            update_check_activity(task_id, None, ["demo"], "thinking", 1)
+        self._logout_test_client()
+        self.assertEqual(self.client.get(f"/tasks/{task_id}?_poll=1").status_code, 404)
+        self.assertEqual(
+            self.client.post(
+                f"/tasks/{task_id}/cancel-check", json={"code": "demo"}
+            ).status_code,
+            404,
+        )
+        with self.app.app_context():
+            self.assertFalse(
+                task_activities([task_id])[task_id]["checks"]["demo"].get(
+                    "cancel_requested", False
+                )
+            )
+
     def _logout_test_client(self):
         with self.client.session_transaction() as session:
             session.clear()

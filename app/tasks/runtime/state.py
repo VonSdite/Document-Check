@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta
 
 from app.persistence.connection import get_db, now_text
+from app.tasks.activity import ACTIVITY_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +50,14 @@ def _start_task_cancel_watcher(
     task_id: int,
     claim_token: str | None,
     cancel_event: threading.Event,
+    check_events: dict[str, threading.Event] | None = None,
 ):
-    if not claim_token:
+    if not claim_token and check_events is None:
         return None, None
     stop_event = threading.Event()
     thread = threading.Thread(
         target=_watch_task_cancellation,
-        args=(app, task_id, claim_token, stop_event, cancel_event),
+        args=(app, task_id, claim_token, stop_event, cancel_event, check_events),
         daemon=True,
         name=f"task-cancel-{task_id}",
     )
@@ -69,25 +71,45 @@ def _watch_task_cancellation(
     claim_token: str,
     stop_event: threading.Event,
     cancel_event: threading.Event,
+    check_events: dict[str, threading.Event] | None = None,
 ):
     while not stop_event.wait(TASK_CANCEL_POLL_INTERVAL_SECONDS):
+        if cancel_event.is_set():
+            for event in list((check_events or {}).values()):
+                event.set()
+            return
         try:
             with app.app_context():
                 db = get_db()
                 task = db.execute(
-                    "SELECT status, cancel_requested, claim_token FROM tasks WHERE id = ?",
-                    (task_id,),
+                    "SELECT t.status, t.cancel_requested, t.claim_token, s.value AS activity "
+                    "FROM tasks t LEFT JOIN settings s ON s.key = ? || t.id WHERE t.id = ?",
+                    (ACTIVITY_KEY_PREFIX, task_id),
                 ).fetchone()
                 if (
                     task is None
-                    or task["claim_token"] != claim_token
+                    or (claim_token is not None and task["claim_token"] != claim_token)
                     or task["status"] not in {"running", "canceling"}
                 ):
                     cancel_event.set()
+                    for event in list((check_events or {}).values()):
+                        event.set()
                     return
                 if task["cancel_requested"] or task["status"] == "canceling":
                     cancel_event.set()
+                    for event in list((check_events or {}).values()):
+                        event.set()
                     return
+                if check_events is not None:
+                    activity = json.loads(task["activity"]) if task["activity"] else {}
+                    checks = (
+                        activity.get("checks", {})
+                        if activity.get("claim_token") == task["claim_token"]
+                        else {}
+                    )
+                    for code, event in list(check_events.items()):
+                        if checks.get(code, {}).get("cancel_requested"):
+                            event.set()
         except Exception:
             logger.exception("任务取消状态读取失败 task_id=%s", task_id)
 
@@ -230,6 +252,9 @@ def _mark_canceled(db, task_id: int, claim_token: str | None = None):
     )
     if canceled.rowcount == 1:
         db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task_id,))
+        db.execute(
+            "DELETE FROM settings WHERE key = ?", (f"{ACTIVITY_KEY_PREFIX}{task_id}",)
+        )
     db.commit()
 
 
@@ -283,12 +308,18 @@ def _mark_failed(
     )
     if failed.rowcount == 1:
         db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task_id,))
+        db.execute(
+            "DELETE FROM settings WHERE key = ?", (f"{ACTIVITY_KEY_PREFIX}{task_id}",)
+        )
     db.commit()
 
 
 def _build_summary(results: list[dict]) -> str:
     failed = _failed_check_results(results)
     succeeded = [result for result in results if not _check_result_failed(result)]
+    canceled = [result for result in results if result.get("canceled")]
+    if canceled:
+        return f"已完成 {len(succeeded)}/{len(results)} 个检查项，失败 {len(failed)} 项，已取消 {len(canceled)} 项。"
     if failed and succeeded:
         failed_names = "、".join(
             str(item.get("name") or item.get("code") or "未命名检查项")
@@ -310,7 +341,11 @@ def _check_result_failed(result: dict) -> bool:
 
 
 def _failed_check_results(results: list[dict]) -> list[dict]:
-    return [result for result in results if _check_result_failed(result)]
+    return [
+        result
+        for result in results
+        if _check_result_failed(result) and not result.get("canceled")
+    ]
 
 
 def _failed_check_items_error(results: list[dict]) -> str:

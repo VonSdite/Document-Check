@@ -30,8 +30,8 @@ _REASONING_FIELDS = (
     "reasoning_opaque",
 )
 
-_REASONING_ONLY_CHUNK_LIMIT = 8_000
-_REASONING_ONLY_CHAR_LIMIT = 32_000
+_REASONING_ONLY_CHUNK_LIMIT = 32_000
+_REASONING_ONLY_CHAR_LIMIT = 128_000
 _DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT = 64
 _DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT = 256
 _MAX_COMPLETION_TOKENS = 12_288
@@ -366,6 +366,7 @@ def run_check(
     stream_trace_enabled: bool = False,
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
+    on_activity: Optional[Callable[[str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
@@ -442,6 +443,7 @@ def run_check(
         stream_trace_enabled=stream_trace_enabled,
         cancel_event=cancel_event,
         check_canceled=check_canceled,
+        on_activity=on_activity,
     )
 
 
@@ -468,6 +470,7 @@ def run_image_check(
     stream_trace_enabled: bool = False,
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
+    on_activity: Optional[Callable[[str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
@@ -555,6 +558,7 @@ def run_image_check(
         stream_trace_enabled=stream_trace_enabled,
         cancel_event=cancel_event,
         check_canceled=check_canceled,
+        on_activity=on_activity,
     )
 
 
@@ -583,6 +587,7 @@ def run_multimodal_document_check(
     stream_trace_enabled: bool = False,
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
+    on_activity: Optional[Callable[[str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
@@ -695,6 +700,7 @@ def run_multimodal_document_check(
         stream_trace_enabled=stream_trace_enabled,
         cancel_event=cancel_event,
         check_canceled=check_canceled,
+        on_activity=on_activity,
     )
 
 
@@ -743,6 +749,7 @@ def _run_payload_with_retries(
     stream_trace_enabled: bool,
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
+    on_activity: Optional[Callable[[str, int | None], None]] = None,
 ) -> str:
     last_error = None
     active_payload = dict(payload)
@@ -774,6 +781,8 @@ def _run_payload_with_retries(
             emit_attempt_content()
 
         try:
+            if on_activity:
+                on_activity("waiting", attempt)
             content = _run_check_attempt(
                 endpoint=endpoint,
                 headers=headers,
@@ -789,6 +798,7 @@ def _run_payload_with_retries(
                 stream_trace_enabled=stream_trace_enabled,
                 cancel_event=cancel_event,
                 check_canceled=check_canceled,
+                on_activity=on_activity,
             )
             if on_content and not attempt_parts and content:
                 on_content(content)
@@ -861,6 +871,8 @@ def _run_payload_with_retries(
                     task_id or "-",
                     attempt,
                 )
+            if on_activity:
+                on_activity("retrying", attempt + 1)
             delay_seconds = attempt
             logger.warning(
                 "LLM 请求出错，准备重试 request_id=%s task_id=%s attempt=%s/%s delay=%ss error=%s",
@@ -950,6 +962,7 @@ def _run_check_attempt(
     stream_trace_enabled: bool,
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
+    on_activity: Optional[Callable[[str, int | None], None]] = None,
 ) -> str:
     try:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
@@ -1015,6 +1028,7 @@ def _run_check_attempt(
                     thinking_disabled=_thinking_disabled_in_payload(stream_payload),
                     cancel_event=cancel_event,
                     check_canceled=check_canceled,
+                    on_activity=on_activity,
                 )
                 logger.info(
                     "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=stream output_chars=%s",
@@ -1277,6 +1291,7 @@ def _thinking_payload_adapter(api_base: str, model_name: str) -> str | None:
                 "glm-5",
                 "glm-5.1",
                 "glm-5.2",
+                "glm-5.3",
             )
         ):
             return "glm"
@@ -1387,6 +1402,7 @@ def _read_stream_response(
     thinking_disabled: bool = False,
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
+    on_activity: Optional[Callable[[str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     _force_utf8_response(response)
@@ -1409,6 +1425,7 @@ def _read_stream_response(
         thinking_disabled=thinking_disabled,
         cancel_event=cancel_event,
         check_canceled=check_canceled,
+        on_activity=on_activity,
     )
 
 
@@ -1423,6 +1440,7 @@ def _read_stream_lines(
     thinking_disabled: bool = False,
     cancel_event: threading.Event | None = None,
     check_canceled: Optional[Callable[[], None]] = None,
+    on_activity: Optional[Callable[[str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled)
     parts = []
@@ -1432,6 +1450,7 @@ def _read_stream_lines(
     reasoning_chunk_limit, reasoning_char_limit = _reasoning_only_limits(
         thinking_disabled
     )
+    last_activity = None
     for raw_line in lines:
         _raise_if_request_canceled(cancel_event, check_canceled)
         if not raw_line:
@@ -1480,6 +1499,17 @@ def _read_stream_lines(
             raise LLMError(f"模型服务返回错误：{service_error}")
 
         diagnostics.observe(data, raw=line)
+        phase = (
+            "output"
+            if diagnostics.content_chunks
+            else "thinking"
+            if diagnostics.reasoning_chunks
+            else None
+        )
+        if phase and phase != last_activity:
+            last_activity = phase
+            if on_activity:
+                on_activity(phase, attempt)
         if _reasoning_only_limit_reached(
             diagnostics,
             chunk_limit=reasoning_chunk_limit,
