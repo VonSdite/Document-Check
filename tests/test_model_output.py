@@ -131,7 +131,8 @@ class ModelOutputTest(unittest.TestCase):
             self.record("one", ["check"], "分析")
         self.assertTrue(self.recorder.disabled)
 
-    def run_model(self, response, *, cancel_event=None):
+    def run_model(self, response, *, cancel_event=None, model_name="custom-model"):
+        llm._reset_http_session_pools()
         session = FakeSession(response)
         with (
             patch.object(llm.requests, "Session", return_value=session),
@@ -140,13 +141,91 @@ class ModelOutputTest(unittest.TestCase):
             return llm.run_check(
                 api_base="http://example.test/v1/chat/completions",
                 api_key=None,
-                model_name="glm-5.3-flash",
+                model_name=model_name,
                 check_name="检查",
                 prompt="检查",
                 document_text="材料",
                 on_output=self.recorder.for_checks(["check"]),
                 cancel_event=cancel_event,
             )
+
+    def test_output_display_is_independent_of_model_name_and_alias(self):
+        for model_name in (
+            "glm-5.3-flash",
+            "deepseek-v4",
+            "qwen3",
+            "kimi-k2.6",
+            "private-proxy-alias",
+            "unknown-future-model",
+        ):
+            for field in (
+                "reasoning_content",
+                "reasoning",
+                "reasoning_text",
+                "reasoning_details",
+            ):
+                for envelope in ("delta", "message"):
+                    with self.subTest(model=model_name, field=field, envelope=envelope):
+                        cursor = self.drain()[1]
+                        reasoning = (
+                            [{"text": "通用思考"}]
+                            if field == "reasoning_details"
+                            else "通用思考"
+                        )
+                        frames = [
+                            json.dumps({"choices": [{envelope: {field: reasoning}}]}),
+                            json.dumps(
+                                {"choices": [{envelope: {"content": "通用正文"}}]}
+                            ),
+                            "data: [DONE]",
+                        ]
+                        self.assertEqual(
+                            self.run_model(
+                                [FakeResponse(lines=frames)], model_name=model_name
+                            ),
+                            "通用正文",
+                        )
+                        events = read_model_output(self.app, 1, cursor)["events"]
+                        self.assertEqual(
+                            [event["kind"] for event in events],
+                            ["start", "thinking", "content", "end"],
+                        )
+                        self.assertEqual(
+                            "".join(
+                                event["text"]
+                                for event in events
+                                if event["kind"] == "thinking"
+                            ),
+                            "通用思考",
+                        )
+                        self.assertEqual(
+                            "".join(
+                                event["text"]
+                                for event in events
+                                if event["kind"] == "content"
+                            ),
+                            "通用正文",
+                        )
+
+    def test_model_without_reasoning_displays_body_only(self):
+        self.assertEqual(
+            self.run_model(
+                [
+                    FakeResponse(
+                        lines=[
+                            'data: {"choices":[{"delta":{"content":"普通模型正文"}}]}',
+                            "data: [DONE]",
+                        ]
+                    )
+                ]
+            ),
+            "普通模型正文",
+        )
+        events, _, _ = self.drain()
+        self.assertEqual(
+            [event["kind"] for event in events], ["start", "content", "end"]
+        )
+        self.assertEqual(events[1]["text"], "普通模型正文")
 
     def test_retry_preserves_thinking_and_separates_attempts(self):
         responses = [
