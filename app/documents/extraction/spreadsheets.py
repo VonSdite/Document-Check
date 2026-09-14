@@ -1,4 +1,4 @@
-import itertools
+import heapq
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -7,6 +7,7 @@ from pathlib import Path
 import xlrd
 from openpyxl import load_workbook
 from openpyxl.utils.cell import get_column_letter, range_boundaries
+from openpyxl.worksheet._reader import FORMULA_TAG, WorkSheetParser
 
 from app.documents.extraction.common import (
     _clean_hyperlink_target,
@@ -28,37 +29,31 @@ def _extract_openpyxl_workbook(
     *,
     cancel_event=None,
 ) -> str:
-    value_workbook = load_workbook(path, read_only=True, data_only=True)
-    formula_workbook = None
+    workbook = load_workbook(path, read_only=True, data_only=True)
     try:
         check_extraction_canceled(cancel_event)
-        formula_workbook = load_workbook(path, read_only=True, data_only=False)
-        parts = []
-        formula_sheets = {sheet.title: sheet for sheet in formula_workbook.worksheets}
         try:
             hyperlinks = _extract_xlsx_hyperlinks(
-                path, formula_workbook, cancel_event=cancel_event
+                path, workbook, cancel_event=cancel_event
             )
         except (ET.ParseError, KeyError, OSError, zipfile.BadZipFile):
             hyperlinks = {}
-        for sheet in value_workbook.worksheets:
+        parts = []
+        workbook_titles = set(workbook.sheetnames)
+        for sheet in workbook.worksheets:
             check_extraction_canceled(cancel_event)
-            formula_sheet = formula_sheets.get(sheet.title)
             rows = _openpyxl_sheet_rows_text(
                 sheet,
-                formula_sheet,
                 hyperlinks.get(sheet.title, []),
                 extracted_hyperlinks,
-                set(formula_sheets),
+                workbook_titles,
                 cancel_event=cancel_event,
             )
             if rows:
                 parts.append(f"# 工作表：{sheet.title}\n" + "\n".join(rows))
         return "\n\n".join(parts)
     finally:
-        value_workbook.close()
-        if formula_workbook is not None:
-            formula_workbook.close()
+        workbook.close()
 
 
 def _extract_xls(
@@ -112,9 +107,85 @@ def _extract_xls(
         workbook.release_resources()
 
 
+class _WorksheetValuesAndFormulas(WorkSheetParser):
+    """在同一单元格解析中保留缓存值与公式，使用 openpyxl 的类型和共享公式规则。"""
+
+    def parse_cell(self, element):
+        cell = super().parse_cell(element)
+        if element.find(FORMULA_TAG) is not None:
+            cell["formula"] = self.parse_formula(element)
+        return cell
+
+
+class _WorksheetHyperlinks:
+    """按升序行定位活动链接范围，保留 XML 中的声明顺序。"""
+
+    def __init__(self, hyperlinks):
+        self.starts = sorted(
+            (item[1], index, item) for index, item in enumerate(hyperlinks)
+        )
+        self.position = 0
+        self.active = {}
+        self.ends = []
+
+    def for_row(self, row_index):
+        while (
+            self.position < len(self.starts)
+            and self.starts[self.position][0] <= row_index
+        ):
+            _, index, item = self.starts[self.position]
+            self.position += 1
+            if item[3] >= row_index:
+                self.active[index] = item
+                heapq.heappush(self.ends, (item[3], index))
+        while self.ends and self.ends[0][0] < row_index:
+            _, index = heapq.heappop(self.ends)
+            self.active.pop(index, None)
+        return _RowHyperlinks(self.active.items())
+
+    def rows_through(self, first_row, last_row):
+        """遍历含链接的缺省行与当前数据行，跳过连续空白区域。"""
+        row_index = first_row
+        while row_index <= last_row:
+            row_links = self.for_row(row_index)
+            if row_links.last_column or row_index == last_row:
+                yield row_index, row_links
+            if row_index == last_row:
+                break
+            if self.active:
+                row_index += 1
+            elif self.position < len(self.starts):
+                row_index = min(last_row, self.starts[self.position][0])
+            else:
+                row_index = last_row
+
+
+class _RowHyperlinks:
+    """按升序列访问链接，重叠范围使用最先声明的目标。"""
+
+    def __init__(self, hyperlinks):
+        self.starts = sorted(
+            (item[0], index, item[2], item[4], item[5]) for index, item in hyperlinks
+        )
+        self.last_column = max((item[2] for item in self.starts), default=0)
+        self.position = 0
+        self.active = []
+
+    def at(self, column_index):
+        while (
+            self.position < len(self.starts)
+            and self.starts[self.position][0] <= column_index
+        ):
+            _, index, end, target, display = self.starts[self.position]
+            heapq.heappush(self.active, (index, end, target, display))
+            self.position += 1
+        while self.active and self.active[0][1] < column_index:
+            heapq.heappop(self.active)
+        return self.active[0][2:] if self.active else None
+
+
 def _openpyxl_sheet_rows_text(
     sheet,
-    formula_sheet,
     hyperlinks,
     extracted_hyperlinks: list[dict] | None = None,
     workbook_titles: set[str] | None = None,
@@ -122,68 +193,82 @@ def _openpyxl_sheet_rows_text(
     cancel_event=None,
 ) -> list[str]:
     rows = []
-    max_row = max(sheet.max_row or 0, getattr(formula_sheet, "max_row", 0) or 0)
-    max_column = max(
-        sheet.max_column or 0, getattr(formula_sheet, "max_column", 0) or 0
-    )
-    value_rows = sheet.iter_rows(
-        min_row=1,
-        max_row=max_row,
-        min_col=1,
-        max_col=max_column,
-    )
-    formula_rows = (
-        formula_sheet.iter_rows(
-            min_row=1,
-            max_row=max_row,
-            min_col=1,
-            max_col=max_column,
+    links = _WorksheetHyperlinks(hyperlinks)
+    max_row, max_column = sheet.max_row, sheet.max_column
+    with sheet._get_source() as source:
+        parser = _WorksheetValuesAndFormulas(
+            source,
+            sheet._shared_strings,
+            data_only=True,
+            epoch=sheet.parent.epoch,
+            date_formats=sheet.parent._date_formats,
+            timedelta_formats=sheet.parent._timedelta_formats,
         )
-        if formula_sheet is not None
-        else itertools.repeat(())
-    )
-    for row_index, value_row in enumerate(value_rows, start=1):
-        check_extraction_canceled(cancel_event)
-        formula_row = next(formula_rows, ())
-        values = []
-        for column_index, value_cell in enumerate(value_row, start=1):
-            value = value_cell.value
-            formula_value = (
-                formula_row[column_index - 1].value
-                if formula_sheet is not None and column_index <= len(formula_row)
-                else None
-            )
-            if value is None and formula_sheet is not None:
-                if isinstance(formula_value, str) and formula_value.startswith("="):
-                    value = formula_value
-            hyperlink = _xlsx_hyperlink_at(hyperlinks, row_index, column_index)
-            formula_target = _xlsx_formula_hyperlink_target(formula_value)
-            target = formula_target or (hyperlink[0] if hyperlink else "")
-            if target:
-                display = hyperlink[1] if hyperlink else ""
-                label = value or display
-                value = _format_hyperlink_text(label, target)
-                _record_hyperlink(
-                    extracted_hyperlinks,
-                    label,
-                    target,
-                    (
-                        f"工作表“{sheet.title}”!"
-                        f"{get_column_letter(column_index)}{row_index}"
-                    ),
-                    internal_target_exists=(
-                        _spreadsheet_internal_target_exists(
+        previous_row = 0
+        for row_index, cells in parser.parse():
+            if row_index <= previous_row:
+                continue
+            if max_row and row_index > max_row:
+                break
+            # 缺省行只处理其链接，单元格按实际内容与链接范围展开。
+            for index, row_links in links.rows_through(previous_row + 1, row_index):
+                check_extraction_canceled(cancel_event)
+                values = {}
+                formulas = {}
+                if index == row_index:
+                    for cell in cells:
+                        column = cell["column"]
+                        if max_column and column > max_column:
+                            continue
+                        value = cell["value"]
+                        formula = cell.get("formula")
+                        if (
+                            value is None
+                            and isinstance(formula, str)
+                            and formula.startswith("=")
+                        ):
+                            value = formula
+                        if value is not None:
+                            values[column] = value
+                        else:
+                            values.pop(column, None)
+                        if formula is not None:
+                            formulas[column] = formula
+                        else:
+                            formulas.pop(column, None)
+                last_column = max(max(values, default=0), row_links.last_column)
+                if max_column:
+                    last_column = min(max_column, last_column)
+                if not last_column:
+                    continue
+                output = []
+                for column in range(1, last_column + 1):
+                    value = values.get(column)
+                    hyperlink = row_links.at(column)
+                    target = _xlsx_formula_hyperlink_target(
+                        formulas.get(column, value)
+                    ) or (hyperlink[0] if hyperlink else "")
+                    if target:
+                        label = value or (hyperlink[1] if hyperlink else "")
+                        value = _format_hyperlink_text(label, target)
+                        _record_hyperlink(
+                            extracted_hyperlinks,
+                            label,
                             target,
-                            workbook_titles or set(),
+                            f"工作表“{sheet.title}”!{get_column_letter(column)}{index}",
+                            internal_target_exists=(
+                                _spreadsheet_internal_target_exists(
+                                    target, workbook_titles or set()
+                                )
+                                if target.startswith("#")
+                                else None
+                            ),
                         )
-                        if target.startswith("#")
-                        else None
-                    ),
-                )
-            values.append(value)
-        row_text = _spreadsheet_row_text(values)
-        if row_text:
-            rows.append(row_text)
+                    output.append(value)
+                row_text = _spreadsheet_row_text(output)
+                if row_text:
+                    rows.append(row_text)
+            previous_row = row_index
     return rows
 
 
@@ -254,17 +339,12 @@ def _xlsx_sheet_relationships(
     return relationships
 
 
-def _xlsx_hyperlink_at(hyperlinks, row_index: int, column_index: int):
-    for min_column, min_row, max_column, max_row, target, display in hyperlinks:
-        if min_row <= row_index <= max_row and min_column <= column_index <= max_column:
-            return target, display
-    return None
-
-
 def _xlsx_formula_hyperlink_target(formula) -> str:
+    if not isinstance(formula, str) or not formula.startswith("="):
+        return ""
     match = re.match(
         r'^=HYPERLINK\(\s*"((?:[^"]|"")*)"',
-        str(formula or ""),
+        formula,
         re.IGNORECASE,
     )
     if not match:

@@ -26,7 +26,9 @@ from app.reporting.service import _empty_report_suppression_version
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def prepare_database(root: Path, tasks: int, users: int) -> None:
+def prepare_database(
+    root: Path, tasks: int, users: int, *, metadata_chars=0, report_chars=0
+) -> None:
     instance = root / "instance"
     instance.mkdir()
     app = Flask(__name__)
@@ -34,18 +36,36 @@ def prepare_database(root: Path, tasks: int, users: int) -> None:
     with app.app_context():
         init_db()
         db = get_db()
+        metadata = (
+            json.dumps({"benchmark_padding": "x" * metadata_chars})
+            if metadata_chars
+            else None
+        )
+        report = (
+            json.dumps(
+                [{"code": "benchmark", "name": "基准", "result": "文" * report_chars}],
+                ensure_ascii=False,
+            )
+            if report_chars
+            else "[]"
+        )
         db.executemany(
             """
             INSERT INTO tasks(
                 ip, owner_subject, owner_source, original_filename, stored_filename,
                 file_type, file_size, checks_json, model_name, api_base,
-                status, progress, document_text, result_json, created_at, updated_at
+                status, progress, document_text, document_meta_json, result_json, created_at, updated_at
             ) VALUES ('127.0.0.1', ?, 'trusted_header', 'example.txt', 'example.txt',
                       'txt', 4096, '[]', 'benchmark', 'http://example.invalid',
-                      'completed', 100, ?, '[]', '2026-09-01 12:00:00', '2026-09-01 12:00:00')
+                      'completed', 100, ?, ?, ?, '2026-09-01 12:00:00', '2026-09-01 12:00:00')
             """,
             (
-                (f"trusted_header:bench-{i % users}", "文档性能测试。" * 512)
+                (
+                    f"trusted_header:bench-{i % users}",
+                    "文档性能测试。" * 512,
+                    metadata,
+                    report,
+                )
                 for i in range(tasks)
             ),
         )
@@ -71,7 +91,13 @@ def benchmark(args) -> dict:
             ignore=shutil.ignore_patterns("__pycache__"),
         )
         shutil.copy2(args.source_root / "run.py", root / "run.py")
-        prepare_database(root, args.tasks, args.users)
+        prepare_database(
+            root,
+            args.tasks,
+            args.users,
+            metadata_chars=args.metadata_chars,
+            report_chars=args.report_chars,
+        )
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
@@ -187,6 +213,8 @@ def benchmark(args) -> dict:
 
                 return {
                     "tasks": args.tasks,
+                    "metadata_chars_per_task": args.metadata_chars,
+                    "report_chars_per_task": args.report_chars,
                     "users": args.users,
                     "requests": args.requests,
                     "concurrency": args.concurrency,
@@ -234,8 +262,12 @@ def main():
     parser.add_argument("--users", type=int, default=100)
     parser.add_argument("--requests", type=int, default=1000)
     parser.add_argument("--concurrency", type=int, default=100)
+    parser.add_argument("--metadata-chars", type=int, default=0)
+    parser.add_argument("--report-chars", type=int, default=0)
     parser.add_argument("--source-root", type=Path, default=PROJECT_ROOT)
     args = parser.parse_args()
+    if min(args.metadata_chars, args.report_chars) < 0:
+        parser.error("元数据和报告字符数为非负整数")
     result = benchmark(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 1 if result["errors"] else 0

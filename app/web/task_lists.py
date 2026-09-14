@@ -58,7 +58,10 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
         SELECT t.id, t.task_type, t.ip,
                t.original_filename, t.stored_filename, t.file_type, t.file_size,
                t.provider_name, t.model_name, t.status, t.progress,
-               t.created_at, t.document_meta_json, t.source_files_cleaned_at
+               t.created_at,
+               CASE WHEN t.task_type IN ('consistency_check', 'language_consistency_check')
+                    THEN t.document_meta_json END AS document_meta_json,
+               t.source_files_cleaned_at
         FROM tasks t
         WHERE {owner_clause} AND t.task_type = ?
         ORDER BY t.created_at DESC, t.id DESC
@@ -100,7 +103,6 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
                 f"""
             SELECT
                 t.id, t.status, t.progress, t.updated_at,
-                CASE WHEN t.result_json IS NOT NULL AND t.result_json != '' THEN 1 ELSE 0 END AS has_result,
                 s.source_updated_at, s.suppression_version,
                 s.issue_count AS issue,
                 s.suggestion_count AS suggestion,
@@ -118,6 +120,30 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
     suppression_version = _report_suppression_versions({task_type}).get(
         task_type, _empty_report_suppression_version()
     )
+    # 有效统计直接用于轮询，仅为过期且已结束的任务检查原始报告是否存在。
+    rows = [dict(row) for row in rows]
+    stale_ids = [
+        row["id"]
+        for row in rows
+        if row["status"] not in {"queued", "running", "canceling"}
+        and (
+            row["source_updated_at"] != row["updated_at"]
+            or row["suppression_version"] != suppression_version
+        )
+    ]
+    has_results = {}
+    if stale_ids:
+        placeholders = ",".join("?" for _ in stale_ids)
+        has_results = {
+            row["id"]: bool(row["has_result"])
+            for row in get_db().execute(
+                f"SELECT id, (result_json IS NOT NULL AND result_json != '') AS has_result "
+                f"FROM tasks WHERE id IN ({placeholders})",
+                tuple(stale_ids),
+            )
+        }
+    for row in rows:
+        row["has_result"] = has_results.get(row["id"], True)
     counts = (
         get_db()
         .execute(
@@ -368,7 +394,9 @@ def _render_admin_task_list(
                t.owner_subject, t.owner_name_snapshot, t.owner_source,
                t.original_filename, t.stored_filename, t.file_type, t.file_size,
                t.provider_name, t.model_name, t.status, t.progress,
-               t.created_at, t.document_meta_json,
+               t.created_at,
+               CASE WHEN t.task_type IN ('consistency_check', 'language_consistency_check')
+                    THEN t.document_meta_json END AS document_meta_json,
                {current_ip_username_expr} AS current_ip_username,
                {1 if join_ip_usernames else 0} AS ip_username_lookup_complete,
                {owner_name_expr} AS current_owner_name,

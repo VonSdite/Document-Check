@@ -2,7 +2,7 @@ import html
 import logging
 import re
 import unicodedata
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 
 import fitz
@@ -134,7 +134,16 @@ def _extract_pymupdf_page_with_tables(
         logger.debug("PDF 表格检测失败 page=%s error=%s", page_number, exc)
         return ""
 
+    if not candidate_tables:
+        return ""
     table_models = []
+    text_index = _PdfTextPresenceIndex(raw_page)
+    # 单页所有表格的空单元格共用一个文本对象。
+    textpage = None
+    try:
+        textpage = page.get_textpage()
+    except Exception:
+        pass
     for table_index, table in enumerate(candidate_tables, start=1):
         check_extraction_canceled(cancel_event)
         try:
@@ -165,6 +174,8 @@ def _extract_pymupdf_page_with_tables(
                 drawings=table_drawings,
                 image_bboxes=table_images,
                 cancel_event=cancel_event,
+                textpage=textpage,
+                text_index=text_index,
             )
         except DocumentReadCanceled:
             raise
@@ -248,6 +259,8 @@ def _pdf_table_model(
     drawings: list[dict],
     image_bboxes: list[tuple[float, ...]],
     cancel_event=None,
+    textpage=None,
+    text_index=None,
 ) -> dict | None:
     try:
         row_count = int(table.row_count)
@@ -282,6 +295,7 @@ def _pdf_table_model(
     ):
         return None
 
+    nontext = _PdfNontextIndex(image_bboxes, drawings)
     cells = []
     covered_positions = set()
     for row_index, row in enumerate(rows):
@@ -321,16 +335,16 @@ def _pdf_table_model(
                 extracted_row
             ):
                 cell_text = str(extracted_row[column_index] or "").strip()
-            if not cell_text:
+            if not cell_text and (text_index is None or text_index.may_have_text(bbox)):
                 try:
-                    cell_text = str(page.get_textbox(fitz.Rect(bbox)) or "").strip()
+                    if textpage is None:
+                        textpage = page.get_textpage()
+                    cell_text = str(
+                        page.get_textbox(fitz.Rect(bbox), textpage=textpage) or ""
+                    ).strip()
                 except Exception:
                     cell_text = ""
-            has_nontext_content = _pdf_cell_has_nontext_content(
-                bbox,
-                image_bboxes=image_bboxes,
-                drawings=drawings,
-            )
+            has_nontext_content = nontext.contains(bbox)
             cells.append(
                 {
                     "row": row_index,
@@ -421,40 +435,89 @@ def _pdf_table_vector_edge_count(
     return count
 
 
-def _pdf_cell_has_nontext_content(
-    cell_bbox: tuple[float, ...],
-    *,
-    image_bboxes: list[tuple[float, ...]],
-    drawings: list[dict],
-) -> bool:
-    cell_x0, cell_y0, cell_x1, cell_y1 = cell_bbox
-    for image_bbox in image_bboxes:
-        image_area = max(0.0, image_bbox[2] - image_bbox[0]) * max(
-            0.0, image_bbox[3] - image_bbox[1]
+class _PdfTextPresenceIndex:
+    """通过页面已有字符边界定位空白区域，保留有文字候选的原生文本回退。"""
+
+    def __init__(self, raw_page):
+        self.complete = "blocks" in raw_page
+        rectangles = []
+        for block in raw_page.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if "chars" not in span:
+                        self.complete = False
+                    for char in span.get("chars", []):
+                        bbox = char.get("bbox")
+                        if bbox is None or len(bbox) != 4:
+                            self.complete = False
+                        else:
+                            rectangles.append(tuple(bbox))
+        self.rectangles = sorted(rectangles, key=lambda bbox: bbox[1])
+        self.starts = [bbox[1] for bbox in self.rectangles]
+        self.bottoms = []
+        maximum = float("-inf")
+        for bbox in self.rectangles:
+            maximum = max(maximum, bbox[3])
+            self.bottoms.append(maximum)
+
+    def may_have_text(self, bbox):
+        if not self.complete:
+            return True
+        tolerance = _PDF_TABLE_COORDINATE_TOLERANCE
+        expanded = (
+            bbox[0] - tolerance,
+            bbox[1] - tolerance,
+            bbox[2] + tolerance,
+            bbox[3] + tolerance,
         )
-        if _pdf_rect_contains_center(cell_bbox, image_bbox) and image_area >= 4:
+        start = bisect_right(self.bottoms, expanded[1])
+        end = bisect_left(self.starts, expanded[3])
+        return any(
+            _pdf_rects_intersect(self.rectangles[index], expanded)
+            for index in range(start, end)
+        )
+
+
+class _PdfNontextIndex:
+    """按纵向中心坐标索引图片和有效图形，单元格只检查相邻候选。"""
+
+    def __init__(self, images, drawings):
+        self.images = sorted(
+            ((bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2)
+            for bbox in images
+            if max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1]) >= 4
+        )
+        points = []
+        for drawing in drawings:
+            value = drawing.get("rect")
+            if value is None:
+                continue
+            x0, y0, x1, y1 = (float(coordinate) for coordinate in value)
+            if x1 - x0 >= 2 and y1 - y0 >= 2:
+                points.append(((y0 + y1) / 2, (x0 + x1) / 2))
+        self.drawings = sorted(points)
+
+    @staticmethod
+    def _contains(points, bbox):
+        tolerance = _PDF_TABLE_COORDINATE_TOLERANCE
+        start = bisect_left(points, (bbox[1] - tolerance, float("-inf")))
+        end = bisect_right(points, (bbox[3] + tolerance, float("inf")))
+        return any(
+            bbox[0] - tolerance <= points[index][1] <= bbox[2] + tolerance
+            for index in range(start, end)
+        )
+
+    def contains(self, bbox):
+        if self._contains(self.images, bbox):
             return True
-    inset = max(1.0, min(cell_x1 - cell_x0, cell_y1 - cell_y0) * 0.04)
-    interior = (
-        cell_x0 + inset,
-        cell_y0 + inset,
-        cell_x1 - inset,
-        cell_y1 - inset,
-    )
-    if interior[2] <= interior[0] or interior[3] <= interior[1]:
-        return False
-    for drawing in drawings:
-        drawing_rect_value = drawing.get("rect")
-        if drawing_rect_value is None:
-            continue
-        drawing_rect = tuple(float(value) for value in drawing_rect_value)
-        if (
-            drawing_rect[2] - drawing_rect[0] >= 2
-            and drawing_rect[3] - drawing_rect[1] >= 2
-            and _pdf_rect_contains_center(interior, drawing_rect)
-        ):
-            return True
-    return False
+        x0, y0, x1, y1 = bbox
+        inset = max(1.0, min(x1 - x0, y1 - y0) * 0.04)
+        interior = (x0 + inset, y0 + inset, x1 - inset, y1 - inset)
+        return (
+            interior[2] > interior[0]
+            and interior[3] > interior[1]
+            and self._contains(self.drawings, interior)
+        )
 
 
 def _pdf_page_text_elements(

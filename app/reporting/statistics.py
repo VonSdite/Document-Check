@@ -135,8 +135,7 @@ def _select_task_report_stat_rows(where_clause: str, params: tuple) -> list:
             s.pending_review_item_count AS pending_review
         FROM tasks t
         LEFT JOIN task_report_stats s ON s.task_id = t.id
-        WHERE t.result_json IS NOT NULL
-          AND t.result_json != ''
+        WHERE (s.task_id IS NOT NULL OR (t.result_json IS NOT NULL AND t.result_json != ''))
           AND {where_clause}
         """,
             params,

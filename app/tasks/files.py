@@ -82,8 +82,9 @@ def _task_upload_paths(task) -> list[Path]:
     return paths
 
 
-def _task_source_file_paths(task) -> list[Path]:
-    groups = _task_document_groups(task)
+def _task_source_file_paths(task, *, groups=None) -> list[Path]:
+    if groups is None:
+        groups = _task_document_groups(task)
     upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
     if not groups:
         return [_task_upload_path(task)]
@@ -110,7 +111,7 @@ def _task_source_files_available(task) -> bool:
         for file_info in group["files"]
     ):
         return False
-    paths = _task_source_file_paths(task)
+    paths = _task_source_file_paths(task, groups=groups)
     return bool(paths) and all(path.is_file() for path in paths)
 
 

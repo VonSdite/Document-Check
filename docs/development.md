@@ -28,6 +28,14 @@ Windows 虚拟环境中，启动器采用 Python `multiprocessing.spawn` 的解�
 
 `documents.extraction` 接受可选的 `cancel_event`，在 PDF 页、表格和表格行以及 Excel 行边界抛出 `DocumentReadCanceled`。文档模块使用自身异常类型，TaskRunner 根据取消信号更新任务状态。新增耗时解析循环时同步设置取消检查点。
 
+## 文档解析与列表读取
+
+`documents/extraction/spreadsheets.py` 将 openpyxl 内部流式接口限定在 Excel 解析器内，使用已锁定的 `openpyxl==3.1.5`。`_WorksheetValuesAndFormulas` 继承 `WorkSheetParser`，一次解析保留缓存值和公式，并沿用其日期、时长、共享公式及单元格类型规则。超链接元数据单独流式读取，再通过行列范围索引参与文本生成。升级 openpyxl 时运行公式、日期、链接、稀疏行列和取消回归测试。
+
+`documents/extraction/pdf.py` 使用页面 rawdict 字符边界筛选可能含文字的单元格，字符信息不完整时保留原生提取回退。同页表格共用 TextPage，图片与绘图使用中心坐标索引。索引仅缩小候选范围，文本及非文本内容仍按现有坐标容差判定。
+
+`web/task_lists.py` 按任务类型选择列表元数据。轮询先批量读取状态与统计缓存，仅对已结束且缓存过期的任务按主键检查报告存在性；候选 ID 来自已验证任务类型和归属的记录。`reporting/statistics.py` 优先使用统计行，报告写入由 `trg_tasks_report_stats_invalidate` 触发缓存删除。文件可用性检查在一次调用内复用已解析分组，并实时检查磁盘文件。
+
 ## 数据库索引初始化
 
 `app/persistence/schema.py` 的 `QUERY_INDEXES` 保存性能索引定义。`init_db()` 记录初始化前已有的表，完成字段准备后，为新建表创建索引。索引初始化在应用工厂启动期间完成。
@@ -91,7 +99,8 @@ uv run python -m unittest discover -s tests
 - `tests/fixtures/http_routes.json` 定义默认配置下的路由、端点名称与 HTTP 方法契约；代理前缀、认证、下载和参数行为由配置与路由测试覆盖。
 - `tests/fixtures/database_schema.json` 定义 SQLite 表、索引和触发器的兼容契约。
 - `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
-- `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
+- `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、轮询字段读取与缓存失效、列表元数据选择、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
+- `tests/test_document_performance.py` 检查 Excel 单工作簿读取、缓存与共享公式、日期类型、重叠链接、稀疏行列，以及 PDF 空单元格扫描次数和坐标索引等价性。`scripts/benchmark_documents.py` 测量合成宽表与 PDF 表格的解析耗时及输出摘要。
 - `tests/test_server_runtime.py` 检查 WSGI 请求体、代理信息、线程配置和监督器退出通知；`tests/test_server_integration.py` 使用真实 HTTP 服务检查多进程、上传下载、任务执行和退出清理。
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查认领、取消、执行权、存活过期任务防重入、进程名额及检查项执行。
 - `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可和监督器被终止后的遗留进程恢复。

@@ -15,10 +15,15 @@ from app.persistence.schema import init_db
 from app.persistence.settings import set_setting
 from app.reporting import statistics
 from app.reporting.service import _empty_report_suppression_version
+from app.tasks import files
 from app.tasks.processes import TaskProcess
 from app.tasks.submission import TaskSubmission, submit_document_task
 from app.tasks.supervisor import TaskSupervisor
-from app.web.task_lists import _task_stats_for_where, _task_status_payload
+from app.web.task_lists import (
+    _task_stats_for_where,
+    _task_status_payload,
+    _user_task_list_data,
+)
 
 
 class InternalPerformanceTest(unittest.TestCase):
@@ -131,6 +136,112 @@ class InternalPerformanceTest(unittest.TestCase):
         self.assertIn("idx_tasks_pending_file_cleanup", plan)
         self.assertNotIn("USE TEMP B-TREE", plan)
         self.assertNotIn("SCAN tasks", plan)
+
+    def poll_tasks(self, ids):
+        with self.app.test_request_context("/?ids=" + ",".join(map(str, ids))):
+            return _task_status_payload(
+                "document_check",
+                owner_clause="t.owner_subject = ?",
+                owner_params=("ip:user",),
+            )
+
+    def test_polling_cached_and_active_tasks_does_not_read_report_bodies(self):
+        self.insert_tasks(1, result="[]")
+        self.insert_tasks(1, status="running", result="[]")
+        db = get_db()
+        db.execute(
+            "INSERT INTO task_report_stats(task_id, source_updated_at, suppression_version, "
+            "issue_count, reviewed_item_count, pending_review_item_count, updated_at) "
+            "VALUES (1, '2026-09-01', ?, 3, 1, 2, '2026-09-01')",
+            (_empty_report_suppression_version(),),
+        )
+        db.commit()
+        statements = []
+        db.set_trace_callback(statements.append)
+        try:
+            tasks = {task["id"]: task for task in self.poll_tasks([1, 2])["tasks"]}
+        finally:
+            db.set_trace_callback(None)
+        self.assertEqual(tasks[1]["review_key"], "in_progress:1:3")
+        self.assertEqual(tasks[2]["review_key"], "unavailable:0:0")
+        self.assertFalse(any("result_json" in sql for sql in statements))
+
+    def test_polling_tracks_report_invalidation_and_scopes_fallback_to_owner(self):
+        self.insert_tasks(1, result="[]")
+        self.insert_tasks(1, owner="ip:other", result="[]")
+        db = get_db()
+        statistics._task_report_stat_rows_for_where("t.id = ?", (1,))
+        self.assertEqual(self.poll_tasks([1])["tasks"][0]["review_key"], "empty:0:0")
+        # 同一时间戳内写入报告仍由数据库触发器使缓存失效。
+        db.execute("UPDATE tasks SET result_json = '[]' WHERE id = 1")
+        db.commit()
+        statements = []
+        db.set_trace_callback(statements.append)
+        try:
+            tasks = self.poll_tasks([1, 2])["tasks"]
+        finally:
+            db.set_trace_callback(None)
+        self.assertEqual([task["id"] for task in tasks], [1])
+        self.assertEqual(tasks[0]["review_key"], "stale")
+        fallback = [sql for sql in statements if "AS has_result" in sql]
+        self.assertEqual(len(fallback), 1)
+        self.assertIn("WHERE id IN (1)", fallback[0])
+        plan = " ".join(
+            row["detail"] for row in db.execute("EXPLAIN QUERY PLAN " + fallback[0])
+        )
+        self.assertIn("USING INTEGER PRIMARY KEY", plan)
+        statistics._task_report_stat_rows_for_where("t.id = ?", (1,))
+        db.execute("UPDATE tasks SET result_json = NULL WHERE id = 1")
+        db.commit()
+        self.assertEqual(self.poll_tasks([1])["tasks"][0]["review_key"], "empty:0:0")
+        self.assertEqual(statistics._select_task_report_stat_rows("t.id = ?", (1,)), [])
+
+    def test_list_metadata_is_loaded_only_for_multi_document_tasks(self):
+        self.insert_tasks(1)
+        db = get_db()
+        metadata = json.dumps(
+            {"groups": [{"files": [{"stored_filename": "sample.txt"}]}]}
+        )
+        db.execute("UPDATE tasks SET document_meta_json = ?", (metadata,))
+        identity = UserIdentity("ip:user", "user", "ip", "127.0.0.1")
+        for task_type in (
+            "document_check",
+            "image_check",
+            "video_check",
+            "consistency_check",
+            "language_consistency_check",
+        ):
+            with self.subTest(task_type=task_type):
+                db.execute("UPDATE tasks SET task_type = ?", (task_type,))
+                db.commit()
+                with self.app.test_request_context("/"):
+                    _, _, total, rows, _ = _user_task_list_data(identity, task_type)
+                self.assertEqual(total, 1)
+                self.assertEqual(
+                    rows[0]["document_meta_json"],
+                    metadata if "consistency" in task_type else None,
+                )
+
+    def test_file_availability_parses_groups_once_and_checks_current_files(self):
+        self.app.config["UPLOAD_FOLDER"] = self.temporary.name
+        source = Path(self.temporary.name) / "source.txt"
+        source.write_text("内容", encoding="utf-8")
+        task = {
+            "task_type": "consistency_check",
+            "stored_filename": "combined.txt",
+            "document_meta_json": json.dumps(
+                {"groups": [{"files": [{"stored_filename": source.name}]}]}
+            ),
+        }
+        with patch.object(
+            files, "_task_document_groups", wraps=files._task_document_groups
+        ) as groups:
+            self.assertTrue(files._task_source_files_available(task))
+            self.assertEqual(groups.call_count, 1)
+        source.unlink()
+        self.assertFalse(files._task_source_files_available(task))
+        source.write_text("恢复", encoding="utf-8")
+        self.assertTrue(files._task_source_files_available(task))
 
     def test_scheduler_cost_is_bounded_by_owners_instead_of_queue_length(self):
         self.insert_tasks(50, status="queued")
