@@ -98,7 +98,7 @@ assert 'gunicorn' not in sys.modules
         base_python = r"C:\Python312\python.exe"
         with (
             patch(
-                "run.sys",
+                "app.infrastructure.subprocesses.sys",
                 SimpleNamespace(
                     platform="win32",
                     executable=venv_python,
@@ -124,7 +124,7 @@ assert 'gunicorn' not in sys.modules
             with (
                 self.subTest(platform=platform),
                 patch(
-                    "run.sys",
+                    "app.infrastructure.subprocesses.sys",
                     SimpleNamespace(
                         platform=platform, executable=executable, _base_executable=base
                     ),
@@ -134,6 +134,40 @@ assert 'gunicorn' not in sys.modules
             ):
                 _start_task_supervisor(app)
             self.assertEqual(start.call_args.args[0][0], executable)
+
+    def test_windows_task_process_uses_independent_module_and_shared_venv_selection(
+        self,
+    ):
+        from app.tasks.processes import TaskWorkerProcess
+
+        venv_python = r"C:\文档检查\.venv\Scripts\python.exe"
+        base_python = r"C:\Python312\python.exe"
+        with (
+            patch(
+                "app.infrastructure.subprocesses.sys",
+                SimpleNamespace(
+                    platform="win32",
+                    executable=venv_python,
+                    _base_executable=base_python,
+                ),
+            ),
+            patch("app.tasks.processes.subprocess.Popen") as start,
+            patch("app.tasks.processes.threading.Thread"),
+        ):
+            worker = TaskWorkerProcess(7, "private-token", root_dir="isolated-root")
+            worker.start()
+            worker.allow_start()
+        self.assertEqual(
+            start.call_args.args[0],
+            [base_python, "-u", "-m", "app.bootstrap.task", "7"],
+        )
+        options = start.call_args.kwargs
+        self.assertEqual(options["env"]["__PYVENV_LAUNCHER__"], venv_python)
+        self.assertEqual(options["env"]["DOCUMENTCHECK_ROOT_DIR"], "isolated-root")
+        self.assertTrue(options["close_fds"])
+        self.assertNotIn("private-token", start.call_args.args[0])
+        permission = json.loads(start.return_value.stdin.write.call_args.args[0])
+        self.assertEqual(permission, {"start": True, "claim_token": "private-token"})
 
     def test_supervisor_start_failure_distinguishes_exit_from_timeout(self):
         app = Flask(__name__)

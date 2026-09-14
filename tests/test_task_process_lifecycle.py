@@ -1,48 +1,24 @@
 """使用真实进程验证阻塞解析、启动握手与监督器恢复。"""
 
-import ctypes
 import json
-import multiprocessing
-import os
+import subprocess
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import psutil
+from openpyxl import Workbook
 
 from app.infrastructure.runtime import create_task_app
+from app.infrastructure.subprocesses import PROJECT_ROOT, python_module_command
 from app.persistence.connection import get_db, now_text
 from app.persistence.schema import init_db
 from app.tasks import supervisor as supervisor_module
-from app.tasks.processes import matching_process, process_is_running
-from app.tasks.supervisor import TaskSupervisor, run_claimed_task, supervisor_state_path
-
-
-def _run_blocked_task(task_id, claim_token, *, root_dir, start_signal):
-    def blocked_preprocessing(*_args, **_kwargs):
-        (Path(root_dir) / f"started-{task_id}").write_text("started", encoding="utf-8")
-        # PyDLL 保留 GIL，模拟长时间阻塞 Python 线程的底层解析调用。
-        if os.name == "nt":
-            ctypes.PyDLL("kernel32").Sleep(10000)
-        else:
-            ctypes.PyDLL(None).sleep(10)
-        return "测试文本", None
-
-    with patch(
-        "app.tasks.runner._prepare_task_inputs", side_effect=blocked_preprocessing
-    ):
-        run_claimed_task(
-            task_id, claim_token, root_dir=root_dir, start_signal=start_signal
-        )
-
-
-def _run_crashable_supervisor(root_dir):
-    app = create_task_app(Path(root_dir))
-    with patch("app.tasks.supervisor.run_claimed_task", _run_blocked_task):
-        TaskSupervisor(app).run(threading.Event())
+from app.tasks.processes import TaskWorkerProcess, matching_process, process_is_running
+from app.tasks.supervisor import TaskSupervisor, supervisor_state_path
+from tests.fixtures.task_process import blocked_task_command
 
 
 class TaskProcessLifecycleTest(unittest.TestCase):
@@ -79,7 +55,10 @@ class TaskProcessLifecycleTest(unittest.TestCase):
 
     def _launch_blocked_task(self):
         task_id = self._insert_task()
-        with patch("app.tasks.supervisor.run_claimed_task", _run_blocked_task):
+        with patch(
+            "app.tasks.processes.python_module_command",
+            side_effect=blocked_task_command,
+        ):
             self.supervisor.run_once()
         self._wait(lambda: (self.root / f"started-{task_id}").exists())
         return task_id, self.supervisor._active[task_id]
@@ -116,6 +95,10 @@ class TaskProcessLifecycleTest(unittest.TestCase):
             self.assertGreater(self._task(task_id)["lease_expires_at"], initial_lease)
             self.assertEqual(self._task(queued_id)["status"], "queued")
             self.assertEqual(len(self.supervisor._active), 1)
+            entry.startup_at -= 120
+            self.supervisor.run_once()
+            self.assertIsNone(entry.startup_error)
+            self.assertTrue(entry.process.is_alive())
 
     def test_cancel_terminates_native_block_before_releasing_capacity(self):
         task_id, entry = self._launch_blocked_task()
@@ -149,7 +132,10 @@ class TaskProcessLifecycleTest(unittest.TestCase):
             real_write(app, state)
 
         with (
-            patch("app.tasks.supervisor.run_claimed_task", _run_blocked_task),
+            patch(
+                "app.tasks.processes.python_module_command",
+                side_effect=blocked_task_command,
+            ),
             patch(
                 "app.tasks.supervisor._write_supervisor_state",
                 side_effect=inspect_before_save,
@@ -162,37 +148,153 @@ class TaskProcessLifecycleTest(unittest.TestCase):
         self.assertEqual(record["pid"], self.supervisor._active[task_id].process.pid)
 
     def test_closed_start_pipe_prevents_task_execution(self):
-        reader, writer = multiprocessing.get_context("spawn").Pipe(duplex=False)
-        writer.close()
-        with patch("app.tasks.supervisor.TaskRunner") as runner:
-            run_claimed_task(1, "claim", root_dir=self.root, start_signal=reader)
-        runner.assert_not_called()
+        task_id = self._insert_task()
+        process = TaskWorkerProcess(task_id, "claim", root_dir=self.root)
+        process.start()
+        try:
+            self._wait(lambda: process.phase == "waiting_permission")
+            self.assertFalse(process.ready.is_set())
+            process.close_start()
+            process.join(timeout=5)
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+            self.assertIsNone(self._task(task_id)["document_text"])
+            self.assertEqual(self._task(task_id)["status"], "queued")
+        finally:
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
+
+    def test_independent_worker_preprocesses_same_named_wide_workbooks(self):
+        task_id = self._insert_task()
+        book = Workbook()
+        book.active.append([f"参数{column}" for column in range(1, 513)])
+        for row in range(10):
+            book.active.append([row * column for column in range(1, 513)])
+        groups = []
+        for role, label in (("material", "素材文档"), ("data", "对照资料")):
+            filename = f"{role}.xlsx"
+            book.save(Path(self.app.config["UPLOAD_FOLDER"]) / filename)
+            groups.append(
+                {
+                    "role": role,
+                    "label": label,
+                    "files": [
+                        {
+                            "stored_filename": filename,
+                            "original_filename": "电网参数.xlsx",
+                            "file_type": "xlsx",
+                        }
+                    ],
+                }
+            )
+        book.close()
+        get_db().execute(
+            "UPDATE tasks SET task_type = 'consistency_check', document_meta_json = ?, max_input_chars = 500000 WHERE id = ?",
+            (json.dumps({"groups": groups}), task_id),
+        )
+        get_db().commit()
+        self.supervisor.run_once()
+        process = self.supervisor._active[task_id].process
+        process.join(timeout=15)
+        self.assertFalse(process.is_alive())
+        self.assertTrue(process.ready.is_set())
+        task = self._task(task_id)
+        self.assertIn("# 素材文档", task["document_text"])
+        self.assertIn("# 对照资料", task["document_text"])
+        self.assertEqual(task["document_text"].count("参数512"), 2)
+        self.assertEqual(task["error"], "没有可执行的检查项")
+        self.assertEqual(process.exitcode, 0)
 
     def test_failed_identity_save_never_grants_execution_permission(self):
         task_id = self._insert_task()
         with (
-            patch("app.tasks.supervisor.run_claimed_task", _run_blocked_task),
+            patch(
+                "app.tasks.processes.python_module_command",
+                side_effect=blocked_task_command,
+            ),
             patch(
                 "app.tasks.supervisor._write_supervisor_state",
                 side_effect=OSError("disk unavailable"),
             ),
         ):
-            with self.assertRaises(OSError):
-                self.supervisor.run_once()
+            self.supervisor.run_once()
         entry = self.supervisor._active[task_id]
         entry.process.join(timeout=5)
         self.assertFalse(entry.process.is_alive())
         self.assertFalse((self.root / f"started-{task_id}").exists())
         self.supervisor._reap_finished_processes()
-        self.assertEqual(self._task(task_id)["status"], "queued")
+        self.assertEqual(self._task(task_id)["status"], "failed")
+        self.assertIn("disk unavailable", self._task(task_id)["error"])
+
+    def _launch_mode(self, mode):
+        task_id = self._insert_task()
+
+        def command_for_mode(module, *, root_dir=None):
+            command, environment = python_module_command(
+                "tests.fixtures.task_process", root_dir=root_dir
+            )
+            return [*command, mode], environment
+
+        with patch(
+            "app.tasks.processes.python_module_command", side_effect=command_for_mode
+        ):
+            self.supervisor.run_once()
+        return task_id, self.supervisor._active[task_id]
+
+    def test_stalled_bootstrap_and_initialization_are_stopped_before_failure(self):
+        for mode, phase in (
+            ("bootstrap-hang", "created"),
+            ("initialization-hang", "initializing"),
+        ):
+            with self.subTest(mode=mode):
+                task_id, entry = self._launch_mode(mode)
+                if mode == "initialization-hang":
+                    self._wait(lambda: entry.process.phase == phase)
+                entry.startup_at -= 61
+                self.supervisor.run_once()
+                self.assertIn("启动超时", entry.startup_error)
+                self.assertEqual(self._task(task_id)["status"], "running")
+                self.assertIs(self.supervisor._active[task_id], entry)
+                entry.process.join(timeout=5)
+                self.assertFalse(entry.process.is_alive())
+                self.supervisor.run_once()
+                task = self._task(task_id)
+                self.assertEqual(task["status"], "failed")
+                self.assertIn(phase, task["error"])
+                self.assertIsNone(task["claim_token"])
+                self.assertFalse(self.supervisor._active)
+
+    def test_early_worker_exit_reports_failure_without_respawning(self):
+        task_id, entry = self._launch_mode("exit")
+        entry.process.join(timeout=5)
+        self.supervisor.run_once()
+        self.assertEqual(self._task(task_id)["status"], "failed")
+        self.assertIn("退出码=7", self._task(task_id)["error"])
+        self.assertFalse(self.supervisor._active)
+
+    def test_state_write_failure_stops_a_child_that_never_reads_permission(self):
+        with patch(
+            "app.tasks.supervisor._write_supervisor_state",
+            side_effect=PermissionError("file locked"),
+        ):
+            task_id, entry = self._launch_mode("bootstrap-hang")
+        entry.process.join(timeout=5)
+        self.assertFalse(entry.process.is_alive())
+        self.supervisor.run_once()
+        self.assertEqual(self._task(task_id)["status"], "failed")
+        self.assertIn("file locked", self._task(task_id)["error"])
+        self.assertFalse(self.supervisor._active)
 
     def test_restart_cleans_orphan_after_supervisor_is_killed(self):
         task_id = self._insert_task()
-        parent = multiprocessing.get_context("spawn").Process(
-            target=_run_crashable_supervisor, args=(str(self.root),)
+        command, environment = python_module_command(
+            "tests.fixtures.task_process", root_dir=self.root
+        )
+        parent = subprocess.Popen(
+            [*command, "supervisor"], cwd=PROJECT_ROOT, env=environment
         )
         orphan = None
-        parent.start()
         try:
             self._wait(lambda: (self.root / f"started-{task_id}").exists())
             state = json.loads(
@@ -202,17 +304,17 @@ class TaskProcessLifecycleTest(unittest.TestCase):
             orphan = matching_process(record)
             self.assertIsNotNone(orphan)
             parent.kill()
-            parent.join(timeout=5)
-            self.assertFalse(parent.is_alive())
+            parent.wait(timeout=5)
+            self.assertIsNotNone(parent.poll())
             self.assertTrue(process_is_running(orphan))
             self.supervisor._recover_previous_processes()
             self.assertFalse(process_is_running(orphan))
             self.assertEqual(self._task(task_id)["status"], "queued")
             self.assertIsNone(self._task(task_id)["claim_token"])
         finally:
-            if parent.is_alive():
+            if parent.poll() is None:
                 parent.kill()
-                parent.join(timeout=5)
+                parent.wait(timeout=5)
             if orphan is not None and process_is_running(orphan):
                 orphan.kill()
                 psutil.wait_procs([orphan], timeout=3)

@@ -1,12 +1,12 @@
 import logging
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 from app.bootstrap.factory import create_app
 from app.bootstrap.server import serve_application
 from app.infrastructure.network import access_urls
+from app.infrastructure.subprocesses import PROJECT_ROOT, python_module_command
 from app.tasks.supervisor import wait_for_supervisor
 from app.web.observability import log_startup_self_check
 
@@ -48,25 +48,17 @@ def main() -> None:
 
 
 def _start_task_supervisor(app):
-    executable = sys.executable
-    environment = {**os.environ, "DOCUMENTCHECK_ROOT_DIR": str(app.config["ROOT_DIR"])}
-    base_executable = getattr(sys, "_base_executable", None) or executable
-    if sys.platform == "win32" and os.path.normcase(executable) != os.path.normcase(
-        base_executable
-    ):
-        # 与 multiprocessing.spawn 一致：直接启动基础解释器并保留虚拟环境。
-        environment["__PYVENV_LAUNCHER__"] = executable
-        executable = base_executable
+    command, environment = python_module_command(
+        "app.bootstrap.supervisor", root_dir=app.config["ROOT_DIR"]
+    )
     supervisor = subprocess.Popen(
         [
-            executable,
-            "-m",
-            "app.bootstrap.supervisor",
+            *command,
             "--parent-pid",
             str(os.getpid()),
             "--watch-stdin",
         ],
-        cwd=Path(__file__).resolve().parent,
+        cwd=PROJECT_ROOT,
         env=environment,
         stdin=subprocess.PIPE,
         start_new_session=False,

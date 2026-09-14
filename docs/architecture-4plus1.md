@@ -35,7 +35,7 @@ run.py 主进程
 1. Web worker 接收上传、校验文件和模型配置。
 2. Web worker 将任务与提交时的配置快照写入 SQLite，任务状态设为 `queued`。
 3. supervisor 在 SQLite 事务中认领任务，应用全局并发、单用户并发和机器级进程上限。
-4. supervisor 为每个已认领任务创建一个独立任务进程，保存任务 ID、租约令牌、PID 和进程创建时间，再通过启动管道允许任务执行。
+4. supervisor 通过 `app.bootstrap.task` 为每个已认领任务创建独立 Python 进程，保存任务 ID、租约令牌、PID 和进程创建时间，再通过标准输入授予执行许可。任务入口在应用初始化完成后报告业务就绪。
 5. TaskRunner 在任务进程中读取任务快照，完成文档预处理并执行检查项。
 6. TaskRunner 通过任务内线程池并发执行检查项，持续写入进度和中间结果。
 7. TaskRunner 将任务状态更新为 `completed`、`partial`、`failed` 或 `canceled`。
@@ -49,6 +49,8 @@ run.py 主进程
 - 受管理的任务在进程退出前持续占用机器、全局和用户并发名额；过期回收与队列认领排除这些任务。
 - supervisor 观察到取消或执行权结束后给予 10 秒退出时间，再终止任务及其外部工具进程，3 秒后仍未退出则强制结束；确认退出后完成取消或恢复状态。
 - supervisor 在 `instance/task-supervisor.json` 中原子保存进程身份，子进程收到启动许可后开始执行。新监督器先按 PID 和创建时间核验遗留进程，确认其退出后再恢复对应任务。
+- supervisor 要求任务进程在创建后 60 秒内确认业务就绪；启动超时和就绪前异常退出在进程退出后写入明确失败原因。业务就绪后的长任务由租约持续管理。
+- 状态文件原子替换遇到权限或文件共享占用错误时有限重试。执行许可依赖身份保存成功；进程终止和退出收尾尽力保存快照，写入失败时继续清理。
 - supervisor 在停止服务时等待任务退出，随后终止剩余进程。未确认退出的进程保留身份记录供启动恢复使用。
 
 ### 管理并发配置
@@ -64,7 +66,7 @@ run.py 主进程
 
 | 模块 | 职责与入口 |
 | --- | --- |
-| `bootstrap` | `factory.create_app` 装配 Web 应用；`supervisor` 提供监督器进程入口 |
+| `bootstrap` | `factory.create_app` 装配 Web 应用；`supervisor` 和 `task` 提供监督器及任务进程入口 |
 | `contracts` | 任务类型、文件数量和输出条目限制等公共约束 |
 | `infrastructure` | 本地配置、网络、日志、文件操作；`runtime` 创建进程应用上下文 |
 | `persistence` | `connection` 管理连接，`schema` 管理初始化，`settings` 管理设置，`defaults` 管理默认检查项 |
@@ -145,12 +147,14 @@ app/                              Python 命名空间包
     server.py                     Uvicorn 启动与运行目录传递
     asgi.py                       Flask 工厂与 WSGI 请求线程池
     supervisor.py                 监督器进程入口
+    task.py                       任务许可、初始化和业务就绪入口
   contracts/
     task_types.py                 任务类型与文档数量约束
     limits.py                     输出数量约束
   infrastructure/
     config.py                     本地配置读写
     runtime.py                    配置、资源定位与进程应用上下文
+    subprocesses.py               Python 解释器与子进程环境
     logging.py                    应用日志
     network.py                    网络配置与访问地址
     files.py                      文件系统操作
@@ -185,7 +189,7 @@ app/                              Python 命名空间包
     submission.py                 提交数据、验证、文件入库与任务事务
     files.py                      上传路径、任务文件与清理辅助
     supervisor.py                 调度、续约、恢复与任务进程管理
-    processes.py                  进程身份、快照与进程树退出
+    processes.py                  独立任务启动、就绪确认、快照与进程树退出
     runner.py                     TaskRunner 与文本检查编排
     runtime/
       preprocessing.py            文档、图片、视频与多文档预处理
@@ -237,13 +241,14 @@ tests/                            行为、兼容、依赖和性能回归
 | a2wsgi 请求线程 | 每个 Web 进程 16 | 执行 Flask 请求 |
 | 任务 supervisor | 1 | SQLite 队列调度、任务进程管理、续约和恢复 |
 | supervisor 维护线程 | 1 | 文件清理和报告统计缓存刷新 |
-| 任务进程 | 最多 4 | 一个进程执行一个任务 |
+| 任务进程 | 最多 4 | 一个独立模块进程执行一个任务 |
+| 任务启动状态读取线程 | 每个任务进程 1 个，位于监督器 | 消费子进程输出，记录启动阶段并接收业务就绪信号 |
 | 任务取消监测线程 | 每任务 1 | 读取取消标记与执行权变化 |
 | 任务内检查线程 | 按 `check_item_concurrency` | 一个任务内并行执行检查项 |
 
-任务 supervisor 由 `run.py` 通过 `app.bootstrap.supervisor` 创建为独立 Python 子进程，再启动 Uvicorn。Web worker 和监督器通过 `DOCUMENTCHECK_ROOT_DIR` 继承运行根目录，读取相同的配置和数据库。父进程通过标准输入管道通知监督器退出，监督器完成任务进程清理；进程存活使用 psutil 检查。任务进程使用 `spawn` 创建，任务进程接收任务 ID、租约令牌和运行根目录；每个进程自行创建应用对象和数据库连接。
+任务 supervisor 由 `run.py` 通过 `app.bootstrap.supervisor` 创建为独立 Python 子进程，再启动 Uvicorn。Web worker 和监督器通过 `DOCUMENTCHECK_ROOT_DIR` 继承运行根目录，读取相同的配置和数据库。父进程通过标准输入管道通知监督器退出，监督器完成任务进程清理；进程存活使用 psutil 检查。任务进程通过 `subprocess.Popen` 直接启动 `app.bootstrap.task`，任务 ID 由命令行传递，租约令牌通过标准输入的许可消息传递，运行根目录由环境变量继承；每个进程自行创建应用对象和数据库连接。
 
-Windows 虚拟环境中的监督器通过基础解释器直接启动，使用 `__PYVENV_LAUNCHER__` 保留虚拟环境。启动器与监督器使用实际进程 PID 完成就绪和父进程存活检查。
+Windows 虚拟环境中的监督器和任务进程通过基础解释器直接启动，使用 `__PYVENV_LAUNCHER__` 保留虚拟环境。统一的解释器选择函数保证父进程持有实际 Python 进程 PID；监督器使用该 PID 完成就绪、存活检查和退出处理。
 
 Web 请求线程、任务进程和任务内检查线程都使用 Python 原生线程或进程。外部模型请求属于 I/O 操作，线程在等待网络响应时释放执行资源；文档解析和视频处理在独立任务进程中运行。
 

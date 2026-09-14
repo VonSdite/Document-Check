@@ -14,15 +14,19 @@ app = create_app()
 
 工厂接受可选的 `root_dir: Path`，用于指定配置和运行数据所在目录。模板与静态资源定位到代码中的 `app/web/`；运行目录负责保存 `config.yaml` 和 `instance/`。启动器通过 `DOCUMENTCHECK_ROOT_DIR` 将此目录传给 Web worker 和监督器；该环境变量也可用于指定独立的运行目录。
 
-`app.infrastructure.runtime.create_task_app()` 创建后台进程使用的应用上下文，并在上下文结束时关闭数据库连接。监督器通过 `python -m app.bootstrap.supervisor` 启动，任务执行入口为 `app.tasks.supervisor.run_claimed_task`。监督器向任务进程传递运行根目录，使子进程使用相同的配置和数据库。
+`app.infrastructure.runtime.create_task_app()` 创建后台进程使用的应用上下文，并在上下文结束时关闭数据库连接。监督器通过 `python -m app.bootstrap.supervisor` 启动，任务通过独立的 `python -m app.bootstrap.task <task_id>` 入口启动，完成应用初始化后调用 `TaskRunner.run()`。监督器向任务进程传递运行根目录，使子进程使用相同的配置和数据库。
 
-Windows 虚拟环境中，启动器采用 Python `multiprocessing.spawn` 的解释器选择方式：调用基础解释器，通过 `__PYVENV_LAUNCHER__` 保留虚拟环境路径与依赖。启动进程 PID 对应实际监督器进程，就绪检查验证该 PID 与新鲜心跳。启动失败信息区分子进程退出与等待超时，并提供退出码、启动 PID 和任务日志路径。
+`app.infrastructure.subprocesses.python_module_command()` 为监督器和任务进程统一选择解释器、UTF-8 输出与运行根目录。Windows 虚拟环境中直接调用基础解释器，通过 `__PYVENV_LAUNCHER__` 保留虚拟环境路径与依赖。启动进程 PID 对应实际 Python 进程，监督器就绪检查验证该 PID 与新鲜心跳。启动失败信息区分子进程退出与等待超时，并提供退出码、启动 PID 和任务日志路径。
 
 ## 任务进程与执行权
 
 `TaskSupervisor` 负责认领、续约、取消收尾和异常恢复；`TaskRunner` 负责预处理与检查执行。监督器每 10 秒按任务主键和令牌更新 90 秒租约，任务中的监测线程只读取取消状态。文件清理与报告统计使用监督器的独立维护线程。
 
-任务进程通过 `spawn` 创建，启动管道在进程身份保存到 `instance/task-supervisor.json` 后发送许可。`tasks/processes.py` 维护 PID、创建时间、租约令牌和待退出子进程快照；PID 和创建时间共同标识进程。监督器启动时先清理记录中的遗留进程，再恢复对应令牌的任务。
+`tasks/processes.TaskWorkerProcess` 使用 `subprocess.Popen` 创建独立模块进程。入口在获得许可前仅加载标准库，通过标准输出报告进入入口；进程身份保存到 `instance/task-supervisor.json` 后，父进程通过标准输入发送包含租约令牌的 JSON 许可并关闭输入管道。子进程收到许可后导入业务模块、创建应用、报告就绪并执行任务。专用读取线程持续消费输出并记录启动阶段，错误堆栈保留在控制台。
+
+监督器从进程创建时起计时，60 秒内须收到业务就绪信号。启动超时、创建失败或就绪前异常退出会产生明确的启动错误；进程确认退出后，任务写为失败，用户可在页面重试。取消状态优先处理，业务就绪后的长任务由原有租约和取消机制管理。
+
+状态文件采用临时文件加原子替换写入。权限或文件共享占用错误最多尝试 6 次，退避等待累计 1.55 秒；持续失败时保留上一份完整快照，并清理临时文件。启动失败时关闭许可管道并终止进程；终止及退出收尾尽力保存快照，状态写入失败时继续清理。`tasks/processes.py` 维护 PID、创建时间、租约令牌和待退出子进程快照；PID 和创建时间共同标识进程。监督器启动时先清理记录中的遗留进程，再恢复对应令牌的任务。
 
 过期回收和队列选择排除 `_active` 中的任务 ID。正在退出的进程继续占用机器、全局及用户并发名额，数据库恢复成功后才移除进程记录。取消先由任务协作退出，10 秒宽限后发送终止信号，3 秒后仍存活则强制结束。数据库租约与运行数据沿用现有字段。
 
@@ -103,7 +107,7 @@ uv run python -m unittest discover -s tests
 - `tests/test_document_performance.py` 检查 Excel 单工作簿读取、缓存与共享公式、日期类型、重叠链接、稀疏行列，以及 PDF 空单元格扫描次数和坐标索引等价性。`scripts/benchmark_documents.py` 测量合成宽表与 PDF 表格的解析耗时及输出摘要。
 - `tests/test_server_runtime.py` 检查 WSGI 请求体、代理信息、线程配置和监督器退出通知；`tests/test_server_integration.py` 使用真实 HTTP 服务检查多进程、上传下载、任务执行和退出清理。
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查认领、取消、执行权、存活过期任务防重入、进程名额及检查项执行。
-- `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可和监督器被终止后的遗留进程恢复。
+- `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可、入口与初始化超时、状态文件写入失败时终止进程，以及监督器被终止后的遗留进程恢复。`tests/test_server_runtime.py` 另验证 Windows 虚拟环境下监督器和任务进程的实际解释器命令。
 - `tests/test_document_cancellation.py` 检查 PDF 分页与表格取消、512 列 Excel 分行取消及异常传播。
 - `tests/test_logging.py` 检查业务日志分流、模块与进程标识、异常堆栈、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查。
 

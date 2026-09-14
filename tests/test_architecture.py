@@ -1,6 +1,5 @@
 import ast
 import json
-import multiprocessing
 import subprocess
 import sys
 import tempfile
@@ -113,10 +112,32 @@ class ModuleArchitectureTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_spawned_task_process_uses_its_runtime_directory(self):
+    def test_task_entry_import_uses_only_standard_library_before_permission(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; import app.bootstrap.task; "
+                    "assert not any(n.startswith(('flask', 'psutil', 'portalocker', "
+                    "'multiprocessing', 'app.tasks', 'app.infrastructure')) for n in sys.modules); "
+                    "sys.argv = ['worker', '1']; app.bootstrap.task.main(); "
+                    "assert 'app.tasks.runner' not in sys.modules"
+                ),
+            ],
+            cwd=PROJECT_ROOT,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "DOCUMENTCHECK_BOOTSTRAP")
+
+    def test_task_subprocess_uses_its_runtime_directory(self):
         from app.infrastructure.runtime import create_task_app
         from app.persistence.schema import init_db
-        from app.tasks.supervisor import run_claimed_task
+        from app.tasks.processes import TaskWorkerProcess
 
         with (
             tempfile.TemporaryDirectory() as root,
@@ -140,13 +161,10 @@ class ModuleArchitectureTest(unittest.TestCase):
                     """
                 )
                 get_db().commit()
-            process = multiprocessing.get_context("spawn").Process(
-                target=run_claimed_task,
-                args=(1, "claim-test"),
-                kwargs={"root_dir": Path(root)},
-            )
+            process = TaskWorkerProcess(1, "claim-test", root_dir=Path(root))
             process.start()
             try:
+                process.allow_start()
                 process.join(timeout=15)
                 self.assertFalse(process.is_alive(), "任务进程应完成并退出")
                 self.assertEqual(process.exitcode, 0)
@@ -170,7 +188,7 @@ class ModuleArchitectureTest(unittest.TestCase):
                 if process.is_alive():
                     process.kill()
                     process.join(timeout=5)
-                process.close()
+                process.close_start()
 
     def test_application_preserves_routes_and_database_schema(self):
         with (

@@ -148,10 +148,16 @@ class ServerIntegrationTest(unittest.TestCase):
                     self.assertIn(
                         "attachment", downloaded.headers["Content-Disposition"]
                     )
-                    self.assertIn(
-                        "任务进程已启动",
-                        (root / "instance/logs/task.log").read_text(encoding="utf-8"),
+                    task_log = (root / "instance/logs/task.log").read_text(
+                        encoding="utf-8"
                     )
+                    for stage in (
+                        "任务进程已创建并发送启动许可",
+                        "任务入口已进入",
+                        "任务运行环境初始化",
+                        "任务业务已就绪",
+                    ):
+                        self.assertIn(stage, task_log)
 
                 descendants = psutil.Process(process.pid).children(recursive=True)
                 process.send_signal(

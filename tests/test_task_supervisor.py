@@ -1,10 +1,11 @@
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import psutil
 from flask import Flask
@@ -15,6 +16,7 @@ from app.persistence.settings import set_setting
 from app.tasks.supervisor import (
     SUPERVISOR_HEARTBEAT_STALE_SECONDS,
     TaskSupervisor,
+    _write_supervisor_state,
     supervisor_is_ready,
     supervisor_state_path,
 )
@@ -23,10 +25,11 @@ from app.tasks.supervisor import (
 class _FakeProcess:
     next_pid = 1000
 
-    def __init__(self, *, target, args, name):
-        self.target = target
-        self.args = args
-        self.name = name
+    def __init__(self, task_id, claim_token, *, root_dir=None):
+        self.args = (task_id, claim_token)
+        self.ready = threading.Event()
+        self.phase = "created"
+        self.permitted = False
         self.pid = None
         self.exitcode = None
         self._alive = False
@@ -35,6 +38,14 @@ class _FakeProcess:
         type(self).next_pid += 1
         self.pid = type(self).next_pid
         self._alive = True
+
+    def allow_start(self):
+        self.permitted = True
+        self.ready.set()
+        self.phase = "ready"
+
+    def close_start(self):
+        pass
 
     def is_alive(self):
         return self._alive
@@ -49,14 +60,6 @@ class _FakeProcess:
     def kill(self):
         self._alive = False
         self.exitcode = -9
-
-
-class _FakeProcessContext:
-    def Pipe(self, *, duplex):
-        return Mock(), Mock()
-
-    def Process(self, *, target, args, name):
-        return _FakeProcess(target=target, args=args, name=name)
 
 
 class TaskSupervisorTest(unittest.TestCase):
@@ -113,7 +116,7 @@ class TaskSupervisorTest(unittest.TestCase):
             self._insert_task(owner)
         set_setting("global_concurrency", 4)
         set_setting("user_concurrency", 1)
-        supervisor = TaskSupervisor(self.app, process_context=_FakeProcessContext())
+        supervisor = TaskSupervisor(self.app, process_factory=_FakeProcess)
 
         claimed = supervisor._claim_available_tasks(max_claims=2)
 
@@ -125,8 +128,107 @@ class TaskSupervisorTest(unittest.TestCase):
         )
         self.assertEqual(running, 2)
 
+    def test_state_replace_retries_transient_permission_errors(self):
+        path = supervisor_state_path(self.app)
+        path.write_text('{"status":"previous"}', encoding="utf-8")
+        replace = os.replace
+        attempts = []
+
+        def locked_twice(source, target):
+            attempts.append(source)
+            if len(attempts) < 3:
+                raise PermissionError(13, "file locked")
+            replace(source, target)
+
+        with (
+            patch("app.tasks.supervisor.os.replace", side_effect=locked_twice),
+            patch("app.tasks.supervisor.time.sleep") as sleep,
+        ):
+            _write_supervisor_state(self.app, {"status": "running"})
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8")), {"status": "running"}
+        )
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertFalse(list(path.parent.glob(".*.tmp")))
+
+    def test_persistent_state_lock_preserves_previous_snapshot_and_cleans_temp(self):
+        path = supervisor_state_path(self.app)
+        path.write_text('{"status":"previous"}', encoding="utf-8")
+        with (
+            patch(
+                "app.tasks.supervisor.os.replace",
+                side_effect=PermissionError(13, "file locked"),
+            ) as replace,
+            patch("app.tasks.supervisor.time.sleep"),
+        ):
+            with self.assertRaises(PermissionError):
+                _write_supervisor_state(self.app, {"status": "running"})
+        self.assertEqual(replace.call_count, 6)
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8")), {"status": "previous"}
+        )
+        self.assertFalse(list(path.parent.glob(".*.tmp")))
+
+    def test_shutdown_terminates_process_even_when_state_writes_fail(self):
+        supervisor, task_id, entry = self._launch_one()
+        with (
+            patch(
+                "app.tasks.supervisor._write_supervisor_state",
+                side_effect=PermissionError("file locked"),
+            ),
+            patch("app.tasks.supervisor.SUPERVISOR_SHUTDOWN_GRACE_SECONDS", 0),
+            patch(
+                "app.tasks.supervisor.psutil.Process",
+                side_effect=psutil.NoSuchProcess(entry.process.pid),
+            ),
+        ):
+            supervisor._shutdown_active_processes()
+        self.assertFalse(entry.process.is_alive())
+        self.assertFalse(supervisor._active)
+        self.assertEqual(self._task(task_id)["status"], "queued")
+
+    def test_failed_launch_is_terminated_on_following_loops(self):
+        task_id = self._insert_task("ip:1")
+        supervisor = TaskSupervisor(self.app, process_factory=_FakeProcess)
+        with (
+            patch(
+                "app.tasks.supervisor._write_supervisor_state",
+                side_effect=PermissionError("file locked"),
+            ),
+            patch(
+                "app.tasks.supervisor.psutil.Process",
+                side_effect=psutil.NoSuchProcess(1),
+            ),
+            patch.object(_FakeProcess, "terminate"),
+            patch.object(_FakeProcess, "kill") as kill,
+            patch("app.tasks.supervisor.TASK_TERMINATE_GRACE_SECONDS", 0),
+        ):
+            supervisor.run_once()
+            entry = supervisor._active[task_id]
+            self.assertFalse(entry.process.permitted)
+            supervisor.run_once()
+            self.assertTrue(kill.called)
+            self.assertEqual(self._task(task_id)["status"], "running")
+        entry.process.kill()
+        supervisor._reap_finished_processes()
+        self.assertEqual(self._task(task_id)["status"], "failed")
+
+    def test_cancellation_wins_over_startup_timeout(self):
+        supervisor, task_id, entry = self._launch_one()
+        entry.process.ready.clear()
+        entry.startup_error = "任务进程启动超时"
+        get_db().execute(
+            "UPDATE tasks SET status = 'canceling', cancel_requested = 1 WHERE id = ?",
+            (task_id,),
+        )
+        get_db().commit()
+        entry.process.terminate()
+        supervisor._reap_finished_processes()
+        self.assertEqual(self._task(task_id)["status"], "canceled")
+
     def test_supervisor_launches_one_process_for_each_claimed_task(self):
-        supervisor = TaskSupervisor(self.app, process_context=_FakeProcessContext())
+        supervisor = TaskSupervisor(self.app, process_factory=_FakeProcess)
         claims = [(11, "claim-11"), (12, "claim-12")]
 
         with patch.object(supervisor, "_claim_available_tasks", return_value=claims):
@@ -146,7 +248,7 @@ class TaskSupervisorTest(unittest.TestCase):
     def _launch_one(self, *, capacity=4):
         self.app.config["MAX_TASK_PROCESSES"] = capacity
         task_id = self._insert_task("ip:1")
-        supervisor = TaskSupervisor(self.app, process_context=_FakeProcessContext())
+        supervisor = TaskSupervisor(self.app, process_factory=_FakeProcess)
         supervisor._launch_available_tasks()
         return supervisor, task_id, supervisor._active[task_id]
 
