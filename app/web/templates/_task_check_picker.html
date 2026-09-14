@@ -5,9 +5,9 @@
       <span class="help-tip" tabindex="0" data-tip="{{ check_help }}">?</span>
     </div>
     <div class="check-picker-actions">
-      <span class="check-selection-count" data-check-selection-count role="status">已选 {{ 1 if check_items|length == 1 else 0 }} 项 / 共 {{ check_items|length }} 项</span>
       <button class="small-button" type="button" data-check-select-all hidden>全选</button>
       <button class="small-button" type="button" data-check-clear hidden>清空</button>
+      <span class="check-selection-count" data-check-selection-count role="status">已选 {{ 1 if check_items|length == 1 else 0 }} 项 / 共 {{ check_items|length }} 项</span>
     </div>
   </div>
   <div class="check-chip-grid">
@@ -23,7 +23,4 @@
     </div>
     {% endfor %}
   </div>
-  {% if check_items %}
-  <p class="check-selection-hint" data-check-selection-hint>{{ "已默认选中唯一检查项，可按需取消。" if check_items|length == 1 else "请选择本次需要的检查项，提交后在当前浏览器记住选择。" }}</p>
-  {% endif %}
 </div>

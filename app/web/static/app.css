@@ -1982,15 +1982,14 @@ body.table-column-resize-active * {
 }
 
 .check-picker-head {
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .check-picker-actions [hidden] {
   display: none;
 }
 
-.check-selection-count,
-.check-selection-hint {
+.check-selection-count {
   margin: 0;
   color: var(--muted);
   font-size: 13px;

@@ -2183,10 +2183,6 @@ function restoreCheckSelection(picker) {
   inputs.forEach((input) => {
     input.checked = inputs.length === 1 || selectedIds.has(input.value);
   });
-  const hint = picker.querySelector("[data-check-selection-hint]");
-  if (hint && inputs.length > 1 && inputs.some((input) => input.checked)) {
-    hint.textContent = "已恢复上次提交的选择，可按需调整；提交后在当前浏览器记住选择。";
-  }
   updateCheckSelectionCount(picker);
 }
 
