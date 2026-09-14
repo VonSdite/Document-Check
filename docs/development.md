@@ -42,7 +42,7 @@ app = create_app()
 
 依赖关系构成有向无环图。跨模块使用显式绝对导入；模块内部按照格式解析、状态管理、请求协议等具体职责组织文件。
 
-HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责。任务和报告服务通过参数接受业务数据，返回结构化结果；数据库和日志操作使用进程内的 Flask 应用上下文。
+HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责。任务和报告服务通过参数接受业务数据，返回结构化结果；数据库操作使用进程内的 Flask 应用上下文，日志使用模块级 logger。
 
 - `TaskSubmission` 承载文件列表、检查项、模型选择和提交令牌。`submit_document_task` 等提交服务返回 `SubmissionResult`，Web 层将消息和任务类型转换为提示与页面跳转。
 - `identity.models.UserIdentity` 是独立的身份数据类型。模型查询显式接收用户主体，任务提交使用身份快照保存归属信息。
@@ -50,6 +50,12 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 - `reporting.service.update_report_item_type(task, data)` 接收复核数据，`reporting.excel.build_report_workbook(task)` 返回工作簿内容；下载响应由 `web.reports` 构造。
 - `reporting.statistics.refresh_stale_report_stats_batch()` 在后台应用上下文中运行。监督器直接调用报告模块。
 - `documents.extraction` 按文件类型分派，具体格式由 `pdf.py`、`docx.py`、`spreadsheets.py` 和 `markup.py` 实现。
+
+## 日志约定
+
+各模块使用 `logging.getLogger(__name__)` 记录日志。`app.infrastructure.logging` 集中配置 INFO 级别、模块名、进程 ID、控制台输出及多进程安全文件轮转。`app.tasks` 及其子模块写入 `task.log`，`app.models` 及其子模块写入 `llm.log`，其余 `app` 模块和 Werkzeug 写入 `app.log`。启动入口使用 `app.run` logger。每条业务记录写入所属文件，同时输出到控制台。
+
+`app.web.observability` 独立维护 `access.log`，记录 HTTP 请求生命周期。业务日志中的 `task_id` 用于关联任务过程和模型请求，模型 `request_id` 标识单次模型调用；访问日志中的 `request_id` 来自 HTTP 请求头或自动生成，标识一次 Web 请求。
 
 ## 扩展方式
 
@@ -75,5 +81,6 @@ uv run python -m unittest discover -s tests
 - `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
 - `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查多进程认领、取消、租约恢复与检查项执行。
+- `tests/test_logging.py` 检查业务日志分流、模块与进程标识、异常堆栈、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查。
 
 Python 依赖由 `pyproject.toml` 和 `uv.lock` 管理，文本文件统一采用 UTF-8 和 LF。配置、数据库、上传文件和生成产物保存在 Git 忽略的运行目录中。

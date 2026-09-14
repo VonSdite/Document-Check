@@ -1,11 +1,10 @@
 import json
+import logging
 import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-
-from flask import current_app
 
 from app.contracts.task_types import (
     CONSISTENCY_MAX_DATA_FILES,
@@ -29,6 +28,8 @@ from app.tasks.files import (
     _save_uploaded_file,
     _upload_destination,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,7 @@ def submit_document_task(
         ]
     except Exception as exc:
         _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("准备单文档检查任务失败")
+        logger.exception("准备单文档检查任务失败")
         messages.append((_unexpected_upload_preparation_message(exc), "error"))
         return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
 
@@ -199,7 +200,7 @@ def submit_document_task(
     except Exception:
         db.rollback()
         _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("创建单文档检查任务失败")
+        logger.exception("创建单文档检查任务失败")
         messages.append(("创建任务失败，请稍后再试。", "error"))
         return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
     return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
@@ -308,7 +309,7 @@ def submit_image_task(
     try:
         file_size = _save_uploaded_file(upload, destination)
     except Exception:
-        current_app.logger.exception("保存图片检查文档失败")
+        logger.exception("保存图片检查文档失败")
         messages.append(("PDF 上传失败，请稍后再试。", "error"))
         return SubmissionResult(IMAGE_TASK_TYPE, messages)
 
@@ -367,7 +368,7 @@ def submit_image_task(
     except Exception:
         db.rollback()
         _remove_uploaded_file(destination)
-        current_app.logger.exception("创建图片检查任务失败")
+        logger.exception("创建图片检查任务失败")
         messages.append(("创建图片检查任务失败，请稍后再试。", "error"))
         return SubmissionResult(IMAGE_TASK_TYPE, messages)
     return SubmissionResult(IMAGE_TASK_TYPE, messages)
@@ -446,14 +447,12 @@ def _create_video_task_from_upload(
             original_filename, identity.subject, created_at, file_type
         )
     except Exception:
-        current_app.logger.exception(
-            "准备视频检查上传路径失败 file=%s", original_filename
-        )
+        logger.exception("准备视频检查上传路径失败 file=%s", original_filename)
         return "视频上传准备失败，请稍后再试。"
     try:
         file_size = _save_uploaded_file(upload, destination)
     except Exception:
-        current_app.logger.exception("保存视频检查文件失败 file=%s", original_filename)
+        logger.exception("保存视频检查文件失败 file=%s", original_filename)
         return "视频上传失败，请稍后再试。"
 
     try:
@@ -511,7 +510,7 @@ def _create_video_task_from_upload(
     except Exception:
         db.rollback()
         _remove_uploaded_file(destination)
-        current_app.logger.exception("创建视频检查任务失败 file=%s", original_filename)
+        logger.exception("创建视频检查任务失败 file=%s", original_filename)
         return "创建视频检查任务失败，请稍后再试。"
     return None
 
@@ -572,7 +571,7 @@ def submit_consistency_task(
         )
     except Exception:
         _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("准备多文档对照任务失败")
+        logger.exception("准备多文档对照任务失败")
         messages.append(("文档上传失败，请稍后再试。", "error"))
         return SubmissionResult(CONSISTENCY_TASK_TYPE, messages)
 
@@ -646,7 +645,7 @@ def submit_consistency_task(
     except Exception:
         db.rollback()
         _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("创建多文档对照任务失败")
+        logger.exception("创建多文档对照任务失败")
         messages.append(("创建多文档对照任务失败，请稍后再试。", "error"))
         return SubmissionResult(CONSISTENCY_TASK_TYPE, messages)
     return SubmissionResult(CONSISTENCY_TASK_TYPE, messages)
@@ -697,7 +696,7 @@ def submit_language_consistency_task(
         )[0]
     except Exception:
         _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("准备跨语种检查任务失败")
+        logger.exception("准备跨语种检查任务失败")
         messages.append(("文档上传失败，请稍后再试。", "error"))
         return SubmissionResult(LANGUAGE_CONSISTENCY_TASK_TYPE, messages)
 
@@ -774,13 +773,13 @@ def submit_language_consistency_task(
         if duplicate:
             messages.append(("该跨语种检查任务已提交，无需重复提交。", "success"))
             return SubmissionResult(LANGUAGE_CONSISTENCY_TASK_TYPE, messages)
-        current_app.logger.exception("创建跨语种检查任务失败")
+        logger.exception("创建跨语种检查任务失败")
         messages.append(("创建跨语种检查任务失败，请稍后再试。", "error"))
         return SubmissionResult(LANGUAGE_CONSISTENCY_TASK_TYPE, messages)
     except Exception:
         db.rollback()
         _remove_uploaded_files(saved_paths)
-        current_app.logger.exception("创建跨语种检查任务失败")
+        logger.exception("创建跨语种检查任务失败")
         messages.append(("创建跨语种检查任务失败，请稍后再试。", "error"))
         return SubmissionResult(LANGUAGE_CONSISTENCY_TASK_TYPE, messages)
     return SubmissionResult(LANGUAGE_CONSISTENCY_TASK_TYPE, messages)

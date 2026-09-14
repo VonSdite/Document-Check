@@ -150,6 +150,14 @@ class ModuleArchitectureTest(unittest.TestCase):
                 process.join(timeout=15)
                 self.assertFalse(process.is_alive(), "任务进程应完成并退出")
                 self.assertEqual(process.exitcode, 0)
+                logs_dir = Path(root) / "instance" / "logs"
+                task_log = (logs_dir / "task.log").read_text(encoding="utf-8")
+                self.assertIn("[app.tasks.runner]", task_log)
+                self.assertIn(f"pid={process.pid}", task_log)
+                self.assertIn("任务开始 task_id=1", task_log)
+                self.assertNotIn(
+                    "任务开始", (logs_dir / "app.log").read_text(encoding="utf-8")
+                )
                 with app.app_context():
                     task = (
                         get_db()

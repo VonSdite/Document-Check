@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import uuid
@@ -22,6 +23,9 @@ from app.infrastructure.files import (
 from app.persistence.connection import now_text
 from app.persistence.settings import get_setting
 
+logger = logging.getLogger(__name__)
+
+
 UPLOAD_PATH_SAFE_CHARS = 240
 UPLOAD_FILENAME_SAFE_CHARS = 180
 INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
@@ -30,7 +34,7 @@ INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\<>:"|?*]+')
 def _remove_uploaded_file(path: Path):
     ok, error = remove_file(path)
     if not ok:
-        current_app.logger.warning("删除文件失败 path=%s error=%s", path, error)
+        logger.warning("删除文件失败 path=%s error=%s", path, error)
     return ok, error
 
 
@@ -55,7 +59,7 @@ def _remove_uploaded_files(paths: list[Path]):
 def _remove_directory(path: Path):
     ok, error = remove_directory_tree(path)
     if not ok:
-        current_app.logger.warning("删除目录失败 path=%s error=%s", path, error)
+        logger.warning("删除目录失败 path=%s error=%s", path, error)
     return ok
 
 

@@ -1,6 +1,7 @@
 import json
+import logging
 
-from flask import abort, current_app, flash, redirect, request, url_for
+from flask import abort, flash, redirect, request, url_for
 
 from app.infrastructure.files import describe_failures
 from app.persistence.connection import get_db, now_text
@@ -25,6 +26,8 @@ from app.web.constants import (
     MAX_BULK_DELETE_TASKS,
 )
 from app.web.submission import _task_list_endpoint
+
+logger = logging.getLogger(__name__)
 
 
 def _get_task_or_404(task_id: int):
@@ -223,7 +226,7 @@ def _delete_task(task):
     image_dirs = {path.parent for path in paths if _image_folder() in path.parents}
     failures = _remove_uploaded_files(paths)
     if failures:
-        current_app.logger.warning(
+        logger.warning(
             "删除任务文件失败 task_id=%s failures=%s",
             task["id"],
             "; ".join(f"{path}: {error}" for path, error in failures),

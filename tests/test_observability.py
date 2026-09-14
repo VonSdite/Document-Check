@@ -121,7 +121,7 @@ class ObservabilityTest(unittest.TestCase):
     def test_readiness_fails_when_scheduler_is_not_alive(self):
         self.supervisor_probe.alive = False
 
-        with self.assertLogs(self.app.logger.name, level="WARNING") as captured:
+        with self.assertLogs("app.web.observability", level="WARNING") as captured:
             response = self.client.get("/health/ready")
 
         self.assertEqual(response.status_code, 503)
@@ -130,7 +130,7 @@ class ObservabilityTest(unittest.TestCase):
         self.assertIn("就绪状态变化 status=not_ready", "\n".join(captured.output))
 
     def test_startup_self_check_records_runtime_configuration(self):
-        with self.assertLogs(self.app.logger.name, level="INFO") as captured:
+        with self.assertLogs("app.web.observability", level="INFO") as captured:
             log_startup_self_check(self.app)
 
         log_text = "\n".join(captured.output)

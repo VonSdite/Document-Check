@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 from app.checks.language_consistency import compose_language_consistency_text
@@ -29,6 +30,8 @@ from app.persistence.connection import now_text
 from app.persistence.settings import get_setting
 from app.tasks.runtime.artifacts import _path_is_relative_to, _task_image_folder
 from app.tasks.runtime.state import TaskCanceled
+
+logger = logging.getLogger(__name__)
 
 
 def _task_value(task, key: str):
@@ -136,7 +139,7 @@ def _prepare_image_task_inputs(
             ).strip()
         except DocumentReadError as exc:
             text_error = str(exc)
-            app.logger.warning(
+            logger.warning(
                 "图片检查任务未能提取文档文本 task_id=%s file=%s error=%s",
                 task["id"],
                 task["original_filename"],
@@ -155,7 +158,7 @@ def _prepare_image_task_inputs(
             images = []
             image_error = str(exc)
             _reset_generated_output_dir(app, output_dir)
-            app.logger.warning(
+            logger.warning(
                 "图片检查任务未能提取 PDF 内嵌图片 task_id=%s file=%s error=%s",
                 task["id"],
                 task["original_filename"],
@@ -247,7 +250,7 @@ def _prepare_video_task_inputs(
         if frame_selection.get("fallback_frame_count") or frame_selection.get(
             "skipped_frame_count"
         ):
-            app.logger.warning(
+            logger.warning(
                 "视频抽帧启用容错 task_id=%s file=%s fallback=%s skipped=%s skipped_timestamps=%s",
                 task["id"],
                 task["original_filename"],
@@ -422,7 +425,7 @@ def _remove_generated_output_dir(app, output_dir: Path, *, required: bool = Fals
         message = f"清理任务生成物失败：{error or output_dir.name}"
         if required:
             raise RuntimeError(message)
-        app.logger.warning("%s", message)
+        logger.warning("%s", message)
 
 
 def _persist_preprocessed_inputs(

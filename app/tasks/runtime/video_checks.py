@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import threading
 import time
@@ -41,6 +42,8 @@ from app.tasks.runtime.state import (
     _task_flag,
     _update_progress,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _run_video_check_items_concurrently(
@@ -138,7 +141,7 @@ def _run_video_check_items_concurrently(
 
             ensure_active()
 
-            app.logger.info(
+            logger.info(
                 "任务视频多模态检查开始 task_id=%s checks=%s groups=%s frames=%s skipped_frames=%s batches=%s",
                 task_id,
                 len(check_items),
@@ -235,7 +238,7 @@ def _run_video_check_items_concurrently(
                     last_stream_chars = len(content)
                     save_snapshot(db, summary, current_progress())
 
-                app.logger.info(
+                logger.info(
                     "任务视频多模态检查组开始 task_id=%s group=%s/%s checks=%s",
                     task_id,
                     group_index,
@@ -355,7 +358,7 @@ def _run_video_check_items_concurrently(
                     f"已完成 {completed_count}/{total} 个视频检查项。",
                     current_progress(),
                 )
-                app.logger.info(
+                logger.info(
                     "任务视频多模态检查组完成 task_id=%s group=%s/%s checks=%s",
                     task_id,
                     group_index,
@@ -363,7 +366,7 @@ def _run_video_check_items_concurrently(
                     len(items),
                 )
 
-            app.logger.info(
+            logger.info(
                 "任务视频多模态检查完成 task_id=%s checks=%s groups=%s frames=%s skipped_frames=%s batches=%s",
                 task_id,
                 len(check_items),

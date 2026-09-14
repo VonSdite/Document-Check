@@ -13,6 +13,8 @@ from flask import current_app, g, jsonify, request
 
 from app.persistence.connection import get_db
 
+logger = logging.getLogger(__name__)
+ACCESS_LOG_FORMAT = "%(asctime)s %(levelname)s [access] pid=%(process)d %(message)s"
 REQUEST_ID_HEADER = "X-Request-ID"
 ACCESS_LOG_MAX_BYTES = 10 * 1024 * 1024
 ACCESS_LOG_BACKUP_COUNT = 4
@@ -37,15 +39,13 @@ def configure_access_logging(app) -> None:
             encoding="utf-8",
         )
         file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s [access] %(message)s")
-        )
+        file_handler.setFormatter(logging.Formatter(ACCESS_LOG_FORMAT))
         access_logger.addHandler(file_handler)
 
     _ensure_console_handler(access_logger)
     access_logger.propagate = False
     app.extensions["access_logger"] = access_logger
-    app.logger.info("访问日志已启用：%s", access_log_file)
+    logger.info("访问日志已启用：%s", access_log_file)
 
 
 def register_observability(app) -> None:
@@ -127,7 +127,7 @@ def log_startup_self_check(app) -> None:
         checks = readiness_checks(app)
     status = "ok" if all(value == "ok" for value in checks.values()) else "failed"
     app.extensions["readiness_status"] = status == "ok"
-    app.logger.info(
+    logger.info(
         "启动自检 status=%s pid=%s python=%s platform=%s host=%s port=%s "
         "url_prefix=%s proxy_fix=%s checks=%s",
         status,
@@ -190,7 +190,7 @@ def _log_readiness_transition(app, ready: bool, checks: dict[str, str]) -> None:
     if previous is ready:
         return
     level = logging.INFO if ready else logging.WARNING
-    app.logger.log(
+    logger.log(
         level,
         "就绪状态变化 status=%s checks=%s",
         "ready" if ready else "not_ready",
@@ -217,7 +217,7 @@ def _request_duration_ms() -> float:
 
 
 def _log_access_event(event: str, *, level: int = logging.INFO, **fields) -> None:
-    access_logger = current_app.extensions.get("access_logger", current_app.logger)
+    access_logger = current_app.extensions.get("access_logger", logger)
     payload = {"event": event, **fields}
     access_logger.log(
         level,
@@ -234,7 +234,7 @@ def _has_file_handler(target_logger, log_file: Path) -> bool:
 
 
 def _ensure_console_handler(target_logger) -> None:
-    formatter = logging.Formatter("%(asctime)s %(levelname)s [access] %(message)s")
+    formatter = logging.Formatter(ACCESS_LOG_FORMAT)
     for handler in target_logger.handlers:
         if isinstance(handler, logging.StreamHandler) and not isinstance(
             handler, logging.FileHandler

@@ -1,7 +1,7 @@
 import io
 import json
+import logging
 
-from flask import current_app
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
@@ -41,6 +41,8 @@ from app.reporting.service import (
     _task_results,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def build_report_workbook(task):
     results = _task_results(task)
@@ -66,9 +68,7 @@ def _load_report_excel_reviews(task, payload: bytes) -> int:
             io.BytesIO(payload), read_only=True, data_only=False, keep_links=False
         )
     except Exception as exc:
-        current_app.logger.warning(
-            "打开报告回填文件失败 task_id=%s error=%s", task["id"], exc
-        )
+        logger.warning("打开报告回填文件失败 task_id=%s error=%s", task["id"], exc)
         raise ReportExcelImportError(
             "无法读取回填文件，请上传系统导出的有效 xlsx 报告。"
         ) from exc
@@ -82,9 +82,7 @@ def _load_report_excel_reviews(task, payload: bytes) -> int:
     except ReportExcelImportError:
         raise
     except Exception as exc:
-        current_app.logger.warning(
-            "解析报告回填文件失败 task_id=%s error=%s", task["id"], exc
-        )
+        logger.warning("解析报告回填文件失败 task_id=%s error=%s", task["id"], exc)
         raise ReportExcelImportError(
             "无法读取回填文件，请上传系统导出的有效 xlsx 报告。"
         ) from exc

@@ -1,4 +1,5 @@
 import hmac
+import logging
 from functools import wraps
 
 from flask import (
@@ -24,6 +25,8 @@ from app.identity.service import (
 from app.persistence.settings import get_ip_username, owner_subject_from_ip
 from app.web.common import _current_relative_url, _row_value, _safe_next_path
 from app.web.constants import CONSOLE_USER_ENDPOINTS
+
+logger = logging.getLogger(__name__)
 
 
 def register_auth_routes(app):
@@ -53,7 +56,7 @@ def register_auth_routes(app):
         except SamlConfigError as error:
             abort(503, description=str(error))
         except Exception:
-            current_app.logger.exception("生成 SAML 登录请求失败")
+            logger.exception("生成 SAML 登录请求失败")
             abort(503, description="SAML 登录配置无效，请联系管理员。")
         session["saml_request_id"] = auth.get_last_request_id()
         return redirect(redirect_url)
@@ -69,13 +72,11 @@ def register_auth_routes(app):
         except SamlConfigError as error:
             abort(503, description=str(error))
         except Exception:
-            current_app.logger.exception("处理 SAML 回调失败")
+            logger.exception("处理 SAML 回调失败")
             abort(401, description="SAML 登录失败，请重新从公司统一入口访问。")
 
         if auth.get_errors() or not auth.is_authenticated():
-            current_app.logger.warning(
-                "SAML 回调校验失败：%s", ", ".join(auth.get_errors())
-            )
+            logger.warning("SAML 回调校验失败：%s", ", ".join(auth.get_errors()))
             abort(401, description="SAML 登录失败，请重新从公司统一入口访问。")
 
         user_id, username = _saml_user_from_response(auth)
@@ -98,7 +99,7 @@ def register_auth_routes(app):
         except SamlConfigError as error:
             abort(503, description=str(error))
         except Exception:
-            current_app.logger.exception("生成 SAML metadata 失败")
+            logger.exception("生成 SAML metadata 失败")
             abort(503, description="SAML SP metadata 配置无效，请联系管理员。")
         return Response(metadata, mimetype="application/samlmetadata+xml")
 

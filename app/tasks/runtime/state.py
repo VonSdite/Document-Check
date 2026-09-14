@@ -1,9 +1,13 @@
 import json
+import logging
 import threading
 import time
 from datetime import datetime, timedelta
 
 from app.persistence.connection import get_db, now_text
+
+logger = logging.getLogger(__name__)
+
 
 TASK_LEASE_SECONDS = 90
 TASK_LEASE_RENEW_INTERVAL_SECONDS = 10
@@ -100,7 +104,7 @@ def _task_lease_heartbeat(
                     return
                 next_renew_at = time.monotonic() + TASK_LEASE_RENEW_INTERVAL_SECONDS
         except Exception:
-            app.logger.exception("任务租约续期失败 task_id=%s", task_id)
+            logger.exception("任务租约续期失败 task_id=%s", task_id)
 
 
 def _cancel_requested(db, task_id: int, claim_token: str | None = None) -> bool:

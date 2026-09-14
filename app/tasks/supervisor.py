@@ -1,4 +1,5 @@
 import json
+import logging
 import multiprocessing
 import os
 import time
@@ -13,6 +14,9 @@ from app.persistence.settings import get_setting
 from app.tasks.runner import TaskRunner
 from app.tasks.runtime.artifacts import cleanup_expired_task_files
 from app.tasks.runtime.state import _mark_canceled, _task_lease_deadline_text
+
+logger = logging.getLogger(__name__)
+
 
 SUPERVISOR_POLL_SECONDS = 2
 SUPERVISOR_HEARTBEAT_STALE_SECONDS = 10
@@ -34,7 +38,7 @@ class TaskSupervisor:
 
     def run(self, stop_event, *, parent_pid: int | None = None) -> None:
         lock_file = _acquire_supervisor_lock(self.app)
-        self.app.logger.info(
+        logger.info(
             "任务调度进程启动 pid=%s max_task_processes=%s",
             os.getpid(),
             self.max_processes,
@@ -45,7 +49,7 @@ class TaskSupervisor:
                 try:
                     self.run_once()
                 except Exception:
-                    self.app.logger.exception("任务调度循环异常")
+                    logger.exception("任务调度循环异常")
                 _write_supervisor_state(self.app, self._state("running"))
                 for _ in range(int(SUPERVISOR_POLL_SECONDS * 10)):
                     if stop_event.is_set():
@@ -55,7 +59,7 @@ class TaskSupervisor:
             self._shutdown_active_processes()
             _remove_supervisor_state(self.app, os.getpid())
             lock_file.release()
-            self.app.logger.info("任务调度进程退出 pid=%s", os.getpid())
+            logger.info("任务调度进程退出 pid=%s", os.getpid())
 
     def run_once(self) -> None:
         self._reap_finished_processes()
@@ -90,11 +94,11 @@ class TaskSupervisor:
             try:
                 process.start()
             except Exception:
-                self.app.logger.exception("任务进程启动失败 task_id=%s", task_id)
+                logger.exception("任务进程启动失败 task_id=%s", task_id)
                 _recover_owned_task(get_db(), task_id, claim_token)
                 continue
             self._active[task_id] = (process, claim_token)
-            self.app.logger.info(
+            logger.info(
                 "任务进程已启动 task_id=%s pid=%s active=%s/%s",
                 task_id,
                 process.pid,
@@ -269,13 +273,9 @@ class TaskSupervisor:
             raise
 
         if recovered_count:
-            self.app.logger.warning(
-                "已回收租约过期的运行任务 count=%s", recovered_count
-            )
+            logger.warning("已回收租约过期的运行任务 count=%s", recovered_count)
         if canceled_count:
-            self.app.logger.warning(
-                "已结束租约过期的取消中任务 count=%s", canceled_count
-            )
+            logger.warning("已结束租约过期的取消中任务 count=%s", canceled_count)
         return claimed_tasks
 
     def _reap_finished_processes(self) -> None:
@@ -287,7 +287,7 @@ class TaskSupervisor:
             with self.app.app_context():
                 recovered = _recover_owned_task(get_db(), task_id, claim_token)
             if recovered:
-                self.app.logger.warning(
+                logger.warning(
                     "任务进程异常退出，任务已重新排队 task_id=%s pid=%s exit_code=%s",
                     task_id,
                     process.pid,
@@ -307,9 +307,9 @@ class TaskSupervisor:
 
             refreshed = refresh_stale_report_stats_batch()
             if refreshed:
-                self.app.logger.info("后台刷新报告统计缓存 count=%s", refreshed)
+                logger.info("后台刷新报告统计缓存 count=%s", refreshed)
         except Exception:
-            self.app.logger.exception("后台刷新报告统计缓存失败")
+            logger.exception("后台刷新报告统计缓存失败")
 
     def _cleanup_task_files_if_due(self) -> None:
         now = time.monotonic()

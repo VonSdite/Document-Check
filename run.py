@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,9 @@ from app.bootstrap.factory import create_app
 from app.infrastructure.network import access_urls
 from app.tasks.supervisor import wait_for_supervisor
 from app.web.observability import log_startup_self_check
+
+logger = logging.getLogger("app.run")
+
 
 SUPERVISOR_STOP_TIMEOUT_SECONDS = 20
 
@@ -40,7 +44,7 @@ def main() -> None:
 
     try:
         log_startup_self_check(app)
-        app.logger.info(
+        logger.info(
             "服务监听：http://%s:%s pid=%s url_prefix=%s proxy_fix=%s "
             "web_workers=%s web_threads=%s max_task_processes=%s",
             host,
@@ -53,7 +57,7 @@ def main() -> None:
             app.config["MAX_TASK_PROCESSES"],
         )
         for url in access_urls(host, port):
-            app.logger.info("可访问地址：%s", url)
+            logger.info("可访问地址：%s", url)
         DocumentCheckServer(
             app,
             _server_options(app, host, port),
@@ -104,9 +108,7 @@ def _stop_task_supervisor(app, stop_event, supervisor) -> None:
     try:
         supervisor.wait(timeout=SUPERVISOR_STOP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        app.logger.warning(
-            "任务调度进程未在期限内退出，准备终止 pid=%s", supervisor.pid
-        )
+        logger.warning("任务调度进程未在期限内退出，准备终止 pid=%s", supervisor.pid)
         supervisor.kill()
         supervisor.wait(timeout=3)
 

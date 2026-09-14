@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time
@@ -17,6 +18,9 @@ from app.infrastructure.files import (
 )
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_setting
+
+logger = logging.getLogger(__name__)
+
 
 DEFAULT_TASK_FILE_RETENTION_DAYS = 0
 TASK_FILE_CLEANUP_BATCH_SIZE = 100
@@ -80,11 +84,9 @@ def cleanup_expired_task_files(app) -> int:
             _remove_task_artifacts(app, task)
             updates.append((now_text(), task["id"]))
         except TaskArtifactCleanupError as exc:
-            app.logger.warning(
-                "定期清理任务文件跳过 task_id=%s error=%s", task["id"], exc
-            )
+            logger.warning("定期清理任务文件跳过 task_id=%s error=%s", task["id"], exc)
         except Exception:
-            app.logger.exception("定期清理任务文件失败 task_id=%s", task["id"])
+            logger.exception("定期清理任务文件失败 task_id=%s", task["id"])
     cleaned = len(updates)
     if updates:
         db.executemany(
@@ -93,7 +95,7 @@ def cleanup_expired_task_files(app) -> int:
         )
         db.commit()
         _invalidate_task_file_cache_snapshot(app)
-        app.logger.info(
+        logger.info(
             "定期清理任务文件完成 cleaned=%s cutoff=%s retention_days=%s",
             cleaned,
             cutoff,
@@ -183,7 +185,7 @@ def _build_task_file_cache_snapshot_background(app, generation: int) -> None:
                 state["snapshot"] = snapshot
                 state["cached_at"] = time.monotonic()
     except Exception:
-        app.logger.exception("后台生成任务文件缓存快照失败")
+        logger.exception("后台生成任务文件缓存快照失败")
     finally:
         with state["lock"]:
             state["building"] = False
@@ -330,7 +332,7 @@ def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
             result["failed"].append({"id": task_id, "error": str(exc)})
             continue
         except Exception:
-            app.logger.exception("手动清理任务文件失败 task_id=%s", task_id)
+            logger.exception("手动清理任务文件失败 task_id=%s", task_id)
             result["failed"].append({"id": task_id, "error": "清理失败，请稍后重试。"})
             continue
         result["cleaned_ids"].append(task_id)
@@ -343,7 +345,7 @@ def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
         )
         db.commit()
         _invalidate_task_file_cache_snapshot(app)
-        app.logger.info(
+        logger.info(
             "手动清理任务文件完成 cleaned=%s freed_size_bytes=%s",
             len(result["cleaned_ids"]),
             result["freed_size_bytes"],
@@ -373,7 +375,7 @@ def _remove_task_artifacts(app, task):
             _path_is_relative_to(path, upload_root)
             or _path_is_relative_to(path, image_root)
         ):
-            app.logger.warning(
+            logger.warning(
                 "跳过不在运行目录内的任务文件 task_id=%s path=%s", task["id"], path
             )
             continue

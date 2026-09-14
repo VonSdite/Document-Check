@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 
 from app.models.client import run_multimodal_document_check
@@ -7,6 +8,8 @@ from app.tasks.runtime.multimodal_common import (
     _summary_line_is_negative,
     _summary_line_is_normal,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _run_combined_multimodal_check_with_repair(
@@ -32,7 +35,7 @@ def _run_combined_multimodal_check_with_repair(
     )
     missing_items = _missing_check_items(check_items, sections)
     if missing_items:
-        app.logger.warning(
+        logger.warning(
             "模型多检查项结果缺失，准备补偿请求 task_id=%s target=%s returned=%s missing=%s output_chars=%s",
             run_kwargs.get("task_id") or "-",
             error_label,
@@ -66,7 +69,7 @@ def _run_combined_multimodal_check_with_repair(
         )
         sections.update(repair_sections)
         missing_items = _missing_check_items(check_items, sections)
-        app.logger.info(
+        logger.info(
             "模型多检查项补偿请求完成 task_id=%s target=%s repaired=%s remaining=%s output_chars=%s",
             run_kwargs.get("task_id") or "-",
             error_label,

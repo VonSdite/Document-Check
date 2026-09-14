@@ -379,13 +379,24 @@ PDF 结构化表格会展开为固定行列的归一化 HTML 后放入模型上�
 
 ## 本地日志
 
-运行日志同时输出到 console 和 `instance/logs/app.log`。日志文件单个最大 5MB，最多保留 3 个文件（当前文件和 2 个历史文件）。日志会记录启动自检、任务 ID、模型名称、请求 ID、HTTP 状态、OpenAI Chat Completions 流式帧数量、`finish_reason`、`usage`、空响应诊断和截断后的响应帧样本，不记录 API Key 和完整文档内容。
+运行日志同时输出到 console 和 `instance/logs/`，按用途写入以下文件：
+
+| 文件 | 内容 |
+| --- | --- |
+| `app.log` | 服务启动、就绪状态、认证、Web、文档与报告模块的应用事件及异常。 |
+| `task.log` | 任务提交、调度、执行、重试、取消、租约、任务文件清理及异常。 |
+| `llm.log` | 模型请求、HTTP 状态、流式响应统计、请求重试、超时和诊断。 |
+| `access.log` | HTTP 请求开始、结束、状态码、耗时及请求异常。 |
+
+`app.log`、`task.log` 和 `llm.log` 各自按 5MB 轮转，每类保留当前文件和 2 个历史文件。日志包含时间、级别、模块名和进程 ID，任务与模型请求记录携带对应的 `task_id`、`request_id`，便于跨文件关联。所有日志文件使用 UTF-8 编码，并支持多进程并发写入和轮转。
+
+`llm.log` 记录模型名称、OpenAI Chat Completions 流式帧数量、`finish_reason`、`usage`、空响应诊断和截断后的响应帧样本。系统设置中的“模型流式定位日志”控制请求发送、响应建立、每个 chunk 短预览及结束标记的详细记录，默认关闭。模型日志只记录请求元信息和响应诊断，API Key 与完整文档正文作为请求数据处理。
 
 HTTP 访问日志独立保存在 `instance/logs/access.log`，单个文件最大 10MB，最多保留 5 个文件（当前文件和 4 个历史文件）。每个普通请求会分别记录 `request_start` 和 `request_end`，包含 `X-Request-ID`、方法、路径、状态码、耗时及必要的反向代理字段；不记录查询参数、Cookie、请求体和认证信息。应用会优先沿用网关传入的合法 `X-Request-ID`，否则自动生成，并在响应头中返回同一个 ID。健康检查请求不会写入访问日志，避免探针产生大量重复记录；就绪状态发生变化时会写入 `app.log`。
 
 服务提供无需认证的健康检查接口：`/health/live` 只确认 Web 进程能够响应；`/health/ready` 同时检查 SQLite、运行目录和任务调度器，全部正常时返回 200，否则返回 503。通过 `/infoCheck` 等子路径发布时，外部地址对应为 `/infoCheck/health/live` 和 `/infoCheck/health/ready`，代理仍需按部署约定去除前缀后转发。
 
-如果页面出现“模型服务没有返回可用内容”，优先查看该日志中同一个 `request_id` 的记录，判断服务是否只返回了 `reasoning_content`、是否触发 `content_filter`、是否返回了 200 状态的错误 JSON，或是否根本没有输出 SSE 数据帧。
+如果页面出现“模型服务没有返回可用内容”，优先查看 `llm.log` 中同一个 `request_id` 的记录，判断服务是否只返回了 `reasoning_content`、是否触发 `content_filter`、是否返回了 200 状态的错误 JSON，或是否根本没有输出 SSE 数据帧。分析任务执行过程时，先按 `task_id` 筛选 `task.log`，再用同一个 `task_id` 关联 `llm.log` 中的模型请求。
 
 ## 本地文件
 
@@ -394,7 +405,9 @@ HTTP 访问日志独立保存在 `instance/logs/access.log`，单个文件最大
 - `instance/extracted_images/`：图片检查任务从文档中提取出的图片。
 - `instance/sensitive_terms.xlsx`：单文档敏感词检查使用的本地词表。
 - `instance/common_terms.xlsx`：单文档常用词检查使用的本地检查表。
-- `instance/logs/app.log`：本地运行日志。
+- `instance/logs/app.log`：应用运行日志。
+- `instance/logs/task.log`：任务调度与执行日志。
+- `instance/logs/llm.log`：模型请求与诊断日志。
 - `instance/logs/access.log`：独立 HTTP 访问日志。
 - `config.yaml`：本地管理员账号、密码、隐藏管理入口、监听地址、启动端口和密钥。
 

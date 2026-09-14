@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,6 +38,9 @@ from app.tasks.runtime.state import (
     _task_flag,
     _update_progress,
 )
+
+logger = logging.getLogger(__name__)
+
 
 IMAGE_PAGE_CHECK_CODES = {
     "image-text-correspondence",
@@ -159,7 +163,7 @@ def _run_image_check_items_concurrently(
             skipped_images = group["skipped_images"]
             manual_notes = group["manual_notes"]
             target_label = group["label"]
-            app.logger.info(
+            logger.info(
                 "任务图文联合检查组开始 task_id=%s target=%s group=%s/%s checks=%s images=%s skipped_images=%s batches=%s",
                 task_id,
                 target_label,
@@ -245,7 +249,7 @@ def _run_image_check_items_concurrently(
                     f"已完成 {completed_count}/{total} 个图片检查项，继续检查中。",
                     progress,
                 )
-                app.logger.info(
+                logger.info(
                     "任务图文联合检查组跳过 task_id=%s target=%s skipped_images=%s",
                     task_id,
                     target_label,
@@ -353,7 +357,7 @@ def _run_image_check_items_concurrently(
                 f"已完成 {completed_count}/{total} 个图片检查项，继续检查中。",
                 current_progress(),
             )
-            app.logger.info(
+            logger.info(
                 "任务图文联合检查组完成 task_id=%s target=%s checks=%s images=%s skipped_images=%s batches=%s",
                 task_id,
                 target_label,

@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -77,6 +78,9 @@ from app.tasks.runtime.state import (
 )
 from app.tasks.runtime.video_checks import _run_video_check_items_concurrently
 
+logger = logging.getLogger(__name__)
+
+
 DEFAULT_CHECK_ITEM_CONCURRENCY = 1
 
 
@@ -110,7 +114,7 @@ class TaskRunner:
             )
             results = []
             try:
-                self.app.logger.info(
+                logger.info(
                     "任务开始 task_id=%s owner=%s ip=%s file=%s model=%s/%s",
                     task_id,
                     task["owner_subject"]
@@ -138,7 +142,7 @@ class TaskRunner:
                     if str(result.get("code") or "").strip() not in retry_code_set
                 ]
                 if retry_check_codes is not None:
-                    self.app.logger.info(
+                    logger.info(
                         "任务重试失败检查项 task_id=%s checks=%s retained=%s",
                         task_id,
                         ",".join(retry_check_codes),
@@ -247,7 +251,7 @@ class TaskRunner:
                 ]
                 if failed_results and not successful_results:
                     error = _failed_check_items_error(failed_results)
-                    self.app.logger.warning(
+                    logger.warning(
                         "任务全部检查项失败 task_id=%s error=%s", task_id, error
                     )
                     _mark_failed(db, task_id, error, results, claim_token)
@@ -296,14 +300,14 @@ class TaskRunner:
                 db.commit()
                 if completed.rowcount == 1:
                     if failed_results:
-                        self.app.logger.warning(
+                        logger.warning(
                             "任务部分完成 task_id=%s succeeded=%s failed=%s",
                             task_id,
                             len(successful_results),
                             len(failed_results),
                         )
                     else:
-                        self.app.logger.info(
+                        logger.info(
                             "任务完成 task_id=%s checks=%s", task_id, len(results)
                         )
                 else:
@@ -312,27 +316,25 @@ class TaskRunner:
                     ):
                         _mark_canceled(db, task_id, claim_token)
                     else:
-                        self.app.logger.warning(
+                        logger.warning(
                             "任务执行权已失效，忽略完成结果 task_id=%s", task_id
                         )
             except TaskCanceled:
-                self.app.logger.info("任务取消 task_id=%s", task_id)
+                logger.info("任务取消 task_id=%s", task_id)
                 _mark_canceled(db, task_id, claim_token)
             except (DocumentReadError, LLMError, RuntimeError) as exc:
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
-                    self.app.logger.info("任务取消 task_id=%s", task_id)
+                    logger.info("任务取消 task_id=%s", task_id)
                     _mark_canceled(db, task_id, claim_token)
                 else:
-                    self.app.logger.warning(
-                        "任务失败 task_id=%s error=%s", task_id, exc
-                    )
+                    logger.warning("任务失败 task_id=%s error=%s", task_id, exc)
                     _mark_failed(db, task_id, str(exc), results, claim_token)
             except Exception as exc:
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
-                    self.app.logger.info("任务取消 task_id=%s", task_id)
+                    logger.info("任务取消 task_id=%s", task_id)
                     _mark_canceled(db, task_id, claim_token)
                 else:
-                    self.app.logger.exception("任务执行异常：%s", task_id)
+                    logger.exception("任务执行异常 task_id=%s", task_id)
                     _mark_failed(
                         db, task_id, f"任务执行异常：{exc}", results, claim_token
                     )
@@ -619,7 +621,7 @@ def _run_check_items_concurrently(
 
             ensure_active()
 
-            app.logger.info(
+            logger.info(
                 "任务检查项开始 task_id=%s item=%s index=%s/%s",
                 task_id,
                 item["name"],
@@ -713,7 +715,7 @@ def _run_check_items_concurrently(
                         pdf_table_evidence=pdf_table_evidence,
                     )
                     if filtered_unsupported_count:
-                        app.logger.info(
+                        logger.info(
                             "已过滤证据不足的视觉对象或表格数据缺失结论 task_id=%s item=%s count=%s",
                             task_id,
                             item["name"],
@@ -741,7 +743,7 @@ def _run_check_items_concurrently(
                     f"{item['name']}检查失败，已完成 {completed_count}/{total} 个检查项，继续检查其他项目。",
                     progress,
                 )
-                app.logger.warning(
+                logger.warning(
                     "任务检查项失败，继续其他检查 task_id=%s item=%s error=%s",
                     task_id,
                     item["name"],
@@ -770,7 +772,7 @@ def _run_check_items_concurrently(
                 f"已完成 {completed_count}/{total} 个检查项，继续检查中。",
                 progress,
             )
-            app.logger.info(
+            logger.info(
                 "任务检查项完成 task_id=%s item=%s output_chars=%s",
                 task_id,
                 item["name"],
