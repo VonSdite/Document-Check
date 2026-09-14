@@ -88,6 +88,6 @@ uv run python -m unittest discover -s tests
 
 项目直接导入的第三方库在 `pyproject.toml` 中显式声明，由 `uv.lock` 锁定完整依赖树。Python 标准库由解释器提供；功能扩展依赖通过 extras 声明，例如 `pypdf[image]`。`ffmpeg`、`ffprobe` 由运行环境安装并加入 `PATH`。
 
-Windows 和 Linux 使用相同的 Uvicorn 与 a2wsgi 依赖。Uvicorn 使用 `spawn` 管理多个 Web worker，事件循环统一使用 `asyncio`，HTTP 协议处理统一使用 `h11`。代理身份与地址由 Flask 的代理配置处理。`psutil` 提供跨平台进程存活检测，父进程通过标准输入管道通知监督器退出。
+Windows 和 Linux 使用相同的 Uvicorn 与 a2wsgi 依赖。默认单进程运行 Web 服务；配置多个 Web worker 时，Uvicorn 使用 `spawn` 管理子进程，事件循环统一使用 `asyncio`，HTTP 协议处理统一使用 `h11`。代理身份与地址由 Flask 的代理配置处理。`psutil` 提供跨平台进程存活检测，父进程通过标准输入管道通知监督器退出。
 
 文本文件统一采用 UTF-8 和 LF。配置、数据库、上传文件和生成产物保存在 Git 忽略的运行目录中。

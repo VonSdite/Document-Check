@@ -17,7 +17,7 @@ server:
   max_upload_mb: 1024
   # Windows 和 Linux 统一使用 Uvicorn；web_workers 控制 Web 进程数。
   # web_threads 控制每个 Web 进程的 Flask 请求线程数。
-  web_workers: 2
+  web_workers: 1
   web_threads: 16
 worker:
   # 管理页面中的“系统同时执行任务数”不能超过该机器级上限。

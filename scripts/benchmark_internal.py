@@ -18,6 +18,7 @@ import requests
 import yaml
 from flask import Flask
 
+from app.infrastructure.config import DEFAULT_WEB_WORKERS
 from app.persistence.connection import get_db
 from app.persistence.schema import init_db
 from app.reporting.service import _empty_report_suppression_version
@@ -81,7 +82,7 @@ def benchmark(args) -> dict:
             "server": {
                 "host": "127.0.0.1",
                 "port": port,
-                "web_workers": 2,
+                "web_workers": DEFAULT_WEB_WORKERS,
                 "web_threads": 16,
             },
             "worker": {"max_task_processes": 4},
@@ -190,7 +191,7 @@ def benchmark(args) -> dict:
                     "requests": args.requests,
                     "concurrency": args.concurrency,
                     "web_server": "uvicorn",
-                    "web_workers": 2,
+                    "web_workers": DEFAULT_WEB_WORKERS,
                     "web_threads_per_worker": 16,
                     "status_requests_percent": 80,
                     "task_list_requests_percent": 20,

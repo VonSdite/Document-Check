@@ -422,7 +422,7 @@ class ProviderConfigTest(unittest.TestCase):
                 created_app.config["MAX_CONTENT_LENGTH"],
                 DEFAULT_MAX_UPLOAD_MB * 1024 * 1024,
             )
-            self.assertEqual(created_app.config["WEB_WORKERS"], 2)
+            self.assertEqual(created_app.config["WEB_WORKERS"], 1)
             self.assertEqual(created_app.config["WEB_THREADS"], 16)
             self.assertEqual(created_app.config["MAX_TASK_PROCESSES"], 4)
 
@@ -443,7 +443,7 @@ class ProviderConfigTest(unittest.TestCase):
             self.assertFalse(config["platform"])
             self.assertEqual(config["server"]["host"], "127.0.0.1")
             self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
-            self.assertEqual(config["server"]["web_workers"], 2)
+            self.assertEqual(config["server"]["web_workers"], 1)
             self.assertEqual(config["server"]["web_threads"], 16)
             self.assertEqual(config["worker"]["max_task_processes"], 4)
             self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())

@@ -10,10 +10,7 @@
   v
 run.py 主进程
   |
-  +-- Uvicorn：Windows / Linux 共用启动实现
-  |     |
-  |     +-- Web worker 1: Flask + a2wsgi 请求线程 x16
-  |     +-- Web worker 2: Flask + a2wsgi 请求线程 x16
+  +-- Uvicorn + Flask + a2wsgi 请求线程 x16
   |
   +-- 独立任务 supervisor
         |
@@ -228,8 +225,7 @@ tests/                            行为、兼容、依赖和性能回归
 
 | 角色 | 默认数量 | 执行内容 |
 | --- | ---: | --- |
-| Uvicorn 主进程 | 1 | 管理 Web worker、监听端口、异常重启和优雅停止 |
-| Uvicorn Web worker | 2 | 使用独立 Flask 应用和事件循环处理 HTTP 请求 |
+| Web 服务（run.py 主进程） | 1 | Uvicorn 监听端口，使用 Flask 应用和事件循环处理 HTTP 请求 |
 | a2wsgi 请求线程 | 每个 Web 进程 16 | 执行 Flask 请求 |
 | 任务 supervisor | 1 | SQLite 队列调度、任务进程管理和租约恢复 |
 | 任务进程 | 最多 4 | 一个进程执行一个任务 |
@@ -240,6 +236,8 @@ tests/                            行为、兼容、依赖和性能回归
 Windows 虚拟环境中的监督器通过基础解释器直接启动，使用 `__PYVENV_LAUNCHER__` 保留虚拟环境。启动器与监督器使用实际进程 PID 完成就绪和父进程存活检查。
 
 Web 请求线程、任务进程和任务内检查线程都使用 Python 原生线程或进程。外部模型请求属于 I/O 操作，线程在等待网络响应时释放执行资源；文档解析和视频处理在独立任务进程中运行。
+
+`server.web_workers` 默认为 1，Web 请求在启动进程中执行。显式设置大于 1 时，Uvicorn 创建相应数量的 Web 子进程并管理异常重启。
 
 ## 物理视图
 
@@ -252,8 +250,7 @@ Web 请求线程、任务进程和任务内检查线程都使用 Python 原生�
 可选反向代理（Nginx 等）
   |
   v
-run.py
-  +-- Uvicorn + Web workers（Flask + a2wsgi）
+run.py（Uvicorn + Flask + a2wsgi）
   +-- task supervisor + task processes
   +-- instance/document_check.sqlite3
   +-- instance/uploads/
@@ -268,7 +265,7 @@ run.py
 
 ### 并发边界
 
-- Windows 和 Linux 的 Web 请求线程容量均由 `web_workers × web_threads` 决定，默认 `2 × 16`；单进程配置直接在启动进程中提供 Web 服务。
+- Windows 和 Linux 的 Web 请求线程容量均由 `web_workers × web_threads` 决定，默认 `1 × 16`；单进程配置直接在启动进程中提供 Web 服务。
 - 任务并发容量由 `global_concurrency` 提供，并受 `max_task_processes` 约束。
 - 单任务检查项并发由 `check_item_concurrency` 提供。
 - SQLite 事务负责任务认领和状态转换，文件系统负责上传文件与提取产物。
