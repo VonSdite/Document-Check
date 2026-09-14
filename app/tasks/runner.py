@@ -88,7 +88,6 @@ from app.tasks.runtime.state import (
 )
 from app.tasks.runtime.video_checks import _run_video_check_items_concurrently
 from app.tasks.selection import (
-    _check_items_for_retry,
     _stored_retry_check_codes,
     _task_check_items,
     selected_check_items,
@@ -175,17 +174,14 @@ class TaskRunner:
                         "check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY
                     ),
                 )
-                if task_type not in {IMAGE_TASK_TYPE, VIDEO_TASK_TYPE}:
-                    check_items = selected_check_items(db, task)
-                    if retry_check_codes is not None:
-                        for item in check_items:
-                            item["execution"] = (
-                                previous_by_code.get(item["code"], {}).get(
-                                    "execution", 0
-                                )
-                                + 1
-                            )
-                    initialize_activity(task_id, claim_token, checks=check_items)
+                check_items = selected_check_items(db, task)
+                if retry_check_codes is not None:
+                    for item in check_items:
+                        item["execution"] = (
+                            previous_by_code.get(item["code"], {}).get("execution", 0)
+                            + 1
+                        )
+                initialize_activity(task_id, claim_token, checks=check_items)
                 preprocessing_started = time.monotonic()
                 logger.info(
                     "任务预处理开始 task_id=%s file_type=%s", task_id, task["file_type"]
@@ -215,8 +211,6 @@ class TaskRunner:
                         raise RuntimeError(
                             "未能从 PDF 中生成可检查页面截图或提取到可检查图片"
                         )
-                    check_items = _task_check_items(db, task, IMAGE_TASK_TYPE)
-                    check_items = _check_items_for_retry(check_items, retry_check_codes)
                     if not check_items:
                         raise RuntimeError("没有可执行的图片检查项")
                     retry_results = _run_image_check_items_concurrently(
@@ -238,8 +232,6 @@ class TaskRunner:
                     frame_items = image_items_from_meta(document_meta_raw, "frames")
                     if not frame_items:
                         raise RuntimeError("未能从视频中抽取到可检查画面")
-                    check_items = _task_check_items(db, task, VIDEO_TASK_TYPE)
-                    check_items = _check_items_for_retry(check_items, retry_check_codes)
                     if not check_items:
                         raise RuntimeError("没有可执行的视频检查项")
                     retry_results = _run_video_check_items_concurrently(
@@ -621,6 +613,7 @@ def _run_check_items_concurrently(
                         "on_output": output_recorder.for_checks(
                             [item["code"]],
                             label=f"第 {execution + 1} 次执行" if execution else "",
+                            executions={item["code"]: execution},
                         ),
                         "on_activity": lambda phase, attempt: update_check_activity(
                             task_id, claim_token, [item["code"]], phase, attempt

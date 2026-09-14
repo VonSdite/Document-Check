@@ -349,6 +349,69 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.client.get(f"/admin/tasks/{task_id}/model-output").status_code, 302
         )
 
+    def test_model_output_state_only_reads_check_status_without_output_or_report(self):
+        from app.tasks.activity import initialize_activity, update_check_activity
+
+        task_id = self._insert_task(status="running")
+        with self.app.app_context():
+            initialize_activity(
+                task_id, None, checks=[{"code": "demo", "name": "检查", "execution": 2}]
+            )
+            update_check_activity(task_id, None, ["demo"], "retrying", 3)
+        for prefix in ("/tasks", "/admin/tasks"):
+            with (
+                self.subTest(prefix=prefix),
+                patch(
+                    "app.web.task_activity.read_model_output",
+                    side_effect=AssertionError("read output"),
+                ),
+                patch(
+                    "app.web.admin_tasks._task_results",
+                    side_effect=AssertionError("read report"),
+                ),
+                patch(
+                    "app.web.user_tasks._task_results",
+                    side_effect=AssertionError("read report"),
+                ),
+            ):
+                response = self.client.get(
+                    f"{prefix}/{task_id}/model-output?state_only=1&cursor=123"
+                )
+                self.assertEqual(response.status_code, 200)
+                data = response.get_json()
+                self.assertEqual(data["events"], [])
+                self.assertEqual(data["cursor"], 123)
+                self.assertEqual(data["checks"]["demo"]["phase"], "retrying")
+                self.assertEqual(data["checks"]["demo"]["attempt"], 3)
+                self.assertEqual(data["checks"]["demo"]["execution"], 2)
+
+    def test_retry_pending_hides_error_before_old_execution_exits(self):
+        from app.tasks.activity import finish_check_activity, initialize_activity
+
+        task_id, _, snapshot, previous = self._insert_retryable_task()
+        with self.app.app_context():
+            get_db().execute("UPDATE tasks SET status='running' WHERE id=?", (task_id,))
+            get_db().commit()
+            initialize_activity(task_id, None, checks=snapshot)
+            finish_check_activity(task_id, None, "check-b", failed=True)
+        response = self.client.post(
+            f"/tasks/{task_id}/retry-check", json={"code": "check-b", "execution": 0}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["output_execution"], 1)
+        self.assertEqual(response.get_json()["execution"], 0)
+        for prefix in ("/tasks", "/admin/tasks"):
+            response = self.client.get(f"{prefix}/{task_id}?_poll=1")
+            soup = BeautifulSoup(response.get_json()["html"], "html.parser")
+            retried = soup.select_one('[data-detail-result="check-b"]')
+            self.assertEqual(retried["data-output-execution"], "1")
+            self.assertIsNone(retried.select_one(".report-error"))
+            self.assertNotIn(previous[1]["result"], retried.get_text())
+            self.assertIn(
+                previous[0]["result"],
+                soup.select_one('[data-detail-result="check-a"]').get_text(),
+            )
+
     def test_model_output_is_collapsed_above_report_and_escapes_text(self):
         task_id = self._insert_task()
         with self.app.app_context():

@@ -11,6 +11,7 @@
   let pending = false;
   let actionVersion = 0;
   let actionPending = false;
+  let refreshQueued = false;
 
   function interactionActive() {
     const focused = document.activeElement;
@@ -22,9 +23,16 @@
 
   function replaceContent(current, next) {
     const html = next.innerHTML;
+    if (next.matches("[data-detail-result]")
+        && (Number(next.dataset.outputExecution) > Number(current.dataset.outputExecution)
+          || (Number(next.dataset.checkAttempt) > 1 && Number(next.dataset.checkAttempt) > Number(current.dataset.checkAttempt)))) {
+      resetCheck(current, Number(next.dataset.outputExecution), Number(next.dataset.checkAttempt));
+    }
     if (next.dataset.checkTerminal) current.dataset.checkTerminal = next.dataset.checkTerminal;
     if (next.dataset.checkPhase) current.dataset.checkPhase = next.dataset.checkPhase;
     if (next.dataset.checkExecution) current.dataset.checkExecution = next.dataset.checkExecution;
+    if (next.dataset.outputExecution) current.dataset.outputExecution = next.dataset.outputExecution;
+    if (next.dataset.checkAttempt) current.dataset.checkAttempt = next.dataset.checkAttempt;
     if (markup.get(current) === html) return;
     const expanded = [...current.querySelectorAll("details")].map((node) => node.open);
     const output = current.querySelector("[data-model-output]");
@@ -70,13 +78,32 @@
     }
   }
 
-  function applyProgress(data) {
-    const badge = root.querySelector(".report-status-panel .status-pill");
-    badge.textContent = data.status_label;
-    badge.className = `status-pill status-${data.status}`;
-    root.querySelector(".report-status-panel .progress span").style.width = `${data.progress}%`;
+  function resetCheck(node, outputExecution, attempt = 0) {
+    root.style.minHeight = `${root.offsetHeight}px`;
+    const status = root.querySelector(".report-status-panel");
+    status.querySelectorAll(".report-error").forEach((error) => error.remove());
+    markup.delete(status);
+    [...node.children].forEach((child) => {
+      if (!child.matches(".panel-head, [data-model-output]")) child.remove();
+    });
+    node.dataset.outputExecution = outputExecution;
+    node.dataset.checkAttempt = attempt;
+    markup.delete(node);
+    actionVersion += 1;
+    root.dispatchEvent(new CustomEvent("check-output-reset", { detail: { code: node.dataset.detailResult } }));
+  }
+
+  function applyCheckStates(data) {
     root.querySelectorAll("[data-detail-result]").forEach((node) => {
       const state = data.checks[node.dataset.detailResult] || {};
+      const execution = state.execution ?? Number(node.dataset.checkExecution);
+      const outputExecution = execution + (state.retry_requested ? 1 : 0);
+      const attempt = state.attempt || 0;
+      if (outputExecution > Number(node.dataset.outputExecution)
+          || (attempt > 1 && attempt > Number(node.dataset.checkAttempt))) {
+        resetCheck(node, outputExecution, attempt);
+      }
+      if (state.phase) node.dataset.checkAttempt = attempt;
       const phase = state.retry_requested ? "pending" : state.phase || node.dataset.checkPhase || "";
       node.dataset.checkPhase = phase;
       node.dataset.checkExecution = state.execution ?? node.dataset.checkExecution;
@@ -89,6 +116,14 @@
       button.hidden = !(singleCancel && ["queued", "running"].includes(data.status) && ["pending", "checking", "waiting", "thinking", "output", "retrying"].includes(phase));
       node.querySelector("[data-retry-check]").hidden = !((singleCancel || !data.active) && data.status !== "canceling" && data.phase !== "finalizing" && ["failed", "canceled", "canceling"].includes(phase));
     });
+  }
+
+  function applyProgress(data) {
+    const badge = root.querySelector(".report-status-panel .status-pill");
+    badge.textContent = data.status_label;
+    badge.className = `status-pill status-${data.status}`;
+    root.querySelector(".report-status-panel .progress span").style.width = `${data.progress}%`;
+    applyCheckStates(data);
     root.dataset.detailActive = data.active ? "1" : "0";
     const refreshMessage = root.querySelector("[data-detail-refresh-message]");
     refreshMessage.textContent = "";
@@ -97,8 +132,10 @@
   }
 
   async function refresh(force = false) {
-    if (pending || document.hidden || interactionActive() || (!force && root.dataset.detailActive !== "1")) return;
+    if (pending) { refreshQueued ||= force; return; }
+    if (document.hidden || interactionActive() || (!force && root.dataset.detailActive !== "1")) return;
     pending = true;
+    refreshQueued = false;
     const version = actionVersion;
     try {
       const url = new URL(window.location.href);
@@ -115,7 +152,10 @@
       const refreshMessage = root.querySelector("[data-detail-refresh-message]");
       refreshMessage.textContent = "状态更新暂时失败，将自动重试";
       refreshMessage.hidden = false;
-    } finally { pending = false; }
+    } finally {
+      pending = false;
+      if (refreshQueued) { refreshQueued = false; refresh(true); }
+    }
   }
 
   async function performCheckAction(button, action) {
@@ -137,6 +177,8 @@
       node.querySelector("[data-cancel-check]").hidden = action !== "retry" || !singleCancel;
       node.querySelector("[data-retry-check]").hidden = action === "retry";
       if (action === "retry") {
+        resetCheck(node, data.output_execution ?? Number(node.dataset.checkExecution) + 1);
+        node.dataset.checkExecution = data.execution ?? node.dataset.checkExecution;
         node.dataset.checkPhase = "pending";
         node.dataset.checkTerminal = "0";
         root.dataset.detailActive = "1";
@@ -156,6 +198,16 @@
     event.stopPropagation();
     if (button.matches("[data-retry-check]")) { performCheckAction(button, "retry"); return; }
     showConfirmPopover(button, "确认取消？", () => performCheckAction(button, "cancel"));
+  });
+  root.addEventListener("task-check-states", (event) => applyCheckStates(event.detail));
+  root.addEventListener("model-output-start", (event) => {
+    const codes = new Set(event.detail.codes);
+    root.querySelectorAll("[data-detail-result]").forEach((node) => {
+      if (codes.has(node.dataset.detailResult) && node.dataset.checkTerminal === "0") {
+        node.querySelectorAll(".report-error").forEach((error) => error.remove());
+        markup.delete(node);
+      }
+    });
   });
   setInterval(refresh, 10000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });

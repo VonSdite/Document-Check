@@ -11,6 +11,7 @@ from app.persistence.connection import get_db
 from app.tasks.activity import (
     finish_check_activity,
     initialize_activity,
+    task_activities,
     update_check_activity,
 )
 from app.tasks.model_output import ModelOutputRecorder
@@ -70,6 +71,13 @@ def _run_video_check_items_concurrently(
     claim_token = _task_claim_token(task)
     total = len(check_items)
     initialize_activity(task_id, claim_token, phase="checking", checks=check_items)
+    output_executions = {
+        code: state.get("execution", 0)
+        for code, state in task_activities([task_id])
+        .get(task_id, {})
+        .get("checks", {})
+        .items()
+    }
     checkable_frames, skipped_frames = _split_checkable_image_items(frame_items)
     if not checkable_frames and not skipped_frames:
         raise RuntimeError("没有可检查的视频抽帧画面")
@@ -305,6 +313,7 @@ def _run_video_check_items_concurrently(
                             "on_output": output_recorder.for_checks(
                                 [item["code"] for item in items],
                                 f"视频帧 · 批次 {batch_index}/{len(batches)}",
+                                executions=output_executions,
                             ),
                             "on_activity": lambda phase, attempt: update_check_activity(
                                 task_id,

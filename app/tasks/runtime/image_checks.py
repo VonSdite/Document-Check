@@ -9,6 +9,7 @@ from app.persistence.connection import get_db
 from app.tasks.activity import (
     finish_check_activity,
     initialize_activity,
+    task_activities,
     update_check_activity,
 )
 from app.tasks.model_output import ModelOutputRecorder
@@ -87,6 +88,13 @@ def _run_image_check_items_concurrently(
     claim_token = _task_claim_token(task)
     total = len(check_items)
     initialize_activity(task_id, claim_token, phase="checking", checks=check_items)
+    output_executions = {
+        code: state.get("execution", 0)
+        for code, state in task_activities([task_id])
+        .get(task_id, {})
+        .get("checks", {})
+        .items()
+    }
     groups = _image_check_groups(
         check_items, image_items, page_image_items, document_meta or {}
     )
@@ -320,6 +328,7 @@ def _run_image_check_items_concurrently(
                         "on_output": output_recorder.for_checks(
                             [item["code"] for item in items],
                             f"{target_label} · 批次 {batch_index}/{batch_count}",
+                            executions=output_executions,
                         ),
                         "on_activity": lambda phase, attempt: update_check_activity(
                             task_id,

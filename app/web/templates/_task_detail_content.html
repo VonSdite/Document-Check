@@ -161,7 +161,7 @@
 
 <section class="result-stack" data-report-results data-report-classification-url="{{ report_classification_url }}">
   {% for result in results %}
-  <article class="panel result-panel" data-detail-result="{{ result.code }}" data-check-phase="{{ result.execution_phase }}" data-check-execution="{{ result.execution }}" data-check-terminal="{{ '0' if result.execution_label else '1' }}">
+  <article class="panel result-panel" data-detail-result="{{ result.code }}" data-check-phase="{{ result.execution_phase }}" data-check-execution="{{ result.execution }}" data-output-execution="{{ result.output_execution }}" data-check-attempt="{{ result.execution_attempt or 0 }}" data-check-terminal="{{ '0' if result.execution_label else '1' }}">
     <div class="panel-head">
       <div class="check-heading">
         <h2 class="check-title">{{ result.name }}</h2>

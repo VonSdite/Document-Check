@@ -795,9 +795,9 @@ def _run_payload_with_retries(
                 on_output(dict(event, stream=stream_id, attempt=stream_attempt))
 
         try:
-            emit_output({"kind": "start"})
             if on_activity:
                 on_activity("waiting", attempt)
+            emit_output({"kind": "start"})
             content = _run_check_attempt(
                 endpoint=endpoint,
                 headers=headers,

@@ -88,6 +88,23 @@ class ModelOutputTest(unittest.TestCase):
         self.assertEqual(result["events"][0]["text"], "中文🙂")
         self.assertTrue(read_model_output(self.app, 1, 9999)["reset"])
 
+    def test_output_records_execution_per_check_for_late_response_isolation(self):
+        record = self.recorder.for_checks(["a", "b"], executions={"a": 2, "b": 4})
+        record({"kind": "start", "stream": "combined", "attempt": 1})
+        record(
+            {
+                "kind": "content",
+                "stream": "combined",
+                "attempt": 1,
+                "codes": ["b"],
+                "text": "补偿结果",
+            }
+        )
+        record({"kind": "end", "stream": "combined", "attempt": 1})
+        events, _, _ = self.drain()
+        self.assertEqual(events[0]["executions"], {"a": 2, "b": 4})
+        self.assertEqual(events[1]["executions"], {"b": 4})
+
     def test_output_is_counted_and_removed_with_task_artifacts(self):
         self.record("one", ["check"], "分析")
         path = model_output_path(self.app, 1)

@@ -173,7 +173,12 @@ def request_check_retry(task_id, code, execution):
             raise CheckRetryError("检查项状态已变化，请刷新后重试。")
         if item.get("retry_requested"):
             db.rollback()
-            return {"status": "pending", "code": code}
+            return {
+                "status": "pending",
+                "code": code,
+                "execution": execution,
+                "output_execution": execution + 1,
+            }
         if item["phase"] not in RETRYABLE_PHASES:
             raise CheckRetryError("仅已取消或失败的检查项可重试。")
         if task["status"] == "running":
@@ -226,7 +231,12 @@ def request_check_retry(task_id, code, execution):
             }
         save_activity(db, task_id, state)
         db.commit()
-        return {"status": "pending", "code": code}
+        return {
+            "status": "pending",
+            "code": code,
+            "execution": state["checks"][code].get("execution", execution),
+            "output_execution": execution + 1,
+        }
     except Exception:
         db.rollback()
         raise

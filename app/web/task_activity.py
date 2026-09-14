@@ -112,7 +112,8 @@ def present_check_activity(task, results, progress):
         state = checks.get(result.get("code"), {})
         phase = state.get("phase")
         execution = state.get("execution", result.get("execution", 0))
-        if progress["active"] and execution > result.get("execution", 0):
+        output_execution = execution + bool(state.get("retry_requested"))
+        if progress["active"] and output_execution > result.get("execution", 0):
             code, name, uses_model = (
                 result["code"],
                 result["name"],
@@ -146,6 +147,7 @@ def present_check_activity(task, results, progress):
                 phase = task["status"]
         result["execution_phase"] = "pending" if state.get("retry_requested") else phase
         result["execution"] = execution
+        result["output_execution"] = output_execution
         result["execution_label"] = (
             PHASE_LABELS.get(result["execution_phase"], "")
             if progress["active"]
@@ -212,8 +214,16 @@ def model_output_response(task):
         cursor = None
     if cursor is None or not 0 <= cursor <= 2**63 - 1:
         return {"error": "模型输出游标无效。"}, 400
-    payload = read_model_output(current_app, task["id"], cursor)
+    payload = (
+        {"events": [], "cursor": cursor, "more": False, "reset": False}
+        if request.args.get("state_only") == "1"
+        else read_model_output(current_app, task["id"], cursor)
+    )
     payload["active"] = task["status"] in {"queued", "running", "canceling"}
+    payload["status"] = task["status"]
+    activity = task_activities([task["id"]]).get(task["id"], {})
+    payload["checks"] = activity.get("checks", {})
+    payload["phase"] = activity.get("phase", "")
     response = jsonify(payload)
     response.headers["Cache-Control"] = "no-store"
     return response

@@ -31,8 +31,9 @@ class ModelOutputRecorder:
         self.timer = None
         self.disabled = False
 
-    def for_checks(self, codes, label=""):
+    def for_checks(self, codes, label="", *, executions=None):
         codes = list(codes)
+        executions = dict(executions or {})
 
         def record(event):
             with self.lock:
@@ -43,6 +44,9 @@ class ModelOutputRecorder:
                     codes=event.get("codes", codes),
                     label=" · ".join(filter(None, [label, event.get("label", "")])),
                 )
+                event["executions"] = {
+                    code: executions.get(code, 0) for code in event["codes"]
+                }
                 text = event.pop("text", "")
                 for offset in range(0, max(1, len(text)), TEXT_CHARS):
                     part = text[offset : offset + TEXT_CHARS]
