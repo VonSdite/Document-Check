@@ -5,7 +5,6 @@ import concurrent.futures
 import json
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -14,6 +13,7 @@ import threading
 import time
 from pathlib import Path
 
+import psutil
 import requests
 import yaml
 from flask import Flask
@@ -100,6 +100,8 @@ def benchmark(args) -> dict:
                 for key, value in os.environ.items()
                 if key not in {"HOST", "PORT"}
             }
+            environment["DOCUMENTCHECK_ROOT_DIR"] = str(root)
+            environment["PYTHONIOENCODING"] = "utf-8"
             process = subprocess.Popen(
                 [sys.executable, str(root / "run.py")],
                 cwd=root,
@@ -115,7 +117,9 @@ def benchmark(args) -> dict:
                     while True:
                         if process.poll() is not None:
                             raise RuntimeError(
-                                (root / "server-output.log").read_text()[-4000:]
+                                (root / "server-output.log").read_text(
+                                    encoding="utf-8"
+                                )[-4000:]
                             )
                         try:
                             response = probe.get(base_url + "/health/ready", timeout=1)
@@ -185,6 +189,7 @@ def benchmark(args) -> dict:
                     "users": args.users,
                     "requests": args.requests,
                     "concurrency": args.concurrency,
+                    "web_server": "uvicorn",
                     "web_workers": 2,
                     "web_threads_per_worker": 16,
                     "status_requests_percent": 80,
@@ -202,16 +207,24 @@ def benchmark(args) -> dict:
             finally:
                 for session in sessions:
                     session.close()
-                # 测试服务及其子进程使用独立进程组。
                 try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
+                    children = psutil.Process(process.pid).children(recursive=True)
+                except psutil.NoSuchProcess:
+                    children = []
+                if process.poll() is None:
+                    process.terminate()
                 try:
                     process.wait(timeout=25)
                 except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    process.kill()
                     process.wait(timeout=5)
+                _, alive = psutil.wait_procs(children, timeout=20)
+                for child in alive:
+                    try:
+                        child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                psutil.wait_procs(alive, timeout=5)
 
 
 def main():

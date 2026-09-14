@@ -6,10 +6,14 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   # Web 应用、进程服务和多进程安全日志。
+  "a2wsgi==1.10.10",
   "concurrent-log-handler==0.9.29",
   "flask==3.0.3",
-  "gunicorn==26.2.0",
+  "markupsafe==3.0.3",
   "portalocker==4.3.0",
+  "psutil==7.2.2",
+  "uvicorn==0.52.4",
+  "werkzeug==3.1.8",
   # 文档解析、模型请求、认证和报告处理。
   "beautifulsoup4==4.12.3",
   "mistune==3.0.2",

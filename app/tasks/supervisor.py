@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 
 import portalocker
+import psutil
 
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_setting
@@ -369,13 +370,7 @@ def supervisor_is_ready(app, *, now: float | None = None) -> bool:
         time.time() if now is None else now
     ) - heartbeat_at > SUPERVISOR_HEARTBEAT_STALE_SECONDS:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    return True
+    return pid > 0 and psutil.pid_exists(pid)
 
 
 def wait_for_supervisor(app, process, timeout: float = 10) -> bool:
@@ -487,4 +482,6 @@ def _remove_supervisor_state(app, pid: int) -> None:
 
 
 def _parent_is_alive(parent_pid: int | None) -> bool:
-    return parent_pid is None or os.getppid() == parent_pid
+    return parent_pid is None or (
+        os.getppid() == parent_pid and psutil.pid_exists(parent_pid)
+    )

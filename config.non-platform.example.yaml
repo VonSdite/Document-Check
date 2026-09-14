@@ -15,7 +15,8 @@ server:
   real_ip_header: ""
   proxy_fix: false
   max_upload_mb: 1024
-  # Gunicorn 使用 2 个 Web 进程，每个进程使用 16 个原生请求线程。
+  # Windows 和 Linux 统一使用 Uvicorn；web_workers 控制 Web 进程数。
+  # web_threads 控制每个 Web 进程的 Flask 请求线程数。
   web_workers: 2
   web_threads: 16
 worker:

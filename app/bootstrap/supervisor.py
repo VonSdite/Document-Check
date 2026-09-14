@@ -1,3 +1,4 @@
+import os
 import signal
 import sys
 import threading
@@ -11,8 +12,16 @@ def run_task_supervisor(stop_event, parent_pid: int | None = None) -> None:
     try:
         TaskSupervisor(create_task_app()).run(stop_event, parent_pid=parent_pid)
     except KeyboardInterrupt:
-        # Gunicorn 将终端信号转发到进程组，监督器在此结束运行。
+        # 终端中断触发监督器退出和任务清理。
         return
+
+
+def _stop_on_stdin_close(stop_event) -> None:
+    try:
+        while os.read(sys.stdin.fileno(), 1):
+            pass
+    finally:
+        stop_event.set()
 
 
 def _run_supervisor_cli() -> None:
@@ -31,6 +40,12 @@ def _run_supervisor_cli() -> None:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, stop)
+    if "--watch-stdin" in sys.argv:
+        threading.Thread(
+            target=_stop_on_stdin_close, args=(stop_event,), daemon=True
+        ).start()
     run_task_supervisor(stop_event, parent_pid=parent_pid)
 
 

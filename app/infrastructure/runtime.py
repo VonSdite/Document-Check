@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from flask import Flask
@@ -69,4 +70,7 @@ def _create_base_app(root_dir: Path | None = None):
 
 
 def _runtime_root_dir() -> Path:
+    configured_root = os.environ.get("DOCUMENTCHECK_ROOT_DIR")
+    if configured_root:
+        return Path(configured_root).resolve()
     return Path(__file__).resolve().parents[2]

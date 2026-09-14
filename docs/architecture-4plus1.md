@@ -10,10 +10,10 @@
   v
 run.py 主进程
   |
-  +-- Gunicorn master
+  +-- Uvicorn：Windows / Linux 共用启动实现
   |     |
-  |     +-- Web worker 1: gthread 原生线程 x16
-  |     +-- Web worker 2: gthread 原生线程 x16
+  |     +-- Web worker 1: Flask + a2wsgi 请求线程 x16
+  |     +-- Web worker 2: Flask + a2wsgi 请求线程 x16
   |
   +-- 独立任务 supervisor
         |
@@ -138,6 +138,8 @@ PDF 文本优先通过 PyMuPDF 提取，按页按需使用 pypdf 回退；候选
 app/                              Python 命名空间包
   bootstrap/
     factory.py                    Web 应用装配
+    server.py                     Uvicorn 启动与运行目录传递
+    asgi.py                       Flask 工厂与 WSGI 请求线程池
     supervisor.py                 监督器进程入口
   contracts/
     task_types.py                 任务类型与文档数量约束
@@ -213,7 +215,7 @@ app/                              Python 命名空间包
     constants.py                  展示约定
     templates/                    Jinja 模板
     static/                       脚本与样式
-run.py                            Gunicorn 启动入口
+run.py                            跨平台 Web 与监督器启动入口
 scripts/benchmark_internal.py     临时环境 HTTP 并发压测
 tests/                            行为、兼容、依赖和性能回归
 ```
@@ -226,14 +228,14 @@ tests/                            行为、兼容、依赖和性能回归
 
 | 角色 | 默认数量 | 执行内容 |
 | --- | ---: | --- |
-| Gunicorn master | 1 | 管理 Web worker、监听端口和优雅停止 |
-| Web worker | 2 | Flask 请求处理 |
-| Web worker 原生线程 | 每个 16 | 同一 worker 内的并发 HTTP 请求 |
+| Uvicorn 主进程 | 1 | 管理 Web worker、监听端口、异常重启和优雅停止 |
+| Uvicorn Web worker | 2 | 使用独立 Flask 应用和事件循环处理 HTTP 请求 |
+| a2wsgi 请求线程 | 每个 Web 进程 16 | 执行 Flask 请求 |
 | 任务 supervisor | 1 | SQLite 队列调度、任务进程管理和租约恢复 |
 | 任务进程 | 最多 4 | 一个进程执行一个任务 |
 | 任务内检查线程 | 按 `check_item_concurrency` | 一个任务内并行执行检查项 |
 
-任务 supervisor 由 `run.py` 通过 `app.bootstrap.supervisor` 创建为独立 Python 子进程，再启动 Gunicorn master。任务进程使用 `spawn` 创建，任务进程接收任务 ID、租约令牌和运行根目录；每个进程自行创建应用对象和数据库连接。
+任务 supervisor 由 `run.py` 通过 `app.bootstrap.supervisor` 创建为独立 Python 子进程，再启动 Uvicorn。Web worker 和监督器通过 `DOCUMENTCHECK_ROOT_DIR` 继承运行根目录，读取相同的配置和数据库。父进程通过标准输入管道通知监督器退出，监督器完成任务进程清理；进程存活使用 psutil 检查。任务进程使用 `spawn` 创建，任务进程接收任务 ID、租约令牌和运行根目录；每个进程自行创建应用对象和数据库连接。
 
 Web 请求线程、任务进程和任务内检查线程都使用 Python 原生线程或进程。外部模型请求属于 I/O 操作，线程在等待网络响应时释放执行资源；文档解析和视频处理在独立任务进程中运行。
 
@@ -249,7 +251,7 @@ Web 请求线程、任务进程和任务内检查线程都使用 Python 原生�
   |
   v
 run.py
-  +-- Gunicorn master + Web workers
+  +-- Uvicorn + Web workers（Flask + a2wsgi）
   +-- task supervisor + task processes
   +-- instance/document_check.sqlite3
   +-- instance/uploads/
@@ -260,11 +262,11 @@ run.py
 外部模型服务
 ```
 
-服务通过 `uv run python run.py` 启动。`config.yaml` 保存监听地址、端口、Gunicorn worker/线程数和任务进程上限。`uv.lock` 固定 Python 依赖版本。视频任务还需要系统提供 `ffmpeg` 和 `ffprobe`。
+服务使用 Python 3.12 及以上版本，通过 `uv run python run.py` 在 Windows 和 Linux 启动 Uvicorn 与 a2wsgi。`config.yaml` 保存监听地址、端口、Web worker/线程数和任务进程上限。`uv.lock` 固定 Python 依赖版本。视频任务还需要系统提供 `ffmpeg` 和 `ffprobe`。
 
 ### 并发边界
 
-- Web 并发容量由 `web_workers × web_threads` 提供，默认值为 `2 × 16`。
+- Windows 和 Linux 的 Web 请求线程容量均由 `web_workers × web_threads` 决定，默认 `2 × 16`；单进程配置直接在启动进程中提供 Web 服务。
 - 任务并发容量由 `global_concurrency` 提供，并受 `max_task_processes` 约束。
 - 单任务检查项并发由 `check_item_concurrency` 提供。
 - SQLite 事务负责任务认领和状态转换，文件系统负责上传文件与提取产物。

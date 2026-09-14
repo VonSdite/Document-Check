@@ -17,7 +17,6 @@ from app.tasks.supervisor import (
     supervisor_is_ready,
     supervisor_state_path,
 )
-from run import DocumentCheckServer, _server_options
 
 
 class _FakeProcess:
@@ -121,15 +120,6 @@ class TaskSupervisorTest(unittest.TestCase):
             [entry[0].args for entry in supervisor._active.values()],
             [(11, "claim-11"), (12, "claim-12")],
         )
-
-    def test_embedded_gunicorn_uses_native_thread_workers(self):
-        options = _server_options(self.app, "127.0.0.1", 31945)
-        server = DocumentCheckServer(self.app, options)
-
-        self.assertEqual(options["worker_class"], "gthread")
-        self.assertEqual(server.cfg.workers, 2)
-        self.assertEqual(server.cfg.threads, 16)
-        self.assertEqual(server.cfg.bind, ["127.0.0.1:31945"])
 
     def _insert_task(self, owner: str) -> None:
         now = now_text()

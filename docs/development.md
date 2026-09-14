@@ -2,7 +2,7 @@
 
 ## 应用入口
 
-项目通过 `uv run python run.py` 启动。`run.py` 调用 `app.bootstrap.factory.create_app()`，创建独立监督器进程并启动 Gunicorn。
+项目通过 `uv run python run.py` 启动。`run.py` 调用 `app.bootstrap.factory.create_app()`，创建独立监督器进程，再通过 `app.bootstrap.server` 启动 Uvicorn。每个 Web worker 调用 `app.bootstrap.asgi.create_asgi_app()` 创建 Flask 应用和 a2wsgi 请求线程池。
 
 `app/` 是 Python 命名空间包，根目录只包含模块目录。Web 工厂导入方式为：
 
@@ -12,7 +12,7 @@ from app.bootstrap.factory import create_app
 app = create_app()
 ```
 
-工厂接受可选的 `root_dir: Path`，用于指定配置和运行数据所在目录。模板与静态资源定位到代码中的 `app/web/`；运行目录负责保存 `config.yaml` 和 `instance/`。
+工厂接受可选的 `root_dir: Path`，用于指定配置和运行数据所在目录。模板与静态资源定位到代码中的 `app/web/`；运行目录负责保存 `config.yaml` 和 `instance/`。启动器通过 `DOCUMENTCHECK_ROOT_DIR` 将此目录传给 Web worker 和监督器；该环境变量也可用于指定独立的运行目录。
 
 `app.infrastructure.runtime.create_task_app()` 创建后台进程使用的应用上下文，并在上下文结束时关闭数据库连接。监督器通过 `python -m app.bootstrap.supervisor` 启动，任务执行入口为 `app.tasks.supervisor.run_claimed_task`。监督器向任务进程传递运行根目录，使子进程使用相同的配置和数据库。
 
@@ -80,7 +80,12 @@ uv run python -m unittest discover -s tests
 - `tests/fixtures/database_schema.json` 定义 SQLite 表、索引和触发器的兼容契约。
 - `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
 - `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
+- `tests/test_server_runtime.py` 检查 WSGI 请求体、代理信息、线程配置和监督器退出通知；`tests/test_server_integration.py` 使用真实 HTTP 服务检查多进程、上传下载、任务执行和退出清理。
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查多进程认领、取消、租约恢复与检查项执行。
 - `tests/test_logging.py` 检查业务日志分流、模块与进程标识、异常堆栈、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查。
 
-Python 依赖由 `pyproject.toml` 和 `uv.lock` 管理，文本文件统一采用 UTF-8 和 LF。配置、数据库、上传文件和生成产物保存在 Git 忽略的运行目录中。
+项目直接导入的第三方库在 `pyproject.toml` 中显式声明，由 `uv.lock` 锁定完整依赖树。Python 标准库由解释器提供；功能扩展依赖通过 extras 声明，例如 `pypdf[image]`。`ffmpeg`、`ffprobe` 由运行环境安装并加入 `PATH`。
+
+Windows 和 Linux 使用相同的 Uvicorn 与 a2wsgi 依赖。Uvicorn 使用 `spawn` 管理多个 Web worker，事件循环统一使用 `asyncio`，HTTP 协议处理统一使用 `h11`。代理身份与地址由 Flask 的代理配置处理。`psutil` 提供跨平台进程存活检测，父进程通过标准输入管道通知监督器退出。
+
+文本文件统一采用 UTF-8 和 LF。配置、数据库、上传文件和生成产物保存在 Git 忽略的运行目录中。

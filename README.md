@@ -9,7 +9,7 @@
 - 管理面：隐藏 URL 登录，查看和管理全部任务，配置检查项提示词、扩展检查项和任务并发度；用户身份和用户模型配置由用户侧管理。
 - 任务执行：独立调度进程从 SQLite 队列拉取任务，默认全局并发 3、单用户并发 1、单任务检查项并发 1，可在管理面调整；机器级任务进程上限默认为 4；文档文本会作为全文一次送入模型，图片检查会把文档文本和按位置命名的图片批次一起送入多模态模型。
 - 本地存储：SQLite 数据库、用户模型配置、上传文件、提取图片和运行日志保存在 `instance/`，本地管理员配置保存在 `config.yaml`。
-- 服务运行：使用 Gunicorn 管理 Web 进程，默认启动 2 个 `gthread` worker，每个 worker 使用 16 个原生请求线程；后台任务由独立调度进程按配置动态创建任务进程，启动命令保持为 `uv run python run.py`。
+- 服务运行：Windows 和 Linux 统一使用 Uvicorn 多进程和 a2wsgi 适配 Flask，默认 2 个 Web 进程、每进程 16 个请求线程；后台任务由独立调度进程按配置动态创建任务进程，启动命令保持为 `uv run python run.py`。
 
 完整运行拓扑和组件职责见 [4+1 架构视图](docs/architecture-4plus1.md)。
 
@@ -35,6 +35,8 @@
 
 ## 快速启动
 
+运行环境为 Python 3.12 及以上版本，支持 Windows 和 Linux。两端统一使用 Uvicorn 与 a2wsgi，采用相同的进程、线程配置和启动方式。
+
 ```bash
 uv sync
 uv run python run.py
@@ -45,7 +47,9 @@ uv run python run.py
 
 启动时自动初始化数据库和索引，并在接收请求前补齐已有数据库缺少的性能索引。索引补齐保持业务表、字段和记录不变；仅在补建索引时对相关表执行一次 `ANALYZE`。首次补建需要读取已有数据，启动耗时随数据量增加；索引完整后，索引检查只读取元数据。
 
-运行依赖在 `pyproject.toml` 中直接声明，并由 `uv.lock` 固定版本：Flask 提供 Web 应用，Gunicorn 提供多进程与原生线程 Web 服务，`concurrent-log-handler` 与 `portalocker` 提供多进程安全日志和监督器单实例锁，文档解析、模型请求和报表处理依赖其对应的文档、网络和表格库。
+运行依赖在 `pyproject.toml` 中直接声明，并由 `uv.lock` 固定版本：Flask 提供 Web 应用，Uvicorn 与 a2wsgi 提供跨平台多进程 Web 服务及 Flask 请求线程池，psutil 提供跨平台进程存活检测，Werkzeug 提供代理中间件与 HTTP 异常，MarkupSafe 提供 HTML 标记类型，`concurrent-log-handler` 与 `portalocker` 提供多进程安全日志和监督器单实例锁，文档解析、模型请求和报表处理依赖其对应的文档、网络和表格库。
+
+`sqlite3`、`multiprocessing` 等模块由 Python 标准库提供。PDF 图片读取使用 `pypdf[image]` 声明的 Pillow 依赖；SAML 使用 `python3-saml` 声明的 lxml 与 xmlsec 依赖。
 
 默认本机管理视图地址：
 
@@ -96,7 +100,8 @@ server:
   # 如果 Nginx 同时注入 X-Forwarded-Proto/Host/Prefix 等标准代理头，可开启。
   proxy_fix: false
   max_upload_mb: 1024
-  # Gunicorn 使用 2 个 Web 进程，每个进程使用 16 个原生请求线程。
+  # Windows 和 Linux 统一使用 Uvicorn；web_workers 控制 Web 进程数。
+  # web_threads 控制每个 Web 进程的 Flask 请求线程数。
   web_workers: 2
   web_threads: 16
 worker:
@@ -161,7 +166,8 @@ server:
   real_ip_header: ""
   proxy_fix: false
   max_upload_mb: 1024
-  # Gunicorn 使用 2 个 Web 进程，每个进程使用 16 个原生请求线程。
+  # Windows 和 Linux 统一使用 Uvicorn；web_workers 控制 Web 进程数。
+  # web_threads 控制每个 Web 进程的 Flask 请求线程数。
   web_workers: 2
   web_threads: 16
 worker:
