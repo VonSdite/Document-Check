@@ -1656,7 +1656,7 @@ function renderModelRows(form, configs) {
     reasoningSelect.className = "model-reasoning-select";
     reasoningSelect.dataset.modelReasoningEffort = "1";
     [
-      ["", "自动（不传）"],
+      ["", "不设置"],
       ["low", "low"],
       ["medium", "medium"],
       ["high", "high"],
