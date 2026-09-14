@@ -50,7 +50,7 @@
       });
     });
     panel.querySelector("[data-output-fallback]").hidden = nodes.size > 0;
-    panel.querySelector("[data-output-status]").textContent = finished ? "已更新" : "实时更新";
+    panel.querySelector("[data-output-status]").textContent = finished ? "" : "实时更新";
     if (following) scroll.scrollTop = scroll.scrollHeight;
   }
 
