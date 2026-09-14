@@ -29,7 +29,7 @@
           <div>
             <span class="field-with-help">
               <span class="field-label">模型 ID 列表</span>
-              <span class="help-tip" tabindex="0" data-tip="每行模型可单独配置思考强度。默认自动，不发送 reasoning_effort；只有显式选择后才发送。">?</span>
+              <span class="help-tip" tabindex="0" data-tip="每行填写一个模型 ID，可单独设置思考强度和是否关闭思考。">?</span>
             </span>
           </div>
           <div class="model-editor-actions">
@@ -49,13 +49,13 @@
                 <th>
                   <span class="table-heading-help">
                     思考强度
-                    <span class="help-tip" tabindex="0" data-tip="自动表示不发送 reasoning_effort，适合不支持该参数或由服务端自行决定的模型。">?</span>
+                    <span class="help-tip" tabindex="0" data-tip="选择模型思考强度；“不设置”时由模型服务决定。">?</span>
                   </span>
                 </th>
                 <th>
                   <span class="table-heading-help">
                     强制关闭思考
-                    <span class="help-tip" tabindex="0" data-tip="默认保留模型思考。勾选后不发送思考强度，并发送 enable_thinking=false、thinking.type=disabled 以及 chat_template_kwargs 中的两个关闭开关。">?</span>
+                    <span class="help-tip" tabindex="0" data-tip="勾选后请求模型关闭思考，思考强度设置不生效。">?</span>
                   </span>
                 </th>
                 <th class="right">操作</th>
