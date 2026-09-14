@@ -7,6 +7,18 @@
   ],
   [
     "index",
+    "idx_report_suppression_hits_task",
+    "report_suppression_hits",
+    "CREATE INDEX idx_report_suppression_hits_task ON report_suppression_hits(task_id)"
+  ],
+  [
+    "index",
+    "idx_report_suppression_rules_enabled_type_updated",
+    "report_suppression_rules",
+    "CREATE INDEX idx_report_suppression_rules_enabled_type_updated ON report_suppression_rules(task_type, updated_at) WHERE enabled = 1"
+  ],
+  [
+    "index",
     "idx_report_suppression_rules_lookup",
     "report_suppression_rules",
     "CREATE INDEX idx_report_suppression_rules_lookup\n            ON report_suppression_rules(task_type, check_code, fingerprint, enabled)"
@@ -22,6 +34,12 @@
     "idx_tasks_owner_created",
     "tasks",
     "CREATE INDEX idx_tasks_owner_created ON tasks(owner_subject, created_at DESC)"
+  ],
+  [
+    "index",
+    "idx_tasks_pending_file_cleanup",
+    "tasks",
+    "CREATE INDEX idx_tasks_pending_file_cleanup ON tasks(source_files_cleaned_at, COALESCE(finished_at, updated_at, created_at), id) WHERE source_files_cleaned_at IS NULL AND status IN ('completed', 'partial', 'failed', 'canceled')"
   ],
   [
     "index",
@@ -76,6 +94,12 @@
     "idx_tasks_type_owner_created",
     "tasks",
     "CREATE INDEX idx_tasks_type_owner_created ON tasks(task_type, owner_subject, created_at DESC, id DESC)"
+  ],
+  [
+    "index",
+    "idx_tasks_type_owner_status",
+    "tasks",
+    "CREATE INDEX idx_tasks_type_owner_status ON tasks(task_type, owner_subject, status)"
   ],
   [
     "index",

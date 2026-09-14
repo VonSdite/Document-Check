@@ -17,6 +17,7 @@ from app.reporting import statistics
 from app.reporting.service import _empty_report_suppression_version
 from app.tasks.submission import TaskSubmission, submit_document_task
 from app.tasks.supervisor import TaskSupervisor
+from app.web.task_lists import _task_stats_for_where, _task_status_payload
 
 
 class InternalPerformanceTest(unittest.TestCase):
@@ -63,6 +64,72 @@ class InternalPerformanceTest(unittest.TestCase):
         finally:
             get_db().set_progress_handler(None, 0)
         return steps, value
+
+    def test_user_counts_use_covering_index_for_the_requested_owner(self):
+        self.insert_tasks(20)
+        self.insert_tasks(3000, owner="ip:other")
+        statements = []
+        db = get_db()
+        db.set_trace_callback(statements.append)
+        try:
+            stats = _task_stats_for_where(
+                "owner_subject = ? AND task_type = ?", ("ip:user", "document_check")
+            )
+            with self.app.test_request_context("/?ids=1"):
+                payload = _task_status_payload(
+                    "document_check",
+                    owner_clause="t.owner_subject = ?",
+                    owner_params=("ip:user",),
+                )
+        finally:
+            db.set_trace_callback(None)
+        self.assertEqual(stats["total"], 20)
+        self.assertEqual(payload["counts"]["tasks"], 20)
+        counts = [
+            sql
+            for sql in statements
+            if "COUNT(*) AS total FROM tasks" in sql or "COUNT(*) AS tasks" in sql
+        ]
+        self.assertEqual(len(counts), 2)
+        for sql in counts:
+            plan = " ".join(
+                row["detail"] for row in db.execute("EXPLAIN QUERY PLAN " + sql)
+            )
+            self.assertIn("COVERING INDEX idx_tasks_type_owner_status", plan)
+            self.assertNotIn("USE TEMP B-TREE", plan)
+
+    def test_expired_file_selection_skips_cleaned_history(self):
+        from app.tasks.runtime.artifacts import cleanup_expired_task_files
+
+        self.insert_tasks(10000)
+        db = get_db()
+        db.execute("UPDATE tasks SET source_files_cleaned_at = '2026-09-01'")
+        db.execute(
+            "UPDATE tasks SET source_files_cleaned_at = NULL, finished_at = '2000-01-01' WHERE id IN (1, 2)"
+        )
+        db.commit()
+        set_setting("task_file_retention_days", 1)
+        statements = []
+        db.set_trace_callback(statements.append)
+        try:
+            with patch("app.tasks.runtime.artifacts._remove_task_artifacts") as remove:
+                steps, count = self.vm_steps(
+                    lambda: cleanup_expired_task_files(self.app)
+                )
+        finally:
+            db.set_trace_callback(None)
+        self.assertEqual(count, 2)
+        self.assertEqual({call.args[1]["id"] for call in remove.call_args_list}, {1, 2})
+        self.assertLess(steps, 2000)
+        selection = next(
+            sql for sql in statements if "SELECT id, stored_filename" in sql
+        )
+        plan = " ".join(
+            row["detail"] for row in db.execute("EXPLAIN QUERY PLAN " + selection)
+        )
+        self.assertIn("idx_tasks_pending_file_cleanup", plan)
+        self.assertNotIn("USE TEMP B-TREE", plan)
+        self.assertNotIn("SCAN tasks", plan)
 
     def test_scheduler_cost_is_bounded_by_owners_instead_of_queue_length(self):
         self.insert_tasks(50, status="queued")

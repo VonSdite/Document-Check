@@ -8,11 +8,40 @@ from app.persistence.connection import (
     now_text,
 )
 
+QUERY_INDEXES = {
+    "idx_tasks_type_owner_status": (
+        "tasks",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_type_owner_status "
+        "ON tasks(task_type, owner_subject, status)",
+    ),
+    "idx_tasks_pending_file_cleanup": (
+        "tasks",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_pending_file_cleanup "
+        "ON tasks(source_files_cleaned_at, COALESCE(finished_at, updated_at, created_at), id) "
+        "WHERE source_files_cleaned_at IS NULL "
+        "AND status IN ('completed', 'partial', 'failed', 'canceled')",
+    ),
+    "idx_report_suppression_hits_task": (
+        "report_suppression_hits",
+        "CREATE INDEX IF NOT EXISTS idx_report_suppression_hits_task "
+        "ON report_suppression_hits(task_id)",
+    ),
+    "idx_report_suppression_rules_enabled_type_updated": (
+        "report_suppression_rules",
+        "CREATE INDEX IF NOT EXISTS idx_report_suppression_rules_enabled_type_updated "
+        "ON report_suppression_rules(task_type, updated_at) WHERE enabled = 1",
+    ),
+}
+
 
 def init_db():
     db = get_db()
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA synchronous = NORMAL")
+    existing_tables = {
+        row["name"]
+        for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS settings (
@@ -249,9 +278,41 @@ def init_db():
     _migrate_task_owners(db)
     _migrate_model_thinking_defaults(db)
     _clear_finished_task_api_keys(db)
+    _initialize_query_indexes(db, existing_tables)
     _cleanup_orphaned_report_suppression_hits(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
+
+
+def _initialize_query_indexes(db, existing_tables: set[str]):
+    # 新建表使用完整的索引定义，字段准备完成后创建索引。
+    for table, sql in QUERY_INDEXES.values():
+        if table not in existing_tables:
+            db.execute(sql)
+
+    # TODO(index-compat): BEGIN 兼容窗口结束后删除此调用，保留新建表的索引初始化。
+    _ensure_existing_query_indexes(db, existing_tables)
+    # TODO(index-compat): END
+
+
+# TODO(index-compat): BEGIN 已有表的索引补齐；兼容窗口结束后删除此函数及调用。
+def _ensure_existing_query_indexes(db, existing_tables: set[str]):
+    if not existing_tables.intersection(table for table, _ in QUERY_INDEXES.values()):
+        return
+    existing_indexes = {
+        row["name"]
+        for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    indexed_tables = set()
+    for name, (table, sql) in QUERY_INDEXES.items():
+        if table in existing_tables and name not in existing_indexes:
+            db.execute(sql)
+            indexed_tables.add(table)
+    for table in sorted(indexed_tables):
+        db.execute(f"ANALYZE {table}")
+
+
+# TODO(index-compat): END
 
 
 def _ensure_column(db, table: str, column: str, definition: str):

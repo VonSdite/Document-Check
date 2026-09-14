@@ -16,6 +16,14 @@ app = create_app()
 
 `app.infrastructure.runtime.create_task_app()` 创建后台进程使用的应用上下文，并在上下文结束时关闭数据库连接。监督器通过 `python -m app.bootstrap.supervisor` 启动，任务执行入口为 `app.tasks.supervisor.run_claimed_task`。监督器向任务进程传递运行根目录，使子进程使用相同的配置和数据库。
 
+## 数据库索引初始化
+
+`app/persistence/schema.py` 的 `QUERY_INDEXES` 保存性能索引定义。`init_db()` 记录初始化前已有的表，完成字段准备后，为新建表创建索引。索引初始化在应用工厂启动期间完成。
+
+已有表的索引补齐由 `_ensure_existing_query_indexes()` 负责，该函数及其调用分别使用 `TODO(index-compat): BEGIN` 和 `TODO(index-compat): END` 包裹。函数读取索引元数据，只创建缺少的索引，并对受影响的表各执行一次 `ANALYZE`；创建和分析共用初始化写事务。
+
+兼容区块的清理范围为上述两对 TODO 标记内的代码，保留 `QUERY_INDEXES`、`_initialize_query_indexes()` 中的新表创建路径及其在 `init_db()` 中的调用。新库创建测试单独验证新表索引定义，兼容测试验证已有库、部分缺失、重复启动、并发启动和失败重试。
+
 ## 模块依赖
 
 | 模块 | 可依赖的项目模块 |
@@ -64,7 +72,8 @@ uv run python -m unittest discover -s tests
 - `tests/test_architecture.py` 检查目录约束、模块依赖、后台导入独立性、HTTP 路由和数据库结构。
 - `tests/fixtures/http_routes.json` 定义默认配置下的路由、端点名称与 HTTP 方法契约；代理前缀、认证、下载和参数行为由配置与路由测试覆盖。
 - `tests/fixtures/database_schema.json` 定义 SQLite 表、索引和触发器的兼容契约。
-- `tests/test_performance.py` 检查查询使用现有索引、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
+- `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
+- `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查多进程认领、取消、租约恢复与检查项执行。
 
 Python 依赖由 `pyproject.toml` 和 `uv.lock` 管理，文本文件统一采用 UTF-8 和 LF。配置、数据库、上传文件和生成产物保存在 Git 忽略的运行目录中。

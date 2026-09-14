@@ -43,6 +43,8 @@ uv run python run.py
 `uv sync` 会按 `pyproject.toml` 和 `uv.lock` 创建/更新 `.venv`，后续启动统一使用 `uv run`。
 视频检查还需要在运行本服务的服务器或容器内安装 `ffmpeg` 和 `ffprobe`，并确保应用进程的 `PATH` 可以找到它们；`uv sync` 不会安装这两个系统级可执行程序。
 
+启动时自动初始化数据库和索引，并在接收请求前补齐已有数据库缺少的性能索引。索引补齐保持业务表、字段和记录不变；仅在补建索引时对相关表执行一次 `ANALYZE`。首次补建需要读取已有数据，启动耗时随数据量增加；索引完整后，索引检查只读取元数据。
+
 运行依赖在 `pyproject.toml` 中直接声明，并由 `uv.lock` 固定版本：Flask 提供 Web 应用，Gunicorn 提供多进程与原生线程 Web 服务，`concurrent-log-handler` 与 `portalocker` 提供多进程安全日志和监督器单实例锁，文档解析、模型请求和报表处理依赖其对应的文档、网络和表格库。
 
 默认本机管理视图地址：
