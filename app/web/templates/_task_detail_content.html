@@ -260,7 +260,10 @@
       </table>
     </div>
     {% elif not result.suppressed_report_items %}
-    <div class="result-text markdown-body">{{ (result.result_summary or result.result)|markdown }}</div>
+    {% set result_text = (result.result_summary or result.result or '')|markdown %}
+    {% if result_text|trim %}
+    <div class="result-text markdown-body">{{ result_text }}</div>
+    {% endif %}
     {% endif %}
     {% if result.suppressed_report_items %}
     <details class="result-raw-details">
