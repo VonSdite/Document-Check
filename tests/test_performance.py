@@ -121,6 +121,34 @@ class InternalPerformanceTest(unittest.TestCase):
         self.assertEqual(large[2], 20)
         self.assertLess(large_steps, small_steps + 1000)
 
+    def test_user_group_filename_search_is_bounded_by_own_tasks(self):
+        self.insert_tasks(20)
+        metadata = json.dumps(
+            {"groups": [{"files": [{"original_filename": "资料参数表.xlsx"}]}]}
+        )
+        db = get_db()
+        db.execute(
+            "UPDATE tasks SET task_type = 'consistency_check', document_meta_json = ?",
+            (metadata,),
+        )
+        db.commit()
+        identity = UserIdentity(
+            subject="ip:user", display_name="user", ip="127.0.0.1", source="ip"
+        )
+        with self.app.test_request_context("/consistency?keyword=参数表"):
+            small_steps, small = self.vm_steps(
+                lambda: _user_task_list_data(identity, "consistency_check")
+            )
+            self.insert_tasks(5000, owner="ip:other")
+            db.execute("UPDATE tasks SET task_type = 'consistency_check'")
+            db.commit()
+            large_steps, large = self.vm_steps(
+                lambda: _user_task_list_data(identity, "consistency_check")
+            )
+        self.assertEqual(small[2], 20)
+        self.assertEqual(large[2], 20)
+        self.assertLess(large_steps, small_steps + 1000)
+
     def test_expired_file_selection_skips_cleaned_history(self):
         from app.tasks.runtime.artifacts import cleanup_expired_task_files
 

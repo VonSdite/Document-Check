@@ -78,26 +78,40 @@ def _task_filter_sql(filters, *, join_ip_usernames):
         )
     if keyword:
         owner_name_filter = (
-            "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
+            "OR COALESCE(iu.username, '') LIKE ? ESCAPE '\\'"
+            if join_ip_usernames
+            else ""
         )
         clauses.append(
             f"""
             (
-                COALESCE(t.original_filename, '') LIKE ?
-                OR COALESCE(t.document_meta_json, '') LIKE ?
-                OR COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ?
-                OR t.ip LIKE ?
-                OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ?
+                COALESCE(t.original_filename, '') LIKE ? ESCAPE '\\'
+                OR COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ? ESCAPE '\\'
+                OR t.ip LIKE ? ESCAPE '\\'
+                OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ? ESCAPE '\\'
                 {owner_name_filter}
+                OR CASE WHEN t.task_type IN ('consistency_check', 'language_consistency_check')
+                    THEN EXISTS (
+                        SELECT 1
+                        FROM json_each(
+                            CASE WHEN json_valid(t.document_meta_json)
+                                 THEN t.document_meta_json ELSE '{{}}' END, '$.groups'
+                        ) AS doc_group
+                        JOIN json_each(
+                            CASE WHEN doc_group.type = 'object'
+                                 THEN doc_group.value ELSE '{{}}' END, '$.files'
+                        ) AS doc_file
+                        WHERE CASE WHEN doc_file.type = 'object'
+                                   THEN json_extract(doc_file.value, '$.original_filename')
+                              END LIKE ? ESCAPE '\\'
+                    ) ELSE 0 END
             )
             """
         )
+        # 文件名与用户信息按输入的文字匹配。
+        keyword = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         keyword_like = f"%{keyword}%"
-        params.extend(
-            [keyword_like, keyword_like, keyword_like, keyword_like, keyword_like]
-        )
-        if join_ip_usernames:
-            params.append(keyword_like)
+        params.extend([keyword_like] * (6 if join_ip_usernames else 5))
     return clauses, params
 
 

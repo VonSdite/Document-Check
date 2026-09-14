@@ -20,7 +20,11 @@
     </label>
     <label>
       关键词
-      <input name="keyword" value="{{ keyword }}" placeholder="按文档名称、用户、账号或 IP 搜索">
+      <input name="keyword" value="{{ keyword }}" placeholder="按文档名称、用户、账号或 IP 搜索" aria-describedby="task-filter-help">
     </label>
     <button class="secondary-button" type="submit">筛选</button>
+    <p class="task-filter-help" id="task-filter-help">
+      搜索范围：文件名（含对照任务各文件）、用户、账号、IP。
+      <span data-task-filter-hint role="status">点击“筛选”或按回车应用条件。</span>
+    </p>
   </form>

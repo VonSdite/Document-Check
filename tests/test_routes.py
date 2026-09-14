@@ -198,6 +198,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     )
                     self.assertIsNone(soup.select_one(f'[data-task-id="{other}"]'))
                     if not partial:
+                        self.assertIn("搜索范围：文件名", soup.get_text())
+                        self.assertIsNotNone(soup.select_one("[data-task-filter-hint]"))
                         self.assertEqual(
                             {
                                 control["name"]
@@ -6538,6 +6540,137 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         report_link = _required_tag(soup.select_one("a.task-report-link"))
         self.assertEqual(report_link.get("href"), f"/admin/tasks/{task_id}")
+
+    def test_task_keyword_matches_names_instead_of_document_references(self):
+        keyword = "ESM-48150A3 V100R025C95 用户手册"
+        routes = (
+            (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
+            (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
+            (IMAGE_TASK_TYPE, "/images", "/admin/images"),
+            (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
+        )
+        for task_type, user_route, admin_route in routes:
+            matching = self._insert_task(
+                task_type=task_type, original_filename=f"{keyword}.pdf"
+            )
+            for filename in (
+                "iSitePower-A V100R025C10 站点整站 用户手册 (PVPU-86N2).pdf",
+                "能量调度特性 V100R026C10 交付指导书.pdf",
+            ):
+                self._insert_cache_task(
+                    task_type=task_type,
+                    original_filename=filename,
+                    stored_filename=f"{keyword}-stored.pdf",
+                    document_text=f"参考文档：{keyword}",
+                    document_meta_json=json.dumps(
+                        {
+                            "hyperlinks": [
+                                {
+                                    "text": keyword,
+                                    "target": "https://example.test/manual",
+                                }
+                            ],
+                            "groups": [
+                                {
+                                    "files": [
+                                        {
+                                            "original_filename": filename,
+                                            "stored_filename": f"{keyword}-stored.pdf",
+                                            "text": keyword,
+                                        }
+                                    ]
+                                }
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            for route in (user_route, admin_route):
+                with self.subTest(route=route):
+                    response = self.client.get(
+                        route, query_string={"keyword": keyword, "_partial": "1"}
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    self.assertEqual(
+                        {
+                            int(row["data-task-id"])
+                            for row in soup.select("[data-task-id]")
+                        },
+                        {matching},
+                    )
+
+    def test_task_keyword_reads_group_filenames_and_handles_legacy_metadata(self):
+        for task_type, user_route, admin_route in (
+            (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
+        ):
+            matching = self._insert_cache_task(
+                task_type=task_type,
+                original_filename="多文档任务",
+                stored_filename="stored.pdf",
+                document_meta_json=json.dumps(
+                    {"groups": [{"files": [{"original_filename": "隐藏参数表.xlsx"}]}]},
+                    ensure_ascii=True,
+                ),
+            )
+            for raw in (
+                "{}",
+                "{broken",
+                "null",
+                '{"groups":["text",null,{"files":["text",null,{}]}]}',
+            ):
+                self._insert_cache_task(
+                    task_type=task_type,
+                    original_filename="其他任务",
+                    stored_filename="stored.pdf",
+                    document_meta_json=raw,
+                )
+            for route in (user_route, admin_route):
+                with self.subTest(route=route):
+                    response = self.client.get(
+                        route, query_string={"keyword": "隐藏参数", "_partial": "1"}
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    self.assertEqual(
+                        {
+                            int(row["data-task-id"])
+                            for row in soup.select("[data-task-id]")
+                        },
+                        {matching},
+                    )
+
+    def test_task_keyword_treats_percent_and_underscore_as_filename_characters(self):
+        expected = {
+            keyword: self._insert_task(original_filename=f"{keyword}.pdf")
+            for keyword in ("规格_表", "容量100%", "name\\value")
+        }
+        self._insert_task(original_filename="规格A表 容量1000 namevalue.pdf")
+        for route in ("/", "/admin/tasks"):
+            for keyword, task_id in expected.items():
+                with self.subTest(route=route, keyword=keyword):
+                    response = self.client.get(
+                        route, query_string={"keyword": keyword, "_partial": "1"}
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    self.assertEqual(
+                        {
+                            int(row["data-task-id"])
+                            for row in soup.select("[data-task-id]")
+                        },
+                        {task_id},
+                    )
 
     def test_admin_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):
