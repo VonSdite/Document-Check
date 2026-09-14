@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from flask import Flask, jsonify, request
@@ -89,6 +90,65 @@ assert 'gunicorn' not in sys.modules
             options["env"]["DOCUMENTCHECK_ROOT_DIR"], str(app.config["ROOT_DIR"])
         )
         self.assertEqual(options["stdin"], subprocess.PIPE)
+
+    def test_windows_venv_supervisor_uses_base_interpreter_and_venv_environment(self):
+        app = Flask(__name__)
+        app.config["ROOT_DIR"] = Path(tempfile.gettempdir()).resolve()
+        venv_python = r"C:\文档检查\.venv\Scripts\python.exe"
+        base_python = r"C:\Python312\python.exe"
+        with (
+            patch(
+                "run.sys",
+                SimpleNamespace(
+                    platform="win32",
+                    executable=venv_python,
+                    _base_executable=base_python,
+                ),
+            ),
+            patch("run.subprocess.Popen") as start,
+            patch("run.wait_for_supervisor", return_value=True),
+        ):
+            _start_task_supervisor(app)
+        self.assertEqual(start.call_args.args[0][0], base_python)
+        self.assertEqual(
+            start.call_args.kwargs["env"]["__PYVENV_LAUNCHER__"], venv_python
+        )
+
+    def test_supervisor_preserves_interpreter_on_linux_and_windows_base_python(self):
+        app = Flask(__name__)
+        app.config["ROOT_DIR"] = Path(tempfile.gettempdir()).resolve()
+        for platform, executable, base in (
+            ("linux", "/project/.venv/bin/python", "/usr/bin/python3"),
+            ("win32", r"C:\Python312\python.exe", r"C:\Python312\python.exe"),
+        ):
+            with (
+                self.subTest(platform=platform),
+                patch(
+                    "run.sys",
+                    SimpleNamespace(
+                        platform=platform, executable=executable, _base_executable=base
+                    ),
+                ),
+                patch("run.subprocess.Popen") as start,
+                patch("run.wait_for_supervisor", return_value=True),
+            ):
+                _start_task_supervisor(app)
+            self.assertEqual(start.call_args.args[0][0], executable)
+
+    def test_supervisor_start_failure_distinguishes_exit_from_timeout(self):
+        app = Flask(__name__)
+        app.config["ROOT_DIR"] = Path(tempfile.gettempdir()).resolve()
+        for exit_code, message in ((7, "退出码=7"), (None, "等待就绪超时")):
+            with (
+                self.subTest(exit_code=exit_code),
+                patch("run.subprocess.Popen") as start,
+                patch("run.wait_for_supervisor", return_value=False),
+                patch("run._stop_task_supervisor") as stop,
+            ):
+                start.return_value.poll.return_value = exit_code
+                with self.assertRaisesRegex(RuntimeError, message):
+                    _start_task_supervisor(app)
+                stop.assert_called_once_with(start.return_value)
 
     def test_readiness_checks_process_existence_without_sending_signals(self):
         with tempfile.TemporaryDirectory() as root:

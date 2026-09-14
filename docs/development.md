@@ -16,6 +16,8 @@ app = create_app()
 
 `app.infrastructure.runtime.create_task_app()` 创建后台进程使用的应用上下文，并在上下文结束时关闭数据库连接。监督器通过 `python -m app.bootstrap.supervisor` 启动，任务执行入口为 `app.tasks.supervisor.run_claimed_task`。监督器向任务进程传递运行根目录，使子进程使用相同的配置和数据库。
 
+Windows 虚拟环境中，启动器采用 Python `multiprocessing.spawn` 的解释器选择方式：调用基础解释器，通过 `__PYVENV_LAUNCHER__` 保留虚拟环境路径与依赖。启动进程 PID 对应实际监督器进程，就绪检查验证该 PID 与新鲜心跳。启动失败信息区分子进程退出与等待超时，并提供退出码、启动 PID 和任务日志路径。
+
 ## 数据库索引初始化
 
 `app/persistence/schema.py` 的 `QUERY_INDEXES` 保存性能索引定义。`init_db()` 记录初始化前已有的表，完成字段准备后，为新建表创建索引。索引初始化在应用工厂启动期间完成。

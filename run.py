@@ -48,9 +48,18 @@ def main() -> None:
 
 
 def _start_task_supervisor(app):
+    executable = sys.executable
+    environment = {**os.environ, "DOCUMENTCHECK_ROOT_DIR": str(app.config["ROOT_DIR"])}
+    base_executable = getattr(sys, "_base_executable", None) or executable
+    if sys.platform == "win32" and os.path.normcase(executable) != os.path.normcase(
+        base_executable
+    ):
+        # 与 multiprocessing.spawn 一致：直接启动基础解释器并保留虚拟环境。
+        environment["__PYVENV_LAUNCHER__"] = executable
+        executable = base_executable
     supervisor = subprocess.Popen(
         [
-            sys.executable,
+            executable,
             "-m",
             "app.bootstrap.supervisor",
             "--parent-pid",
@@ -58,15 +67,21 @@ def _start_task_supervisor(app):
             "--watch-stdin",
         ],
         cwd=Path(__file__).resolve().parent,
-        env={**os.environ, "DOCUMENTCHECK_ROOT_DIR": str(app.config["ROOT_DIR"])},
+        env=environment,
         stdin=subprocess.PIPE,
         start_new_session=False,
     )
     if wait_for_supervisor(app, supervisor):
         return supervisor
 
+    exit_code = supervisor.poll()
+    reason = "等待就绪超时" if exit_code is None else f"子进程退出，退出码={exit_code}"
     _stop_task_supervisor(supervisor)
-    raise RuntimeError("任务调度进程启动失败")
+    task_log = Path(app.instance_path) / "logs" / "task.log"
+    raise RuntimeError(
+        f"任务调度进程启动失败：{reason}，启动 PID={supervisor.pid}。"
+        f"请查看控制台前面的子进程异常和任务日志：{task_log}"
+    )
 
 
 def _stop_task_supervisor(supervisor) -> None:
