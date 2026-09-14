@@ -5,6 +5,15 @@ class DocumentReadError(Exception):
     pass
 
 
+class DocumentReadCanceled(DocumentReadError):
+    pass
+
+
+def check_extraction_canceled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise DocumentReadCanceled("文档解析已取消")
+
+
 def _format_hyperlink_text(label, target) -> str:
     label = str(label or "").strip()
     target = _clean_hyperlink_target(target)

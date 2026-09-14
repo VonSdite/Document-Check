@@ -71,7 +71,7 @@ from app.tasks.runtime.state import (
     _mark_failed,
     _progress_heartbeat,
     _save_intermediate_results,
-    _start_task_lease_heartbeat,
+    _start_task_cancel_watcher,
     _task_claim_token,
     _task_flag,
     _update_progress,
@@ -106,7 +106,7 @@ class TaskRunner:
             cancel_event = threading.Event()
             if task["cancel_requested"] or task["status"] == "canceling":
                 cancel_event.set()
-            lease_stop, lease_thread = _start_task_lease_heartbeat(
+            cancel_stop, cancel_thread = _start_task_cancel_watcher(
                 self.app,
                 task_id,
                 claim_token,
@@ -154,13 +154,26 @@ class TaskRunner:
                         "check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY
                     ),
                 )
+                preprocessing_started = time.monotonic()
+                logger.info(
+                    "任务预处理开始 task_id=%s file_type=%s", task_id, task["file_type"]
+                )
                 document_text, document_meta_raw = _prepare_task_inputs(
                     self.app,
                     db,
                     task,
                     task_type,
                     claim_token,
+                    cancel_event=cancel_event,
                 )
+                logger.info(
+                    "任务预处理完成 task_id=%s duration_seconds=%.3f text_chars=%s",
+                    task_id,
+                    time.monotonic() - preprocessing_started,
+                    len(document_text),
+                )
+                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                    raise TaskCanceled
                 if task_type == IMAGE_TASK_TYPE:
                     image_items = image_items_from_meta(document_meta_raw)
                     page_image_items = image_items_from_meta(
@@ -339,10 +352,10 @@ class TaskRunner:
                         db, task_id, f"任务执行异常：{exc}", results, claim_token
                     )
             finally:
-                if lease_stop is not None:
-                    lease_stop.set()
-                if lease_thread is not None:
-                    lease_thread.join(timeout=2)
+                if cancel_stop is not None:
+                    cancel_stop.set()
+                if cancel_thread is not None:
+                    cancel_thread.join(timeout=2)
 
 
 def _document_check_items(db, task) -> list[dict]:

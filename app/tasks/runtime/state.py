@@ -44,7 +44,7 @@ def _task_lease_deadline_text() -> str:
     return deadline.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _start_task_lease_heartbeat(
+def _start_task_cancel_watcher(
     app,
     task_id: int,
     claim_token: str | None,
@@ -54,23 +54,22 @@ def _start_task_lease_heartbeat(
         return None, None
     stop_event = threading.Event()
     thread = threading.Thread(
-        target=_task_lease_heartbeat,
+        target=_watch_task_cancellation,
         args=(app, task_id, claim_token, stop_event, cancel_event),
         daemon=True,
-        name=f"task-lease-{task_id}",
+        name=f"task-cancel-{task_id}",
     )
     thread.start()
     return stop_event, thread
 
 
-def _task_lease_heartbeat(
+def _watch_task_cancellation(
     app,
     task_id: int,
     claim_token: str,
     stop_event: threading.Event,
     cancel_event: threading.Event,
 ):
-    next_renew_at = time.monotonic() + TASK_LEASE_RENEW_INTERVAL_SECONDS
     while not stop_event.wait(TASK_CANCEL_POLL_INTERVAL_SECONDS):
         try:
             with app.app_context():
@@ -88,23 +87,9 @@ def _task_lease_heartbeat(
                     return
                 if task["cancel_requested"] or task["status"] == "canceling":
                     cancel_event.set()
-                if time.monotonic() < next_renew_at:
-                    continue
-                renewed = db.execute(
-                    """
-                    UPDATE tasks
-                    SET lease_expires_at = ?
-                    WHERE id = ? AND status IN ('running', 'canceling') AND claim_token = ?
-                    """,
-                    (_task_lease_deadline_text(), task_id, claim_token),
-                )
-                db.commit()
-                if renewed.rowcount != 1:
-                    cancel_event.set()
                     return
-                next_renew_at = time.monotonic() + TASK_LEASE_RENEW_INTERVAL_SECONDS
         except Exception:
-            logger.exception("任务租约续期失败 task_id=%s", task_id)
+            logger.exception("任务取消状态读取失败 task_id=%s", task_id)
 
 
 def _cancel_requested(db, task_id: int, claim_token: str | None = None) -> bool:

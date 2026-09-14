@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.documents.extraction.common import DocumentReadError
+from app.documents.extraction.common import DocumentReadError, check_extraction_canceled
 from app.documents.extraction.docx import _extract_docx
 from app.documents.extraction.markup import (
     _extract_html,
@@ -24,8 +24,12 @@ def extension_of(filename: str) -> str:
     return filename.rsplit(".", 1)[1].lower()
 
 
-def extract_text(path: Path, file_type: str, *, include_tables: bool = True) -> str:
-    text, _hyperlinks = extract_document(path, file_type, include_tables=include_tables)
+def extract_text(
+    path: Path, file_type: str, *, include_tables: bool = True, cancel_event=None
+) -> str:
+    text, _hyperlinks = extract_document(
+        path, file_type, include_tables=include_tables, cancel_event=cancel_event
+    )
     return text
 
 
@@ -34,14 +38,21 @@ def extract_document(
     file_type: str,
     *,
     include_tables: bool = True,
+    cancel_event=None,
 ) -> tuple[str, list[dict]]:
+    check_extraction_canceled(cancel_event)
     hyperlinks = []
     try:
         if file_type == "docx":
             return _extract_docx(path, hyperlinks), hyperlinks
         if file_type == "pdf":
             return (
-                _extract_pdf(path, hyperlinks, include_tables=include_tables),
+                _extract_pdf(
+                    path,
+                    hyperlinks,
+                    include_tables=include_tables,
+                    cancel_event=cancel_event,
+                ),
                 hyperlinks,
             )
         if file_type == "txt":
@@ -53,9 +64,13 @@ def extract_document(
         if file_type == "html":
             return _extract_html(path, hyperlinks), hyperlinks
         if file_type in {"xlsx", "xlsm"}:
-            return _extract_openpyxl_workbook(path, hyperlinks), hyperlinks
+            return _extract_openpyxl_workbook(
+                path, hyperlinks, cancel_event=cancel_event
+            ), hyperlinks
         if file_type == "xls":
-            return _extract_xls(path, hyperlinks), hyperlinks
+            return _extract_xls(path, hyperlinks, cancel_event=cancel_event), hyperlinks
+    except DocumentReadError:
+        raise
     except Exception as exc:
         raise DocumentReadError(str(exc)) from exc
     raise DocumentReadError(f"不支持的文件类型：{file_type}")

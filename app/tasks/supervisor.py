@@ -2,6 +2,7 @@ import json
 import logging
 import multiprocessing
 import os
+import threading
 import time
 import uuid
 from functools import partial
@@ -12,9 +13,21 @@ import psutil
 
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_setting
+from app.tasks.processes import (
+    TaskProcess,
+    collect_process_tree,
+    matching_process,
+    process_identity,
+    process_is_running,
+    signal_processes,
+)
 from app.tasks.runner import TaskRunner
 from app.tasks.runtime.artifacts import cleanup_expired_task_files
-from app.tasks.runtime.state import _mark_canceled, _task_lease_deadline_text
+from app.tasks.runtime.state import (
+    TASK_LEASE_RENEW_INTERVAL_SECONDS,
+    _mark_canceled,
+    _task_lease_deadline_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +35,8 @@ logger = logging.getLogger(__name__)
 SUPERVISOR_POLL_SECONDS = 2
 SUPERVISOR_HEARTBEAT_STALE_SECONDS = 10
 SUPERVISOR_SHUTDOWN_GRACE_SECONDS = 10
+TASK_CANCEL_GRACE_SECONDS = 10
+TASK_TERMINATE_GRACE_SECONDS = 3
 REPORT_STATS_REFRESH_INTERVAL_SECONDS = 2
 TASK_FILE_CLEANUP_INTERVAL_SECONDS = 3600
 SUPERVISOR_STATE_FILENAME = "task-supervisor.json"
@@ -33,7 +48,9 @@ class TaskSupervisor:
         self.app = app
         self.max_processes = max(1, int(app.config.get("MAX_TASK_PROCESSES", 4)))
         self._process_context = process_context or multiprocessing.get_context("spawn")
-        self._active: dict[int, tuple[object, str]] = {}
+        self._active: dict[int, TaskProcess] = {}
+        self._shutting_down = False
+        self._next_lease_renew_at = 0.0
         self._last_task_file_cleanup = 0.0
         self._last_report_stats_refresh = 0.0
 
@@ -44,7 +61,18 @@ class TaskSupervisor:
             os.getpid(),
             self.max_processes,
         )
+        maintenance = None
+        recovered_previous = False
         try:
+            self._recover_previous_processes()
+            recovered_previous = True
+            maintenance = threading.Thread(
+                target=self._run_maintenance,
+                args=(stop_event,),
+                daemon=True,
+                name="task-maintenance",
+            )
+            maintenance.start()
             _write_supervisor_state(self.app, self._state("running"))
             while not stop_event.is_set() and _parent_is_alive(parent_pid):
                 try:
@@ -57,25 +85,43 @@ class TaskSupervisor:
                         break
                     time.sleep(0.1)
         finally:
-            self._shutdown_active_processes()
-            _remove_supervisor_state(self.app, os.getpid())
-            lock_file.release()
+            stop_event.set()
+            try:
+                self._shutdown_active_processes()
+                if maintenance is not None:
+                    maintenance.join(timeout=2)
+                if recovered_previous and not self._active:
+                    _remove_supervisor_state(self.app, os.getpid())
+            finally:
+                lock_file.release()
             logger.info("任务调度进程退出 pid=%s", os.getpid())
 
     def run_once(self) -> None:
         self._reap_finished_processes()
         with self.app.app_context():
-            self._cleanup_task_files_if_due()
-            self._refresh_report_stats_if_due()
+            self._maintain_active_processes()
             self._launch_available_tasks()
+
+    def _run_maintenance(self, stop_event) -> None:
+        while not stop_event.is_set():
+            try:
+                with self.app.app_context():
+                    self._cleanup_task_files_if_due()
+                    self._refresh_report_stats_if_due()
+            except Exception:
+                logger.exception("任务后台维护失败")
+            stop_event.wait(SUPERVISOR_POLL_SECONDS)
 
     def _state(self, status: str) -> dict:
         return {
             "pid": os.getpid(),
-            "status": status,
+            "status": "stopping" if self._shutting_down else status,
             "heartbeat_at": time.time(),
             "active_tasks": len(self._active),
             "max_task_processes": self.max_processes,
+            "task_processes": [
+                entry.snapshot(task_id) for task_id, entry in self._active.items()
+            ],
         }
 
     def _launch_available_tasks(self) -> None:
@@ -84,21 +130,42 @@ class TaskSupervisor:
             return
         claimed_tasks = self._claim_available_tasks(process_slots)
         for task_id, claim_token in claimed_tasks:
+            if task_id in self._active:
+                logger.error("任务进程仍受管理，跳过重复启动 task_id=%s", task_id)
+                continue
+            receive_start, send_start = self._process_context.Pipe(duplex=False)
             process = self._process_context.Process(
                 target=partial(
                     run_claimed_task,
                     root_dir=self.app.config.get("ROOT_DIR"),
+                    start_signal=receive_start,
                 ),
                 args=(task_id, claim_token),
                 name=f"task-{task_id}",
             )
+            entry = TaskProcess(process, claim_token)
             try:
                 process.start()
+                receive_start.close()
+                self._active[task_id] = entry
+                entry.create_time = process_identity(process.pid)
+                # 先保存进程身份，再允许子进程读取文件与调用模型。
+                _write_supervisor_state(self.app, self._state("running"))
+                send_start.send(True)
             except Exception:
                 logger.exception("任务进程启动失败 task_id=%s", task_id)
-                _recover_owned_task(get_db(), task_id, claim_token)
+                if process.pid is None:
+                    _recover_owned_task(get_db(), task_id, claim_token)
+                else:
+                    self._active[task_id] = entry
+                    entry.stop_requested_at = (
+                        time.monotonic() - TASK_CANCEL_GRACE_SECONDS
+                    )
+                    self._stop_process_if_due(task_id, entry)
                 continue
-            self._active[task_id] = (process, claim_token)
+            finally:
+                receive_start.close()
+                send_start.close()
             logger.info(
                 "任务进程已启动 task_id=%s pid=%s active=%s/%s",
                 task_id,
@@ -116,6 +183,15 @@ class TaskSupervisor:
         canceled_count = 0
         claim_limit = (
             self.max_processes if max_claims is None else max(0, int(max_claims))
+        )
+        managed_ids = tuple(self._active)
+        unmanaged_clause = (
+            f" AND id NOT IN ({','.join('?' for _ in managed_ids)})"
+            if managed_ids
+            else ""
+        )
+        managed_clause = (
+            f" OR id IN ({','.join('?' for _ in managed_ids)})" if managed_ids else ""
         )
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -136,8 +212,9 @@ class TaskSupervisor:
                         OR (status = 'running' AND cancel_requested = 1)
                       )
                   AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
-                """,
-                (now, now, now),
+                """
+                + unmanaged_clause,
+                (now, now, now, *managed_ids),
             )
             canceled_count = max(0, canceled.rowcount)
             recovered = db.execute(
@@ -160,8 +237,9 @@ class TaskSupervisor:
                 WHERE status = 'running'
                   AND cancel_requested = 0
                   AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
-                """,
-                (now, now),
+                """
+                + unmanaged_clause,
+                (now, now, *managed_ids),
             )
             recovered_count = max(0, recovered.rowcount)
             db.execute(
@@ -183,11 +261,13 @@ class TaskSupervisor:
             user_limit = max(1, _setting_int("user_concurrency", 1))
             running_total = db.execute(
                 "SELECT COUNT(*) AS total FROM tasks WHERE status IN ('running', 'canceling')"
+                + managed_clause,
+                managed_ids,
             ).fetchone()["total"]
             slots = min(claim_limit, global_limit - running_total)
             if slots > 0:
                 queued = db.execute(
-                    """
+                    f"""
                     WITH RECURSIVE queued_owners(owner_subject) AS (
                         SELECT MIN(owner_subject) FROM tasks WHERE status = 'queued'
                         UNION ALL
@@ -201,7 +281,7 @@ class TaskSupervisor:
                     running_by_owner AS (
                         SELECT owner_subject, COUNT(*) AS running_count
                         FROM tasks
-                        WHERE status IN ('running', 'canceling')
+                        WHERE status IN ('running', 'canceling') {managed_clause}
                         GROUP BY owner_subject
                     ),
                     eligible_owners AS MATERIALIZED (
@@ -222,6 +302,7 @@ class TaskSupervisor:
                         JOIN tasks queued ON queued.id IN (
                             SELECT id FROM tasks INDEXED BY idx_tasks_status_owner
                             WHERE status = 'queued' AND owner_subject = owners.owner_subject
+                            {unmanaged_clause}
                             ORDER BY id LIMIT ?
                         )
                     )
@@ -231,7 +312,14 @@ class TaskSupervisor:
                     ORDER BY created_at ASC, id ASC
                     LIMIT ?
                     """,
-                    (user_limit, min(user_limit, slots), user_limit, slots),
+                    (
+                        *managed_ids,
+                        user_limit,
+                        *managed_ids,
+                        min(user_limit, slots),
+                        user_limit,
+                        slots,
+                    ),
                 ).fetchall()
                 running_by_owner: dict[str, int] = {}
                 for task in queued:
@@ -279,20 +367,137 @@ class TaskSupervisor:
             logger.warning("已结束租约过期的取消中任务 count=%s", canceled_count)
         return claimed_tasks
 
+    def _maintain_active_processes(self) -> None:
+        db = get_db()
+        now = time.monotonic()
+        renew = now >= self._next_lease_renew_at
+        try:
+            for task_id, entry in self._active.items():
+                if not entry.process.is_alive():
+                    continue
+                task = db.execute(
+                    "SELECT status, cancel_requested, claim_token FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                owns_task = (
+                    task is not None and task["claim_token"] == entry.claim_token
+                )
+                executing = owns_task and task["status"] in {"running", "canceling"}
+                if (
+                    not executing
+                    or task["cancel_requested"]
+                    or task["status"] == "canceling"
+                ):
+                    if entry.stop_requested_at is None:
+                        entry.stop_requested_at = now
+                    self._stop_process_if_due(task_id, entry)
+                if renew and executing:
+                    db.execute(
+                        """
+                        UPDATE tasks SET lease_expires_at = ?
+                        WHERE id = ? AND claim_token = ?
+                          AND status IN ('running', 'canceling')
+                        """,
+                        (_task_lease_deadline_text(), task_id, entry.claim_token),
+                    )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        if renew:
+            self._next_lease_renew_at = (
+                time.monotonic() + TASK_LEASE_RENEW_INTERVAL_SECONDS
+            )
+
+    def _stop_process_if_due(self, task_id: int, entry: TaskProcess) -> None:
+        now = time.monotonic()
+        if (
+            entry.stop_requested_at is None
+            or now - entry.stop_requested_at < TASK_CANCEL_GRACE_SECONDS
+        ):
+            return
+        if entry.terminate_sent_at is None:
+            logger.warning(
+                "任务进程退出等待结束，发送终止信号 task_id=%s pid=%s",
+                task_id,
+                entry.process.pid,
+            )
+            try:
+                process = psutil.Process(entry.process.pid)
+                entry.descendants = collect_process_tree(process)
+            except psutil.NoSuchProcess:
+                pass
+            _write_supervisor_state(self.app, self._state("running"))
+            signal_processes(entry.descendants)
+            if entry.process.is_alive():
+                entry.process.terminate()
+            entry.terminate_sent_at = now
+        elif now - entry.terminate_sent_at >= TASK_TERMINATE_GRACE_SECONDS:
+            signal_processes(entry.descendants, kill=True)
+            if entry.process.is_alive():
+                entry.process.kill()
+
     def _reap_finished_processes(self) -> None:
-        for task_id, (process, claim_token) in list(self._active.items()):
+        for task_id, entry in list(self._active.items()):
+            process = entry.process
             if process.is_alive():
                 continue
             process.join()
-            self._active.pop(task_id, None)
+            # 任务的外部工具也退出后，才释放该任务的执行名额。
+            if any(process_is_running(child) for child in entry.descendants):
+                signal_processes(entry.descendants, kill=True)
+                continue
             with self.app.app_context():
-                recovered = _recover_owned_task(get_db(), task_id, claim_token)
+                recovered = _recover_owned_task(get_db(), task_id, entry.claim_token)
+            self._active.pop(task_id)
             if recovered:
                 logger.warning(
                     "任务进程异常退出，任务已重新排队 task_id=%s pid=%s exit_code=%s",
                     task_id,
                     process.pid,
                     process.exitcode,
+                )
+
+    def _recover_previous_processes(self) -> None:
+        path = supervisor_state_path(self.app)
+        if not path.exists():
+            return
+        # 状态文件读取失败时保留现场，确保进程身份得到确认后再恢复任务。
+        state = json.loads(path.read_text(encoding="utf-8"))
+        records = state.get("task_processes", [])
+        processes = {}
+        for record in records:
+            previous = [record, *record.get("descendants", [])]
+            descendants = {}
+            for identity in previous:
+                process = matching_process(identity)
+                if process is not None:
+                    for child in collect_process_tree(process):
+                        descendants[child.pid] = child
+            record["descendants"] = [
+                {"pid": child.pid, "create_time": child.create_time()}
+                for child in descendants.values()
+            ]
+            processes.update(descendants)
+            if descendants:
+                logger.warning(
+                    "清理遗留任务进程 task_id=%s pids=%s",
+                    record["task_id"],
+                    list(descendants),
+                )
+        # 保存清理中的进程身份，使清理中断后仍可继续确认全部进程退出。
+        _write_supervisor_state(self.app, state)
+        processes = list(processes.values())
+        signal_processes(processes)
+        _, alive = psutil.wait_procs(processes, timeout=TASK_TERMINATE_GRACE_SECONDS)
+        signal_processes(alive, kill=True)
+        _, alive = psutil.wait_procs(alive, timeout=TASK_TERMINATE_GRACE_SECONDS)
+        if any(process_is_running(process) for process in alive):
+            raise RuntimeError("遗留任务进程仍在退出，保留进程记录并停止启动")
+        with self.app.app_context():
+            for record in records:
+                _recover_owned_task(
+                    get_db(), int(record["task_id"]), record["claim_token"]
                 )
 
     def _refresh_report_stats_if_due(self) -> None:
@@ -320,6 +525,7 @@ class TaskSupervisor:
         cleanup_expired_task_files(self.app)
 
     def _shutdown_active_processes(self) -> None:
+        self._shutting_down = True
         if not self._active:
             return
         _write_supervisor_state(self.app, self._state("stopping"))
@@ -329,25 +535,35 @@ class TaskSupervisor:
             if self._active:
                 time.sleep(0.1)
 
-        for process, _claim_token in self._active.values():
-            if process.is_alive():
-                process.terminate()
-        for process, _claim_token in self._active.values():
-            process.join(timeout=3)
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=3)
-
-        with self.app.app_context():
-            db = get_db()
-            for task_id, (_process, claim_token) in self._active.items():
-                _recover_owned_task(db, task_id, claim_token)
-        self._active.clear()
+        for task_id, entry in self._active.items():
+            entry.stop_requested_at = time.monotonic() - TASK_CANCEL_GRACE_SECONDS
+            self._stop_process_if_due(task_id, entry)
+        deadline = time.monotonic() + TASK_TERMINATE_GRACE_SECONDS * 2 + 1
+        while self._active and time.monotonic() < deadline:
+            for task_id, entry in self._active.items():
+                self._stop_process_if_due(task_id, entry)
+            self._reap_finished_processes()
+            if self._active:
+                time.sleep(0.1)
+        # 未确认退出的进程继续保留身份和租约归属，供下次启动处理。
+        _write_supervisor_state(self.app, self._state("stopping"))
 
 
 def run_claimed_task(
-    task_id: int, claim_token: str, *, root_dir: Path | None = None
+    task_id: int,
+    claim_token: str,
+    *,
+    root_dir: Path | None = None,
+    start_signal=None,
 ) -> None:
+    if start_signal is not None:
+        try:
+            if start_signal.recv() is not True:
+                return
+        except EOFError:
+            return
+        finally:
+            start_signal.close()
     from app.infrastructure.runtime import create_task_app
 
     TaskRunner(create_task_app(root_dir)).run(task_id, claim_token)

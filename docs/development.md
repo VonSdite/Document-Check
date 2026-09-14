@@ -18,6 +18,16 @@ app = create_app()
 
 Windows 虚拟环境中，启动器采用 Python `multiprocessing.spawn` 的解释器选择方式：调用基础解释器，通过 `__PYVENV_LAUNCHER__` 保留虚拟环境路径与依赖。启动进程 PID 对应实际监督器进程，就绪检查验证该 PID 与新鲜心跳。启动失败信息区分子进程退出与等待超时，并提供退出码、启动 PID 和任务日志路径。
 
+## 任务进程与执行权
+
+`TaskSupervisor` 负责认领、续约、取消收尾和异常恢复；`TaskRunner` 负责预处理与检查执行。监督器每 10 秒按任务主键和令牌更新 90 秒租约，任务中的监测线程只读取取消状态。文件清理与报告统计使用监督器的独立维护线程。
+
+任务进程通过 `spawn` 创建，启动管道在进程身份保存到 `instance/task-supervisor.json` 后发送许可。`tasks/processes.py` 维护 PID、创建时间、租约令牌和待退出子进程快照；PID 和创建时间共同标识进程。监督器启动时先清理记录中的遗留进程，再恢复对应令牌的任务。
+
+过期回收和队列选择排除 `_active` 中的任务 ID。正在退出的进程继续占用机器、全局及用户并发名额，数据库恢复成功后才移除进程记录。取消先由任务协作退出，10 秒宽限后发送终止信号，3 秒后仍存活则强制结束。数据库租约与运行数据沿用现有字段。
+
+`documents.extraction` 接受可选的 `cancel_event`，在 PDF 页、表格和表格行以及 Excel 行边界抛出 `DocumentReadCanceled`。文档模块使用自身异常类型，TaskRunner 根据取消信号更新任务状态。新增耗时解析循环时同步设置取消检查点。
+
 ## 数据库索引初始化
 
 `app/persistence/schema.py` 的 `QUERY_INDEXES` 保存性能索引定义。`init_db()` 记录初始化前已有的表，完成字段准备后，为新建表创建索引。索引初始化在应用工厂启动期间完成。
@@ -83,7 +93,9 @@ uv run python -m unittest discover -s tests
 - `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
 - `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
 - `tests/test_server_runtime.py` 检查 WSGI 请求体、代理信息、线程配置和监督器退出通知；`tests/test_server_integration.py` 使用真实 HTTP 服务检查多进程、上传下载、任务执行和退出清理。
-- `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查多进程认领、取消、租约恢复与检查项执行。
+- `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查认领、取消、执行权、存活过期任务防重入、进程名额及检查项执行。
+- `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可和监督器被终止后的遗留进程恢复。
+- `tests/test_document_cancellation.py` 检查 PDF 分页与表格取消、512 列 Excel 分行取消及异常传播。
 - `tests/test_logging.py` 检查业务日志分流、模块与进程标识、异常堆栈、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查。
 
 项目直接导入的第三方库在 `pyproject.toml` 中显式声明，由 `uv.lock` 锁定完整依赖树。Python 标准库由解释器提供；功能扩展依赖通过 extras 声明，例如 `pypdf[image]`。`ffmpeg`、`ffprobe` 由运行环境安装并加入 `PATH`。

@@ -15,7 +15,11 @@ from app.documents.extraction import (
     extract_text,
     format_document_text,
 )
-from app.documents.extraction.common import DocumentReadError
+from app.documents.extraction.common import (
+    DocumentReadCanceled,
+    DocumentReadError,
+    check_extraction_canceled,
+)
 from app.documents.images import (
     DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES,
     candidate_pdf_pages_for_image_check,
@@ -63,14 +67,19 @@ def _int_setting(key: str, default: int) -> int:
 
 
 def _prepare_task_inputs(
-    app, db, task, task_type: str, claim_token: str | None
+    app, db, task, task_type: str, claim_token: str | None, *, cancel_event=None
 ) -> tuple[str, str | None]:
+    check_extraction_canceled(cancel_event)
     if task_type == IMAGE_TASK_TYPE:
-        return _prepare_image_task_inputs(app, db, task, claim_token)
+        return _prepare_image_task_inputs(
+            app, db, task, claim_token, cancel_event=cancel_event
+        )
     if task_type == VIDEO_TASK_TYPE:
         return _prepare_video_task_inputs(app, db, task, claim_token)
     if task_type in {CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}:
-        return _prepare_consistency_task_inputs(app, db, task, task_type, claim_token)
+        return _prepare_consistency_task_inputs(
+            app, db, task, task_type, claim_token, cancel_event=cancel_event
+        )
 
     document_text = str(_task_value(task, "document_text") or "")
     document_meta_raw = _task_value(task, "document_meta_json")
@@ -79,6 +88,7 @@ def _prepare_task_inputs(
         extracted_text, hyperlinks = extract_document(
             upload_path,
             task["file_type"],
+            cancel_event=cancel_event,
         )
         extracted_text = extracted_text.strip()
         if not extracted_text:
@@ -100,7 +110,7 @@ def _prepare_task_inputs(
 
 
 def _prepare_image_task_inputs(
-    app, db, task, claim_token: str | None
+    app, db, task, claim_token: str | None, *, cancel_event=None
 ) -> tuple[str, str]:
     document_meta_raw = _task_value(task, "document_meta_json")
     document_meta = _document_meta(document_meta_raw)
@@ -136,7 +146,10 @@ def _prepare_image_task_inputs(
                 upload_path,
                 task["file_type"],
                 include_tables=False,
+                cancel_event=cancel_event,
             ).strip()
+        except DocumentReadCanceled:
+            raise
         except DocumentReadError as exc:
             text_error = str(exc)
             logger.warning(
@@ -290,12 +303,14 @@ def _prepare_consistency_task_inputs(
     task,
     task_type: str,
     claim_token: str | None,
+    *,
+    cancel_event=None,
 ) -> tuple[str, str | None]:
     document_text = str(_task_value(task, "document_text") or "")
     document_meta_raw = _task_value(task, "document_meta_json")
     if not document_text:
         document_text, document_meta = _build_consistency_task_inputs(
-            app, task, task_type
+            app, task, task_type, cancel_event=cancel_event
         )
         document_text, document_meta_raw = _persist_preprocessed_inputs(
             db,
@@ -308,8 +323,10 @@ def _prepare_consistency_task_inputs(
     return document_text, document_meta_raw
 
 
-def _build_consistency_task_inputs(app, task, task_type: str) -> tuple[str, dict]:
-    groups = _extract_consistency_groups(app, task)
+def _build_consistency_task_inputs(
+    app, task, task_type: str, *, cancel_event=None
+) -> tuple[str, dict]:
+    groups = _extract_consistency_groups(app, task, cancel_event=cancel_event)
     document_meta = _document_meta(task["document_meta_json"])
     if task_type == LANGUAGE_CONSISTENCY_TASK_TYPE:
         groups_by_role = {group["role"]: group for group in groups}
@@ -335,7 +352,7 @@ def _extract_consistency_document_text(app, task) -> str:
     return document_text
 
 
-def _extract_consistency_groups(app, task) -> list[dict]:
+def _extract_consistency_groups(app, task, *, cancel_event=None) -> list[dict]:
     groups = document_groups_from_meta(task["document_meta_json"])
     if not groups:
         raise RuntimeError("多文档对照检查缺少文档组信息")
@@ -357,7 +374,9 @@ def _extract_consistency_groups(app, task) -> list[dict]:
             if not upload_path.is_file():
                 raise RuntimeError(f"{label}“{original_filename}”已删除，无法检查")
             try:
-                text = extract_text(upload_path, file_type).strip()
+                text = extract_text(
+                    upload_path, file_type, cancel_event=cancel_event
+                ).strip()
             except DocumentReadError as exc:
                 raise DocumentReadError(f"{label}“{original_filename}”：{exc}") from exc
             if not text:

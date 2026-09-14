@@ -15,6 +15,7 @@ from app.persistence.schema import init_db
 from app.persistence.settings import set_setting
 from app.reporting import statistics
 from app.reporting.service import _empty_report_suppression_version
+from app.tasks.processes import TaskProcess
 from app.tasks.submission import TaskSubmission, submit_document_task
 from app.tasks.supervisor import TaskSupervisor
 from app.web.task_lists import _task_stats_for_where, _task_status_payload
@@ -148,6 +149,26 @@ class InternalPerformanceTest(unittest.TestCase):
         )
         self.assertEqual(len(claims), 2)
         self.assertLess(larger_steps, max(3000, baseline_steps * 3))
+
+    def test_scheduler_managed_processes_skip_history_and_blocked_queue(self):
+        self.insert_tasks(1, owner="ip:busy")
+        self.insert_tasks(50, owner="ip:busy", status="queued")
+        self.insert_tasks(1, owner="ip:eligible", status="queued")
+        set_setting("global_concurrency", 3)
+        set_setting("user_concurrency", 1)
+        supervisor = TaskSupervisor(self.app)
+        supervisor._active[1] = TaskProcess(object(), "finishing")
+        baseline, claims = self.vm_steps(supervisor._claim_available_tasks)
+        self.assertEqual(len(claims), 1)
+        get_db().execute(
+            "UPDATE tasks SET status = 'queued' WHERE id = ?", (claims[0][0],)
+        )
+        get_db().commit()
+        self.insert_tasks(10000, owner="ip:busy", status="queued")
+        self.insert_tasks(10000, owner="ip:history")
+        larger, claims = self.vm_steps(supervisor._claim_available_tasks)
+        self.assertEqual(len(claims), 1)
+        self.assertLess(larger, max(3000, baseline * 3))
 
     def test_background_stats_scan_is_bounded_and_eventually_revisits_old_tasks(self):
         self.insert_tasks(1200, result="[]")

@@ -35,7 +35,7 @@ run.py 主进程
 1. Web worker 接收上传、校验文件和模型配置。
 2. Web worker 将任务与提交时的配置快照写入 SQLite，任务状态设为 `queued`。
 3. supervisor 在 SQLite 事务中认领任务，应用全局并发、单用户并发和机器级进程上限。
-4. supervisor 为每个已认领任务创建一个独立任务进程，并传递任务 ID 与租约令牌。
+4. supervisor 为每个已认领任务创建一个独立任务进程，保存任务 ID、租约令牌、PID 和进程创建时间，再通过启动管道允许任务执行。
 5. TaskRunner 在任务进程中读取任务快照，完成文档预处理并执行检查项。
 6. TaskRunner 通过任务内线程池并发执行检查项，持续写入进度和中间结果。
 7. TaskRunner 将任务状态更新为 `completed`、`partial`、`failed` 或 `canceled`。
@@ -44,10 +44,12 @@ run.py 主进程
 ### 取消和恢复任务
 
 - Web worker 将运行任务标记为 `canceling` 并写入 `cancel_requested`。
-- TaskRunner 通过 SQLite 轮询取消标记，停止当前检查并写入 `canceled`。
-- TaskRunner 使用租约心跳更新 `lease_expires_at`。
-- supervisor 回收异常退出或租约过期的任务，并将可重试任务重新置为 `queued`。
-- supervisor 在停止服务时等待任务退出，随后回收剩余任务的租约。
+- TaskRunner 每秒通过 SQLite 读取取消标记和执行权变化；PDF 在页、表格及表格行边界检查取消，Excel 在行边界检查取消。
+- supervisor 每 10 秒为存活任务更新 `lease_expires_at`，有效期为当前时间后的 90 秒。续约覆盖机器进程名额已满的状态。
+- 受管理的任务在进程退出前持续占用机器、全局和用户并发名额；过期回收与队列认领排除这些任务。
+- supervisor 观察到取消或执行权结束后给予 10 秒退出时间，再终止任务及其外部工具进程，3 秒后仍未退出则强制结束；确认退出后完成取消或恢复状态。
+- supervisor 在 `instance/task-supervisor.json` 中原子保存进程身份，子进程收到启动许可后开始执行。新监督器先按 PID 和创建时间核验遗留进程，确认其退出后再恢复对应任务。
+- supervisor 在停止服务时等待任务退出，随后终止剩余进程。未确认退出的进程保留身份记录供启动恢复使用。
 
 ### 管理并发配置
 
@@ -177,7 +179,8 @@ app/                              Python 命名空间包
   tasks/
     submission.py                 提交数据、验证、文件入库与任务事务
     files.py                      上传路径、任务文件与清理辅助
-    supervisor.py                 调度、租约恢复与任务进程管理
+    supervisor.py                 调度、续约、恢复与任务进程管理
+    processes.py                  进程身份、快照与进程树退出
     runner.py                     TaskRunner 与文本检查编排
     runtime/
       preprocessing.py            文档、图片、视频与多文档预处理
@@ -227,8 +230,10 @@ tests/                            行为、兼容、依赖和性能回归
 | --- | ---: | --- |
 | Web 服务（run.py 主进程） | 1 | Uvicorn 监听端口，使用 Flask 应用和事件循环处理 HTTP 请求 |
 | a2wsgi 请求线程 | 每个 Web 进程 16 | 执行 Flask 请求 |
-| 任务 supervisor | 1 | SQLite 队列调度、任务进程管理和租约恢复 |
+| 任务 supervisor | 1 | SQLite 队列调度、任务进程管理、续约和恢复 |
+| supervisor 维护线程 | 1 | 文件清理和报告统计缓存刷新 |
 | 任务进程 | 最多 4 | 一个进程执行一个任务 |
+| 任务取消监测线程 | 每任务 1 | 读取取消标记与执行权变化 |
 | 任务内检查线程 | 按 `check_item_concurrency` | 一个任务内并行执行检查项 |
 
 任务 supervisor 由 `run.py` 通过 `app.bootstrap.supervisor` 创建为独立 Python 子进程，再启动 Uvicorn。Web worker 和监督器通过 `DOCUMENTCHECK_ROOT_DIR` 继承运行根目录，读取相同的配置和数据库。父进程通过标准输入管道通知监督器退出，监督器完成任务进程清理；进程存活使用 psutil 检查。任务进程使用 `spawn` 创建，任务进程接收任务 ID、租约令牌和运行根目录；每个进程自行创建应用对象和数据库连接。

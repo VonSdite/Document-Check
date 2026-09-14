@@ -10,9 +10,11 @@ from openpyxl.utils.cell import get_column_letter
 from pypdf import PdfReader
 
 from app.documents.extraction.common import (
+    DocumentReadCanceled,
     _clean_hyperlink_target,
     _format_hyperlink_text,
     _record_hyperlink,
+    check_extraction_canceled,
 )
 
 _PDF_TABLE_COORDINATE_TOLERANCE = 2.0
@@ -28,6 +30,7 @@ def _extract_pdf(
     extracted_hyperlinks: list[dict] | None = None,
     *,
     include_tables: bool = True,
+    cancel_event=None,
 ) -> str:
     reader = None
     try:
@@ -44,6 +47,7 @@ def _extract_pdf(
             else len(reader.pages)
         )
         for index in range(1, page_count + 1):
+            check_extraction_canceled(cancel_event)
             pypdf_page = None
             if layout_document is not None and index <= layout_document.page_count:
                 layout_page = layout_document[index - 1]
@@ -63,6 +67,7 @@ def _extract_pdf(
                         index,
                         raw_page,
                         pymupdf_text,
+                        cancel_event=cancel_event,
                     )
                     if structured_text:
                         text = structured_text
@@ -111,6 +116,8 @@ def _extract_pymupdf_page_with_tables(
     page_number: int,
     raw_page: dict,
     source_text: str,
+    *,
+    cancel_event=None,
 ) -> str:
     try:
         drawings = page.get_drawings()
@@ -129,6 +136,7 @@ def _extract_pymupdf_page_with_tables(
 
     table_models = []
     for table_index, table in enumerate(candidate_tables, start=1):
+        check_extraction_canceled(cancel_event)
         try:
             table_bbox = tuple(float(value) for value in table.bbox)
         except (AttributeError, TypeError, ValueError):
@@ -156,7 +164,10 @@ def _extract_pymupdf_page_with_tables(
                 table_index=table_index,
                 drawings=table_drawings,
                 image_bboxes=table_images,
+                cancel_event=cancel_event,
             )
+        except DocumentReadCanceled:
+            raise
         except Exception as exc:
             logger.debug(
                 "PDF 单个表格结构化失败 page=%s table=%s error=%s",
@@ -236,6 +247,7 @@ def _pdf_table_model(
     table_index: int,
     drawings: list[dict],
     image_bboxes: list[tuple[float, ...]],
+    cancel_event=None,
 ) -> dict | None:
     try:
         row_count = int(table.row_count)
@@ -273,6 +285,7 @@ def _pdf_table_model(
     cells = []
     covered_positions = set()
     for row_index, row in enumerate(rows):
+        check_extraction_canceled(cancel_event)
         if len(row.cells) != column_count:
             return None
         for column_index, cell_bbox in enumerate(row.cells):

@@ -12,6 +12,7 @@ from app.documents.extraction.common import (
     _clean_hyperlink_target,
     _format_hyperlink_text,
     _record_hyperlink,
+    check_extraction_canceled,
 )
 
 _SPREADSHEETML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -24,17 +25,24 @@ _OFFICE_RELATIONSHIP_NAMESPACE = (
 def _extract_openpyxl_workbook(
     path: Path,
     extracted_hyperlinks: list[dict] | None = None,
+    *,
+    cancel_event=None,
 ) -> str:
     value_workbook = load_workbook(path, read_only=True, data_only=True)
-    formula_workbook = load_workbook(path, read_only=True, data_only=False)
+    formula_workbook = None
     try:
+        check_extraction_canceled(cancel_event)
+        formula_workbook = load_workbook(path, read_only=True, data_only=False)
         parts = []
         formula_sheets = {sheet.title: sheet for sheet in formula_workbook.worksheets}
         try:
-            hyperlinks = _extract_xlsx_hyperlinks(path, formula_workbook)
+            hyperlinks = _extract_xlsx_hyperlinks(
+                path, formula_workbook, cancel_event=cancel_event
+            )
         except (ET.ParseError, KeyError, OSError, zipfile.BadZipFile):
             hyperlinks = {}
         for sheet in value_workbook.worksheets:
+            check_extraction_canceled(cancel_event)
             formula_sheet = formula_sheets.get(sheet.title)
             rows = _openpyxl_sheet_rows_text(
                 sheet,
@@ -42,22 +50,27 @@ def _extract_openpyxl_workbook(
                 hyperlinks.get(sheet.title, []),
                 extracted_hyperlinks,
                 set(formula_sheets),
+                cancel_event=cancel_event,
             )
             if rows:
                 parts.append(f"# 工作表：{sheet.title}\n" + "\n".join(rows))
         return "\n\n".join(parts)
     finally:
         value_workbook.close()
-        formula_workbook.close()
+        if formula_workbook is not None:
+            formula_workbook.close()
 
 
-def _extract_xls(path: Path, hyperlinks: list[dict] | None = None) -> str:
+def _extract_xls(
+    path: Path, hyperlinks: list[dict] | None = None, *, cancel_event=None
+) -> str:
     workbook = xlrd.open_workbook(str(path), on_demand=True)
     try:
         parts = []
         for sheet in workbook.sheets():
             rows = []
             for row_index in range(sheet.nrows):
+                check_extraction_canceled(cancel_event)
                 values = []
                 for column_index in range(sheet.ncols):
                     value = sheet.cell_value(row_index, column_index)
@@ -105,6 +118,8 @@ def _openpyxl_sheet_rows_text(
     hyperlinks,
     extracted_hyperlinks: list[dict] | None = None,
     workbook_titles: set[str] | None = None,
+    *,
+    cancel_event=None,
 ) -> list[str]:
     rows = []
     max_row = max(sheet.max_row or 0, getattr(formula_sheet, "max_row", 0) or 0)
@@ -128,6 +143,7 @@ def _openpyxl_sheet_rows_text(
         else itertools.repeat(())
     )
     for row_index, value_row in enumerate(value_rows, start=1):
+        check_extraction_canceled(cancel_event)
         formula_row = next(formula_rows, ())
         values = []
         for column_index, value_cell in enumerate(value_row, start=1):
@@ -171,7 +187,9 @@ def _openpyxl_sheet_rows_text(
     return rows
 
 
-def _extract_xlsx_hyperlinks(path: Path, workbook) -> dict[str, list[tuple]]:
+def _extract_xlsx_hyperlinks(
+    path: Path, workbook, *, cancel_event=None
+) -> dict[str, list[tuple]]:
     result = {}
     with zipfile.ZipFile(path) as archive:
         archive_names = set(archive.namelist())
@@ -187,6 +205,8 @@ def _extract_xlsx_hyperlinks(path: Path, workbook) -> dict[str, list[tuple]]:
             items = []
             with archive.open(sheet_path) as source:
                 for _event, element in ET.iterparse(source, events=("end",)):
+                    if element.tag == f"{{{_SPREADSHEETML_NAMESPACE}}}row":
+                        check_extraction_canceled(cancel_event)
                     if element.tag != f"{{{_SPREADSHEETML_NAMESPACE}}}hyperlink":
                         element.clear()
                         continue
