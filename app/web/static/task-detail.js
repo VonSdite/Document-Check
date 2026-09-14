@@ -90,7 +90,9 @@
       node.querySelector("[data-retry-check]").hidden = !((singleCancel || !data.active) && data.status !== "canceling" && data.phase !== "finalizing" && ["failed", "canceled", "canceling"].includes(phase));
     });
     root.dataset.detailActive = data.active ? "1" : "0";
-    root.querySelector("[data-detail-refresh-message]").textContent = data.active ? "每 10 秒更新" : "任务已结束";
+    const refreshMessage = root.querySelector("[data-detail-refresh-message]");
+    refreshMessage.textContent = "";
+    refreshMessage.hidden = true;
     root.dispatchEvent(new CustomEvent("task-detail-updated"));
   }
 
@@ -110,7 +112,9 @@
       applyProgress(data);
       root.dataset.detailRevision = data.revision;
     } catch (_error) {
-      root.querySelector("[data-detail-refresh-message]").textContent = "状态更新暂时失败，将自动重试";
+      const refreshMessage = root.querySelector("[data-detail-refresh-message]");
+      refreshMessage.textContent = "状态更新暂时失败，将自动重试";
+      refreshMessage.hidden = false;
     } finally { pending = false; }
   }
 

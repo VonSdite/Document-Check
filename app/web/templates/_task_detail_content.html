@@ -61,7 +61,7 @@
     </div>
     <span class="status-pill status-{{ task.status }}">{{ task_progress.status_label }}</span>
   </div>
-  <p class="task-refresh-message" data-detail-refresh-message role="status">每 10 秒更新</p>
+  <p class="task-refresh-message" data-detail-refresh-message role="status" hidden></p>
   <div class="progress"><span style="width: {{ task.progress }}%"></span></div>
   <dl class="meta-list report-meta-list">
     <div><dt>任务类型</dt><dd>{{ task_type_label(task.task_type) }}</dd></div>
