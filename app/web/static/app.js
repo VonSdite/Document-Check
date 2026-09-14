@@ -15,7 +15,7 @@ function placeConfirmPopover(popover, anchor) {
   const margin = 12;
   const width = popover.offsetWidth;
   const height = popover.offsetHeight;
-  let left = rect.right - width;
+  let left = rect.left + (rect.width - width) / 2;
   let top = rect.bottom + 8;
   let placement = "bottom";
 
@@ -46,9 +46,8 @@ function showConfirmPopover(anchor, message, onConfirm) {
   popover.className = "confirm-popover";
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-live", "polite");
-  popover.setAttribute("aria-label", "确认操作");
+  popover.setAttribute("aria-label", message);
   popover.innerHTML = `
-    <div class="confirm-popover-title">确认操作</div>
     <div class="confirm-popover-message"></div>
     <div class="confirm-popover-actions">
       <button class="small-button" type="button" data-confirm-cancel>取消</button>

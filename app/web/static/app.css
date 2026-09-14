@@ -4013,15 +4013,8 @@ body.table-column-resize-active * {
   transform: rotate(225deg);
 }
 
-.confirm-popover-title {
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 850;
-}
-
 .confirm-popover-message {
-  margin-top: 6px;
-  color: var(--muted);
+  color: var(--text);
   font-size: 13px;
   line-height: 1.55;
 }

@@ -151,8 +151,7 @@
     event.preventDefault();
     event.stopPropagation();
     if (button.matches("[data-retry-check]")) { performCheckAction(button, "retry"); return; }
-    const name = button.closest("[data-detail-result]").querySelector(".check-title").textContent.trim();
-    showConfirmPopover(button, `确定取消“${name}”的执行？`, () => performCheckAction(button, "cancel"));
+    showConfirmPopover(button, "确认取消？", () => performCheckAction(button, "cancel"));
   });
   setInterval(refresh, 10000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
