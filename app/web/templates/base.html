@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}文档智能门禁{% endblock %}</title>
   {% block extra_head %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260914-5') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260914-6') }}">
 </head>
 <body>
   {% set is_admin = (not platform_mode) or (request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login') %}
@@ -77,7 +77,7 @@
 {% if not list_partial %}
   </main>
   <script src="{{ url_for('static', filename='app.js', v='20260914-3') }}"></script>
-  <script src="{{ url_for('static', filename='task-list.js', v='20260914-2') }}"></script>
+  <script src="{{ url_for('static', filename='task-list.js', v='20260914-3') }}"></script>
   <script src="{{ url_for('static', filename='table-resize.js') }}"></script>
 </body>
 </html>

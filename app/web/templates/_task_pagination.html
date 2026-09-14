@@ -11,7 +11,6 @@
       {% endif %}
       <input type="hidden" name="page" value="1">
       <label>
-        每页
         <select name="per_page" aria-label="每页条数" data-page-size-select>
           {% for option in pagination.per_page_options %}
           <option value="{{ option }}" {{ 'selected' if option == pagination.per_page else '' }}>{{ option }}</option>

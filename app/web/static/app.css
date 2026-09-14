@@ -3474,17 +3474,6 @@ body.table-column-resize-active * {
   white-space: nowrap;
 }
 
-.task-filter-help {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.task-filter-help .is-pending {
-  color: #9a6700;
-}
-
 @media (max-width: 840px) {
   .task-filter-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4409,6 +4398,7 @@ body.table-column-resize-active * {
 .task-refresh-button svg { width: 18px; height: 18px; }
 .task-refresh-button[aria-busy="true"] svg { animation: task-refresh-spin 1s linear infinite; }
 .task-list-feedback { color: var(--muted); font-size: 12px; }
+.task-list-feedback:empty { display: none; }
 @keyframes task-refresh-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .task-refresh-button[aria-busy="true"] svg { animation: none; }

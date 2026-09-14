@@ -136,23 +136,6 @@
     if (target) target.textContent = text;
   }
 
-  function updateTaskFilterHint() {
-    const form = document.querySelector("[data-task-filters]");
-    const hint = form?.querySelector("[data-task-filter-hint]");
-    if (!hint) return;
-    const list = document.querySelector('[data-refresh-region="task-list"]');
-    const applied = new URL(list.dataset.listUrl, window.location.href)
-      .searchParams;
-    const pending = ["status", "review_status", "keyword"].some(
-      (name) =>
-        form.elements.namedItem(name).value.trim() !== (applied.get(name) || ""),
-    );
-    hint.textContent = pending
-      ? "条件已修改，点击“筛选”或按回车后更新列表。"
-      : "点击“筛选”或按回车应用条件。";
-    hint.classList.toggle("is-pending", pending);
-  }
-
   function copyListAttributes(current, next) {
     for (const [key, value] of Object.entries(next.dataset))
       current.dataset[key] = value;
@@ -264,7 +247,6 @@
     if (filters)
       filters.elements.namedItem("per_page").value =
         url.searchParams.get("per_page");
-    updateTaskFilterHint();
     document
       .querySelectorAll('[data-task-list-panel] input[name="next"]')
       .forEach((input) => {
@@ -380,7 +362,7 @@
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
     }
-    listFeedback(full || target ? "更新中…" : "");
+    listFeedback("");
     try {
       const options = { force, historyMode, syncFilters };
       const params = new URL(window.location.href).searchParams;
@@ -398,8 +380,6 @@
         )?.dataset.refreshUrl;
         await refreshTaskStatuses(refreshUrl, token, options);
       }
-      if (token.version === listRequestVersion)
-        listFeedback(full || target ? "已更新" : "");
     } catch (error) {
       if (token.version === listRequestVersion && error.name !== "AbortError")
         listFeedback(error.message || "刷新失败，请重试。");
@@ -465,10 +445,6 @@
   document.addEventListener("change", (event) => {
     if (event.target.matches("[data-page-size-select]"))
       event.target.form.requestSubmit();
-    if (event.target.closest("[data-task-filters]")) updateTaskFilterHint();
-  });
-  document.addEventListener("input", (event) => {
-    if (event.target.closest("[data-task-filters]")) updateTaskFilterHint();
   });
   document.addEventListener("click", (event) => {
     if (event.target.closest("[data-manual-task-refresh]")) {
@@ -581,6 +557,5 @@
   });
 
   updateBulkTaskControls();
-  updateTaskFilterHint();
   applyAutoRefreshState();
 })();

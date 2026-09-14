@@ -198,8 +198,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     )
                     self.assertIsNone(soup.select_one(f'[data-task-id="{other}"]'))
                     if not partial:
-                        self.assertIn("搜索范围：文件名", soup.get_text())
-                        self.assertIsNotNone(soup.select_one("[data-task-filter-hint]"))
                         self.assertEqual(
                             {
                                 control["name"]
