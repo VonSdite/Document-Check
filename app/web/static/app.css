@@ -4388,3 +4388,17 @@ body.table-column-resize-active * {
   border-left: 2px solid var(--line);
   padding-left: 12px;
 }
+
+.task-refresh-button {
+  width: 34px;
+  min-width: 34px;
+  height: 32px;
+  padding: 6px;
+}
+.task-refresh-button svg { width: 18px; height: 18px; }
+.task-refresh-button[aria-busy="true"] svg { animation: task-refresh-spin 1s linear infinite; }
+.task-list-feedback { color: var(--muted); font-size: 12px; }
+@keyframes task-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .task-refresh-button[aria-busy="true"] svg { animation: none; }
+}

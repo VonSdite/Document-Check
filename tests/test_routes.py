@@ -156,6 +156,156 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_user_filters_match_console_and_preserve_owner_scope(self):
+        routes = (
+            (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
+            (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
+            (IMAGE_TASK_TYPE, "/images", "/admin/images"),
+            (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
+        )
+        for task_type, route, console in routes:
+            matching = self._insert_task(
+                task_type=task_type, original_filename="筛选目标.pdf"
+            )
+            self._insert_task(
+                task_type=task_type, original_filename="筛选目标.pdf", status="queued"
+            )
+            other = self._insert_task(
+                task_type=task_type, original_filename="筛选目标.pdf", ip="10.0.0.8"
+            )
+            for partial in (False, True):
+                with self.subTest(task_type=task_type, partial=partial):
+                    response = self.client.get(
+                        route,
+                        query_string={
+                            "status": "completed",
+                            "keyword": "筛选目标",
+                            "_partial": "1" if partial else "0",
+                        },
+                    )
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    self.assertEqual(
+                        {
+                            int(row["data-task-id"])
+                            for row in soup.select("[data-task-id]")
+                        },
+                        {matching},
+                    )
+                    self.assertIsNone(soup.select_one(f'[data-task-id="{other}"]'))
+                    if not partial:
+                        self.assertEqual(
+                            {
+                                control["name"]
+                                for control in soup.select("[data-task-filters] [name]")
+                            },
+                            {"status", "keyword", "review_status", "per_page"},
+                        )
+                        self.assertIsNotNone(
+                            soup.select_one(
+                                "[data-auto-refresh-toggle] + [data-manual-task-refresh]"
+                            )
+                        )
+                    else:
+                        self.assertIsNone(
+                            soup.select_one("html, .create-panel, .topbar, script")
+                        )
+                        self.assertEqual(response.headers["Cache-Control"], "no-store")
+            console_page = self.client.get(
+                console, query_string={"status": "completed", "keyword": "筛选目标"}
+            )
+            console_soup = BeautifulSoup(
+                console_page.get_data(as_text=True), "html.parser"
+            )
+            self.assertEqual(
+                {
+                    int(row["data-task-id"])
+                    for row in console_soup.select("[data-task-id]")
+                },
+                {matching, other},
+            )
+            injection = self.client.get(
+                route, query_string={"keyword": "' OR 1=1 --", "_partial": "1"}
+            )
+            self.assertNotIn("data-task-id=", injection.get_data(as_text=True))
+
+    def test_list_fragments_skip_submission_data_and_keep_clean_action_urls(self):
+        self._insert_task(status="failed")
+        for route in (
+            "/",
+            "/consistency",
+            "/language-consistency",
+            "/images",
+            "/videos",
+            "/admin/tasks",
+            "/admin/consistency",
+            "/admin/language-consistency",
+            "/admin/images",
+            "/admin/videos",
+        ):
+            with (
+                self.subTest(route=route),
+                patch(
+                    "app.web.task_lists.get_enabled_models",
+                    side_effect=AssertionError("加载模型"),
+                ),
+                patch(
+                    "app.web.task_lists.get_enabled_check_items",
+                    side_effect=AssertionError("加载检查项"),
+                ),
+            ):
+                response = self.client.get(
+                    route,
+                    query_string={
+                        "_partial": "1",
+                        "status": "failed",
+                        "keyword": "测试",
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                self.assertIsNotNone(soup.select_one('[data-refresh-region="stats"]'))
+                region = soup.select_one('[data-refresh-region="task-list"]')
+                self.assertNotIn("_partial", region["data-list-url"])
+                for target in soup.select('input[name="next"]'):
+                    self.assertNotIn("_partial", target["value"])
+                    self.assertIn("status=failed", target["value"])
+
+    def test_user_pagination_keeps_filters_and_bounds_page_to_filtered_count(self):
+        ids = [self._insert_task(original_filename="目标文档.txt") for _ in range(25)]
+        self._insert_task(original_filename="其他文档.txt")
+        self._insert_task(original_filename="目标文档.txt", status="queued")
+        response = self.client.get(
+            "/",
+            query_string={
+                "status": "completed",
+                "review_status": "empty",
+                "keyword": "目标",
+                "per_page": "20",
+                "page": "99",
+                "_partial": "1",
+            },
+        )
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        self.assertEqual(
+            {int(row["data-task-id"]) for row in soup.select("[data-task-id]")},
+            set(ids[:5]),
+        )
+        self.assertIn("共 25 条", soup.get_text())
+        self.assertEqual(
+            soup.select_one('.page-jump-form input[name="page"]')["value"], "2"
+        )
+        for form in soup.select(".pagination form"):
+            self.assertEqual(form.select_one('[name="keyword"]')["value"], "目标")
+            self.assertEqual(form.select_one('[name="status"]')["value"], "completed")
+            self.assertEqual(
+                form.select_one('[name="review_status"]')["value"], "empty"
+            )
+
     def test_model_output_requires_task_access_and_reads_only_new_records(self):
         from app.tasks.model_output import ModelOutputRecorder
 
@@ -2362,6 +2512,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
             get_db().commit()
 
+        user_page = self.client.get("/?review_status=pending&_partial=1")
+        user_soup = BeautifulSoup(user_page.get_data(as_text=True), "html.parser")
+        self.assertEqual(
+            {int(row["data-task-id"]) for row in user_soup.select("[data-task-id]")},
+            {task_id},
+        )
         pending_page = self.client.get("/admin/tasks?review_status=pending")
         pending_soup = BeautifulSoup(pending_page.get_data(as_text=True), "html.parser")
         pending_row = _required_tag(
@@ -2371,6 +2527,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("未标注 0/2", pending_row.get_text(" ", strip=True))
         self.assertIsNone(pending_soup.select_one(f'[data-task-id="{empty_task_id}"]'))
 
+        user_page = self.client.get("/?review_status=empty&_partial=1")
+        user_soup = BeautifulSoup(user_page.get_data(as_text=True), "html.parser")
+        self.assertEqual(
+            {int(row["data-task-id"]) for row in user_soup.select("[data-task-id]")},
+            {empty_task_id},
+        )
         empty_page = self.client.get("/admin/tasks?review_status=empty")
         empty_soup = BeautifulSoup(empty_page.get_data(as_text=True), "html.parser")
         self.assertIsNotNone(empty_soup.select_one(f'[data-task-id="{empty_task_id}"]'))
@@ -2407,6 +2569,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(status_task["review_status"], "in_progress")
         self.assertEqual(status_task["review_key"], "in_progress:1:2")
 
+        user_page = self.client.get("/?review_status=in_progress&_partial=1")
+        user_soup = BeautifulSoup(user_page.get_data(as_text=True), "html.parser")
+        self.assertEqual(
+            {int(row["data-task-id"]) for row in user_soup.select("[data-task-id]")},
+            {task_id},
+        )
         in_progress_page = self.client.get("/admin/tasks?review_status=in_progress")
         in_progress_soup = BeautifulSoup(
             in_progress_page.get_data(as_text=True), "html.parser"
@@ -2433,6 +2601,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(second_review.get_json()["totals"]["reviewed"], 2)
         self.assertEqual(second_review.get_json()["totals"]["pending_review"], 0)
 
+        user_page = self.client.get("/?review_status=completed&_partial=1")
+        user_soup = BeautifulSoup(user_page.get_data(as_text=True), "html.parser")
+        self.assertEqual(
+            {int(row["data-task-id"]) for row in user_soup.select("[data-task-id]")},
+            {task_id},
+        )
         completed_page = self.client.get("/admin/tasks?review_status=completed")
         completed_soup = BeautifulSoup(
             completed_page.get_data(as_text=True), "html.parser"

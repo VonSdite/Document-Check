@@ -5,6 +5,7 @@
 {% block title %}单文档检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
+{% if not list_partial %}
 {% set submit_disabled = not models or not check_items %}
 <section class="page-title">
   <div>
@@ -63,26 +64,28 @@
   {% endwith %}
 </form>
 
+{% endif %}
+
 <section class="metric-grid five" data-refresh-region="stats" data-refresh-active="{{ '1' if stats.queued or stats.running else '0' }}" data-refresh-url="{{ refresh_url }}">
-  <div class="metric"><span>全部</span><strong>{{ stats.total }}</strong></div>
-  <div class="metric"><span>排队</span><strong>{{ stats.queued }}</strong></div>
-  <div class="metric"><span>检查中</span><strong>{{ stats.running }}</strong></div>
-  <div class="metric"><span>已完成</span><strong>{{ stats.completed }}</strong></div>
-  <div class="metric"><span>部分完成</span><strong>{{ stats.partial }}</strong></div>
+  <div class="metric"><span>全部</span><strong data-task-stat="tasks">{{ stats.total }}</strong></div>
+  <div class="metric"><span>排队</span><strong data-task-stat="queued">{{ stats.queued }}</strong></div>
+  <div class="metric"><span>检查中</span><strong data-task-stat="running">{{ stats.running }}</strong></div>
+  <div class="metric"><span>已完成</span><strong data-task-stat="completed">{{ stats.completed }}</strong></div>
+  <div class="metric"><span>部分完成</span><strong data-task-stat="partial">{{ stats.partial }}</strong></div>
 </section>
 
-<section class="panel">
+<section class="panel" data-task-list-panel>
+  {% if not list_partial %}
   <div class="panel-head compact-head task-panel-head">
     <h2>任务记录</h2>
     <div class="task-panel-actions">
       {{ task_bulk.delete_form(tasks, 'user') }}
-    <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
-      <span class="refresh-dot" aria-hidden="true"></span>
-      <span data-refresh-label>刷新中</span>
-    </button>
+      {% include "_task_refresh_controls.html" %}
     </div>
   </div>
-  <div data-refresh-region="task-list">
+  {% include "_task_filters.html" %}
+  {% endif %}
+  <div data-refresh-region="task-list" data-list-url="{{ list_url }}">
   {% if tasks %}
   <div class="table-wrap">
     <table class="task-table">
@@ -149,10 +152,11 @@
       </tbody>
     </table>
   </div>
-  {{ task_pagination.render('user_tasks', pagination) }}
+  {{ task_pagination.render(request.endpoint, pagination, status, keyword, review_status) }}
   {% else %}
   <div class="empty-state compact">
-    <h3>暂无任务</h3>
+    <h3>{{ "没有匹配任务" if status or review_status or keyword else "暂无任务" }}</h3>
+    {% if status or review_status or keyword %}<p>调整筛选条件后再查看。</p>{% endif %}
   </div>
   {% endif %}
   </div>

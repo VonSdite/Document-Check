@@ -104,6 +104,23 @@ class InternalPerformanceTest(unittest.TestCase):
             self.assertIn("COVERING INDEX idx_tasks_type_owner_status", plan)
             self.assertNotIn("USE TEMP B-TREE", plan)
 
+    def test_user_filter_cost_is_bounded_by_own_tasks(self):
+        self.insert_tasks(20)
+        identity = UserIdentity(
+            subject="ip:user", display_name="user", ip="127.0.0.1", source="ip"
+        )
+        with self.app.test_request_context("/?keyword=sample&status=completed"):
+            small_steps, small = self.vm_steps(
+                lambda: _user_task_list_data(identity, "document_check")
+            )
+            self.insert_tasks(5000, owner="ip:other")
+            large_steps, large = self.vm_steps(
+                lambda: _user_task_list_data(identity, "document_check")
+            )
+        self.assertEqual(small[2], 20)
+        self.assertEqual(large[2], 20)
+        self.assertLess(large_steps, small_steps + 1000)
+
     def test_expired_file_selection_skips_cleaned_history(self):
         from app.tasks.runtime.artifacts import cleanup_expired_task_files
 

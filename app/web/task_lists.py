@@ -1,6 +1,6 @@
 import uuid
 
-from flask import render_template, request, url_for
+from flask import make_response, render_template, request, url_for
 
 from app.checks.catalog import get_enabled_check_items
 from app.contracts.task_types import (
@@ -18,6 +18,7 @@ from app.reporting.constants import (
     REPORT_ITEM_TYPE_ORDER,
     REPORT_REVIEW_FILTERS,
     REPORT_REVIEW_STATUSES,
+    REPORT_STATS_INLINE_REBUILD_LIMIT,
 )
 from app.reporting.service import (
     _empty_report_suppression_version,
@@ -35,22 +36,155 @@ from app.web.constants import (
 from app.web.overview import _admin_totals
 
 
+def _task_filter_values():
+    status = str(request.args.get("status") or "").strip()
+    if status not in STATUS_LABELS:
+        status = ""
+    review_status = str(request.args.get("review_status") or "").strip()
+    if review_status not in REPORT_REVIEW_FILTERS:
+        review_status = ""
+    keyword = request.args.get("keyword")
+    if keyword is None:
+        keyword = request.args.get("owner", request.args.get("ip", ""))
+    keyword = keyword.strip()
+    return {"status": status, "review_status": review_status, "keyword": keyword}
+
+
+def _task_filter_sql(filters, *, join_ip_usernames):
+    status, review_status, keyword = (
+        filters[key] for key in ("status", "review_status", "keyword")
+    )
+    clauses, params = [], []
+    if status:
+        clauses.append("t.status = ?")
+        params.append(status)
+    report_total_expr = "(COALESCE(trs.issue_count, 0) + COALESCE(trs.suggestion_count, 0) + COALESCE(trs.non_issue_count, 0))"
+    if review_status == "pending":
+        clauses.append(
+            f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) = 0"
+        )
+    elif review_status == "in_progress":
+        clauses.append(
+            f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) > 0 "
+            "AND COALESCE(trs.pending_review_item_count, 0) > 0"
+        )
+    elif review_status == "completed":
+        clauses.append(
+            f"{report_total_expr} > 0 AND COALESCE(trs.pending_review_item_count, 0) = 0"
+        )
+    elif review_status == "empty":
+        clauses.append(
+            f"t.status NOT IN ('queued', 'running', 'canceling') AND {report_total_expr} = 0"
+        )
+    if keyword:
+        owner_name_filter = (
+            "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
+        )
+        clauses.append(
+            f"""
+            (
+                COALESCE(t.original_filename, '') LIKE ?
+                OR COALESCE(t.document_meta_json, '') LIKE ?
+                OR COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ?
+                OR t.ip LIKE ?
+                OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ?
+                {owner_name_filter}
+            )
+            """
+        )
+        keyword_like = f"%{keyword}%"
+        params.extend(
+            [keyword_like, keyword_like, keyword_like, keyword_like, keyword_like]
+        )
+        if join_ip_usernames:
+            params.append(keyword_like)
+    return clauses, params
+
+
+def _task_list_partial():
+    return request.args.get("_partial") == "1"
+
+
+def _render_list_template(template_name, **context):
+    partial = _task_list_partial()
+    pagination = context["pagination"]
+    context["list_url"] = url_for(
+        request.endpoint,
+        **_task_filter_values(),
+        page=pagination["page"],
+        per_page=pagination["per_page"],
+    )
+    if partial:
+        context["current_relative_url"] = lambda: context["list_url"]
+    response = make_response(
+        render_template(template_name, list_partial=partial, **context)
+    )
+    if partial:
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _render_user_task_list(identity, task_type, template_name):
+    page, per_page, total, rows, stats = _user_task_list_data(identity, task_type)
+    partial = _task_list_partial()
+    return _render_list_template(
+        template_name,
+        identity=identity,
+        ip=identity.ip,
+        tasks=rows,
+        stats=stats,
+        pagination=_pagination(page, total, per_page),
+        **_task_filter_values(),
+        review_status_filters=REPORT_REVIEW_FILTERS,
+        check_items=[] if partial else get_enabled_check_items(task_type),
+        models=[] if partial else get_enabled_models(identity.subject),
+        submission_token=uuid.uuid4().hex,
+        refresh_url=url_for("user_task_statuses", task_type=task_type),
+        active_nav=task_type,
+    )
+
+
 def _render_admin_tasks_page():
     return _render_admin_task_list(
         task_type=DOCUMENT_TASK_TYPE,
         template_name="admin_tasks.html",
         totals_task_type=DOCUMENT_TASK_TYPE,
-        check_items=get_enabled_check_items(),
+        check_items=[] if _task_list_partial() else get_enabled_check_items(),
     )
 
 
 def _user_task_list_data(identity: UserIdentity, task_type: str):
     page = _page_arg()
     per_page = _per_page_arg()
-    owner_clause = "t.owner_subject = ?"
     params = (identity.subject, task_type)
     stats = _task_stats_for_where("owner_subject = ? AND task_type = ?", params)
+    filters = _task_filter_values()
+    join_ip_usernames = bool(filters["keyword"]) and _auth_mode() == "ip"
+    joins = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    if filters["review_status"]:
+        # 请求线程只准备本用户最近的一批统计，历史记录由后台持续维护。
+        _task_report_stat_rows_for_where(
+            "t.id IN (SELECT id FROM tasks WHERE owner_subject = ? AND task_type = ? "
+            "ORDER BY created_at DESC, id DESC LIMIT ?)",
+            (*params, REPORT_STATS_INLINE_REBUILD_LIMIT),
+        )
+        joins += " LEFT JOIN task_report_stats trs ON trs.task_id = t.id"
+    clauses, filter_params = _task_filter_sql(
+        filters, join_ip_usernames=join_ip_usernames
+    )
+    where = "t.owner_subject = ? AND t.task_type = ?"
+    if clauses:
+        where += " AND " + " AND ".join(clauses)
+    params = (*params, *filter_params)
     total = stats["total"]
+    if clauses:
+        total = (
+            get_db()
+            .execute(
+                f"SELECT COUNT(*) AS total FROM tasks t {joins} WHERE {where}", params
+            )
+            .fetchone()["total"]
+        )
     page = _bounded_page(page, total, per_page)
     rows = (
         get_db()
@@ -64,7 +198,8 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
                     THEN t.document_meta_json END AS document_meta_json,
                t.source_files_cleaned_at
         FROM tasks t
-        WHERE {owner_clause} AND t.task_type = ?
+        {joins}
+        WHERE {where}
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ? OFFSET ?
         """,
@@ -273,7 +408,9 @@ def _render_admin_consistency_page():
         task_type=CONSISTENCY_TASK_TYPE,
         template_name="admin_consistency.html",
         totals_task_type=CONSISTENCY_TASK_TYPE,
-        check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
+        check_items=[]
+        if _task_list_partial()
+        else get_enabled_check_items(CONSISTENCY_TASK_TYPE),
     )
 
 
@@ -282,7 +419,9 @@ def _render_admin_language_consistency_page():
         task_type=LANGUAGE_CONSISTENCY_TASK_TYPE,
         template_name="admin_language_consistency.html",
         totals_task_type=LANGUAGE_CONSISTENCY_TASK_TYPE,
-        check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
+        check_items=[]
+        if _task_list_partial()
+        else get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
     )
 
 
@@ -291,7 +430,9 @@ def _render_admin_images_page():
         task_type=IMAGE_TASK_TYPE,
         template_name="admin_images.html",
         totals_task_type=IMAGE_TASK_TYPE,
-        check_items=get_enabled_check_items(IMAGE_TASK_TYPE),
+        check_items=[]
+        if _task_list_partial()
+        else get_enabled_check_items(IMAGE_TASK_TYPE),
     )
 
 
@@ -300,7 +441,9 @@ def _render_admin_videos_page():
         task_type=VIDEO_TASK_TYPE,
         template_name="admin_videos.html",
         totals_task_type=VIDEO_TASK_TYPE,
-        check_items=get_enabled_check_items(VIDEO_TASK_TYPE),
+        check_items=[]
+        if _task_list_partial()
+        else get_enabled_check_items(VIDEO_TASK_TYPE),
     )
 
 
@@ -308,14 +451,10 @@ def _render_admin_task_list(
     *, task_type: str, template_name: str, totals_task_type: str, check_items
 ):
     identity = _console_user_identity()
-    status = request.args.get("status", "")
-    review_status = str(request.args.get("review_status") or "").strip()
-    if review_status not in REPORT_REVIEW_FILTERS:
-        review_status = ""
-    keyword = request.args.get("keyword")
-    if keyword is None:
-        keyword = request.args.get("owner", request.args.get("ip", ""))
-    keyword = keyword.strip()
+    filters = _task_filter_values()
+    status, review_status, keyword = (
+        filters[key] for key in ("status", "review_status", "keyword")
+    )
     page = _page_arg()
     per_page = _per_page_arg()
     params = []
@@ -339,49 +478,11 @@ def _render_admin_task_list(
     mode_clause, mode_params = _mode_subject_filter("t")
     clauses.append(mode_clause)
     params.extend(mode_params)
-    if status:
-        clauses.append("t.status = ?")
-        params.append(status)
-    report_total_expr = "(COALESCE(trs.issue_count, 0) + COALESCE(trs.suggestion_count, 0) + COALESCE(trs.non_issue_count, 0))"
-    if review_status == "pending":
-        clauses.append(
-            f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) = 0"
-        )
-    elif review_status == "in_progress":
-        clauses.append(
-            f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) > 0 "
-            "AND COALESCE(trs.pending_review_item_count, 0) > 0"
-        )
-    elif review_status == "completed":
-        clauses.append(
-            f"{report_total_expr} > 0 AND COALESCE(trs.pending_review_item_count, 0) = 0"
-        )
-    elif review_status == "empty":
-        clauses.append(
-            f"t.status NOT IN ('queued', 'running', 'canceling') AND {report_total_expr} = 0"
-        )
-    if keyword:
-        owner_name_filter = (
-            "OR COALESCE(iu.username, '') LIKE ?" if join_ip_usernames else ""
-        )
-        clauses.append(
-            f"""
-            (
-                COALESCE(t.original_filename, '') LIKE ?
-                OR COALESCE(t.document_meta_json, '') LIKE ?
-                OR COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ?
-                OR t.ip LIKE ?
-                OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ?
-                {owner_name_filter}
-            )
-            """
-        )
-        keyword_like = f"%{keyword}%"
-        params.extend(
-            [keyword_like, keyword_like, keyword_like, keyword_like, keyword_like]
-        )
-        if join_ip_usernames:
-            params.append(keyword_like)
+    filter_clauses, filter_params = _task_filter_sql(
+        filters, join_ip_usernames=join_ip_usernames
+    )
+    clauses.extend(filter_clauses)
+    params.extend(filter_params)
     clauses.append("t.task_type = ?")
     params.append(task_type)
     where = f"WHERE {' AND '.join(clauses)}"
@@ -429,7 +530,7 @@ def _render_admin_task_list(
         .fetchall()
     )
     rows = _task_rows_with_review_progress(rows)
-    return render_template(
+    return _render_list_template(
         template_name,
         identity=identity,
         tasks=rows,
@@ -442,7 +543,7 @@ def _render_admin_task_list(
         global_concurrency=get_setting("global_concurrency", 3),
         user_concurrency=get_setting("user_concurrency", 1),
         check_items=check_items,
-        models=get_enabled_models(identity.subject),
+        models=[] if _task_list_partial() else get_enabled_models(identity.subject),
         submission_token=uuid.uuid4().hex,
         refresh_url=url_for("admin_task_statuses", task_type=task_type),
         active_nav=task_type,

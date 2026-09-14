@@ -5,6 +5,7 @@
 {% block title %}跨语种文档一致性检查 - 文档智能门禁{% endblock %}
 
 {% block content %}
+{% if not list_partial %}
 {% set submit_disabled = not models or not check_items %}
 <section class="page-title">
   <div>
@@ -80,6 +81,8 @@
   {% endwith %}
 </form>
 
+{% endif %}
+
 <div class="admin-metric-groups" data-refresh-region="stats" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}" data-refresh-url="{{ refresh_url }}">
   <section class="admin-metric-group">
     <h2 class="admin-metric-group-title">任务概况</h2>
@@ -111,45 +114,19 @@
   </section>
 </div>
 
-<section class="panel">
+<section class="panel" data-task-list-panel>
+  {% if not list_partial %}
   <div class="panel-head compact-head task-panel-head">
     <h2>任务记录</h2>
     <div class="task-panel-actions">
       {{ task_bulk.delete_form(tasks, 'admin') }}
-    <button class="small-button refresh-toggle" type="button" data-auto-refresh-toggle aria-pressed="true">
-      <span class="refresh-dot" aria-hidden="true"></span>
-      <span data-refresh-label>刷新中</span>
-    </button>
+      {% include "_task_refresh_controls.html" %}
     </div>
   </div>
-  <form method="get" class="filter-bar task-filter-bar">
-    <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
-    <label>
-      状态
-      <select name="status">
-        <option value="">全部</option>
-        {% for key, label in status_labels.items() %}
-        <option value="{{ key }}" {{ "selected" if status == key else "" }}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      标注状态
-      <select name="review_status">
-        <option value="">全部</option>
-        {% for key, label in review_status_filters.items() %}
-        <option value="{{ key }}" {{ "selected" if key == review_status else "" }}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      关键词
-      <input name="keyword" value="{{ keyword }}" placeholder="按文档名称、用户、账号或 IP 搜索">
-    </label>
-    <button class="secondary-button" type="submit">筛选</button>
-  </form>
+  {% include "_task_filters.html" %}
 
-  <div data-refresh-region="task-list">
+  {% endif %}
+  <div data-refresh-region="task-list" data-list-url="{{ list_url }}">
   {% if tasks %}
   <div class="table-wrap">
     <table class="admin-task-table">
@@ -222,7 +199,7 @@
       </tbody>
     </table>
   </div>
-  {{ task_pagination.render('admin_language_consistency', pagination, status, keyword, review_status) }}
+  {{ task_pagination.render(request.endpoint, pagination, status, keyword, review_status) }}
   {% else %}
   <div class="empty-state compact">
     <h3>没有匹配任务</h3>

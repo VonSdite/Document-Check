@@ -1,8 +1,5 @@
-import uuid
-
 from flask import flash, redirect, render_template, request, url_for
 
-from app.checks.catalog import get_enabled_check_items
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -11,7 +8,6 @@ from app.contracts.task_types import (
     VIDEO_TASK_TYPE,
 )
 from app.identity.service import current_identity
-from app.models.service import get_enabled_models
 from app.reporting.constants import REPORT_ITEM_TYPES
 from app.reporting.service import (
     _report_item_fields_for_task,
@@ -52,14 +48,13 @@ from app.web.task_activity import (
     present_check_activity,
 )
 from app.web.task_lists import (
-    _pagination,
     _render_admin_consistency_page,
     _render_admin_images_page,
     _render_admin_language_consistency_page,
     _render_admin_tasks_page,
     _render_admin_videos_page,
+    _render_user_task_list,
     _task_status_payload,
-    _user_task_list_data,
     _validated_task_status_type,
 )
 from app.web.task_media import (
@@ -82,21 +77,7 @@ def register_user_tasks_routes(app):
         identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
-        page, per_page, total, rows, stats = _user_task_list_data(
-            identity, DOCUMENT_TASK_TYPE
-        )
-        return render_template(
-            "user_tasks.html",
-            ip=identity.ip,
-            identity=identity,
-            tasks=rows,
-            stats=stats,
-            pagination=_pagination(page, total, per_page),
-            check_items=get_enabled_check_items(),
-            models=get_enabled_models(identity.subject),
-            refresh_url=url_for("user_task_statuses", task_type=DOCUMENT_TASK_TYPE),
-            active_nav=DOCUMENT_TASK_TYPE,
-        )
+        return _render_user_task_list(identity, DOCUMENT_TASK_TYPE, "user_tasks.html")
 
     @app.route("/tasks/new", methods=["GET", "POST"])
     def user_new_task():
@@ -123,20 +104,8 @@ def register_user_tasks_routes(app):
         if request.method == "POST":
             return create_consistency_task_for_identity(identity, admin_created=False)
 
-        page, per_page, total, rows, stats = _user_task_list_data(
-            identity, CONSISTENCY_TASK_TYPE
-        )
-        return render_template(
-            "user_consistency.html",
-            ip=identity.ip,
-            identity=identity,
-            tasks=rows,
-            stats=stats,
-            pagination=_pagination(page, total, per_page),
-            check_items=get_enabled_check_items(CONSISTENCY_TASK_TYPE),
-            models=get_enabled_models(identity.subject),
-            refresh_url=url_for("user_task_statuses", task_type=CONSISTENCY_TASK_TYPE),
-            active_nav=CONSISTENCY_TASK_TYPE,
+        return _render_user_task_list(
+            identity, CONSISTENCY_TASK_TYPE, "user_consistency.html"
         )
 
     @app.route("/language-consistency", methods=["GET", "POST"])
@@ -154,23 +123,8 @@ def register_user_tasks_routes(app):
                 identity, admin_created=False
             )
 
-        page, per_page, total, rows, stats = _user_task_list_data(
-            identity, LANGUAGE_CONSISTENCY_TASK_TYPE
-        )
-        return render_template(
-            "user_language_consistency.html",
-            ip=identity.ip,
-            identity=identity,
-            tasks=rows,
-            stats=stats,
-            pagination=_pagination(page, total, per_page),
-            check_items=get_enabled_check_items(LANGUAGE_CONSISTENCY_TASK_TYPE),
-            models=get_enabled_models(identity.subject),
-            submission_token=uuid.uuid4().hex,
-            refresh_url=url_for(
-                "user_task_statuses", task_type=LANGUAGE_CONSISTENCY_TASK_TYPE
-            ),
-            active_nav=LANGUAGE_CONSISTENCY_TASK_TYPE,
+        return _render_user_task_list(
+            identity, LANGUAGE_CONSISTENCY_TASK_TYPE, "user_language_consistency.html"
         )
 
     @app.route("/images", methods=["GET", "POST"])
@@ -186,21 +140,7 @@ def register_user_tasks_routes(app):
         if request.method == "POST":
             return create_image_task_for_identity(identity, admin_created=False)
 
-        page, per_page, total, rows, stats = _user_task_list_data(
-            identity, IMAGE_TASK_TYPE
-        )
-        return render_template(
-            "user_images.html",
-            ip=identity.ip,
-            identity=identity,
-            tasks=rows,
-            stats=stats,
-            pagination=_pagination(page, total, per_page),
-            check_items=get_enabled_check_items(IMAGE_TASK_TYPE),
-            models=get_enabled_models(identity.subject),
-            refresh_url=url_for("user_task_statuses", task_type=IMAGE_TASK_TYPE),
-            active_nav=IMAGE_TASK_TYPE,
-        )
+        return _render_user_task_list(identity, IMAGE_TASK_TYPE, "user_images.html")
 
     @app.route("/videos", methods=["GET", "POST"])
     def user_videos():
@@ -215,21 +155,7 @@ def register_user_tasks_routes(app):
         if request.method == "POST":
             return create_video_task_for_identity(identity, admin_created=False)
 
-        page, per_page, total, rows, stats = _user_task_list_data(
-            identity, VIDEO_TASK_TYPE
-        )
-        return render_template(
-            "user_videos.html",
-            ip=identity.ip,
-            identity=identity,
-            tasks=rows,
-            stats=stats,
-            pagination=_pagination(page, total, per_page),
-            check_items=get_enabled_check_items(VIDEO_TASK_TYPE),
-            models=get_enabled_models(identity.subject),
-            refresh_url=url_for("user_task_statuses", task_type=VIDEO_TASK_TYPE),
-            active_nav=VIDEO_TASK_TYPE,
-        )
+        return _render_user_task_list(identity, VIDEO_TASK_TYPE, "user_videos.html")
 
     @app.get("/task-statuses")
     def user_task_statuses():

@@ -1,0 +1,26 @@
+<form method="get" class="filter-bar task-filter-bar" data-task-filters>
+    <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+    <label>
+      状态
+      <select name="status">
+        <option value="">全部</option>
+        {% for key, label in status_labels.items() %}
+        <option value="{{ key }}" {{ "selected" if key == status else "" }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      标注状态
+      <select name="review_status">
+        <option value="">全部</option>
+        {% for key, label in review_status_filters.items() %}
+        <option value="{{ key }}" {{ "selected" if key == review_status else "" }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      关键词
+      <input name="keyword" value="{{ keyword }}" placeholder="按文档名称、用户、账号或 IP 搜索">
+    </label>
+    <button class="secondary-button" type="submit">筛选</button>
+  </form>
