@@ -7,7 +7,7 @@
     </svg>
     <span>返回列表</span>
   </a>
-  {% if task.status in ["completed", "partial", "failed"] %}
+  {% if task.status in ["completed", "partial", "failed", "canceled"] %}
   <div class="report-export-actions" aria-label="报告操作">
     {% if task.status in ["completed", "partial"] %}
     <a class="primary-button report-export-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">
@@ -37,7 +37,7 @@
       </button>
     </form>
     {% endif %}
-    {% if task.status in ["partial", "failed"] %}
+    {% if task.status in ["partial", "failed", "canceled"] %}
     <form class="report-import-form" method="post" action="{{ url_for('admin_retry_task' if mode == 'admin' else 'user_retry_task', task_id=task.id) }}" data-prevent-double-submit="true">
       <input type="hidden" name="next" value="{{ task_detail_url }}">
       <button class="primary-button report-export-button" type="submit">
@@ -45,7 +45,7 @@
           <path d="M20 6v6h-6"></path>
           <path d="M18.5 15a7 7 0 1 1-.7-7.8L20 9"></path>
         </svg>
-        <span>重试失败项</span>
+        <span>重试未完成项</span>
       </button>
     </form>
     {% endif %}

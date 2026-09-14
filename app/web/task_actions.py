@@ -1,4 +1,3 @@
-import json
 import logging
 
 from flask import abort, flash, redirect, request, url_for
@@ -6,21 +5,20 @@ from flask import abort, flash, redirect, request, url_for
 from app.infrastructure.files import describe_failures
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import delete_task_record
-from app.tasks.activity import activity_key
 from app.tasks.files import (
     _image_folder,
     _remove_empty_directory,
     _remove_uploaded_files,
     _task_upload_paths,
 )
-from app.tasks.runner import retry_check_codes_for_task
+from app.tasks.retries import TaskRetryError, request_task_retry
 from app.web.auth import (
     _auth_mode,
     _current_user_identity,
     _mode_subject_filter,
     _platform_enabled,
 )
-from app.web.common import _row_value, _safe_next_path
+from app.web.common import _safe_next_path
 from app.web.constants import (
     BULK_DELETABLE_TASK_STATUSES,
     DELETABLE_TASK_STATUSES,
@@ -173,67 +171,11 @@ def _cancel_task(task):
 
 def _retry_task(task) -> bool:
     try:
-        retry_check_codes = retry_check_codes_for_task(task)
-    except RuntimeError as exc:
+        retry_count = request_task_retry(task["id"])
+    except TaskRetryError as exc:
         flash(str(exc), "error")
         return False
-
-    provider_id = _row_value(task, "provider_id")
-    owner_subject = str(_row_value(task, "owner_subject") or "").strip()
-    if provider_id is None or not owner_subject:
-        flash("原任务的模型提供商信息不完整，无法重试。", "error")
-        return False
-
-    db = get_db()
-    provider = db.execute(
-        """
-        SELECT api_key
-        FROM user_model_providers
-        WHERE id = ? AND owner_subject = ?
-        """,
-        (provider_id, owner_subject),
-    ).fetchone()
-    if provider is None:
-        flash("原任务使用的模型提供商已不存在，无法重试。", "error")
-        return False
-
-    now = now_text()
-    retried = db.execute(
-        """
-        UPDATE tasks
-        SET status = 'queued',
-            progress = 0,
-            cancel_requested = 0,
-            retry_check_codes_json = ?,
-            api_key = ?,
-            claim_token = NULL,
-            lease_expires_at = NULL,
-            summary = ?,
-            error = NULL,
-            updated_at = ?,
-            started_at = NULL,
-            finished_at = NULL
-        WHERE id = ? AND status IN ('failed', 'partial')
-        """,
-        (
-            json.dumps(retry_check_codes, ensure_ascii=False),
-            provider["api_key"],
-            f"已进入重试队列，等待重跑 {len(retry_check_codes)} 个失败检查项。",
-            now,
-            task["id"],
-        ),
-    )
-    if retried.rowcount != 1:
-        db.rollback()
-        flash("任务状态已变化，无法重试。", "error")
-        return False
-
-    db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
-    db.execute("DELETE FROM settings WHERE key = ?", (activity_key(task["id"]),))
-    db.commit()
-    flash(
-        f"已重新加入队列，将只重跑 {len(retry_check_codes)} 个失败检查项。", "success"
-    )
+    flash(f"已重新加入队列，将重跑 {retry_count} 个未完成检查项。", "success")
     return True
 
 

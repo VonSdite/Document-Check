@@ -2607,6 +2607,39 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertTrue(all(result["error"] == "模型服务不可用" for result in results))
 
+    def test_batch_retry_selection_preserves_success_and_includes_canceled_items(self):
+        from app.tasks.retries import TaskRetryError, retry_check_codes_for_task
+
+        snapshot = [
+            {"code": code, "name": code, "prompt": "检查"}
+            for code in ("success", "failed", "canceled", "pending", "outside")
+        ]
+        results = [
+            {"code": "success", "result": "成功结果"},
+            {"code": "failed", "error": "失败"},
+            {"code": "canceled", "canceled": True},
+            {"code": "unknown", "error": "无关结果"},
+        ]
+        for status, scope, expected in (
+            ("partial", None, ["failed", "canceled"]),
+            ("failed", None, ["failed", "canceled", "pending", "outside"]),
+            ("canceled", None, ["failed", "canceled", "pending", "outside"]),
+            ("failed", ["pending"], ["failed", "canceled", "pending"]),
+        ):
+            with self.subTest(status=status, scope=scope):
+                task = {
+                    "status": status,
+                    "checks_snapshot_json": json.dumps(snapshot),
+                    "result_json": json.dumps(results),
+                    "retry_check_codes_json": json.dumps(scope) if scope else None,
+                }
+                self.assertEqual(retry_check_codes_for_task(task), expected)
+        task["result_json"] = json.dumps(
+            [{"code": item["code"], "result": "成功"} for item in snapshot]
+        )
+        with self.assertRaisesRegex(TaskRetryError, "没有可重试"):
+            retry_check_codes_for_task(task)
+
     def test_retry_run_only_executes_failed_item_and_replaces_result_by_code(self):
         check_items = [
             {

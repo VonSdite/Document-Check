@@ -107,7 +107,7 @@ def _run_video_check_items_concurrently(
                 db,
                 task_id,
                 base_results,
-                f"正在重试 {total} 个失败检查项。",
+                f"正在重试 {total} 个未完成检查项。",
                 5,
                 claim_token,
             )

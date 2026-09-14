@@ -574,7 +574,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.client.post(f"/admin/tasks/{task_id}/retry").status_code, 302
         )
         with self.app.app_context():
-            self.assertEqual(task_activities([task_id]), {})
+            checks = task_activities([task_id])[task_id]["checks"]
+            self.assertEqual(list(checks), ["check-b"])
+            self.assertEqual(checks["check-b"]["execution"], 1)
+            self.assertEqual(checks["check-b"]["phase"], "pending")
         page = self.client.get(f"/admin/tasks/{task_id}")
         soup = BeautifulSoup(page.get_data(as_text=True), "html.parser")
         self.assertTrue(
@@ -591,7 +594,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         self.assertEqual(
             self.client.post(
-                f"/admin/tasks/{task_id}/cancel-check", json={"code": "check-b"}
+                f"/admin/tasks/{task_id}/cancel-check",
+                json={"code": "check-b", "execution": 0},
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/admin/tasks/{task_id}/cancel-check",
+                json={"code": "check-b", "execution": 1},
             ).status_code,
             200,
         )
@@ -6508,6 +6519,181 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIsNone(task["started_at"])
         self.assertIsNone(task["finished_at"])
 
+    def test_batch_retry_runs_failed_and_canceled_items_with_model_snapshot(self):
+        from app.models.client import LLMError
+        from app.tasks.runner import TaskRunner
+        from app.tasks.supervisor import TaskSupervisor
+
+        for prefix in ("/tasks", "/admin/tasks"):
+            for model_missing in (False, True):
+                with self.subTest(prefix=prefix, model_missing=model_missing):
+                    task_id, provider_id, snapshot, previous = (
+                        self._insert_retryable_task()
+                    )
+                    snapshot.append(
+                        {"code": "check-c", "name": "检查 C", "prompt": "执行检查 C"}
+                    )
+                    previous.append(
+                        {
+                            "code": "check-c",
+                            "name": "检查 C",
+                            "result": "已接收的输出",
+                            "error": "用户取消",
+                            "canceled": True,
+                            "execution": 2,
+                        }
+                    )
+                    with self.app.app_context():
+                        db = get_db()
+                        db.execute(
+                            "DELETE FROM user_model_configs WHERE provider_id=?",
+                            (provider_id,),
+                        )
+                        db.execute(
+                            "UPDATE user_model_providers SET api_base='https://changed.invalid', request_timeout=1, api_key='current-secret' WHERE id=?",
+                            (provider_id,),
+                        )
+                        db.execute(
+                            "UPDATE tasks SET checks_snapshot_json=?, result_json=?, document_text='快照正文' WHERE id=?",
+                            (json.dumps(snapshot), json.dumps(previous), task_id),
+                        )
+                        db.commit()
+                    url = f"{prefix}/{task_id}"
+                    self.assertEqual(self.client.post(f"{url}/retry").status_code, 302)
+                    page = BeautifulSoup(
+                        self.client.get(url).get_data(as_text=True), "html.parser"
+                    )
+                    pending = page.select_one('[data-detail-result="check-c"]')
+                    self.assertEqual(pending["data-check-execution"], "3")
+                    self.assertNotIn("用户取消", pending.get_text())
+                    with self.app.app_context():
+                        [(claimed_id, token)] = TaskSupervisor(
+                            self.app
+                        )._claim_available_tasks()
+                    self.assertEqual(claimed_id, task_id)
+                    with patch(
+                        "app.tasks.runner.run_check",
+                        side_effect=LLMError("模型不存在") if model_missing else None,
+                        return_value="重试成功",
+                    ) as model:
+                        TaskRunner(self.app).run(task_id, token)
+                    calls = [call.kwargs for call in model.call_args_list]
+                    self.assertEqual(
+                        [call["check_name"] for call in calls], ["检查 B", "检查 C"]
+                    )
+                    for call in calls:
+                        self.assertEqual(call["prompt"], f"执行{call['check_name']}")
+                        self.assertEqual(call["model_name"], "snapshot-model")
+                        self.assertEqual(
+                            call["api_base"],
+                            "https://snapshot.test/v1/chat/completions",
+                        )
+                        self.assertEqual(call["request_timeout"], 77)
+                        self.assertEqual(call["api_key"], "current-secret")
+                        self.assertTrue(call["force_disable_thinking"])
+                        self.assertEqual(call["reasoning_effort"], "high")
+                    with self.app.app_context():
+                        task = (
+                            get_db()
+                            .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                            .fetchone()
+                        )
+                    results = json.loads(task["result_json"])
+                    self.assertEqual(results[0], previous[0])
+                    self.assertEqual(results[2]["execution"], 3)
+                    self.assertFalse(results[2].get("canceled"))
+                    self.assertEqual(
+                        task["status"], "partial" if model_missing else "completed"
+                    )
+                    self.assertIsNone(task["api_key"])
+                    for result in results[1:]:
+                        self.assertEqual(
+                            result.get("error"), "模型不存在" if model_missing else None
+                        )
+
+    def test_batch_retry_accepts_all_canceled_tasks_and_rejects_duplicate_submission(
+        self,
+    ):
+        for prefix in ("/tasks", "/admin/tasks"):
+            for has_results in (False, True):
+                with self.subTest(prefix=prefix, has_results=has_results):
+                    task_id, _, snapshot, _ = self._insert_retryable_task(
+                        status="canceled"
+                    )
+                    results = (
+                        [
+                            {
+                                "code": item["code"],
+                                "name": item["name"],
+                                "error": "用户取消",
+                                "canceled": True,
+                                "execution": 3,
+                            }
+                            for item in snapshot
+                        ]
+                        if has_results
+                        else []
+                    )
+                    with self.app.app_context():
+                        get_db().execute(
+                            "UPDATE tasks SET result_json=?, cancel_requested=1 WHERE id=?",
+                            (json.dumps(results), task_id),
+                        )
+                        get_db().commit()
+                    url = f"{prefix}/{task_id}"
+                    page = BeautifulSoup(
+                        self.client.get(url).get_data(as_text=True), "html.parser"
+                    )
+                    self.assertIn(
+                        "重试未完成项",
+                        page.select_one(f'form[action="{url}/retry"]').get_text(),
+                    )
+                    self.assertEqual(self.client.post(f"{url}/retry").status_code, 302)
+                    with self.app.app_context():
+                        queued = dict(
+                            get_db()
+                            .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                            .fetchone()
+                        )
+                    self.assertEqual(queued["status"], "queued")
+                    self.assertEqual(queued["cancel_requested"], 0)
+                    self.assertEqual(
+                        json.loads(queued["retry_check_codes_json"]),
+                        [item["code"] for item in snapshot],
+                    )
+                    self.assertEqual(json.loads(queued["result_json"]), results)
+                    self.assertEqual(self.client.post(f"{url}/retry").status_code, 302)
+                    with self.app.app_context():
+                        self.assertEqual(
+                            dict(
+                                get_db()
+                                .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                                .fetchone()
+                            ),
+                            queued,
+                        )
+
+    def test_batch_retry_uses_latest_results_when_route_read_is_stale(self):
+        from app.web.task_actions import _retry_task
+
+        task_id, _, _, previous = self._insert_retryable_task()
+        with self.app.test_request_context():
+            db = get_db()
+            stale_task = dict(
+                db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            )
+            previous[1].pop("error")
+            previous[0].update(error="已取消", canceled=True)
+            db.execute(
+                "UPDATE tasks SET result_json=? WHERE id=?",
+                (json.dumps(previous), task_id),
+            )
+            db.commit()
+            self.assertTrue(_retry_task(stale_task))
+            task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            self.assertEqual(json.loads(task["retry_check_codes_json"]), ["check-a"])
+            self.assertEqual(json.loads(task["result_json"]), previous)
+
     def test_admin_retry_failed_task_without_item_results_retries_full_snapshot(self):
         task_id, _, check_snapshot, _ = self._insert_retryable_task(
             status="failed",
@@ -6590,7 +6776,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "UPDATE tasks SET status = 'completed' WHERE id = ?", (completed_id,)
             )
             get_db().commit()
-        cases.append((completed_id, "仅失败或部分完成任务可重试"))
+        cases.append((completed_id, "仅失败、部分完成或已取消任务可重试"))
 
         for task_id, expected_message in cases:
             with self.subTest(task_id=task_id):
@@ -6641,21 +6827,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         for task_type, user_list_url, admin_list_url in task_routes:
-            task_id, _, _, _ = self._insert_retryable_task(task_type=task_type)
-            expected_forms = (
-                (user_list_url, f"/tasks/{task_id}/retry"),
-                (admin_list_url, f"/admin/tasks/{task_id}/retry"),
-                (f"/tasks/{task_id}", f"/tasks/{task_id}/retry"),
-                (f"/admin/tasks/{task_id}", f"/admin/tasks/{task_id}/retry"),
-            )
-            for page_url, action in expected_forms:
-                with self.subTest(task_type=task_type, page_url=page_url):
-                    response = self.client.get(page_url)
-                    self.assertEqual(response.status_code, 200)
-                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                    form = soup.select_one(f'form[action="{action}"]')
-                    self.assertIsNotNone(form)
-                    self.assertIn("重试", form.get_text(" ", strip=True))
+            for status in ("partial", "failed", "canceled"):
+                task_id, _, _, _ = self._insert_retryable_task(
+                    task_type=task_type, status=status
+                )
+                expected_forms = (
+                    (user_list_url, f"/tasks/{task_id}/retry"),
+                    (admin_list_url, f"/admin/tasks/{task_id}/retry"),
+                    (f"/tasks/{task_id}", f"/tasks/{task_id}/retry"),
+                    (f"/admin/tasks/{task_id}", f"/admin/tasks/{task_id}/retry"),
+                )
+                for page_url, action in expected_forms:
+                    with self.subTest(task_type=task_type, page_url=page_url):
+                        response = self.client.get(page_url)
+                        self.assertEqual(response.status_code, 200)
+                        soup = BeautifulSoup(
+                            response.get_data(as_text=True), "html.parser"
+                        )
+                        form = soup.select_one(f'form[action="{action}"]')
+                        self.assertIsNotNone(form)
+                        self.assertIn("重试", form.get_text(" ", strip=True))
 
     def test_user_task_report_link_has_clean_url_and_returns_to_task_list(self):
         for index in range(21):

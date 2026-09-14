@@ -60,6 +60,7 @@ from app.tasks.model_output import ModelOutputRecorder
 from app.tasks.runtime.common import (
     STREAM_SNAPSHOT_INTERVAL_SECONDS,
     STREAM_SNAPSHOT_MIN_CHAR_GROWTH,
+    _check_results_from_json,
     _document_meta,
     _int_setting,
     _issue_output_limit,
@@ -88,7 +89,6 @@ from app.tasks.runtime.state import (
 from app.tasks.runtime.video_checks import _run_video_check_items_concurrently
 from app.tasks.selection import (
     _check_items_for_retry,
-    _check_items_from_snapshot,
     _stored_retry_check_codes,
     _task_check_items,
     selected_check_items,
@@ -164,7 +164,7 @@ class TaskRunner:
                 ]
                 if retry_check_codes is not None:
                     logger.info(
-                        "任务重试失败检查项 task_id=%s checks=%s retained=%s",
+                        "任务重试未完成检查项 task_id=%s checks=%s retained=%s",
                         task_id,
                         ",".join(retry_check_codes),
                         len(base_results),
@@ -412,76 +412,6 @@ def _document_check_items(db, task) -> list[dict]:
     return _task_check_items(db, task, DOCUMENT_TASK_TYPE)
 
 
-def retry_check_codes_for_task(task) -> list[str]:
-    status = str(_task_value(task, "status") or "").strip()
-    if status not in {"failed", "partial"}:
-        raise RuntimeError("仅失败或部分完成任务可重试。")
-
-    snapshot_raw = _task_value(task, "checks_snapshot_json")
-    try:
-        snapshot_value = json.loads(snapshot_raw) if snapshot_raw else None
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("原任务缺少有效的检查项快照，无法重试。") from exc
-    snapshot_items = _check_items_from_snapshot(snapshot_raw)
-    if (
-        not isinstance(snapshot_value, list)
-        or not snapshot_value
-        or len(snapshot_items) != len(snapshot_value)
-    ):
-        raise RuntimeError("原任务缺少有效的检查项快照，无法重试。")
-
-    snapshot_codes = [item["code"] for item in snapshot_items]
-    snapshot_code_set = set(snapshot_codes)
-    results = _check_results_from_json(_task_value(task, "result_json"))
-    results_by_code = {
-        str(result.get("code") or "").strip(): result
-        for result in results
-        if str(result.get("code") or "").strip() in snapshot_code_set
-    }
-    failed_codes = {
-        code
-        for code, result in results_by_code.items()
-        if _check_result_failed(result) and not result.get("canceled")
-    }
-
-    if status == "partial":
-        retry_codes = [code for code in snapshot_codes if code in failed_codes]
-    else:
-        stored_codes = _stored_retry_check_codes(task)
-        if stored_codes is not None:
-            stored_code_set = set(stored_codes)
-            retry_codes = [
-                code
-                for code in snapshot_codes
-                if code in stored_code_set
-                and (code not in results_by_code or code in failed_codes)
-            ]
-        elif results_by_code:
-            retry_codes = [
-                code
-                for code in snapshot_codes
-                if code not in results_by_code or code in failed_codes
-            ]
-        else:
-            retry_codes = snapshot_codes
-
-    if not retry_codes:
-        raise RuntimeError("任务没有可重试的失败检查项。")
-    return retry_codes
-
-
-def _check_results_from_json(raw: str | None) -> list[dict]:
-    if not raw:
-        return []
-    try:
-        value = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return []
-    if not isinstance(value, list):
-        return []
-    return [dict(item) for item in value if isinstance(item, dict)]
-
-
 def _run_check_items_concurrently(
     app,
     task,
@@ -549,7 +479,7 @@ def _run_check_items_concurrently(
                 db,
                 task_id,
                 base_results,
-                f"正在重试 {total} 个失败检查项。",
+                f"正在重试 {total} 个未完成检查项。",
                 5,
                 claim_token,
             )

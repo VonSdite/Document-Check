@@ -10,6 +10,18 @@ STREAM_SNAPSHOT_INTERVAL_SECONDS = 5.0
 STREAM_SNAPSHOT_MIN_CHAR_GROWTH = 256
 
 
+def _check_results_from_json(raw: str | None) -> list[dict]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
 def _merge_check_results(base_results: list[dict], updates: list[dict]) -> list[dict]:
     updates_by_code = {
         str(result.get("code") or "").strip(): result

@@ -1,15 +1,127 @@
-"""单项手动重试：保留模型快照、结果和任务并发边界。"""
+"""任务与单项手动重试：保留模型快照、结果和任务并发边界。"""
 
 import json
 
 from app.contracts.task_types import IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
 from app.persistence.connection import get_db, now_text
 from app.tasks.activity import RETRYABLE_PHASES, load_activity, save_activity
+from app.tasks.runtime.common import _check_results_from_json
+from app.tasks.runtime.state import _check_result_failed
 from app.tasks.selection import _check_items_from_snapshot, _stored_retry_check_codes
 
 
-class CheckRetryError(RuntimeError):
+class TaskRetryError(RuntimeError):
     pass
+
+
+class CheckRetryError(TaskRetryError):
+    pass
+
+
+def retry_check_codes_for_task(task) -> list[str]:
+    task = dict(task)
+    status = task.get("status")
+    if status not in {"failed", "partial", "canceled"}:
+        raise TaskRetryError("仅失败、部分完成或已取消任务可重试。")
+    snapshot_raw = task.get("checks_snapshot_json")
+    try:
+        snapshot_value = json.loads(snapshot_raw) if snapshot_raw else None
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise TaskRetryError("原任务缺少有效的检查项快照，无法重试。") from exc
+    snapshot = _check_items_from_snapshot(snapshot_raw)
+    if (
+        not isinstance(snapshot_value, list)
+        or not snapshot_value
+        or len(snapshot) != len(snapshot_value)
+    ):
+        raise TaskRetryError("原任务缺少有效的检查项快照，无法重试。")
+    results = {
+        str(item.get("code") or "").strip(): item
+        for item in _check_results_from_json(task.get("result_json"))
+    }
+    try:
+        stored_codes = _stored_retry_check_codes(task)
+    except RuntimeError as exc:
+        raise TaskRetryError(str(exc)) from exc
+    missing_scope = set(stored_codes) if stored_codes is not None else None
+    codes = []
+    for item in snapshot:
+        code = item["code"]
+        previous = results.get(code)
+        if previous is not None:
+            if previous.get("canceled") or _check_result_failed(previous):
+                codes.append(code)
+        elif status in {"failed", "canceled"} and (
+            missing_scope is None or code in missing_scope
+        ):
+            codes.append(code)
+    if not codes:
+        raise TaskRetryError("任务没有可重试的未完成检查项。")
+    return codes
+
+
+def request_task_retry(task_id: int) -> int:
+    db = get_db()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        task = db.execute(
+            "SELECT status, checks_snapshot_json, result_json, retry_check_codes_json, "
+            "provider_id, owner_subject FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if task is None:
+            raise TaskRetryError("任务已不存在，无法重试。")
+        codes = retry_check_codes_for_task(task)
+        if task["provider_id"] is None or not task["owner_subject"]:
+            raise TaskRetryError("原任务的模型提供商信息不完整，无法重试。")
+        provider = db.execute(
+            "SELECT api_key FROM user_model_providers WHERE id=? AND owner_subject=?",
+            (task["provider_id"], task["owner_subject"]),
+        ).fetchone()
+        if provider is None:
+            raise TaskRetryError("原任务使用的模型提供商已不存在，无法重试。")
+        now = now_text()
+        db.execute(
+            "UPDATE tasks SET status='queued', progress=0, cancel_requested=0, "
+            "retry_check_codes_json=?, api_key=?, claim_token=NULL, lease_expires_at=NULL, "
+            "summary=?, error=NULL, updated_at=?, started_at=NULL, finished_at=NULL WHERE id=?",
+            (
+                json.dumps(codes),
+                provider["api_key"],
+                f"已进入重试队列，等待重跑 {len(codes)} 个未完成检查项。",
+                now,
+                task_id,
+            ),
+        )
+        previous = {
+            str(item.get("code") or "").strip(): item
+            for item in _check_results_from_json(task["result_json"])
+        }
+        code_set = set(codes)
+        save_activity(
+            db,
+            task_id,
+            {
+                "claim_token": None,
+                "phase": "preparing",
+                "checks": {
+                    item["code"]: {
+                        "name": item["name"],
+                        "phase": "pending",
+                        "execution": previous.get(item["code"], {}).get("execution", 0)
+                        + 1,
+                    }
+                    for item in _check_items_from_snapshot(task["checks_snapshot_json"])
+                    if item["code"] in code_set
+                },
+            },
+        )
+        db.execute("DELETE FROM task_live_results WHERE task_id=?", (task_id,))
+        db.commit()
+        return len(codes)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def request_check_retry(task_id, code, execution):
