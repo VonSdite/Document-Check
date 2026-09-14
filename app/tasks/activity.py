@@ -3,6 +3,7 @@
 import json
 
 from app.persistence.connection import get_db, now_text
+from app.tasks.selection import selected_check_items
 
 ACTIVITY_KEY_PREFIX = "task_activity:"
 PHASE_LABELS = {
@@ -17,14 +18,14 @@ PHASE_LABELS = {
     "canceling": "取消中",
 }
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
-CANCELABLE_PHASES = {"waiting", "thinking", "output", "retrying"}
+CANCELABLE_PHASES = {"pending", "checking", "waiting", "thinking", "output", "retrying"}
 
 
 def activity_key(task_id: int) -> str:
     return f"{ACTIVITY_KEY_PREFIX}{task_id}"
 
 
-def _change_activity(task_id, claim_token, change):
+def _change_activity(task_id, claim_token, change, *, allow_queued=False):
     db = get_db()
     try:
         db.execute("BEGIN IMMEDIATE")
@@ -33,8 +34,9 @@ def _change_activity(task_id, claim_token, change):
         ).fetchone()
         if (
             task is None
-            or task["status"] != "running"
-            or (claim_token is not None and task["claim_token"] != claim_token)
+            or task["status"]
+            not in ({"queued", "running"} if allow_queued else {"running"})
+            or task["claim_token"] != claim_token
         ):
             db.rollback()
             return None
@@ -97,15 +99,47 @@ def finish_check_activity(task_id, claim_token, code, *, failed=False):
     return bool(_change_activity(task_id, claim_token, change))
 
 
+def start_check_activity(task_id, claim_token, code):
+    """在检查项开始前原子确认取消意图，并进入执行阶段。"""
+
+    def change(state):
+        item = state["checks"].get(code)
+        if (
+            item is None
+            or item.get("cancel_requested")
+            or item.get("phase") in TERMINAL_PHASES
+        ):
+            return False
+        item["phase"] = "checking"
+        return True
+
+    return bool(_change_activity(task_id, claim_token, change))
+
+
 def request_check_cancellation(task_id, claim_token, code):
     def change(state):
         item = state["checks"].get(code)
+        if item is None:
+            db = get_db()
+            task = db.execute(
+                "SELECT task_type, checks_json, checks_snapshot_json, retry_check_codes_json "
+                "FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            try:
+                selected = selected_check_items(db, task)
+            except RuntimeError:
+                return False
+            match = next((entry for entry in selected if entry["code"] == code), None)
+            if match is None:
+                return False
+            item = state["checks"][code] = {"name": match["name"], "phase": "pending"}
         if item is None or item.get("phase") not in CANCELABLE_PHASES | {"canceling"}:
             return False
         item.update(cancel_requested=True, phase="canceling")
         return True
 
-    return bool(_change_activity(task_id, claim_token, change))
+    return bool(_change_activity(task_id, claim_token, change, allow_queued=True))
 
 
 def task_activities(task_ids):
@@ -116,7 +150,7 @@ def task_activities(task_ids):
     rows = get_db().execute(
         f"SELECT t.id, t.claim_token, s.value FROM tasks t "
         f"JOIN settings s ON s.key = ? || t.id "
-        f"WHERE t.id IN ({placeholders}) AND t.status IN ('running', 'canceling')",
+        f"WHERE t.id IN ({placeholders}) AND t.status IN ('queued', 'running', 'canceling')",
         (ACTIVITY_KEY_PREFIX, *task_ids),
     )
     activities = {}

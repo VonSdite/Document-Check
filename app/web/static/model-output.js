@@ -50,7 +50,7 @@
       });
     });
     panel.querySelector("[data-output-fallback]").hidden = nodes.size > 0;
-    panel.querySelector("[data-output-status]").textContent = finished ? "" : "实时更新";
+    panel.querySelector("[data-output-status]").textContent = "";
     if (following) scroll.scrollTop = scroll.scrollHeight;
   }
 
@@ -99,7 +99,7 @@
     const panel = event.target;
     if (!panel.matches("[data-model-output]")) return;
     if (panel.open) { render(panel); read(); }
-    else panel.querySelector("[data-output-status]").textContent = "展开查看";
+    else panel.querySelector("[data-output-status]").textContent = "";
     schedule();
   }, true);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) read(); else clearTimeout(timer); });

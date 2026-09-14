@@ -1,4 +1,5 @@
 let activeConfirmPopover = null;
+let activeConfirmAnchor = null;
 
 function closeConfirmPopover() {
   if (!activeConfirmPopover) {
@@ -6,6 +7,7 @@ function closeConfirmPopover() {
   }
   activeConfirmPopover.remove();
   activeConfirmPopover = null;
+  activeConfirmAnchor = null;
 }
 
 function placeConfirmPopover(popover, anchor) {
@@ -15,6 +17,7 @@ function placeConfirmPopover(popover, anchor) {
   const height = popover.offsetHeight;
   let left = rect.right - width;
   let top = rect.bottom + 8;
+  let placement = "bottom";
 
   if (left < margin) {
     left = margin;
@@ -24,6 +27,7 @@ function placeConfirmPopover(popover, anchor) {
   }
   if (top + height > window.innerHeight - margin) {
     top = rect.top - height - 8;
+    placement = "top";
   }
   if (top < margin) {
     top = margin;
@@ -31,6 +35,8 @@ function placeConfirmPopover(popover, anchor) {
 
   popover.style.left = `${left}px`;
   popover.style.top = `${top}px`;
+  popover.dataset.placement = placement;
+  popover.style.setProperty("--confirm-arrow-left", `${Math.max(18, Math.min(width - 18, rect.left + rect.width / 2 - left))}px`);
 }
 
 function showConfirmPopover(anchor, message, onConfirm) {
@@ -40,6 +46,7 @@ function showConfirmPopover(anchor, message, onConfirm) {
   popover.className = "confirm-popover";
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-live", "polite");
+  popover.setAttribute("aria-label", "确认操作");
   popover.innerHTML = `
     <div class="confirm-popover-title">确认操作</div>
     <div class="confirm-popover-message"></div>
@@ -52,11 +59,12 @@ function showConfirmPopover(anchor, message, onConfirm) {
   const popoverRoot = anchor.closest("dialog[open]") || document.body;
   popoverRoot.appendChild(popover);
   activeConfirmPopover = popover;
+  activeConfirmAnchor = { element: anchor, rect: anchor.getBoundingClientRect() };
   placeConfirmPopover(popover, anchor);
 
   window.setTimeout(() => {
     const okButton = popover.querySelector("[data-confirm-ok]");
-    okButton?.focus();
+    okButton?.focus({ preventScroll: true });
   });
 
   popover.addEventListener("click", (event) => {
@@ -913,7 +921,12 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("resize", closeConfirmPopover);
-window.addEventListener("scroll", closeConfirmPopover, true);
+window.addEventListener("scroll", (event) => {
+  const anchor = activeConfirmAnchor;
+  if (!anchor || (event.target !== document && !event.target.contains?.(anchor.element))) return;
+  const rect = anchor.element.getBoundingClientRect();
+  if (Math.abs(rect.top - anchor.rect.top) > 0.5 || Math.abs(rect.left - anchor.rect.left) > 0.5) closeConfirmPopover();
+}, true);
 
 let activeHelpTip = null;
 let activeHelpTipAnchor = null;

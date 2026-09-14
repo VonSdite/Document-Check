@@ -57,6 +57,10 @@ def detail_progress(task):
 def present_check_activity(task, results, progress):
     by_code = {item["code"]: item for item in results if item.get("code")}
     checks = progress["checks"]
+    try:
+        retry_codes = json.loads(task.get("retry_check_codes_json") or "null")
+    except (ValueError, TypeError):
+        retry_codes = []
     if progress["active"]:
         try:
             snapshot = json.loads(task.get("checks_snapshot_json") or "[]")
@@ -99,8 +103,11 @@ def present_check_activity(task, results, progress):
         if (
             not phase
             and progress["active"]
-            and not result.get("result")
-            and not result.get("error")
+            and (
+                result.get("code") in retry_codes
+                if isinstance(retry_codes, list)
+                else not result.get("result") and not result.get("error")
+            )
         ):
             phase = "pending"
         result["execution_label"] = (
@@ -110,7 +117,7 @@ def present_check_activity(task, results, progress):
         )
         result["execution_attempt"] = state.get("attempt", 0)
         result["can_cancel"] = (
-            task["status"] == "running"
+            task["status"] in {"queued", "running"}
             and task["task_type"] in SINGLE_CANCEL_TASK_TYPES
             and phase in CANCELABLE_PHASES
         )
@@ -125,7 +132,7 @@ def cancel_check(task):
         return {"error": "检查项取消请求格式无效。"}, 400
     code = str(data.get("code") or "")
     if not request_check_cancellation(task["id"], task.get("claim_token"), code):
-        return {"error": "此检查项已结束或尚未进入模型请求阶段，请刷新状态。"}, 409
+        return {"error": "此检查项当前无法取消，请刷新状态。"}, 409
     return {"status": "canceling", "code": code}
 
 

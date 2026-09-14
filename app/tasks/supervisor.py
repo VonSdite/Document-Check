@@ -11,6 +11,7 @@ import psutil
 
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_setting
+from app.tasks.activity import activity_key
 from app.tasks.processes import (
     TaskProcess,
     TaskWorkerProcess,
@@ -256,7 +257,7 @@ class TaskSupervisor:
                 "DELETE FROM settings WHERE key >= 'task_activity:' AND key < 'task_activity;' "
                 "AND NOT EXISTS (SELECT 1 FROM tasks "
                 "WHERE id = CAST(substr(settings.key, 15) AS INTEGER) "
-                "AND status IN ('running', 'canceling') "
+                "AND status IN ('queued', 'running', 'canceling') "
                 "AND claim_token IS json_extract(settings.value, '$.claim_token'))"
             )
 
@@ -360,6 +361,11 @@ class TaskSupervisor:
                         ),
                     )
                     if claimed.rowcount == 1:
+                        db.execute(
+                            "UPDATE settings SET value = json_set(value, '$.claim_token', ?), updated_at = ? "
+                            "WHERE key = ? AND json_extract(value, '$.claim_token') IS NULL",
+                            (claim_token, now, activity_key(task["id"])),
+                        )
                         claimed_tasks.append((task["id"], claim_token))
                         running_by_owner[owner_subject] = running_for_user + 1
             db.commit()

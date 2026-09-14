@@ -36,10 +36,8 @@ from app.checks.sensitive_terms import (
     sensitive_terms_file_candidates,
 )
 from app.contracts.task_types import (
-    CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
-    LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
 )
 from app.documents.extraction.common import DocumentReadError
@@ -52,6 +50,7 @@ from app.tasks.activity import (
     clear_activity,
     finish_check_activity,
     initialize_activity,
+    start_check_activity,
     update_check_activity,
 )
 from app.tasks.model_output import ModelOutputRecorder
@@ -84,6 +83,13 @@ from app.tasks.runtime.state import (
     _update_progress,
 )
 from app.tasks.runtime.video_checks import _run_video_check_items_concurrently
+from app.tasks.selection import (
+    _check_items_for_retry,
+    _check_items_from_snapshot,
+    _stored_retry_check_codes,
+    _task_check_items,
+    selected_check_items,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +171,9 @@ class TaskRunner:
                         "check_item_concurrency", DEFAULT_CHECK_ITEM_CONCURRENCY
                     ),
                 )
+                if task_type not in {IMAGE_TASK_TYPE, VIDEO_TASK_TYPE}:
+                    check_items = selected_check_items(db, task)
+                    initialize_activity(task_id, claim_token, checks=check_items)
                 preprocessing_started = time.monotonic()
                 logger.info(
                     "任务预处理开始 task_id=%s file_type=%s", task_id, task["file_type"]
@@ -236,18 +245,8 @@ class TaskRunner:
                         base_results=base_results,
                     )
                 else:
-                    if task_type in {
-                        CONSISTENCY_TASK_TYPE,
-                        LANGUAGE_CONSISTENCY_TASK_TYPE,
-                    }:
-                        check_items = _task_check_items(db, task, task_type)
-                    else:
-                        check_items = _document_check_items(db, task)
-
-                    check_items = _check_items_for_retry(check_items, retry_check_codes)
                     if not check_items:
                         raise RuntimeError("没有可执行的检查项")
-
                     retry_results = _run_check_items_concurrently(
                         self.app,
                         task,
@@ -389,86 +388,6 @@ def _document_check_items(db, task) -> list[dict]:
     return _task_check_items(db, task, DOCUMENT_TASK_TYPE)
 
 
-def _task_check_items(db, task, task_type: str) -> list[dict]:
-    snapshot_raw = _task_value(task, "checks_snapshot_json")
-    snapshot = _check_items_from_snapshot(snapshot_raw)
-    if _task_value(task, "retry_check_codes_json") is not None:
-        try:
-            snapshot_value = json.loads(snapshot_raw) if snapshot_raw else None
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise RuntimeError("原任务缺少有效的检查项快照，无法重试") from exc
-        if (
-            not isinstance(snapshot_value, list)
-            or not snapshot_value
-            or len(snapshot) != len(snapshot_value)
-        ):
-            raise RuntimeError("原任务缺少有效的检查项快照，无法重试")
-    if snapshot:
-        return snapshot
-
-    try:
-        check_values = json.loads(task["checks_json"])
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("检查项数据无效") from exc
-    if not isinstance(check_values, list) or not check_values:
-        return []
-
-    check_ids = [int(value) for value in check_values if isinstance(value, int)]
-    check_codes = [
-        str(value).strip()
-        for value in check_values
-        if isinstance(value, str) and str(value).strip()
-    ]
-    clauses = []
-    params = []
-    if check_ids:
-        clauses.append(f"id IN ({','.join('?' for _ in check_ids)})")
-        params.extend(check_ids)
-    if check_codes:
-        clauses.append(f"code IN ({','.join('?' for _ in check_codes)})")
-        params.extend(check_codes)
-    if not clauses:
-        return []
-    params.append(task_type)
-    return [
-        dict(row)
-        for row in db.execute(
-            f"""
-            SELECT *
-            FROM check_items
-            WHERE ({" OR ".join(clauses)}) AND task_type = ? AND enabled = 1
-            ORDER BY sort_order ASC, id ASC
-            """,
-            tuple(params),
-        ).fetchall()
-    ]
-
-
-def _check_items_from_snapshot(raw: str | None) -> list[dict]:
-    if not raw:
-        return []
-    try:
-        value = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return []
-    if not isinstance(value, list):
-        return []
-
-    items = []
-    seen_codes = set()
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        code = str(item.get("code") or "").strip()
-        name = str(item.get("name") or "").strip()
-        prompt = str(item.get("prompt") or "").strip()
-        if not code or not name or not prompt or code in seen_codes:
-            continue
-        seen_codes.add(code)
-        items.append({"code": code, "name": name, "prompt": prompt})
-    return items
-
-
 def retry_check_codes_for_task(task) -> list[str]:
     status = str(_task_value(task, "status") or "").strip()
     if status not in {"failed", "partial"}:
@@ -537,41 +456,6 @@ def _check_results_from_json(raw: str | None) -> list[dict]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
-
-
-def _stored_retry_check_codes(task) -> list[str] | None:
-    raw = _task_value(task, "retry_check_codes_json")
-    if raw is None:
-        return None
-    try:
-        value = json.loads(raw)
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("重试检查项范围无效") from exc
-    if not isinstance(value, list) or not value:
-        raise RuntimeError("重试检查项范围无效")
-
-    codes = []
-    seen_codes = set()
-    for item in value:
-        code = str(item or "").strip() if isinstance(item, str) else ""
-        if not code or code in seen_codes:
-            raise RuntimeError("重试检查项范围无效")
-        seen_codes.add(code)
-        codes.append(code)
-    return codes
-
-
-def _check_items_for_retry(
-    check_items: list[dict],
-    retry_check_codes: list[str] | None,
-) -> list[dict]:
-    if retry_check_codes is None:
-        return check_items
-    items_by_code = {str(item.get("code") or "").strip(): item for item in check_items}
-    missing_codes = [code for code in retry_check_codes if code not in items_by_code]
-    if missing_codes:
-        raise RuntimeError(f"原任务检查项快照缺少重试项：{','.join(missing_codes)}")
-    return [items_by_code[code] for code in retry_check_codes]
 
 
 def _run_check_items_concurrently(
@@ -679,8 +563,6 @@ def _run_check_items_concurrently(
                 if item_cancel_event.is_set():
                     raise RuntimeError("本检查项已由用户取消。")
 
-            ensure_active()
-
             logger.info(
                 "任务检查项开始 task_id=%s item=%s index=%s/%s",
                 task_id,
@@ -723,7 +605,9 @@ def _run_check_items_concurrently(
                 save_snapshot(db, summary, current_progress())
 
             try:
-                update_check_activity(task_id, claim_token, [item["code"]], "checking")
+                if not start_check_activity(task_id, claim_token, item["code"]):
+                    item_cancel_event.set()
+                ensure_active()
                 structured_report = None
                 if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                     structured_report = _run_sensitive_terms_check(

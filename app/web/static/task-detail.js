@@ -10,11 +10,13 @@
   root.querySelectorAll("[data-detail-region], [data-detail-result]").forEach((node) => markup.set(node, node.innerHTML));
   let pending = false;
   let actionVersion = 0;
+  let cancelPending = false;
 
   function interactionActive() {
     const focused = document.activeElement;
     const selection = window.getSelection();
-    return (root.contains(focused) && focused.matches("input, textarea, select"))
+    return cancelPending || Boolean(document.querySelector(".confirm-popover"))
+      || (root.contains(focused) && focused.matches("input, textarea, select"))
       || (selection && !selection.isCollapsed && root.contains(selection.anchorNode));
   }
 
@@ -71,10 +73,10 @@
       if (["completed", "failed", "canceled"].includes(phase)) node.dataset.checkTerminal = "1";
       const label = node.querySelector("[data-check-activity]");
       const text = data.active ? phaseLabels[phase] || "" : "";
-      label.textContent = text + (text && state.attempt > 1 ? ` · 第 ${state.attempt}/3 次尝试` : "");
+      label.textContent = text ? `状态：${text}` + (state.attempt > 1 ? ` · 第 ${state.attempt}/3 次尝试` : "") : "";
       label.hidden = !text;
       const button = node.querySelector("[data-cancel-check]");
-      button.hidden = !(singleCancel && data.status === "running" && ["waiting", "thinking", "output", "retrying"].includes(phase));
+      button.hidden = !(singleCancel && ["queued", "running"].includes(data.status) && ["pending", "checking", "waiting", "thinking", "output", "retrying"].includes(phase));
     });
     root.dataset.detailActive = data.active ? "1" : "0";
     root.querySelector("[data-detail-refresh-message]").textContent = data.active ? "每 10 秒更新" : "任务已结束";
@@ -100,10 +102,10 @@
     } finally { pending = false; }
   }
 
-  root.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-cancel-check]");
-    if (!button || button.disabled) return;
+  async function cancelCheck(button) {
+    if (!button.isConnected || button.disabled || button.hidden || cancelPending) return;
     actionVersion += 1;
+    cancelPending = true;
     button.disabled = true;
     try {
       const response = await fetch(root.dataset.cancelCheckUrl, {
@@ -114,12 +116,21 @@
       if (!response.ok) throw new Error(data.error || "取消请求失败，请重试。");
       const label = button.closest("[data-detail-result]").querySelector("[data-check-activity]");
       label.hidden = false;
-      label.textContent = "取消中";
+      label.textContent = "状态：取消中";
       button.hidden = true;
-      await refresh(true);
     } catch (error) {
       if (typeof showToast === "function") showToast(error.message || "取消请求失败，请重试。", "error");
-    } finally { button.disabled = false; }
+    } finally { button.disabled = false; cancelPending = false; }
+    await refresh(true);
+  }
+
+  root.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-cancel-check]");
+    if (!button || button.disabled || cancelPending) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const name = button.closest("[data-detail-result]").querySelector(".check-title").textContent.trim();
+    showConfirmPopover(button, `确定取消“${name}”的执行？`, () => cancelCheck(button));
   });
   setInterval(refresh, 10000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });

@@ -163,16 +163,15 @@
   {% for result in results %}
   <article class="panel result-panel" data-detail-result="{{ result.code }}" data-check-terminal="{{ '0' if result.execution_label else '1' }}">
     <div class="panel-head">
-      <div>
-        <h2 class="check-title">{{ result.name }}<small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}</small></h2>
+      <div class="check-heading">
+        <h2 class="check-title">{{ result.name }}</h2>
+        <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消执行</button>
+        <small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{% if result.execution_label %}状态：{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}{% endif %}</small>
       </div>
-    </div>
-    <div class="check-actions" data-check-actions>
-      <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消此项</button>
     </div>
     {% if result.uses_model %}
     <details class="model-output-details" data-model-output="{{ result.code }}">
-      <summary>模型输出内容 <small data-output-status>展开查看</small></summary>
+      <summary>模型输出内容<small data-output-status></small></summary>
       <div class="model-output-scroll" data-output-scroll>
         <div data-output-requests></div>
         <div data-output-fallback>

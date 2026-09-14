@@ -3998,13 +3998,19 @@ body.table-column-resize-active * {
   content: "";
   position: absolute;
   top: -7px;
-  right: 24px;
+  left: calc(var(--confirm-arrow-left, 270px) - 6px);
   width: 12px;
   height: 12px;
   border-top: 1px solid #cfe0f5;
   border-left: 1px solid #cfe0f5;
   background: #fff;
   transform: rotate(45deg);
+}
+
+.confirm-popover[data-placement="top"]::before {
+  top: auto;
+  bottom: -7px;
+  transform: rotate(225deg);
 }
 
 .confirm-popover-title {
@@ -4323,17 +4329,19 @@ body.table-column-resize-active * {
   margin-bottom: 24px;
 }
 
-.check-title small {
-  margin-left: 0.7rem;
+.check-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.panel-head .check-title {
+  margin: 0;
+}
+.check-heading small {
   color: var(--muted, #64748b);
   font-size: 0.78rem;
   font-weight: 400;
-}
-.check-actions {
-  margin-bottom: 0.5rem;
-}
-.check-actions:has(button[hidden]) {
-  display: none;
 }
 .task-refresh-message {
   color: var(--muted, #64748b);
@@ -4361,6 +4369,10 @@ body.table-column-resize-active * {
   margin-left: 8px;
   color: var(--muted);
   font-weight: 400;
+}
+
+.model-output-details > summary small:empty {
+  display: none;
 }
 
 .model-output-scroll {

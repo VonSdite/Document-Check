@@ -410,7 +410,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(page.get_data(as_text=True), "html.parser")
         self.assertIsNone(soup.select_one('meta[http-equiv="refresh"]'))
         self.assertEqual(
-            soup.select_one("[data-check-activity]").get_text(strip=True), "思考"
+            soup.select_one("[data-check-activity]").get_text(strip=True), "状态：思考"
         )
         self.assertFalse(soup.select_one("[data-cancel-check]").has_attr("hidden"))
         revision = soup.select_one("[data-task-detail]")["data-detail-revision"]
@@ -434,6 +434,64 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(
             finished_soup.select_one("[data-check-activity]").has_attr("hidden")
         )
+
+    def test_cancel_check_before_execution_on_user_and_admin_pages(self):
+        checks = [{"code": "demo", "name": "演示检查", "prompt": "检查"}]
+        for prefix in ("/tasks", "/admin/tasks"):
+            for status in ("queued", "running"):
+                for task_type in (
+                    DOCUMENT_TASK_TYPE,
+                    CONSISTENCY_TASK_TYPE,
+                    LANGUAGE_CONSISTENCY_TASK_TYPE,
+                ):
+                    with self.subTest(
+                        prefix=prefix, status=status, task_type=task_type
+                    ):
+                        task_id = self._insert_task(status=status, task_type=task_type)
+                        with self.app.app_context():
+                            get_db().execute(
+                                "UPDATE tasks SET checks_snapshot_json=? WHERE id=?",
+                                (json.dumps(checks), task_id),
+                            )
+                            get_db().commit()
+                        url = f"{prefix}/{task_id}"
+                        page = self.client.get(url)
+                        self.assertEqual(page.status_code, 200)
+                        soup = BeautifulSoup(page.get_data(as_text=True), "html.parser")
+                        button = soup.select_one(".check-heading [data-cancel-check]")
+                        self.assertEqual(button.get_text(strip=True), "取消执行")
+                        self.assertFalse(button.has_attr("hidden"))
+                        self.assertEqual(
+                            soup.select_one("[data-check-activity]").get_text(
+                                strip=True
+                            ),
+                            "状态：待执行",
+                        )
+                        self.assertEqual(
+                            soup.select_one("[data-model-output] summary").get_text(
+                                strip=True
+                            ),
+                            "模型输出内容",
+                        )
+                        self.assertEqual(
+                            self.client.post(
+                                f"{url}/cancel-check", json={"code": "missing"}
+                            ).status_code,
+                            409,
+                        )
+                        self.assertEqual(
+                            self.client.post(
+                                f"{url}/cancel-check", json={"code": "demo"}
+                            ).status_code,
+                            200,
+                        )
+                        payload = self.client.get(
+                            url, query_string={"_poll": "1"}
+                        ).get_json()
+                        self.assertEqual(
+                            payload["checks"]["demo"]["phase"], "canceling"
+                        )
+                        self.assertEqual(payload["status"], status)
 
     def test_cancel_check_is_scoped_to_active_supported_items(self):
         from app.tasks.activity import (
@@ -496,6 +554,46 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 f"/admin/tasks/{media_id}/cancel-check", json={"code": "demo"}
             ).status_code,
             400,
+        )
+
+    def test_queued_retry_only_allows_canceling_items_in_retry_scope(self):
+        from app.tasks.activity import activity_key, task_activities
+
+        task_id, _, _, _ = self._insert_retryable_task()
+        with self.app.app_context():
+            set_setting(
+                activity_key(task_id),
+                json.dumps(
+                    {
+                        "claim_token": None,
+                        "checks": {"check-a": {"name": "检查 A", "phase": "pending"}},
+                    }
+                ),
+            )
+        self.assertEqual(
+            self.client.post(f"/admin/tasks/{task_id}/retry").status_code, 302
+        )
+        with self.app.app_context():
+            self.assertEqual(task_activities([task_id]), {})
+        page = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(page.get_data(as_text=True), "html.parser")
+        self.assertTrue(
+            soup.select_one('[data-cancel-check="check-a"]').has_attr("hidden")
+        )
+        self.assertFalse(
+            soup.select_one('[data-cancel-check="check-b"]').has_attr("hidden")
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/admin/tasks/{task_id}/cancel-check", json={"code": "check-a"}
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/admin/tasks/{task_id}/cancel-check", json={"code": "check-b"}
+            ).status_code,
+            200,
         )
 
     def test_user_cannot_poll_or_cancel_another_owners_check(self):

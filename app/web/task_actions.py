@@ -6,6 +6,7 @@ from flask import abort, flash, redirect, request, url_for
 from app.infrastructure.files import describe_failures
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import delete_task_record
+from app.tasks.activity import activity_key
 from app.tasks.files import (
     _image_folder,
     _remove_empty_directory,
@@ -228,6 +229,7 @@ def _retry_task(task) -> bool:
         return False
 
     db.execute("DELETE FROM task_live_results WHERE task_id = ?", (task["id"],))
+    db.execute("DELETE FROM settings WHERE key = ?", (activity_key(task["id"]),))
     db.commit()
     flash(
         f"已重新加入队列，将只重跑 {len(retry_check_codes)} 个失败检查项。", "success"

@@ -172,6 +172,7 @@ class TaskExecutionTest(unittest.TestCase):
         initialize_activity(task_id, "current", phase="checking", checks=checks)
         update_check_activity(task_id, "current", ["demo"], "thinking", 1)
         self.assertFalse(request_check_cancellation(task_id, "old", "demo"))
+        self.assertFalse(request_check_cancellation(task_id, None, "demo"))
         self.assertTrue(request_check_cancellation(task_id, "current", "demo"))
         update_check_activity(task_id, "current", ["demo"], "output", 1)
         self.assertEqual(
@@ -191,6 +192,118 @@ class TaskExecutionTest(unittest.TestCase):
         )
         finish_check_activity(task_id, "new", "demo")
         self.assertFalse(request_check_cancellation(task_id, "new", "demo"))
+
+    def test_queued_check_cancellation_survives_claim_and_skips_model(self):
+        from app.tasks.activity import request_check_cancellation, task_activities
+
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "检查"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        get_db().execute("UPDATE tasks SET status='queued' WHERE id=?", (task_id,))
+        get_db().commit()
+        self.assertTrue(request_check_cancellation(task_id, None, "first"))
+        supervisor = TaskSupervisor(self.app)
+        self.assertEqual(supervisor._claim_available_tasks(max_claims=0), [])
+        self.assertTrue(
+            task_activities([task_id])[task_id]["checks"]["first"]["cancel_requested"]
+        )
+        [(claimed_id, token)] = supervisor._claim_available_tasks()
+        self.assertEqual(claimed_id, task_id)
+        self.assertEqual(task_activities([task_id])[task_id]["claim_token"], token)
+        self.assertFalse(request_check_cancellation(task_id, None, "second"))
+        with patch("app.tasks.runner.run_check", return_value="第二项完成") as model:
+            TaskRunner(self.app).run(task_id, token)
+        self.assertEqual(model.call_count, 1)
+        self.assertEqual(model.call_args.kwargs["check_name"], "第二项")
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "partial")
+        results = json.loads(task["result_json"])
+        self.assertTrue(results[0]["canceled"])
+        self.assertEqual(results[1]["result"], "第二项完成")
+
+    def test_cancellation_during_preprocessing_skips_check(self):
+        from app.tasks.activity import request_check_cancellation, task_activities
+
+        checks = [{"id": 101, "code": "only", "name": "唯一项", "prompt": "检查"}]
+        task_id = self._insert_running_document_task(checks)
+
+        def prepare(*args, **kwargs):
+            activity = task_activities([task_id])[task_id]
+            self.assertEqual(activity["phase"], "preparing")
+            self.assertEqual(activity["checks"]["only"]["phase"], "pending")
+            self.assertTrue(request_check_cancellation(task_id, None, "only"))
+            return "正文", None
+
+        with (
+            patch("app.tasks.runner._prepare_task_inputs", side_effect=prepare),
+            patch("app.tasks.runner.run_check") as model,
+        ):
+            TaskRunner(self.app).run(task_id)
+        model.assert_not_called()
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "canceled")
+        self.assertTrue(json.loads(task["result_json"])[0]["canceled"])
+
+    def test_pending_checks_skip_execution_before_watcher_poll(self):
+        from app.tasks.activity import request_check_cancellation
+
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "检查"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+            {
+                "id": 103,
+                "code": COMMON_TERMS_CHECK_CODE,
+                "name": "常用语",
+                "prompt": "检查",
+            },
+        ]
+        task_id = self._insert_running_document_task(checks)
+        set_setting("check_item_concurrency", 1)
+
+        def model(**kwargs):
+            self.assertEqual(kwargs["check_name"], "第一项")
+            self.assertTrue(request_check_cancellation(task_id, None, "second"))
+            self.assertTrue(
+                request_check_cancellation(task_id, None, COMMON_TERMS_CHECK_CODE)
+            )
+            return "第一项完成"
+
+        with (
+            patch(
+                "app.tasks.runner._start_task_cancel_watcher", return_value=(None, None)
+            ),
+            patch("app.tasks.runner.run_check", side_effect=model) as run_model,
+            patch("app.tasks.runner._run_common_terms_check") as local_check,
+        ):
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(run_model.call_count, 1)
+        local_check.assert_not_called()
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "partial")
+        results = json.loads(task["result_json"])
+        self.assertEqual(results[0]["result"], "第一项完成")
+        self.assertTrue(all(result["canceled"] for result in results[1:]))
+
+    def test_recovered_lease_does_not_inherit_old_check_cancellation(self):
+        from app.tasks.activity import (
+            initialize_activity,
+            request_check_cancellation,
+            task_activities,
+        )
+
+        task_id = self._insert_scheduler_task(status="running", claim_token="expired")
+        initialize_activity(
+            task_id, "expired", checks=[{"code": "demo", "name": "演示"}]
+        )
+        self.assertTrue(request_check_cancellation(task_id, "expired", "demo"))
+        [(claimed_id, token)] = TaskSupervisor(self.app)._claim_available_tasks()
+        self.assertEqual(claimed_id, task_id)
+        initialize_activity(task_id, token, checks=[{"code": "demo", "name": "演示"}])
+        item = task_activities([task_id])[task_id]["checks"]["demo"]
+        self.assertEqual(item["phase"], "pending")
+        self.assertNotIn("cancel_requested", item)
 
     def test_external_task_cancel_event_reaches_individual_model_request(self):
         from app.tasks.runtime.state import TaskCanceled
