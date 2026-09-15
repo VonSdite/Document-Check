@@ -889,7 +889,7 @@ def _run_payload_with_retries(
                 )
             if on_activity:
                 on_activity("retrying", attempt + 1)
-            delay_seconds = attempt
+            delay_seconds = attempt * 2
             logger.warning(
                 "LLM 请求出错，准备重试 request_id=%s task_id=%s attempt=%s/%s delay=%ss error=%s",
                 request_id,

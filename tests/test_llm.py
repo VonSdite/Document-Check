@@ -791,7 +791,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertTrue(fake_session.calls[1][1]["stream"])
         self.assertFalse(fake_session.calls[0][1]["verify"])
         self.assertFalse(fake_session.calls[1][1]["verify"])
-        sleep.assert_called_once_with(1)
+        sleep.assert_called_once_with(2)
 
     def test_stops_repeated_stream_without_retry(self):
         repeated = "重复内容" * 20
@@ -894,7 +894,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertNotIn("thinking", first_payload)
         self.assert_all_thinking_disable_flags(second_payload)
         self.assertIn("下一次重试自动关闭思考", "\n".join(logs.output))
-        sleep.assert_called_once_with(1)
+        sleep.assert_called_once_with(2)
 
     def test_force_disabled_thinking_stops_reasoning_quickly_and_retries(self):
         consumed = []
@@ -940,7 +940,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(len(fake_session.calls), 2)
         self.assert_all_thinking_disable_flags(fake_session.calls[0][1]["json"])
         self.assert_all_thinking_disable_flags(fake_session.calls[1][1]["json"])
-        sleep.assert_called_once_with(1)
+        sleep.assert_called_once_with(2)
 
     def test_generic_reasoning_only_retry_does_not_add_deepseek_thinking_flags(self):
         fake_session = FakeSession(
@@ -1483,7 +1483,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(result, "重试成功")
         self.assertEqual(chunks, ["重试成功"])
         self.assertEqual(len(fake_session.calls), 3)
-        self.assertEqual(sleep.call_args_list, [call(1), call(2)])
+        self.assertEqual(sleep.call_args_list, [call(2), call(4)])
 
     def test_stream_trace_logs_request_and_chunks(self):
         fake_session = FakeSession(
@@ -1560,7 +1560,7 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(result, "重试成功")
         self.assertEqual(snapshots, ["失败前片段", "", "重试", "重试成功"])
         self.assertEqual(len(fake_session.calls), 2)
-        sleep.assert_called_once_with(1)
+        sleep.assert_called_once_with(2)
 
 
 if __name__ == "__main__":
