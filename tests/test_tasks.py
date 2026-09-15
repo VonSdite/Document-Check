@@ -26,6 +26,7 @@ from app.persistence.settings import set_setting
 from app.tasks.runner import (
     TaskRunner,
     _document_check_items,
+    _local_rule_document_text,
     _run_check_items_concurrently,
 )
 from app.tasks.runtime.artifacts import (
@@ -71,6 +72,15 @@ class TaskExecutionTest(unittest.TestCase):
     def tearDown(self):
         self.context.pop()
         self.temp_dir.cleanup()
+
+    def test_local_rule_document_text_prefers_plain_pdf_text(self):
+        self.assertEqual(
+            _local_rule_document_text(
+                "file: guide.pdf\n\nCO_{2} 指标",
+                {"text_semantics": {"script_marker_format": "caret_brace_v1"}},
+            ),
+            "file: guide.pdf\n\nCO2 指标",
+        )
 
     def test_single_check_cancel_keeps_other_check_running_and_retains_results(self):
         from app.tasks.activity import request_check_cancellation, task_activities

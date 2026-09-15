@@ -42,6 +42,7 @@ from app.contracts.task_types import (
 )
 from app.documents.extraction.common import DocumentReadError
 from app.documents.images import image_items_from_meta
+from app.documents.text_semantics import strip_script_markers
 from app.infrastructure.network import outbound_network_config
 from app.models.client import LLMError, run_check
 from app.persistence.connection import get_db, now_text
@@ -509,6 +510,7 @@ def _run_check_items_concurrently(
 
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
+    local_rule_document_text = _local_rule_document_text(document_text, document_meta)
 
     def save_failed_result(item, execution, error, *, canceled):
         progress = mark_unit_completed()
@@ -610,12 +612,12 @@ def _run_check_items_concurrently(
                 structured_report = None
                 if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                     structured_report = _run_sensitive_terms_check(
-                        app, document_text, issue_output_limit
+                        app, local_rule_document_text, issue_output_limit
                     )
                     content = format_sensitive_terms_report(structured_report)
                 elif item["code"] == COMMON_TERMS_CHECK_CODE:
                     structured_report = _run_common_terms_check(
-                        app, document_text, issue_output_limit
+                        app, local_rule_document_text, issue_output_limit
                     )
                     content = format_common_terms_report(structured_report)
                 elif item["code"] == HYPERLINK_CHECK_CODE:
@@ -792,6 +794,20 @@ def _run_check_items_concurrently(
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
         executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _local_rule_document_text(document_text: str, document_meta: dict | None) -> str:
+    if isinstance(document_meta, dict):
+        plain_text = document_meta.get("plain_document_text")
+        if isinstance(plain_text, str) and plain_text.strip():
+            return plain_text
+        text_semantics = document_meta.get("text_semantics")
+        if (
+            isinstance(text_semantics, dict)
+            and text_semantics.get("script_marker_format") == "caret_brace_v1"
+        ):
+            return strip_script_markers(document_text)
+    return document_text
 
 
 def _run_sensitive_terms_check(

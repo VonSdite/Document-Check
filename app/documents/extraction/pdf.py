@@ -19,6 +19,9 @@ from app.documents.extraction.common import (
 
 _PDF_TABLE_COORDINATE_TOLERANCE = 2.0
 _PDF_TABLE_MIN_TEXT_COVERAGE = 0.85
+_PDF_SCRIPT_SIZE_RATIO = 0.88
+_PDF_SCRIPT_VERTICAL_RATIO = 0.18
+_PDF_SCRIPT_NEIGHBOR_GAP_RATIO = 0.9
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +55,7 @@ def _extract_pdf(
             if layout_document is not None and index <= layout_document.page_count:
                 layout_page = layout_document[index - 1]
                 pymupdf_text, raw_page = _extract_pymupdf_page_text(layout_page)
+                pymupdf_semantic_text = _pdf_page_semantic_text(raw_page)
                 pypdf_text = ""
                 if _pdf_should_try_pypdf(pymupdf_text):
                     if reader is None:
@@ -60,8 +64,13 @@ def _extract_pdf(
                     pypdf_text = pypdf_page.extract_text() or ""
                 pypdf_text = _normalize_pdf_overlapping_spaces(pypdf_text, raw_page)
                 pymupdf_text = _normalize_pdf_overlapping_spaces(pymupdf_text, raw_page)
-                text = _select_pdf_page_text(pypdf_text, pymupdf_text)
-                if include_tables and text == pymupdf_text:
+                selected_text = _select_pdf_page_text(pypdf_text, pymupdf_text)
+                text = (
+                    pymupdf_semantic_text
+                    if selected_text == pymupdf_text and pymupdf_semantic_text.strip()
+                    else selected_text
+                )
+                if include_tables and selected_text == pymupdf_text:
                     structured_text = _extract_pymupdf_page_with_tables(
                         layout_page,
                         index,
@@ -109,6 +118,18 @@ def _extract_pymupdf_page_text(page) -> tuple[str, dict]:
         return text, raw_page
     except Exception:
         return "", {}
+
+
+def _pdf_page_semantic_text(raw_page: dict) -> str:
+    lines = []
+    for block in raw_page.get("blocks", []):
+        if block.get("type", 0) != 0:
+            continue
+        for line in block.get("lines", []):
+            text = _pdf_line_semantic_text(line).strip()
+            if text:
+                lines.append(text)
+    return "\n".join(lines)
 
 
 def _extract_pymupdf_page_with_tables(
@@ -171,6 +192,7 @@ def _extract_pymupdf_page_with_tables(
                 table,
                 page_number=page_number,
                 table_index=table_index,
+                raw_page=raw_page,
                 drawings=table_drawings,
                 image_bboxes=table_images,
                 cancel_event=cancel_event,
@@ -256,6 +278,7 @@ def _pdf_table_model(
     *,
     page_number: int,
     table_index: int,
+    raw_page: dict,
     drawings: list[dict],
     image_bboxes: list[tuple[float, ...]],
     cancel_event=None,
@@ -344,6 +367,9 @@ def _pdf_table_model(
                     ).strip()
                 except Exception:
                     cell_text = ""
+            semantic_cell_text = _pdf_semantic_text_in_bbox(raw_page, bbox)
+            if semantic_cell_text:
+                cell_text = semantic_cell_text
             has_nontext_content = nontext.contains(bbox)
             cells.append(
                 {
@@ -531,7 +557,9 @@ def _pdf_page_text_elements(
         for line in block.get("lines", []):
             source_order += 1
             _source, text = _pdf_line_text_variants(line)
+            semantic_text = _pdf_line_semantic_text(line)
             text = text.strip()
+            semantic_text = semantic_text.strip()
             bbox = line.get("bbox")
             if not text or not bbox:
                 continue
@@ -544,7 +572,7 @@ def _pdf_page_text_elements(
             elements.append(
                 {
                     "bbox": normalized_bbox,
-                    "content": text,
+                    "content": semantic_text or text,
                     "plain_text": text,
                     "kind": "text",
                     "source_order": source_order,
@@ -851,15 +879,7 @@ def _pdf_line_text_variants(line: dict) -> tuple[str, str]:
     cached = line.get("_text_variants")
     if isinstance(cached, tuple) and len(cached) == 2:
         return cached
-    chars = []
-    for span in line.get("spans", []):
-        size = float(span.get("size") or 0)
-        for char in span.get("chars", []):
-            value = str(char.get("c") or "")
-            if value:
-                chars.append(
-                    {"value": value, "origin": char.get("origin"), "size": size}
-                )
+    chars = _pdf_line_char_items(line)
 
     source = "".join(char["value"] for char in chars)
     if " " not in source or len(chars) < 3:
@@ -867,19 +887,120 @@ def _pdf_line_text_variants(line: dict) -> tuple[str, str]:
         line["_text_variants"] = result
         return result
 
+    remove_indexes = _pdf_line_overlapping_space_indexes(line, chars)
+    normalized = "".join(
+        char["value"] for index, char in enumerate(chars) if index not in remove_indexes
+    )
+    result = (source, normalized)
+    line["_text_variants"] = result
+    return result
+
+
+def _pdf_line_semantic_text(line: dict, indexes: set[int] | None = None) -> str:
+    if indexes is None:
+        cached = line.get("_semantic_text")
+        if isinstance(cached, str):
+            return cached
+    chars = _pdf_line_char_items(line)
+    remove_indexes = _pdf_line_overlapping_space_indexes(line, chars)
+    script_kinds = _pdf_line_script_kinds(line, chars, remove_indexes)
+    active_indexes = indexes if indexes is not None else set(range(len(chars)))
+    parts = []
+    index = 0
+    while index < len(chars):
+        if index in remove_indexes or index not in active_indexes:
+            index += 1
+            continue
+        kind = script_kinds.get(index)
+        if not kind:
+            parts.append(chars[index]["value"])
+            index += 1
+            continue
+
+        values = []
+        while index < len(chars):
+            if index in remove_indexes:
+                index += 1
+                continue
+            if index not in active_indexes or script_kinds.get(index) != kind:
+                break
+            values.append(chars[index]["value"])
+            index += 1
+        marker = "^" if kind == "superscript" else "_"
+        parts.append(f"{marker}{{{''.join(values)}}}")
+    result = "".join(parts)
+    if indexes is None:
+        line["_semantic_text"] = result
+    return result
+
+
+def _pdf_semantic_text_in_bbox(raw_page: dict, bbox: tuple[float, ...]) -> str:
+    expanded = (
+        bbox[0] - _PDF_TABLE_COORDINATE_TOLERANCE,
+        bbox[1] - _PDF_TABLE_COORDINATE_TOLERANCE,
+        bbox[2] + _PDF_TABLE_COORDINATE_TOLERANCE,
+        bbox[3] + _PDF_TABLE_COORDINATE_TOLERANCE,
+    )
+    lines = []
+    for block in raw_page.get("blocks", []):
+        if block.get("type", 0) != 0:
+            continue
+        for line in block.get("lines", []):
+            indexes = {
+                index
+                for index, char in enumerate(_pdf_line_char_items(line))
+                if _pdf_char_center_in_bbox(char, expanded)
+            }
+            if not indexes:
+                continue
+            text = _pdf_line_semantic_text(line, indexes).strip()
+            if text:
+                lines.append(text)
+    return "\n".join(lines).strip()
+
+
+def _pdf_line_char_items(line: dict) -> list[dict]:
+    cached = line.get("_char_items")
+    if isinstance(cached, list):
+        return cached
+    chars = []
+    for span in line.get("spans", []):
+        size = float(span.get("size") or 0)
+        for char in span.get("chars", []):
+            value = str(char.get("c") or "")
+            if value:
+                chars.append(
+                    {
+                        "value": value,
+                        "origin": char.get("origin"),
+                        "bbox": char.get("bbox"),
+                        "size": size,
+                    }
+                )
+    line["_char_items"] = chars
+    return chars
+
+
+def _pdf_line_overlapping_space_indexes(line: dict, chars: list[dict]) -> set[int]:
+    cached = line.get("_overlapping_space_indexes")
+    if isinstance(cached, set):
+        return cached
+    source = "".join(char["value"] for char in chars)
+    if " " not in source or len(chars) < 3:
+        line["_overlapping_space_indexes"] = set()
+        return set()
+
     direction = line.get("dir") or (1.0, 0.0)
     try:
         direction_x = float(direction[0])
         direction_y = float(direction[1])
         direction_length = (direction_x**2 + direction_y**2) ** 0.5
     except (TypeError, ValueError, IndexError):
-        result = (source, source)
-        line["_text_variants"] = result
-        return result
+        line["_overlapping_space_indexes"] = set()
+        return set()
     if direction_length <= 0:
-        result = (source, source)
-        line["_text_variants"] = result
-        return result
+        line["_overlapping_space_indexes"] = set()
+        return set()
     direction_x /= direction_length
     direction_y /= direction_length
 
@@ -914,9 +1035,153 @@ def _pdf_line_text_variants(line: dict) -> tuple[str, str]:
         if abs(advance) <= tolerance:
             remove_indexes.add(index)
 
-    normalized = "".join(
-        char["value"] for index, char in enumerate(chars) if index not in remove_indexes
-    )
-    result = (source, normalized)
-    line["_text_variants"] = result
+    line["_overlapping_space_indexes"] = remove_indexes
+    return remove_indexes
+
+
+def _pdf_line_script_kinds(
+    line: dict, chars: list[dict], remove_indexes: set[int]
+) -> dict[int, str]:
+    cached = line.get("_script_kinds")
+    if isinstance(cached, dict):
+        return cached
+    result: dict[int, str] = {}
+    direction = line.get("dir") or (1.0, 0.0)
+    try:
+        direction_x = float(direction[0])
+        direction_y = float(direction[1])
+    except (TypeError, ValueError, IndexError):
+        line["_script_kinds"] = result
+        return result
+    if abs(direction_y) > 0.25 or abs(direction_x) < 0.75:
+        line["_script_kinds"] = result
+        return result
+
+    visible_indexes = [
+        index
+        for index, char in enumerate(chars)
+        if index not in remove_indexes and char["value"].strip()
+    ]
+    if len(visible_indexes) < 2:
+        line["_script_kinds"] = result
+        return result
+
+    sizes = [float(chars[index].get("size") or 0) for index in visible_indexes]
+    main_size = _dominant_pdf_font_size(sizes)
+    if main_size <= 0:
+        line["_script_kinds"] = result
+        return result
+
+    size_tolerance = max(0.75, main_size * 0.08)
+    body_indexes = [
+        index
+        for index in visible_indexes
+        if abs(float(chars[index].get("size") or 0) - main_size) <= size_tolerance
+    ]
+    if not body_indexes:
+        line["_script_kinds"] = result
+        return result
+    baseline = _median(_pdf_char_baseline_y(chars[index]) for index in body_indexes)
+    body_index_set = set(body_indexes)
+    min_vertical_offset = max(1.2, main_size * _PDF_SCRIPT_VERTICAL_RATIO)
+
+    for index in visible_indexes:
+        char = chars[index]
+        value = char["value"]
+        size = float(char.get("size") or 0)
+        if (
+            index in body_index_set
+            or size <= 0
+            or size > main_size * _PDF_SCRIPT_SIZE_RATIO
+            or not _is_pdf_script_candidate_char(value)
+            or not _has_pdf_script_neighbor(
+                index, chars, visible_indexes, body_index_set
+            )
+        ):
+            continue
+        offset = baseline - _pdf_char_baseline_y(char)
+        if offset >= min_vertical_offset:
+            result[index] = "superscript"
+        elif offset <= -min_vertical_offset:
+            result[index] = "subscript"
+    line["_script_kinds"] = result
     return result
+
+
+def _dominant_pdf_font_size(sizes: list[float]) -> float:
+    counts: dict[float, int] = {}
+    for size in sizes:
+        rounded = round(float(size), 1)
+        counts[rounded] = counts.get(rounded, 0) + 1
+    return max(counts, key=lambda size: (counts[size], size))
+
+
+def _median(values) -> float:
+    ordered = sorted(float(value) for value in values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def _pdf_char_baseline_y(char: dict) -> float:
+    origin = char.get("origin")
+    if origin and len(origin) >= 2:
+        return float(origin[1])
+    bbox = char.get("bbox")
+    if bbox and len(bbox) == 4:
+        return float(bbox[3])
+    return 0.0
+
+
+def _is_pdf_script_candidate_char(value: str) -> bool:
+    return len(value) == 1 and (value.isalnum() or value in "+-−=()/.,")
+
+
+def _has_pdf_script_neighbor(
+    index: int, chars: list[dict], visible_indexes: list[int], body_indexes: set[int]
+) -> bool:
+    position = visible_indexes.index(index)
+    gap_limit = max(
+        3.0,
+        float(chars[index].get("size") or 0) * _PDF_SCRIPT_NEIGHBOR_GAP_RATIO,
+    )
+    if position > 0:
+        previous_index = visible_indexes[position - 1]
+        if previous_index in body_indexes and (
+            _pdf_inline_gap(chars[previous_index], chars[index]) <= gap_limit
+        ):
+            return True
+    if position + 1 < len(visible_indexes):
+        next_index = visible_indexes[position + 1]
+        if next_index in body_indexes and (
+            _pdf_inline_gap(chars[index], chars[next_index]) <= gap_limit
+        ):
+            return True
+    return False
+
+
+def _pdf_inline_gap(left: dict, right: dict) -> float:
+    left_bbox = left.get("bbox")
+    right_bbox = right.get("bbox")
+    if left_bbox and len(left_bbox) == 4 and right_bbox and len(right_bbox) == 4:
+        return max(0.0, float(right_bbox[0]) - float(left_bbox[2]))
+    left_origin = left.get("origin")
+    right_origin = right.get("origin")
+    if (
+        left_origin
+        and len(left_origin) >= 2
+        and right_origin
+        and len(right_origin) >= 2
+    ):
+        return abs(float(right_origin[0]) - float(left_origin[0]))
+    return float("inf")
+
+
+def _pdf_char_center_in_bbox(char: dict, bbox: tuple[float, ...]) -> bool:
+    char_bbox = char.get("bbox")
+    if not char_bbox or len(char_bbox) != 4:
+        return False
+    center_x = (float(char_bbox[0]) + float(char_bbox[2])) / 2
+    center_y = (float(char_bbox[1]) + float(char_bbox[3])) / 2
+    return bbox[0] <= center_x <= bbox[2] and bbox[1] <= center_y <= bbox[3]

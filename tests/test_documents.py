@@ -34,6 +34,7 @@ from app.documents.images import (
     image_path_from_item,
     select_pdf_page_numbers,
 )
+from app.documents.text_semantics import strip_script_markers
 from app.documents.videos import (
     VideoFrameExtractionError,
     _decode_process_output,
@@ -204,6 +205,42 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("DANGER", text)
         self.assertNotIn("D ANGER", text)
         self.assertIn("NORMAL SPACE", text)
+
+    def test_pdf_extraction_marks_superscript_and_subscript(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "script.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            body_size = 12
+            script_size = 8
+
+            x = 72
+            baseline = 72
+            page.insert_text((x, baseline), "E=mc", fontsize=body_size)
+            x += fitz.get_text_length("E=mc", fontname="helv", fontsize=body_size)
+            page.insert_text((x, baseline - 5), "2", fontsize=script_size)
+
+            x = 72
+            baseline = 105
+            page.insert_text((x, baseline), "H", fontsize=body_size)
+            x += fitz.get_text_length("H", fontname="helv", fontsize=body_size)
+            page.insert_text((x, baseline + 4), "2", fontsize=script_size)
+            x += fitz.get_text_length("2", fontname="helv", fontsize=script_size)
+            page.insert_text((x, baseline), "O", fontsize=body_size)
+
+            document.save(path)
+            document.close()
+
+            text = extract_text(path, "pdf")
+
+        self.assertIn("E=mc^{2}", text)
+        self.assertIn("H_{2}O", text)
+
+    def test_strip_script_markers_returns_plain_text(self):
+        self.assertEqual(
+            strip_script_markers("CO_{2} 与 E=mc^{2}"),
+            "CO2 与 E=mc2",
+        )
 
     def test_extracts_pdf_link_annotation_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:

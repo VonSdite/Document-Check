@@ -28,6 +28,7 @@ from app.documents.images import (
     image_items_from_meta,
     render_pdf_page_images,
 )
+from app.documents.text_semantics import strip_script_markers
 from app.documents.videos import extract_video_frames, format_video_document_text
 from app.infrastructure.files import remove_directory_tree
 from app.persistence.connection import now_text
@@ -95,6 +96,12 @@ def _prepare_task_inputs(
             raise RuntimeError("未能从文档中提取到可检查文本")
         document_text = format_document_text(task["original_filename"], extracted_text)
         document_meta = _document_meta(document_meta_raw)
+        if task["file_type"] == "pdf":
+            plain_document_text = strip_script_markers(document_text)
+            if plain_document_text != document_text:
+                document_meta["text_semantics"] = {
+                    "script_marker_format": "caret_brace_v1"
+                }
         document_meta["hyperlinks"] = [
             {**item, "source": task["original_filename"]} for item in hyperlinks
         ]
