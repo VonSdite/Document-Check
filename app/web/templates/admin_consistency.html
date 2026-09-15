@@ -76,7 +76,7 @@
     </div>
   </div>
 
-  {% with check_label="多文档对照项", check_help="可多选；系统会按检查项逐项调用模型比对素材文档和资料。" %}
+  {% with check_label="多文档对照项", check_help="可多选；系统会按检查项逐项调用模型比对素材文档和资料。", check_first_only=true %}
     {% include "_task_check_picker.html" %}
   {% endwith %}
 </form>

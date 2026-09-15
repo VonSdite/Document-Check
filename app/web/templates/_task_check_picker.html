@@ -1,19 +1,12 @@
-<div class="check-row" data-check-picker data-check-subject="{{ identity.subject }}" data-check-task-type="{{ active_nav }}">
-  <div class="check-picker-head">
-    <div class="check-row-title">
-      <span>{{ check_label }}</span>
-      <span class="help-tip" tabindex="0" data-tip="{{ check_help }}">?</span>
-    </div>
-    <div class="check-picker-actions">
-      <button class="small-button" type="button" data-check-select-all hidden>全部勾选</button>
-      <button class="small-button" type="button" data-check-clear hidden>取消勾选</button>
-      <span class="check-selection-count" data-check-selection-count role="status">已选 {{ 1 if check_items|length == 1 else 0 }} 项 / 共 {{ check_items|length }} 项</span>
-    </div>
+<div class="check-row">
+  <div class="check-row-title">
+    <span>{{ check_label }}</span>
+    <span class="help-tip" tabindex="0" data-tip="{{ check_help }}">?</span>
   </div>
   <div class="check-chip-grid">
     {% for item in check_items %}
     <label class="check-chip">
-      <input type="checkbox" name="checks" value="{{ item.id }}"{% if check_items|length == 1 %} checked{% endif %} autocomplete="off">
+      <input type="checkbox" name="checks" value="{{ item.id }}"{% if not check_first_only|default(false) or loop.first %} checked{% endif %} autocomplete="off">
       <span>{{ item.name }}</span>
       <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
     </label>

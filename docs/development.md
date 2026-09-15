@@ -95,7 +95,7 @@ Uvicorn 使用 `log_config=None` 保留应用日志配置，每个 Web worker �
 
 `web/__init__.py` 统一注册认证、用户任务、模型管理、管理概览、管理任务和系统设置路由。模板和静态资源分别保存在 `web/templates/` 与 `web/static/`。
 
-五类任务的用户端和管理端共用 `_task_check_picker.html`，渲染时传入任务归属身份 `identity` 和任务类型 `active_nav`。`app.js` 按这两个维度在浏览器本地保存提交时的检查项 ID；多项首次不预选，恢复时仅匹配当前可用项，单项默认选中。选择计数、全选、清空和提交前校验由同一套前端逻辑处理。
+五类任务的用户端和管理端共用 `_task_check_picker.html`。单文档、跨语种、图片和视频检查默认全选，多文档对照检查传入 `check_first_only` 并默认选择第一项。各页面提交前统一校验至少选择一项。
 
 ## 回归验证
 
