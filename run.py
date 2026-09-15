@@ -19,11 +19,7 @@ def main() -> None:
     from app.web.observability import log_startup_self_check
 
     app = create_app()
-    host = (
-        os.environ.get("HOST", app.config["LISTEN_HOST"])
-        if app.config["PLATFORM"]
-        else "127.0.0.1"
-    )
+    host = os.environ.get("HOST", app.config["LISTEN_HOST"])
     port = int(os.environ.get("PORT", app.config["LISTEN_PORT"]))
     supervisor = _start_task_supervisor(app)
 

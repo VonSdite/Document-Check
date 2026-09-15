@@ -10,40 +10,6 @@
     ]
   ],
   [
-    "/auth/saml/acs",
-    "saml_acs",
-    [
-      "OPTIONS",
-      "POST"
-    ]
-  ],
-  [
-    "/auth/saml/login",
-    "saml_login",
-    [
-      "GET",
-      "HEAD",
-      "OPTIONS"
-    ]
-  ],
-  [
-    "/auth/saml/logout",
-    "saml_logout",
-    [
-      "OPTIONS",
-      "POST"
-    ]
-  ],
-  [
-    "/auth/saml/metadata",
-    "saml_metadata",
-    [
-      "GET",
-      "HEAD",
-      "OPTIONS"
-    ]
-  ],
-  [
     "/consistency",
     "user_consistency",
     [

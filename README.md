@@ -4,7 +4,7 @@
 
 ## 功能概览
 
-- 用户面：创建单文档检查、多文档对照检查、跨语种文档一致性检查和图片检查任务、维护自己的模型提供商和模型 ID、测试模型连通性、查看当前用户的任务、取消任务、删除历史任务，支持用 SSO 用户主体或 IP 兜底身份归属任务。
+- 用户面：创建单文档检查、多文档对照检查、跨语种文档一致性检查和图片检查任务、维护自己的模型提供商和模型 ID、测试模型连通性、查看当前用户的任务、取消任务、删除历史任务，支持用 Cookie 稳定用户 ID 或 IP 身份归属任务。
 - 跨语种检查：输入两个不同语种或不同语言版本的资料文档，系统先静态抽取长度、语种、标题、数字、版本、URL、邮箱、IP 等硬线索，再调用大模型输出中文差异报告，重点识别内容不一致、缺失、增补和翻译偏差。
 - 管理面：隐藏 URL 登录，查看和管理全部任务，配置检查项提示词、扩展检查项和任务并发度；用户身份和用户模型配置由用户侧管理。
 - 任务执行：独立调度进程从 SQLite 队列拉取任务，默认全局并发 3、单用户并发 1、单任务检查项并发 1，可在管理面调整；机器级任务进程上限默认为 4；文档文本会作为全文一次送入模型，图片检查会把文档文本和按位置命名的图片批次一起送入多模态模型。
@@ -23,7 +23,7 @@
 | `app/contracts/` | 任务类型、数量和输出限制等公共约束 |
 | `app/infrastructure/` | 本地配置、网络、日志、文件操作和进程应用上下文 |
 | `app/persistence/` | SQLite 连接、表结构初始化、设置和默认检查项 |
-| `app/identity/` | 用户身份数据、IP/请求头认证和 SAML 适配 |
+| `app/identity/` | 用户身份数据、IP 与 cookie_session 认证 |
 | `app/models/` | 模型配置、模型发现和推理客户端 |
 | `app/documents/` | 文档文本与链接提取、图片处理和视频抽帧 |
 | `app/checks/` | 检查项目录、词表检查、链接校验、语种分析和证据规则 |
@@ -52,184 +52,28 @@ uv run python run.py
 
 运行依赖在 `pyproject.toml` 中直接声明，并由 `uv.lock` 固定版本：Flask 提供 Web 应用，Uvicorn 与 a2wsgi 提供跨平台多进程 Web 服务及 Flask 请求线程池，psutil 提供跨平台进程存活检测，Werkzeug 提供代理中间件与 HTTP 异常，MarkupSafe 提供 HTML 标记类型，`concurrent-log-handler` 与 `portalocker` 提供多进程安全日志和监督器单实例锁，文档解析、模型请求和报表处理依赖其对应的文档、网络和表格库。
 
-`sqlite3`、`multiprocessing` 等模块由 Python 标准库提供。PDF 图片读取使用 `pypdf[image]` 声明的 Pillow 依赖；SAML 使用 `python3-saml` 声明的 lxml 与 xmlsec 依赖。
+`sqlite3`、`multiprocessing` 等模块由 Python 标准库提供。PDF 图片读取使用 `pypdf[image]` 声明的 Pillow 依赖。
 
-默认本机管理视图地址：
-
-```text
-http://127.0.0.1:31945/
-```
-
-首次启动没有配置文件时，会自动生成非平台模式的 `config.yaml`，默认管理员为 `admin / admin123`。非平台模式下根路径直接进入管理视图，无需登录。
+默认用户入口：
 
 ```text
 http://127.0.0.1:31945/
 ```
+
+首次启动会生成 `config.yaml`，默认监听 `127.0.0.1:31945`。管理员入口为 `/console`，默认账号密码为 `admin / admin123`，管理页面需要登录。
 
 上线或给他人使用前，请修改 `config.yaml` 中的管理员密码、`secret_key` 和 `admin_url`。
 
 ## 本地配置
 
-`config.yaml` 支持配置运行模式、管理入口、监听地址和端口。仓库中提供两份示例：
+系统统一采用用户面与管理面分离的运行方式。参考 [配置样例](config.platform.example.yaml)，复制为 `config.yaml` 后填写真实配置。
 
-```text
-config.platform.example.yaml
-config.non-platform.example.yaml
-```
-
-选择对应模式的示例复制为 `config.yaml` 后再修改真实账号、密码和密钥。
-
-平台服务模式示例：
-
-```yaml
-# 平台服务模式：适合部署到服务器或让局域网/公司入口访问。
-# 管理入口需要登录；auth.mode 按公司身份服务选择 ip、trusted_header 或 saml。
-platform: true
-secret_key: 请替换为随机长字符串
-admin:
-  username: admin
-  password: 请替换为强密码
-admin_url: /console
-server:
-  # 0.0.0.0 表示监听所有网卡；也可以改成服务器指定内网 IP。
-  # 对外开放前请务必修改 admin.password、secret_key 和 admin_url。
-  host: 0.0.0.0
-  port: 31945
-  # 如果通过 Nginx 子路径发布，例如 https://example.com/infoCheck，请填写 /infoCheck；根路径发布则留空。
-  url_prefix: ""
-  # 如果 Nginx 会覆盖并注入真实客户端 IP，例如 proxy_set_header X-Real-IP $remote_addr，可填写 X-Real-IP。
-  # 只有确认外部用户无法绕过 Nginx 直连本服务时才启用。
-  real_ip_header: X-Real-IP
-  # 如果 Nginx 同时注入 X-Forwarded-Proto/Host/Prefix 等标准代理头，可开启。
-  proxy_fix: false
-  max_upload_mb: 1024
-  # Windows 和 Linux 统一使用 Uvicorn；web_workers 控制 Web 进程数。
-  # web_threads 控制每个 Web 进程的 Flask 请求线程数。
-  web_workers: 1
-  web_threads: 16
-worker:
-  # 管理页面中的“系统同时执行任务数”不能超过该机器级上限。
-  max_task_processes: 4
-logging:
-  # 控制台级别：INFO、WARNING、ERROR、CRITICAL；文件固定记录 INFO 及以上日志。
-  console_level: WARNING
-network:
-  # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
-  # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
-  proxy_mode: direct
-  # proxy 仅在 proxy_mode: custom 时填写，例如 http://127.0.0.1:7890；用户模型配置里不允许再填写代理。
-  proxy: ""
-  # 是否校验 HTTPS 证书；默认 false，适合内网或自签名证书服务。公网正式证书环境建议改为 true。
-  ssl_verify: false
-auth:
-  # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
-  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
-  # saml：直接对接 SAML 2.0。
-  # 不同 mode 的用户数据相互隔离：ip:<IP>、trusted_header:<用户ID>、saml:<用户ID>。
-  # 平台 ip 模式可在管理员后台给 IP 设置显示用户名；SSO 模式不会显示该入口。
-  mode: ip
-  # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
-  trusted_header:
-    # user_id 是“唯一用户 ID”所在的 HTTP header 名称，例如 X-SSO-User-Id；不要填姓名。
-    user_id: ""
-    # username 是“显示名”所在的 HTTP header 名称，例如 X-SSO-User-Name；可为空，空时显示 user_id。
-    username: ""
-  # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
-  saml:
-    # sp_entity_id 是本系统作为 SP 的唯一标识，通常可使用 https://你的域名/auth/saml/metadata。
-    sp_entity_id: ""
-    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，必须是外部可访问的 https://你的域名/auth/saml/acs。
-    acs_url: ""
-    # idp_entity_id 是公司 SSO 作为 IdP 的唯一标识，由公司 SSO 管理员提供。
-    idp_entity_id: ""
-    # idp_sso_url 是公司 SSO 的登录跳转地址，由公司 SSO 管理员提供。
-    idp_sso_url: ""
-    # idp_x509_cert 是公司 SSO 用于签名 SAML 响应的公钥证书内容，不是私钥。
-    idp_x509_cert: ""
-    # user_id_attribute 是 SAML Attribute 中稳定唯一用户 ID 的字段名；留空时使用 SAML NameID。
-    user_id_attribute: ""
-    # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
-    username_attribute: ""
-```
-
-本机非平台模式示例：
-
-```yaml
-# 本机非平台模式：适合单机使用，根路径直接进入管理视图，无需管理员登录。
-# 出于安全考虑，程序在 platform: false 时会强制监听 127.0.0.1。
-platform: false
-secret_key: 请替换为随机长字符串
-admin:
-  username: admin
-  password: 请替换为强密码
-admin_url: /console
-server:
-  # platform: false 时这里即使改成 0.0.0.0 或其他 IP，启动时也会被强制为 127.0.0.1。
-  # 如果需要局域网或服务器访问，请改用 config.platform.example.yaml 的 platform: true。
-  host: 127.0.0.1
-  port: 31945
-  url_prefix: ""
-  real_ip_header: ""
-  proxy_fix: false
-  max_upload_mb: 1024
-  # Windows 和 Linux 统一使用 Uvicorn；web_workers 控制 Web 进程数。
-  # web_threads 控制每个 Web 进程的 Flask 请求线程数。
-  web_workers: 1
-  web_threads: 16
-worker:
-  # 管理页面中的“系统同时执行任务数”不能超过该机器级上限。
-  max_task_processes: 4
-logging:
-  # 控制台级别：INFO、WARNING、ERROR、CRITICAL；文件固定记录 INFO 及以上日志。
-  console_level: WARNING
-network:
-  # 系统出站代理模式，控制本服务访问模型 API、拉取模型列表、测试模型连通性等所有对外请求。
-  # 可选值：direct、system、custom。direct 为直连；system 读取本机 HTTP_PROXY/HTTPS_PROXY 等环境变量；custom 使用下面 proxy。
-  proxy_mode: direct
-  # proxy 仅在 proxy_mode: custom 时填写，例如 http://127.0.0.1:7890；用户模型配置里不允许再填写代理。
-  proxy: ""
-  # 是否校验 HTTPS 证书；默认 false，适合内网或自签名证书服务。公网正式证书环境建议改为 true。
-  ssl_verify: false
-auth:
-  # 可选值：ip、trusted_header、saml。默认先用 ip，本机模式通常不需要切换。
-  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
-  # saml：直接对接 SAML 2.0。
-  # 不同 mode 的用户数据相互隔离：ip:<IP>、trusted_header:<用户ID>、saml:<用户ID>。
-  # 平台 ip 模式可在管理员后台给 IP 设置显示用户名；SSO 模式不会显示该入口。
-  mode: ip
-  # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
-  trusted_header:
-    # user_id 是“唯一用户 ID”所在的 HTTP header 名称，例如 X-SSO-User-Id；不要填姓名。
-    user_id: ""
-    # username 是“显示名”所在的 HTTP header 名称，例如 X-SSO-User-Name；可为空，空时显示 user_id。
-    username: ""
-  # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
-  saml:
-    # sp_entity_id 是本系统作为 SP 的唯一标识，通常可使用 https://你的域名/auth/saml/metadata。
-    sp_entity_id: ""
-    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，必须是外部可访问的 https://你的域名/auth/saml/acs。
-    acs_url: ""
-    # idp_entity_id 是公司 SSO 作为 IdP 的唯一标识，由公司 SSO 管理员提供。
-    idp_entity_id: ""
-    # idp_sso_url 是公司 SSO 的登录跳转地址，由公司 SSO 管理员提供。
-    idp_sso_url: ""
-    # idp_x509_cert 是公司 SSO 用于签名 SAML 响应的公钥证书内容，不是私钥。
-    idp_x509_cert: ""
-    # user_id_attribute 是 SAML Attribute 中稳定唯一用户 ID 的字段名；留空时使用 SAML NameID。
-    user_id_attribute: ""
-    # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
-    username_attribute: ""
-```
-
-`platform` 默认为 `false`，首次启动没有配置文件时会生成非平台模式配置：服务只监听 `127.0.0.1`，根路径直接进入管理视图，无需登录；该模式下 `server.host` 和 `HOST` 环境变量都会被忽略，`PORT` 仍可临时覆盖端口。设置为 `true` 时进入平台服务模式：用户面和管理面分离，管理面需要登录，可按配置或环境变量监听指定地址。
-
-`admin_url` 可以写成 `/console` 或 `console`，启动时会自动规范为合法路径。平台服务模式下临时启动时也可以用 `HOST`、`PORT` 环境变量覆盖本地配置。
-
-通过 Nginx 等反向代理部署时，可按实际网关配置维护 `server` 下的代理字段：
-
-- `server.url_prefix`：本服务挂在域名子路径下时填写，例如外部访问路径为 `/infoCheck` 就填 `/infoCheck`；根路径发布留空。
-- `server.real_ip_header`：当 Nginx 使用 `proxy_set_header X-Real-IP $remote_addr;` 覆盖并注入真实客户端 IP 时填写 `X-Real-IP`。该字段会影响 `auth.mode: ip` 的用户归属、任务审计 IP、统计和并发控制，必须保证外部用户不能绕过 Nginx 直连 Flask 服务，也不能伪造同名请求头。
-- `server.proxy_fix`：只有在 Nginx 注入并覆盖 `X-Forwarded-Proto`、`X-Forwarded-Host`、`X-Forwarded-Prefix` 等标准代理头时开启，用于修正 Flask 看到的协议、域名和前缀。
+- `admin.username`、`admin.password`、`admin_url`：管理员凭据和管理入口。`admin_url` 会规范为以斜杠开头的路径。
+- `server.host`、`server.port`：监听地址和端口；可用 `HOST`、`PORT` 环境变量临时覆盖。默认地址为 `127.0.0.1`；监听所有网卡时填写 `0.0.0.0`。
+- `server.url_prefix`：反向代理发布的子路径，例如 `/infoCheck`；根路径发布留空。
+- `server.real_ip_header`：网关注入的真实客户端 IP 头。网关应覆盖客户端同名头，并限制外部直连应用。
+- `server.proxy_fix`：启用可信网关提供的协议、域名和路径前缀。
+- `auth.mode`：只允许 `ip`、`cookie_session`；未填写时默认 `ip`，填写其他值会阻止启动。
 
 ## 系统出站网络配置
 
@@ -241,93 +85,80 @@ auth:
 
 这些字段也可以在管理端“系统设置”里修改。保存后系统会直接写回本地 `config.yaml`，并立即更新当前进程配置；不会写入 SQLite。
 
-## 用户身份与 SSO
+## 用户身份与登录
 
-系统使用 `owner_subject` 作为任务归属。配置提供 `ip`、`trusted_header` 和 `saml` 三种 `auth.mode`，默认值为 `ip`。不同模式使用独立用户命名空间，模型配置、任务列表和统计概览按当前用户主体隔离。IP 始终记录在任务中用于审计。
+系统使用 `owner_subject` 作为任务归属。配置提供 `ip` 和 `cookie_session` 两种 `auth.mode`，默认值为 `ip`。IP 始终记录在任务中用于审计。
 
-- `ip`：不接 SSO，用户主体为 `ip:<访问 IP>`。
-- `trusted_header`：公司网关或反向代理已经完成 SSO 登录，并把用户 ID/用户名注入可信 HTTP header，用户主体为 `trusted_header:<用户ID>`。
-- `saml`：公司 SSO 是 SAML 2.0，本系统直接作为 SAML SP 对接，用户主体为 `saml:<用户ID>`。
+- `ip`：不接统一登录，用户主体为 `ip:<访问 IP>`。任务列表只看当前 IP 的任务。
+- `cookie_session`：应用部署在统一登录主域下，把浏览器原始 Cookie 转发给外部用户信息接口换取身份，用户主体为 `cookie_session:<稳定标识>`（跨工号轮换不变的人员标识，如 `uuid`），右上角展示工号/姓名与头像。列表、详情、导出和操作均按当前稳定用户 ID 隔离。
 
 无论用户从 `/` 用户入口还是从 `admin_url` 对应的 console 入口创建任务、选择模型或进入“模型管理”，系统都会按同一套 `auth.mode` 解析当前用户，使用同一个 `owner_subject` 读写该用户自己的模型配置。
 
-平台模式且 `auth.mode: ip` 时，管理员后台“系统设置”会显示“IP 用户标记”，可以给 IP 设置显示用户名。该设置只改变页面显示和统计展示，不改变认证身份；统计概览会优先显示映射用户名，未设置时回退显示 IP。`trusted_header` 和 `saml` 模式不会显示这个入口。
-
-系统支持 SAML 2.0；SAML 1.0/1.1 不在支持范围内。
+配置 `auth.mode: ip` 时，管理员后台“系统设置”会显示“IP 用户标记”，可以给 IP 设置显示用户名。该设置只改变页面显示和统计展示，不改变认证身份；统计概览会优先显示映射用户名，未设置时回退显示 IP。`cookie_session` 模式不会显示这个入口。
 
 常用字段含义：
 
-- `trusted_header.user_id`：保存唯一用户 ID 的 HTTP header 名称，例如 `X-SSO-User-Id`，用于生成 `owner_subject = trusted_header:<用户ID>`。
-- `trusted_header.username`：保存显示名的 HTTP header 名称，例如 `X-SSO-User-Name`，只用于页面显示和任务快照，可为空。
-- `saml.sp_entity_id`：本系统作为 SP 的唯一标识，通常用 `https://你的域名/auth/saml/metadata`。
-- `saml.acs_url`：公司 SSO 登录成功后 POST 回调本系统的地址，通常是 `https://你的域名/auth/saml/acs`。
-- `saml.idp_entity_id`：公司 SSO 作为 IdP 的唯一标识，由公司 SSO 管理员提供。
-- `saml.idp_sso_url`：公司 SSO 登录跳转地址，由公司 SSO 管理员提供。
-- `saml.idp_x509_cert`：公司 SSO 用来签名 SAML 响应的公钥证书内容，不是私钥。
-- `saml.user_id_attribute`：SAML Attribute 中稳定唯一用户 ID 的字段名，留空时使用 SAML `NameID`。
-- `saml.username_attribute`：SAML Attribute 中显示名的字段名，留空时显示用户 ID。
+- `cookie_session.userinfo_url`：外部用户信息接口完整 URL，应用把原始 Cookie 头转发到此地址换取用户信息。
+- `cookie_session.cookie_header_name`：转发到外部接口的请求头名称，默认 `cookie`。
+- `cookie_session.ssl_verify`：是否校验外部接口 HTTPS 证书，默认 `false`。
+- `cookie_session.timeout`：调用外部接口的超时秒数，默认 `3`。
+- `cookie_session.cache_ttl`：用户信息缓存有效期秒数，默认 `600`。
+- `cookie_session.cache_grace`：缓存过期后的宽限期秒数，宽限期内允许用过期缓存降级放行，`0` 表示不降级。
+- `cookie_session.avatar_url_template`：头像地址模板，`{user_id}` 占位符会被替换为 `avatar_field` 指定的字段值（通常工号），留空则不显示头像。
+- `cookie_session.avatar_field`：指定从外部接口响应中取哪个字段填充头像模板的 `{user_id}`，留空时用 `user_id`。
+- `cookie_session.field_mapping.user_id`：外部接口返回 JSON 中跨工号轮换不变的稳定人员标识字段名（如 `uuid`），作为任务归属主键，必填。
+- `cookie_session.field_mapping.username`：外部接口返回 JSON 中显示名的字段名，留空时显示稳定用户 ID。
+- `cookie_session.field_mapping.employee_number`：外部接口返回 JSON 中工号的字段名，可空；配置后展示为“姓名（工号）”。
+- `cookie_session.login_url`：未登录或会话失效时跳转的统一登录地址。`cookie_session` 模式下必填，否则返回 401。
 
-`trusted_header` 只有在公司已有统一网关或反向代理，并且网关已经完成 SSO 登录、能把登录用户写入可信请求头时才需要；直接对接 SAML 2.0 时不需要配置它。网关模式可以这样写：
+每次成功查询用户信息后，系统按稳定用户 ID 保存最新姓名、工号和头像。任务列表、详情、报告导出、搜索和统计统一使用最新资料，任务归属和提交时的姓名快照保持不变。页面现有的自动刷新会同步右上角资料。资料同步在缓存到期后的下一次成功查询时生效，已有资料用于展示，登录状态仍由 Cookie 验证。
 
-```yaml
-auth:
-  mode: trusted_header
-  trusted_header:
-    user_id: X-SSO-User-Id
-    username: X-SSO-User-Name
-```
-
-此时系统会把 `X-SSO-User-Id` 解析为 `trusted_header:<用户ID>`，用 `X-SSO-User-Name` 作为显示名；用户入口缺少 `X-SSO-User-Id` 时返回 401。该模式要求服务位于可信 SSO 网关之后，网关负责清理外部请求中的同名 header。本系统保存任务归属快照、审计 IP、统计和并发控制所需的用户主体。
-
-实际接入时按下面顺序操作：
-
-1. 向公司 SSO 管理员确认是否已有统一网关或反向代理能在登录后注入请求头，并确认“唯一用户 ID”和“显示名”分别对应哪个 header，例如 `X-SSO-User-Id`、`X-SSO-User-Name`。
-2. 将本服务部署在该网关之后，禁止用户绕过网关直连 Flask 服务；网关转发前应清理外部请求自带的同名 header，再写入可信 header。
-3. 把 `config.yaml` 的 `platform` 设为 `true`，`auth.mode` 设为 `trusted_header`，并按公司网关实际 header 名称填写 `trusted_header`。
-4. 访问用户入口验证任务归属：提交任务后，管理端任务列表应显示 `trusted_header:<账号>` 和显示名称。
-5. 管理员入口仍使用本系统 `admin.username`、`admin.password` 和 `admin_url` 登录；但在 console 内创建任务和管理模型时，仍会使用与 `/` 相同的 SSO 用户身份。若网关默认保护全部路径，需要让网关对 `admin_url` 放行或单独做管理员访问控制；建议同时限制为内网、VPN 或管理员来源 IP。
-
-如果公司 SSO 提供的是 SAML 2.0，并且没有现成网关负责把 SAML 转成可信 header，可以让本系统作为 SAML SP 直接对接：
+如果应用部署在统一登录主域下，且公司存在支持 Cookie 认证的用户信息接口，可以使用 `cookie_session` 模式：服务端不自行解析或校验登录票据，而是把浏览器携带的原始 Cookie 头原样转发给 `cookie_session.userinfo_url`，由该接口验明登录态后返回结构化用户信息。应用按 `field_mapping` 取出稳定人员标识和显示名，生成 `owner_subject = cookie_session:<稳定标识>`，并在右上角展示工号/姓名与头像。前提是应用主机能访问 `userinfo_url`，且登录 Cookie 的 Domain 覆盖应用主机。配置示例：
 
 ```yaml
 auth:
-  mode: saml
-  saml:
-    sp_entity_id: https://文档门禁域名/auth/saml/metadata
-    acs_url: https://文档门禁域名/auth/saml/acs
-    idp_entity_id: 公司 SSO 提供的 IdP Entity ID
-    idp_sso_url: 公司 SSO 提供的 SSO 登录地址
-    idp_x509_cert: |
-      公司 SSO 提供的签名证书内容
-    user_id_attribute: uid
-    username_attribute: displayName
+  mode: cookie_session
+  cookie_session:
+    userinfo_url: https://用户信息接口域名/api/user
+    cookie_header_name: cookie
+    ssl_verify: false
+    timeout: 3
+    cache_ttl: 600
+    cache_grace: 600
+    avatar_url_template: https://头像服务域名/face/{user_id}/120
+    avatar_field: "工号字段名"
+    field_mapping:
+      user_id: uuid
+      username: 姓名字段名
+      employee_number: 工号字段名
+      extra_fields: {}
+    login_url: https://统一登录域名/login
 ```
 
-SAML 接入时需要把下面信息交给公司 SSO 管理员：SP Entity ID、ACS URL、SP metadata URL（`https://文档门禁域名/auth/saml/metadata`），并请对方把稳定唯一用户 ID 映射到 `user_id_attribute`，把显示名映射到 `username_attribute`。如果 `user_id_attribute` 留空，系统会使用 SAML `NameID` 作为用户 ID；不建议使用姓名作为用户 ID，因为同名用户无法区分。SAML 登录成功后会存为 `owner_subject = saml:<用户ID>`。管理员入口继续使用本系统本地管理员账号密码，不需要在公司 SSO 里设置管理员；console 内涉及当前用户的任务提交和模型配置时，仍使用同一个 SAML 用户身份。
+`field_mapping.user_id` 必须指向跨工号轮换不变的稳定人员标识（如 `uuid`），作为任务归属主键，不得使用工号或姓名——工号会随轮换变化，用稳定标识才能保证换工号后历史数据连续。`avatar_url_template` 中的 `{user_id}` 会被替换为 `avatar_field` 指定的字段值（通常工号），留空则用 `user_id`，留空 `avatar_url_template` 则不显示头像。外部接口 HTTP 状态为 2xx 时解析用户信息，支持包裹式响应（`{"status": "success", "data": {...}}`）和直接式响应（`{"字段": "值"}`）两种结构；返回 `status` 为 `401`/`403` 或 HTTP 401/403 时视为会话失效，其他非成功状态、解析失败或网络故障时，在宽限期内使用缓存身份。
 
-咨询公司 SSO 管理员时可以直接发送下面这段：
+未登录或会话失效时，页面跳转到统一登录地址，回跳路径经过 URL 编码。异步请求返回 401 和登录地址，浏览器跳转登录后返回操作前的页面。管理员登录使用本地管理员凭据；console 的任务创建页和模型管理仍要求当前用户身份。
 
-```text
-我们要把“文档智能门禁”接入公司 SSO，用于识别普通用户并按用户 ID 归属任务；管理员入口仍使用系统本地管理员账号，不需要通过 SSO 授权管理员，但 console 内创建任务和管理模型时仍使用当前 SSO 用户身份。
+身份缓存默认有效 600 秒，外部接口临时故障时最多再宽限 600 秒。HTTP 401/403 或明确的会话失效响应立即停止使用该 Cookie 的缓存身份。每个请求只解析一次身份，同一 Cookie 的并发查询共用一次上游调用，失败后至少间隔 5 秒重试。每个 Web 进程最多保存 4096 条缓存，并按到期时间回收。认证状态变化只影响后续访问，已提交任务继续执行。
 
-请帮忙确认公司 SSO 支持哪种接入方式：
-1. 是否有统一网关/反向代理可先完成 SSO 登录，再向后端注入可信 HTTP header？如果可以，我们倾向使用 trusted_header。
-2. 如果不能注入 header，是否支持 SAML 2.0？如果支持，我们使用 SAML 2.0 SP。
+Cookie 身份解析成功后，系统将当前 IP 下 `owner_subject = ip:<当前IP>` 的任务和模型配置归属于当前稳定用户 ID。每个请求最多检查一次迁移，无对应数据时为空操作。
 
-我们需要给你们的信息：
-- 系统访问域名：https://文档门禁域名
-- 管理员入口：/console，是否需要从 SSO 网关放行请一起确认
-- trusted_header 模式：请告知你们希望注入的 header 名称；我们需要唯一用户 ID 和显示名
-- SAML 2.0 模式：SP Entity ID = https://文档门禁域名/auth/saml/metadata，ACS URL = https://文档门禁域名/auth/saml/acs，Metadata URL = https://文档门禁域名/auth/saml/metadata
+查询尚未迁移的 IP 归属数据：
 
-请你们提供给我们的信息：
-- 推荐接入模式：trusted_header / SAML 2.0
-- 唯一用户 ID 字段：不能是姓名，要稳定且唯一，例如工号、账号 ID、uid
-- 显示名字段：例如 displayName、cn、name
-- trusted_header 模式：用户 ID header 名称、显示名 header 名称，并确认网关会清理外部伪造的同名 header
-- SAML 2.0 模式：IdP Entity ID、SSO 登录地址、X509 签名证书、用户 ID Attribute、显示名 Attribute
-- 是否要求 HTTPS、内网/VPN、回调域名白名单、证书轮换周期
+```bash
+uv run python -m scripts.audit_ip_owners
+uv run python -m scripts.audit_ip_owners --database /path/to/document_check.sqlite3 --json
 ```
+
+脚本以只读方式输出每个 IP 的任务数、提供商数和模型数，不输出密钥，也不执行迁移。
+
+实际接入 `cookie_session` 时按下面顺序操作：
+
+1. 确认公司存在支持 Cookie 认证的用户信息接口，以及未登录时跳转的统一登录地址。
+2. 把本服务部署在统一登录主域下，确保浏览器登录 Cookie 的 Domain 覆盖应用主机。
+3. 把 `config.yaml` 的 `auth.mode` 设为 `cookie_session`，并按公司接口预填 `cookie_session`（接口地址、字段名、头像模板、登录地址）。
+4. 访问用户入口验证任务归属：提交任务后，右上角应显示工号/姓名与头像，任务列表显示自己的稳定标识任务；首次登录会自动迁移该 IP 下的历史任务到稳定标识。
+5. 管理员入口仍使用本系统 `admin.username`、`admin.password` 和 `admin_url` 登录；console 内创建任务和管理模型时，使用与 `/` 相同的统一登录用户身份。
 
 ## 模型配置
 

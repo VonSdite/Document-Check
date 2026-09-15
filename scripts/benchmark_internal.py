@@ -4,6 +4,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -11,6 +12,9 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import psutil
@@ -24,6 +28,38 @@ from app.persistence.schema import init_db
 from app.reporting.service import _empty_report_suppression_version
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def userinfo_server(users: int):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            ticket = cookie.get("benchmark_user")
+            user = ticket.value if ticket else ""
+            valid = user.isdecimal() and 0 <= int(user) < users
+            payload = (
+                {"id": f"bench-{user}", "name": f"压测用户 {user}"} if valid else {}
+            )
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200 if valid else 401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/userinfo"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def prepare_database(
@@ -55,13 +91,13 @@ def prepare_database(
                 ip, owner_subject, owner_source, original_filename, stored_filename,
                 file_type, file_size, checks_json, model_name, api_base,
                 status, progress, document_text, document_meta_json, result_json, created_at, updated_at
-            ) VALUES ('127.0.0.1', ?, 'trusted_header', 'example.txt', 'example.txt',
+            ) VALUES ('127.0.0.1', ?, 'cookie_session', 'example.txt', 'example.txt',
                       'txt', 4096, '[]', 'benchmark', 'http://example.invalid',
                       'completed', 100, ?, ?, ?, '2026-09-01 12:00:00', '2026-09-01 12:00:00')
             """,
             (
                 (
-                    f"trusted_header:bench-{i % users}",
+                    f"cookie_session:bench-{i % users}",
                     "文档性能测试。" * 512,
                     metadata,
                     report,
@@ -83,7 +119,10 @@ def benchmark(args) -> dict:
         or args.tasks < args.users
     ):
         raise ValueError("任务、用户、请求和并发数为正整数，任务数应覆盖全部用户")
-    with tempfile.TemporaryDirectory(prefix="documentcheck-benchmark-") as temporary:
+    with (
+        tempfile.TemporaryDirectory(prefix="documentcheck-benchmark-") as temporary,
+        userinfo_server(args.users) as userinfo_url,
+    ):
         root = Path(temporary)
         shutil.copytree(
             args.source_root / "app",
@@ -102,7 +141,6 @@ def benchmark(args) -> dict:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         config = {
-            "platform": True,
             "secret_key": "isolated-benchmark-session",
             "admin_url": "/benchmark-console",
             "server": {
@@ -113,8 +151,11 @@ def benchmark(args) -> dict:
             },
             "worker": {"max_task_processes": 4},
             "auth": {
-                "mode": "trusted_header",
-                "trusted_header": {"user_id": "X-Benchmark-User"},
+                "mode": "cookie_session",
+                "cookie_session": {
+                    "userinfo_url": userinfo_url,
+                    "field_mapping": {"user_id": "id", "username": "name"},
+                },
             },
         }
         (root / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -167,7 +208,7 @@ def benchmark(args) -> dict:
                     first_id = user + 1
                     polling = index % 5 != 0
                     path = (
-                        f"/task-statuses?task_type=document_check&ids={first_id}"
+                        f"/task-statuses?task_type=document_check&ids={first_id},{(user + 1) % args.users + 1}"
                         if polling
                         else "/"
                     )
@@ -175,7 +216,7 @@ def benchmark(args) -> dict:
                     try:
                         with local.session.get(
                             base_url + path,
-                            headers={"X-Benchmark-User": f"bench-{user}"},
+                            headers={"Cookie": f"benchmark_user={user}"},
                             timeout=30,
                         ) as response:
                             response.raise_for_status()
@@ -185,8 +226,18 @@ def benchmark(args) -> dict:
                                     first_id
                                 ]:
                                     raise AssertionError("轮询响应与用户所属任务不一致")
-                            elif "example.txt" not in response.text:
-                                raise AssertionError("任务列表缺少测试文档")
+                            else:
+                                ids = {
+                                    int(value)
+                                    for value in re.findall(
+                                        r'data-task-id="(\d+)"', response.text
+                                    )
+                                }
+                                if not ids or any(
+                                    (task_id - 1) % args.users != user
+                                    for task_id in ids
+                                ):
+                                    raise AssertionError("任务列表与用户所属任务不一致")
                         return time.perf_counter() - start, None
                     except Exception as error:
                         return time.perf_counter() - start, str(error)

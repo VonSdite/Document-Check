@@ -1,6 +1,6 @@
 from flask import flash, redirect, render_template, request, url_for
 
-from app.identity.service import UserIdentity, current_identity
+from app.identity.service import UserIdentity
 from app.infrastructure.network import outbound_network_config
 from app.models.client import (
     LLMError,
@@ -21,9 +21,7 @@ from app.models.service import (
     _user_provider_exists,
 )
 from app.web.auth import (
-    _console_user_identity,
     _current_user_identity,
-    _platform_enabled,
     admin_required,
 )
 from app.web.common import _form_bool
@@ -35,11 +33,11 @@ def register_models_routes(app):
 
     @app.route("/models", methods=["GET", "POST"])
     def user_models():
-        return _model_management_response(_model_page_identity(), "user_models")
+        return _model_management_response(_current_user_identity(), "user_models")
 
     @app.post("/models/fetch")
     def user_fetch_models():
-        _model_page_identity()
+        _current_user_identity()
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return {"error": "请求数据格式不正确。"}, 400
@@ -62,7 +60,7 @@ def register_models_routes(app):
 
     @app.post("/models/test")
     def user_test_model():
-        _model_page_identity()
+        _current_user_identity()
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return {"ok": False, "error": "请求数据格式不正确。"}, 400
@@ -96,15 +94,7 @@ def register_models_routes(app):
     @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
     @admin_required
     def admin_models():
-        if not _platform_enabled():
-            return redirect(url_for("user_models"))
-        return _model_management_response(_console_user_identity(), "admin_models")
-
-
-def _model_page_identity() -> UserIdentity:
-    if _platform_enabled():
-        return _current_user_identity()
-    return current_identity()
+        return _model_management_response(_current_user_identity(), "admin_models")
 
 
 def _model_management_response(identity: UserIdentity, redirect_endpoint: str):

@@ -320,7 +320,9 @@
         (row) =>
           returned.get(row.dataset.taskId)?.status !== row.dataset.taskStatus ||
           returned.get(row.dataset.taskId)?.review_key !==
-            row.dataset.taskReviewKey,
+            row.dataset.taskReviewKey ||
+          (row.dataset.ownerProfileLabel !== undefined &&
+            returned.get(row.dataset.taskId)?.owner_profile_label !== row.dataset.ownerProfileLabel),
       );
     if (changed) {
       await fetchTaskPage(window.location.href, token, options);

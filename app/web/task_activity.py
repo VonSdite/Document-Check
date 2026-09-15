@@ -52,6 +52,7 @@ def detail_progress(task):
                 "live_result_size",
                 "finished_at",
                 "result_size",
+                "current_owner_name",
             )
         )
         + ":"

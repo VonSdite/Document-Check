@@ -5,15 +5,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}文档智能门禁{% endblock %}</title>
+  <script src="{{ url_for('static', filename='auth.js', v='20260915-2') }}"></script>
   {% block extra_head %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260915-3') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260915-4') }}">
 </head>
 <body>
-  {% set is_admin = (not platform_mode) or (request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login') %}
+  {% set is_admin = (request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login') %}
   {% set is_ip_users_page = request.endpoint == 'admin_settings' and request.args.get('tab') == 'ip_users' %}
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="{{ url_for('admin_dashboard') if platform_mode and is_admin else url_for('user_tasks') }}">
+      <a class="brand" href="{{ url_for('admin_dashboard') if is_admin else url_for('user_tasks') }}">
         <span class="brand-mark">文</span>
         <span>
           <strong>文档智能门禁</strong>
@@ -21,15 +22,13 @@
       </a>
       {% if is_admin %}
       <nav class="nav" aria-label="主导航">
-        {% if platform_mode %}
         <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active' if active_nav|default('') == 'overview' or request.endpoint == 'admin_dashboard' else '' }}" title="统计概览">概览</a>
-        {% endif %}
-        <a href="{{ url_for('admin_tasks') if platform_mode else url_for('user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks'] else '' }}" title="单文档检查">单文档</a>
-        <a href="{{ url_for('admin_consistency') if platform_mode else url_for('user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档对照</a>
-        <a href="{{ url_for('admin_language_consistency') if platform_mode else url_for('user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_language_consistency'] else '' }}" title="跨语种文档一致性检查">跨语种</a>
-        <a href="{{ url_for('admin_images') if platform_mode else url_for('user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}" title="图片检查">图片</a>
-        <a href="{{ url_for('admin_videos') if platform_mode else url_for('user_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_videos'] else '' }}" title="视频检查">视频</a>
-        <a href="{{ url_for('admin_models') if platform_mode else url_for('user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}" title="模型管理">模型</a>
+        <a href="{{ url_for('admin_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks'] else '' }}" title="单文档检查">单文档</a>
+        <a href="{{ url_for('admin_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档对照</a>
+        <a href="{{ url_for('admin_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_language_consistency'] else '' }}" title="跨语种文档一致性检查">跨语种</a>
+        <a href="{{ url_for('admin_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}" title="图片检查">图片</a>
+        <a href="{{ url_for('admin_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_videos'] else '' }}" title="视频检查">视频</a>
+        <a href="{{ url_for('admin_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}" title="模型管理">模型</a>
         {% if auth_mode == 'ip' %}
         <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if is_ip_users_page else '' }}" title="IP 用户标记">IP 用户</a>
         {% endif %}
@@ -46,14 +45,11 @@
       </nav>
       {% endif %}
       <div class="topbar-account">
-        <div class="nav-identity" title="{{ nav_identity }}">{{ nav_identity }}</div>
-        {% if is_admin and platform_mode %}
+        <img class="nav-avatar" {% if nav_avatar %}src="{{ nav_avatar }}"{% else %}hidden{% endif %} alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.hidden=true">
+        <div class="nav-identity" title="{{ nav_identity }}" data-subject="{{ nav_subject }}" data-profile-version="{{ nav_profile_version }}">{{ nav_identity }}</div>
+        {% if is_admin %}
         <div class="admin-tag">管理员</div>
         <form class="logout-form" method="post" action="{{ url_for('admin_logout') }}">
-          <button class="logout-button" type="submit">退出</button>
-        </form>
-        {% elif not is_admin and platform_mode and auth_mode == 'saml' %}
-        <form class="logout-form" method="post" action="{{ url_for('saml_logout') }}">
           <button class="logout-button" type="submit">退出</button>
         </form>
         {% endif %}
@@ -77,7 +73,7 @@
 {% if not list_partial %}
   </main>
   <script src="{{ url_for('static', filename='app.js', v='20260915-1') }}"></script>
-  <script src="{{ url_for('static', filename='task-list.js', v='20260914-3') }}"></script>
+  <script src="{{ url_for('static', filename='task-list.js', v='20260915-1') }}"></script>
   <script src="{{ url_for('static', filename='table-resize.js') }}"></script>
 </body>
 </html>

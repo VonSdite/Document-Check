@@ -26,7 +26,7 @@ from app.reporting.service import (
 )
 from app.reporting.statistics import _task_report_stat_rows_for_where
 from app.tasks.activity import activity_label, task_activities
-from app.web.auth import _auth_mode, _console_user_identity, _mode_subject_filter
+from app.web.auth import _auth_mode, _current_user_identity
 from app.web.common import _row_value
 from app.web.constants import (
     DEFAULT_TASKS_PER_PAGE,
@@ -83,7 +83,7 @@ def _task_filter_sql(filters, *, search_owner, join_ip_usernames):
                 [
                     "COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ? ESCAPE '\\'",
                     "t.ip LIKE ? ESCAPE '\\'",
-                    "COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ? ESCAPE '\\'",
+                    "COALESCE(NULLIF(json_extract(profile.value, '$.label'), ''), NULLIF(t.owner_name_snapshot, ''), t.username_snapshot, '') LIKE ? ESCAPE '\\'",
                 ]
             )
             if join_ip_usernames:
@@ -252,6 +252,7 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
                 f"""
             SELECT
                 t.id, t.status, t.progress, t.updated_at,
+                COALESCE(json_extract(profile.value, '$.label'), '') AS owner_profile_label,
                 s.source_updated_at, s.suppression_version,
                 s.issue_count AS issue,
                 s.suggestion_count AS suggestion,
@@ -260,6 +261,7 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
                 s.pending_review_item_count AS pending_review
             FROM tasks t
             LEFT JOIN task_report_stats s ON s.task_id = t.id
+            LEFT JOIN settings profile ON profile.key = 'identity_profile:' || t.owner_subject
             WHERE t.task_type = ? AND {owner_clause} AND t.id IN ({placeholders})
             """,
                 (task_type, *owner_params, *task_ids),
@@ -335,6 +337,7 @@ def _task_status_payload_row(row, suppression_version: str) -> dict:
             row, "status_label", STATUS_LABELS.get(status, status)
         ),
         "progress": int(row["progress"] or 0),
+        "owner_profile_label": _row_value(row, "owner_profile_label", ""),
     }
     if status in {"queued", "running", "canceling"}:
         review = _task_review_progress(status, 0, 0, 0)
@@ -463,7 +466,7 @@ def _render_admin_videos_page():
 def _render_admin_task_list(
     *, task_type: str, template_name: str, totals_task_type: str, check_items
 ):
-    identity = _console_user_identity()
+    identity = _current_user_identity()
     filters = _task_filter_values()
     status, review_status, keyword = (
         filters[key] for key in ("status", "review_status", "keyword")
@@ -485,12 +488,10 @@ def _render_admin_task_list(
         if join_ip_usernames
         else "COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
     )
+    owner_name_expr = f"COALESCE(NULLIF(json_extract(profile.value, '$.label'), ''), {owner_name_expr})"
     current_ip_username_expr = (
         "COALESCE(iu.username, '')" if join_ip_usernames else "''"
     )
-    mode_clause, mode_params = _mode_subject_filter("t")
-    clauses.append(mode_clause)
-    params.extend(mode_params)
     filter_clauses, filter_params = _task_filter_sql(
         filters, search_owner=True, join_ip_usernames=join_ip_usernames
     )
@@ -506,6 +507,7 @@ def _render_admin_task_list(
         SELECT COUNT(*) AS total
         FROM tasks t
         {ip_username_join if keyword else ""}
+        {"LEFT JOIN settings profile ON profile.key = 'identity_profile:' || t.owner_subject" if keyword else ""}
         {report_stats_join}
         {where}
         """,
@@ -530,9 +532,11 @@ def _render_admin_task_list(
                {1 if join_ip_usernames else 0} AS ip_username_lookup_complete,
                {owner_name_expr} AS current_owner_name,
                {owner_name_expr} AS current_username,
+               COALESCE(json_extract(profile.value, '$.label'), '') AS owner_profile_label,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
         {ip_username_join}
+        LEFT JOIN settings profile ON profile.key = 'identity_profile:' || t.owner_subject
         {report_stats_join}
         {where}
         ORDER BY t.created_at DESC, t.id DESC
@@ -560,7 +564,7 @@ def _render_admin_task_list(
         submission_token=uuid.uuid4().hex,
         refresh_url=url_for("admin_task_statuses", task_type=task_type),
         active_nav=task_type,
-        keyword_placeholder="按文档名称、用户、账号或 IP 搜索",
+        keyword_placeholder="按文档名称、姓名、工号、账号或 IP 搜索",
     )
 
 

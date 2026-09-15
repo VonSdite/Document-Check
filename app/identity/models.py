@@ -7,10 +7,16 @@ class UserIdentity:
     display_name: str
     source: str
     ip: str
+    avatar: str = ""
+    employee_number: str = ""
+    profile_version: int = 0
 
     @property
     def label(self) -> str:
-        return self.display_name or subject_label(self.subject)
+        name = self.display_name or subject_label(self.subject)
+        if self.employee_number and self.employee_number != name:
+            return f"{name}（{self.employee_number}）"
+        return name
 
 
 def ip_subject(ip: str) -> str:
@@ -21,8 +27,6 @@ def subject_label(subject: str) -> str:
     subject = str(subject or "").strip()
     if subject.startswith("ip:"):
         return subject[3:]
-    if subject.startswith("trusted_header:"):
+    if subject.startswith("cookie_session:"):
         return subject[15:]
-    if subject.startswith("saml:"):
-        return subject[5:]
     return subject

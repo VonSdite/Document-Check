@@ -9,7 +9,7 @@ from app.reporting.service import (
     _uses_compact_media_report,
 )
 from app.tasks.files import _task_document_groups
-from app.web.auth import _console_user_identity, _mode_subject_filter, admin_required
+from app.web.auth import _current_user_identity, admin_required
 from app.web.common import _safe_next_path
 from app.web.reports import (
     _export_task_report,
@@ -66,7 +66,7 @@ def register_admin_tasks_routes(app):
     def admin_tasks():
         if request.method == "POST":
             return create_task_for_identity(
-                _console_user_identity(), admin_created=True
+                _current_user_identity(), admin_created=True
             )
         return _render_admin_tasks_page()
 
@@ -75,7 +75,7 @@ def register_admin_tasks_routes(app):
     def admin_new_task():
         if request.method == "POST":
             return create_task_for_identity(
-                _console_user_identity(), admin_created=True
+                _current_user_identity(), admin_created=True
             )
         return redirect(url_for("admin_tasks"))
 
@@ -85,17 +85,14 @@ def register_admin_tasks_routes(app):
         task_type = _validated_task_status_type()
         if task_type is None:
             return {"error": "任务类型无效。"}, 400
-        mode_clause, mode_params = _mode_subject_filter("t")
-        return _task_status_payload(
-            task_type, owner_clause=mode_clause, owner_params=mode_params
-        )
+        return _task_status_payload(task_type, owner_clause="1=1", owner_params=())
 
     @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
     @admin_required
     def admin_consistency():
         if request.method == "POST":
             return create_consistency_task_for_identity(
-                _console_user_identity(), admin_created=True
+                _current_user_identity(), admin_created=True
             )
         return _render_admin_consistency_page()
 
@@ -104,7 +101,7 @@ def register_admin_tasks_routes(app):
     def admin_language_consistency():
         if request.method == "POST":
             return create_language_consistency_task_for_identity(
-                _console_user_identity(), admin_created=True
+                _current_user_identity(), admin_created=True
             )
         return _render_admin_language_consistency_page()
 
@@ -113,7 +110,7 @@ def register_admin_tasks_routes(app):
     def admin_images():
         if request.method == "POST":
             return create_image_task_for_identity(
-                _console_user_identity(), admin_created=True
+                _current_user_identity(), admin_created=True
             )
         return _render_admin_images_page()
 
@@ -122,7 +119,7 @@ def register_admin_tasks_routes(app):
     def admin_videos():
         if request.method == "POST":
             return create_video_task_for_identity(
-                _console_user_identity(), admin_created=True
+                _current_user_identity(), admin_created=True
             )
         return _render_admin_videos_page()
 

@@ -33,11 +33,10 @@ def _create_base_app(root_dir: Path | None = None):
 
     app.config.update(
         SECRET_KEY=local_config["secret_key"],
-        PLATFORM=local_config["platform"],
         ADMIN_USERNAME=local_config["admin"]["username"],
         ADMIN_PASSWORD=local_config["admin"]["password"],
         ADMIN_URL=local_config["admin_url"],
-        LISTEN_HOST=server_config["host"] if local_config["platform"] else "127.0.0.1",
+        LISTEN_HOST=server_config["host"],
         LISTEN_PORT=server_config["port"],
         APPLICATION_ROOT=server_config["url_prefix"] or "/",
         PROXY_FIX=server_config["proxy_fix"],

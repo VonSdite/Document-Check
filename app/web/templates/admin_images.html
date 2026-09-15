@@ -123,7 +123,7 @@
       <tbody>
         {% for task in tasks %}
         {% set source_files_available = task_source_files_available(task) %}
-        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}" data-task-review-key="{{ task.review_key }}">
+        <tr data-task-id="{{ task.id }}" data-task-status="{{ task.status }}" data-task-review-key="{{ task.review_key }}" data-owner-profile-label="{{ task.owner_profile_label }}">
           {{ task_bulk.select_cell(task) }}
           <td class="task-file-cell">
             <div class="task-file-line">

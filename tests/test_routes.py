@@ -24,7 +24,6 @@ from app.contracts.task_types import (
     VIDEO_TASK_TYPE,
 )
 from app.documents.extraction.common import DocumentReadError
-from app.identity.service import SAML_USER_SESSION_KEY
 from app.infrastructure.config import CONFIG_FILENAME
 from app.models.service import _find_enabled_model, get_enabled_models
 from app.persistence.connection import get_db
@@ -76,51 +75,6 @@ def _pdf_with_image_bytes() -> io.BytesIO:
     document.close()
     output.seek(0)
     return output
-
-
-def _saml_auth_config() -> dict:
-    return {
-        "mode": "saml",
-        "saml": {
-            "sp_entity_id": "https://doc.example.com/auth/saml/metadata",
-            "acs_url": "https://doc.example.com/auth/saml/acs",
-            "idp_entity_id": "https://sso.example.com/idp",
-            "idp_sso_url": "https://sso.example.com/login",
-            "idp_x509_cert": "test-cert",
-            "user_id_attribute": "uid",
-            "username_attribute": "displayName",
-        },
-    }
-
-
-class _FakeSamlAuth:
-    def __init__(self):
-        self.processed_request_id = None
-
-    def login(self, return_to=None):
-        self.return_to = return_to
-        return "https://sso.example.com/login?SAMLRequest=test"
-
-    def process_response(self, request_id=None):
-        self.processed_request_id = request_id
-
-    def get_last_request_id(self):
-        return "REQ-1"
-
-    def get_errors(self):
-        return []
-
-    def is_authenticated(self):
-        return True
-
-    def get_nameid(self):
-        return "nameid-1"
-
-    def get_attributes(self):
-        return {"uid": ["100086"], "displayName": ["张三"]}
-
-    def get_friendlyname_attributes(self):
-        return {}
 
 
 class AdminSettingsRouteTest(unittest.TestCase):
@@ -2336,8 +2290,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             json_response.get_json(), {"ok": True, "ip": "10.0.0.8", "username": "李四"}
         )
 
-    def test_admin_settings_shows_ip_username_mapping_in_local_ip_mode(self):
-        self.app.config["PLATFORM"] = False
+    def test_admin_settings_ip_mapping_in_authenticated_console(self):
         self._insert_task(ip="10.0.0.8")
 
         settings_response = self.client.get("/admin/settings")
@@ -2353,14 +2306,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_hides_ip_username_mapping_outside_ip_mode(self):
         self.app.config["AUTH"] = {
-            "mode": "trusted_header",
-            "trusted_header": {
-                "user_id": "X-SSO-User-Id",
-                "username": "X-SSO-User-Name",
+            "mode": "cookie_session",
+            "cookie_session": {
+                "userinfo_url": "https://example.com/api/user",
+                "cookie_header_name": "cookie",
+                "field_mapping": {"user_id": "employeeNum", "username": ""},
             },
         }
 
-        response = self.client.get("/admin/settings")
+        with patch("app.identity.service.resolve_userinfo", return_value=(None, None)):
+            response = self.client.get("/admin/settings")
         blocked = self.client.post(
             "/admin/settings",
             data={"action": "ip_username", "ip": "10.0.0.8", "username": "张三"},
@@ -2371,11 +2326,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(blocked.status_code, 404)
         with self.app.app_context():
             self.assertEqual(get_ip_username("10.0.0.8"), "")
-
-        self.app.config["AUTH"] = _saml_auth_config()
-        saml_response = self.client.get("/admin/settings")
-        self.assertEqual(saml_response.status_code, 200)
-        self.assertNotIn("IP 用户标记", saml_response.get_data(as_text=True))
 
     def test_admin_settings_shows_document_and_consistency_prompt_groups(self):
         response = self.client.get("/admin/settings")
@@ -2835,6 +2785,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             [
                 {
                     "id": task_id,
+                    "owner_profile_label": "",
                     "pending_review_item_count": 0,
                     "progress": 100,
                     "report_item_count": 0,
@@ -3056,53 +3007,59 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         self.assertEqual(task_row.get("data-task-status"), "running")
 
-    def test_admin_overview_filters_tasks_by_auth_mode(self):
-        self._insert_task(
-            ip="10.0.0.1",
-            owner_subject="ip:10.0.0.1",
-            owner_source="ip",
-            created_at="2026-05-01 10:00:00",
-        )
-        self._insert_task(
-            ip="10.0.0.2",
-            owner_subject="trusted_header:100086",
-            owner_name_snapshot="张三",
-            owner_source="trusted_header",
-            created_at="2026-05-01 11:00:00",
-        )
-        self._insert_task(
-            ip="10.0.0.3",
-            owner_subject="saml:100086",
-            owner_name_snapshot="李四",
-            owner_source="saml",
-            created_at="2026-05-01 12:00:00",
-        )
+    def test_cookie_session_user_list_includes_migrated_ip_tasks(self):
         self.app.config["AUTH"] = {
-            "mode": "trusted_header",
-            "trusted_header": {
-                "user_id": "X-SSO-User-Id",
-                "username": "X-SSO-User-Name",
+            "mode": "cookie_session",
+            "cookie_session": {
+                "userinfo_url": "https://example.com/api/user",
+                "cookie_header_name": "cookie",
+                "field_mapping": {
+                    "user_id": "employeeNum",
+                    "username": "displayCnName",
+                },
+                "login_url": "https://login.example.com/",
             },
         }
+        # 本人的跨 IP 任务、当前 IP 的待迁移任务和其他用户任务。
+        matching = self._insert_task(
+            ip="10.0.0.1",
+            owner_subject="cookie_session:100086",
+            owner_name_snapshot="张三",
+            owner_source="cookie_session",
+        )
+        same_ip = self._insert_task(
+            ip="127.0.0.1",
+            owner_subject="ip:127.0.0.1",
+            owner_source="ip",
+        )
+        other = self._insert_task(
+            ip="10.0.0.2",
+            owner_subject="cookie_session:200086",
+            owner_name_snapshot="李四",
+            owner_source="cookie_session",
+        )
 
-        response = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-01")
+        with patch("app.identity.service.resolve_userinfo") as mocked:
+            mocked.return_value = (
+                {"user_id": "100086", "username": "张三", "avatar": ""},
+                None,
+            )
+            response = self.client.get("/", headers={"cookie": "session=abc"})
 
         self.assertEqual(response.status_code, 200)
-        html = response.get_data(as_text=True)
-        self.assertIn("<span>活跃用户</span><strong>1</strong>", html)
-        self.assertIn("<span>提交任务</span><strong>1</strong>", html)
-        self.assertIn("张三", html)
-        self.assertNotIn("李四", html)
-        self.assertNotIn("ip:10.0.0.1", html)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        ids = {int(row["data-task-id"]) for row in soup.select("[data-task-id]")}
+        # 迁移后的任务归属于当前用户。
+        self.assertEqual(ids, {matching, same_ip})
+        self.assertNotIn(other, ids)
 
-    def test_local_mode_admin_root_redirects_to_management_view(self):
-        self.app.config["PLATFORM"] = False
+    def test_admin_root_requires_login(self):
         self._logout_test_client()
 
         response = self.client.get("/admin")
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.headers["Location"].endswith("/"))
+        self.assertTrue(response.headers["Location"].endswith("/admin/login"))
 
     def test_admin_model_route_requires_admin_login(self):
         self._logout_test_client()
@@ -3183,8 +3140,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("测试提供商", response.get_data(as_text=True))
 
-    def test_local_mode_root_shows_admin_view_without_login(self):
-        self.app.config["PLATFORM"] = False
+    def test_user_root_shows_user_view(self):
         self._logout_test_client()
 
         response = self.client.get("/")
@@ -3197,8 +3153,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("用户管理", html)
         self.assertNotIn("退出", html)
 
-    def test_local_mode_user_model_page_does_not_require_login(self):
-        self.app.config["PLATFORM"] = False
+    def test_ip_user_model_page_does_not_require_admin_login(self):
         self._logout_test_client()
 
         response = self.client.get("/models")
@@ -3209,7 +3164,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_user_management_route_is_not_registered(self):
         platform_response = self.client.get("/admin/users")
 
-        self.app.config["PLATFORM"] = False
         self._logout_test_client()
         local_response = self.client.get("/admin/users")
 
@@ -7062,7 +7016,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertEqual(keyword_input.get("value"), "2000")
                 self.assertEqual(
                     keyword_input.get("placeholder"),
-                    "按文档名称、用户、账号或 IP 搜索",
+                    "按文档名称、姓名、工号、账号或 IP 搜索",
                 )
                 self.assertEqual(filenames, [matching_filename])
 
@@ -7847,109 +7801,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
             other_response.get_json()["error"], "选择其他原因时必须填写具体原因。"
         )
 
-    def test_create_task_uses_trusted_header_identity(self):
-        model_id = self._configure_provider("trusted_header:100086")
-        self.app.config["AUTH"] = {
-            "mode": "trusted_header",
-            "trusted_header": {
-                "user_id": "X-SSO-User-Id",
-                "username": "X-SSO-User-Name",
-            },
-        }
-        with self.app.app_context():
-            item = (
-                get_db()
-                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
-                .fetchone()
-            )
-
-        response = self.client.post(
-            "/",
-            data={
-                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                "checks": [str(item["id"])],
-                "model_id": model_id,
-            },
-            headers={"X-SSO-User-Id": "100086", "X-SSO-User-Name": "张三"},
-            content_type="multipart/form-data",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        with self.app.app_context():
-            task = (
-                get_db()
-                .execute(
-                    "SELECT owner_subject, owner_name_snapshot, owner_source, ip FROM tasks"
-                )
-                .fetchone()
-            )
-        self.assertEqual(task["owner_subject"], "trusted_header:100086")
-        self.assertEqual(task["owner_name_snapshot"], "张三")
-        self.assertEqual(task["owner_source"], "trusted_header")
-        self.assertEqual(task["ip"], "127.0.0.1")
-
-    def test_trusted_header_user_page_requires_sso_header(self):
-        self.app.config["AUTH"] = {
-            "mode": "trusted_header",
-            "trusted_header": {
-                "user_id": "X-SSO-User-Id",
-                "username": "X-SSO-User-Name",
-            },
-        }
-
-        response = self.client.get("/")
-
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("未收到 SSO 用户信息", response.get_data(as_text=True))
-
-    def test_trusted_header_admin_settings_still_uses_local_admin_login(self):
-        self.app.config["AUTH"] = {
-            "mode": "trusted_header",
-            "trusted_header": {
-                "user_id": "X-SSO-User-Id",
-                "username": "X-SSO-User-Name",
-            },
-        }
-
-        response = self.client.get("/admin/settings")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("系统设置", response.get_data(as_text=True))
-
-    def test_trusted_header_admin_task_page_requires_same_sso_user(self):
-        self.app.config["AUTH"] = {
-            "mode": "trusted_header",
-            "trusted_header": {
-                "user_id": "X-SSO-User-Id",
-                "username": "X-SSO-User-Name",
-            },
-        }
-
-        response = self.client.get("/admin/tasks")
-
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("未收到 SSO 用户信息", response.get_data(as_text=True))
-
-    def test_trusted_header_admin_task_page_uses_sso_user_models(self):
-        model_id = self._configure_provider("trusted_header:100086")
-        self.app.config["AUTH"] = {
-            "mode": "trusted_header",
-            "trusted_header": {
-                "user_id": "X-SSO-User-Id",
-                "username": "X-SSO-User-Name",
-            },
-        }
-
-        response = self.client.get(
-            "/admin/tasks",
-            headers={"X-SSO-User-Id": "100086", "X-SSO-User-Name": "张三"},
-        )
-
-        self.assertEqual(response.status_code, 200)
-        html = response.get_data(as_text=True)
-        self.assertIn("model-a", html)
-        self.assertIn(f'value="{model_id}"', html)
-
     def test_task_pages_use_expected_default_check_selection(self):
         self._configure_provider()
         response = self.client.post(
@@ -8029,116 +7880,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         checkboxes = form.select('input[name="checks"]')
         self.assertTrue(checkboxes)
         self.assertTrue(all(checkbox.has_attr("checked") for checkbox in checkboxes))
-
-    def test_saml_user_page_redirects_to_saml_login(self):
-        self.app.config["AUTH"] = _saml_auth_config()
-
-        response = self.client.get("/")
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/auth/saml/login?next=/", response.headers["Location"])
-
-    def test_saml_login_stores_request_id(self):
-        self.app.config["AUTH"] = _saml_auth_config()
-        fake_auth = _FakeSamlAuth()
-
-        with patch("app.web.auth.create_saml_auth", return_value=fake_auth):
-            response = self.client.get("/auth/saml/login?next=/consistency")
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(
-            response.headers["Location"],
-            "https://sso.example.com/login?SAMLRequest=test",
-        )
-        self.assertEqual(fake_auth.return_to, "/consistency")
-        with self.client.session_transaction() as session:
-            self.assertEqual(session["saml_request_id"], "REQ-1")
-
-    def test_saml_acs_saves_session_identity(self):
-        self.app.config["AUTH"] = _saml_auth_config()
-        fake_auth = _FakeSamlAuth()
-        with self.client.session_transaction() as session:
-            session["saml_request_id"] = "REQ-1"
-
-        with patch("app.web.auth.create_saml_auth", return_value=fake_auth):
-            response = self.client.post(
-                "/auth/saml/acs",
-                data={"SAMLResponse": "test", "RelayState": "/consistency"},
-            )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/consistency")
-        self.assertEqual(fake_auth.processed_request_id, "REQ-1")
-        with self.client.session_transaction() as session:
-            self.assertEqual(
-                session[SAML_USER_SESSION_KEY],
-                {"user_id": "100086", "username": "张三"},
-            )
-            self.assertNotIn("saml_request_id", session)
-
-    def test_create_task_uses_saml_session_identity(self):
-        model_id = self._configure_provider("saml:100086")
-        self.app.config["AUTH"] = _saml_auth_config()
-        with self.client.session_transaction() as session:
-            session[SAML_USER_SESSION_KEY] = {"user_id": "100086", "username": "张三"}
-        with self.app.app_context():
-            item = (
-                get_db()
-                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
-                .fetchone()
-            )
-
-        response = self.client.post(
-            "/",
-            data={
-                "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                "checks": [str(item["id"])],
-                "model_id": model_id,
-            },
-            content_type="multipart/form-data",
-        )
-
-        self.assertEqual(response.status_code, 302)
-        with self.app.app_context():
-            task = (
-                get_db()
-                .execute(
-                    "SELECT owner_subject, owner_name_snapshot, owner_source FROM tasks"
-                )
-                .fetchone()
-            )
-        self.assertEqual(task["owner_subject"], "saml:100086")
-        self.assertEqual(task["owner_name_snapshot"], "张三")
-        self.assertEqual(task["owner_source"], "saml")
-
-    def test_saml_metadata_uses_sp_config_only(self):
-        self.app.config["AUTH"] = _saml_auth_config()
-
-        response = self.client.get("/auth/saml/metadata")
-
-        self.assertEqual(response.status_code, 200)
-        html = response.get_data(as_text=True)
-        self.assertIn("EntityDescriptor", html)
-        self.assertIn("https://doc.example.com/auth/saml/metadata", html)
-        self.assertIn("https://doc.example.com/auth/saml/acs", html)
-
-    def test_saml_admin_settings_still_uses_local_admin_login(self):
-        self.app.config["AUTH"] = _saml_auth_config()
-
-        response = self.client.get("/admin/settings")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("系统设置", response.get_data(as_text=True))
-
-    def test_saml_admin_task_page_redirects_to_saml_login_for_same_user(self):
-        self.app.config["AUTH"] = _saml_auth_config()
-
-        response = self.client.get("/admin/tasks")
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(
-            "/auth/saml/login?next=/admin/tasks", response.headers["Location"]
-        )
 
     def test_create_consistency_task_rejects_missing_checks_before_saving_file(self):
         model_id = self._configure_provider()

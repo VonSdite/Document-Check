@@ -15,8 +15,6 @@ from app.tasks.retries import TaskRetryError, request_task_retry
 from app.web.auth import (
     _auth_mode,
     _current_user_identity,
-    _mode_subject_filter,
-    _platform_enabled,
 )
 from app.web.common import _safe_next_path
 from app.web.constants import (
@@ -54,12 +52,7 @@ def _get_task_or_404(task_id: int, *, lightweight=False, include_revision=True):
         if join_ip_usernames
         else "COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '')"
     )
-    clauses = ["t.id = ?"]
-    params: list[object] = [task_id]
-    if _platform_enabled():
-        mode_clause, mode_params = _mode_subject_filter("t")
-        clauses.append(mode_clause)
-        params.extend(mode_params)
+    owner_name_expr = f"COALESCE(NULLIF(json_extract(profile.value, '$.label'), ''), {owner_name_expr})"
     task = (
         get_db()
         .execute(
@@ -70,10 +63,11 @@ def _get_task_or_404(task_id: int, *, lightweight=False, include_revision=True):
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
         LEFT JOIN task_live_results live ON live.task_id = t.id
+        LEFT JOIN settings profile ON profile.key = 'identity_profile:' || t.owner_subject
         {ip_username_join}
-        WHERE {" AND ".join(clauses)}
+        WHERE t.id = ?
         """,
-            tuple(params),
+            (task_id,),
         )
         .fetchone()
     )
@@ -90,11 +84,12 @@ def _get_user_task(task_id: int, *, lightweight=False, include_revision=True):
         .execute(
             f"""
         SELECT {selection},
-               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
-               COALESCE(NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
+               COALESCE(NULLIF(json_extract(profile.value, '$.label'), ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_owner_name,
+               COALESCE(NULLIF(json_extract(profile.value, '$.label'), ''), NULLIF(t.owner_name_snapshot, ''), NULLIF(t.username_snapshot, ''), '') AS current_username,
                COALESCE(t.owner_subject, 'ip:' || t.ip) AS effective_owner_subject
         FROM tasks t
         LEFT JOIN task_live_results live ON live.task_id = t.id
+        LEFT JOIN settings profile ON profile.key = 'identity_profile:' || t.owner_subject
         WHERE t.id = ? AND t.owner_subject = ?
         """,
             (task_id, identity.subject),
@@ -116,18 +111,6 @@ def _task_with_live_result(task) -> dict:
     value.pop("live_result_json", None)
     value.pop("live_summary", None)
     return value
-
-
-def _get_user_task_or_local_admin(
-    task_id: int, *, lightweight=False, include_revision=True
-):
-    if not _platform_enabled():
-        return _get_task_or_404(
-            task_id, lightweight=lightweight, include_revision=include_revision
-        )
-    return _get_user_task(
-        task_id, lightweight=lightweight, include_revision=include_revision
-    )
 
 
 def _cancel_task(task):

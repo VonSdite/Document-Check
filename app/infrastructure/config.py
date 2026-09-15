@@ -5,9 +5,7 @@ from pathlib import Path
 import yaml
 
 DEFAULT_ADMIN_URL = "/console"
-DEFAULT_PLATFORM = False
-DEFAULT_LISTEN_HOST = "0.0.0.0"
-DEFAULT_LOCAL_LISTEN_HOST = "127.0.0.1"
+DEFAULT_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 31945
 DEFAULT_URL_PREFIX = ""
 DEFAULT_REAL_IP_HEADER = ""
@@ -19,7 +17,7 @@ DEFAULT_MAX_TASK_PROCESSES = 4
 DEFAULT_CONSOLE_LOG_LEVEL = "WARNING"
 CONSOLE_LOG_LEVELS = {"INFO", "WARNING", "ERROR", "CRITICAL"}
 DEFAULT_AUTH_MODE = "ip"
-AUTH_MODES = {"ip", "trusted_header", "saml"}
+AUTH_MODES = {"ip", "cookie_session"}
 DEFAULT_PROXY_MODE = "direct"
 PROXY_MODES = {"direct", "system", "custom"}
 DEFAULT_SSL_VERIFY = False
@@ -62,7 +60,6 @@ def _read_config(config_path: Path) -> dict:
 
 def _default_config() -> dict:
     return {
-        "platform": DEFAULT_PLATFORM,
         "secret_key": secrets.token_urlsafe(32),
         "admin": {
             "username": "admin",
@@ -70,9 +67,7 @@ def _default_config() -> dict:
         },
         "admin_url": DEFAULT_ADMIN_URL,
         "server": {
-            "host": DEFAULT_LISTEN_HOST
-            if DEFAULT_PLATFORM
-            else DEFAULT_LOCAL_LISTEN_HOST,
+            "host": DEFAULT_LISTEN_HOST,
             "port": DEFAULT_LISTEN_PORT,
             "url_prefix": DEFAULT_URL_PREFIX,
             "real_ip_header": DEFAULT_REAL_IP_HEADER,
@@ -92,18 +87,22 @@ def _default_config() -> dict:
         },
         "auth": {
             "mode": DEFAULT_AUTH_MODE,
-            "trusted_header": {
-                "user_id": "",
-                "username": "",
-            },
-            "saml": {
-                "sp_entity_id": "",
-                "acs_url": "",
-                "idp_entity_id": "",
-                "idp_sso_url": "",
-                "idp_x509_cert": "",
-                "user_id_attribute": "",
-                "username_attribute": "",
+            "cookie_session": {
+                "userinfo_url": "",
+                "cookie_header_name": "cookie",
+                "ssl_verify": DEFAULT_SSL_VERIFY,
+                "timeout": 3,
+                "cache_ttl": 600,
+                "cache_grace": 600,
+                "avatar_url_template": "",
+                "avatar_field": "",
+                "field_mapping": {
+                    "user_id": "",
+                    "username": "",
+                    "employee_number": "",
+                    "extra_fields": {},
+                },
+                "login_url": "",
             },
         },
     }
@@ -118,7 +117,7 @@ def _dump_config(config: dict) -> str:
 
 
 def _normalize_config(config: dict) -> dict:
-    config["platform"] = _normalize_bool(config.get("platform"), DEFAULT_PLATFORM)
+    config.pop("platform", None)
     secret_key = config.get("secret_key")
     if not isinstance(secret_key, str) or not secret_key:
         config["secret_key"] = secrets.token_urlsafe(32)
@@ -139,9 +138,7 @@ def _normalize_config(config: dict) -> dict:
     if not isinstance(server, dict):
         server = {}
     config["server"] = server
-    default_host = (
-        DEFAULT_LISTEN_HOST if config["platform"] else DEFAULT_LOCAL_LISTEN_HOST
-    )
+    default_host = DEFAULT_LISTEN_HOST
     server["host"] = str(server.get("host") or default_host).strip() or default_host
     server["port"] = _normalize_port(server.get("port", DEFAULT_LISTEN_PORT))
     server["url_prefix"] = _normalize_url_prefix(
@@ -206,31 +203,57 @@ def normalize_network_config(value) -> dict:
 
 def _normalize_auth(value) -> dict:
     if not isinstance(value, dict):
-        value = {}
-    mode = str(value.get("mode") or DEFAULT_AUTH_MODE).strip().lower()
+        raise ValueError("auth 必须是配置对象，auth.mode 只允许 ip 或 cookie_session")
+    mode = str(value.get("mode", DEFAULT_AUTH_MODE)).strip().lower()
     if mode not in AUTH_MODES:
-        mode = DEFAULT_AUTH_MODE
-    trusted_header = value.get("trusted_header", {})
-    if not isinstance(trusted_header, dict):
-        trusted_header = {}
-    saml = value.get("saml", {})
-    if not isinstance(saml, dict):
-        saml = {}
+        raise ValueError("auth.mode 只允许 ip 或 cookie_session")
+    cookie_session = value.get("cookie_session", {})
+    if not isinstance(cookie_session, dict):
+        cookie_session = {}
+    field_mapping = cookie_session.get("field_mapping", {})
+    if not isinstance(field_mapping, dict):
+        field_mapping = {}
     return {
         "mode": mode,
-        "trusted_header": {
-            "user_id": _normalize_header_name(trusted_header.get("user_id")),
-            "username": _normalize_header_name(trusted_header.get("username")),
+        "cookie_session": _normalize_cookie_session(cookie_session, field_mapping),
+    }
+
+
+def _normalize_cookie_session(cookie_session: dict, field_mapping: dict) -> dict:
+    extra_fields = field_mapping.get("extra_fields", {})
+    if not isinstance(extra_fields, dict):
+        raise ValueError(
+            "auth.cookie_session.field_mapping.extra_fields 必须是配置对象"
+        )
+    return {
+        "userinfo_url": str(cookie_session.get("userinfo_url") or "").strip(),
+        "cookie_header_name": _normalize_header_name(
+            cookie_session.get("cookie_header_name")
+        )
+        or "cookie",
+        "ssl_verify": _normalize_bool(
+            cookie_session.get("ssl_verify"), DEFAULT_SSL_VERIFY
+        ),
+        "timeout": _normalize_positive_int(cookie_session.get("timeout"), 3),
+        "cache_ttl": _normalize_positive_int(cookie_session.get("cache_ttl"), 600),
+        "cache_grace": _normalize_non_negative_int(
+            cookie_session.get("cache_grace"), 600
+        ),
+        "avatar_url_template": str(
+            cookie_session.get("avatar_url_template") or ""
+        ).strip(),
+        "avatar_field": str(cookie_session.get("avatar_field") or "").strip(),
+        "field_mapping": {
+            "user_id": str(field_mapping.get("user_id") or "").strip(),
+            "username": str(field_mapping.get("username") or "").strip(),
+            "employee_number": str(field_mapping.get("employee_number") or "").strip(),
+            "extra_fields": {
+                str(k).strip(): str(v).strip()
+                for k, v in extra_fields.items()
+                if str(k).strip() and str(v).strip()
+            },
         },
-        "saml": {
-            "sp_entity_id": str(saml.get("sp_entity_id") or "").strip(),
-            "acs_url": str(saml.get("acs_url") or "").strip(),
-            "idp_entity_id": str(saml.get("idp_entity_id") or "").strip(),
-            "idp_sso_url": str(saml.get("idp_sso_url") or "").strip(),
-            "idp_x509_cert": str(saml.get("idp_x509_cert") or "").strip(),
-            "user_id_attribute": str(saml.get("user_id_attribute") or "").strip(),
-            "username_attribute": str(saml.get("username_attribute") or "").strip(),
-        },
+        "login_url": str(cookie_session.get("login_url") or "").strip(),
     }
 
 
@@ -275,6 +298,16 @@ def _normalize_positive_int(value, default: int) -> int:
     except (TypeError, ValueError):
         return default
     if number <= 0:
+        return default
+    return number
+
+
+def _normalize_non_negative_int(value, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    if number < 0:
         return default
     return number
 

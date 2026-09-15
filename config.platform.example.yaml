@@ -1,6 +1,4 @@
-# 平台服务模式：适合部署到服务器或让局域网/公司入口访问。
-# 管理入口需要登录；用户身份可先用 ip，后续按公司 SSO 情况切到 trusted_header 或 saml。
-platform: true
+# 管理入口使用管理员凭据登录；用户身份由 auth.mode 决定。
 secret_key: 请替换为随机长字符串
 admin:
   username: admin
@@ -39,31 +37,41 @@ network:
   # 是否校验 HTTPS 证书；默认 false，适合内网或自签名证书服务。公网正式证书环境建议改为 true。
   ssl_verify: false
 auth:
-  # 可选值：ip、trusted_header、saml。默认先用 ip，确认公司 SSO 接入方式后再切换。
-  # ip：按访问 IP 区分用户；trusted_header：从可信网关注入的 HTTP header 取用户。
-  # saml：直接对接 SAML 2.0。
-  # 不同 mode 的用户数据相互隔离：ip:<IP>、trusted_header:<用户ID>、saml:<用户ID>。
-  # 平台 ip 模式可在管理员后台给 IP 设置显示用户名；SSO 模式不会显示该入口。
+  # 可选值：ip、cookie_session。默认先用 ip，接入公司统一登录域后切到 cookie_session。
+  # ip：按访问 IP 区分用户；cookie_session：转发浏览器原始 Cookie 到外部用户信息接口换取身份。
+  # 任务列表、详情与操作按 owner_subject 隔离；Cookie 登录时自动归属当前 IP 的待迁移数据。
+  # ip 模式可在管理员后台给 IP 设置显示用户名。
   mode: ip
-  # mode: trusted_header 时填写；只有公司网关已完成 SSO 并注入可信 header 才使用。
-  trusted_header:
-    # user_id 是“唯一用户 ID”所在的 HTTP header 名称，例如 X-SSO-User-Id；不要填姓名。
-    user_id: ""
-    # username 是“显示名”所在的 HTTP header 名称，例如 X-SSO-User-Name；可为空，空时显示 user_id。
-    username: ""
-  # mode: saml 时填写；公司 SSO 是 SAML 2.0 且本系统直接对接时使用。
-  saml:
-    # sp_entity_id 是本系统作为 SP 的唯一标识，通常可使用 https://你的域名/auth/saml/metadata。
-    sp_entity_id: ""
-    # acs_url 是公司 SSO 登录后 POST 回调本系统的地址，必须是外部可访问的 https://你的域名/auth/saml/acs。
-    acs_url: ""
-    # idp_entity_id 是公司 SSO 作为 IdP 的唯一标识，由公司 SSO 管理员提供。
-    idp_entity_id: ""
-    # idp_sso_url 是公司 SSO 的登录跳转地址，由公司 SSO 管理员提供。
-    idp_sso_url: ""
-    # idp_x509_cert 是公司 SSO 用于签名 SAML 响应的公钥证书内容，不是私钥。
-    idp_x509_cert: ""
-    # user_id_attribute 是 SAML Attribute 中稳定唯一用户 ID 的字段名；留空时使用 SAML NameID。
-    user_id_attribute: ""
-    # username_attribute 是 SAML Attribute 中显示名的字段名；留空时显示 user_id。
-    username_attribute: ""
+  # mode: cookie_session 时填写；应用部署在统一登录主域下，把浏览器原始 Cookie 转发给外部用户信息接口换取身份。
+  # mode 只允许 ip、cookie_session；其他值会阻止启动。
+  # 接口地址、字段名、头像模板全部在此配置，代码中不硬编码任何厂商信息。
+  cookie_session:
+    # userinfo_url 是外部用户信息接口完整 URL。应用把原始 Cookie 头转发到此地址换取用户信息。
+    userinfo_url: "https://用户信息接口域名/api/user"
+    # cookie_header_name 是转发到外部接口的请求头名称，默认 cookie。
+    cookie_header_name: cookie
+    # 是否校验外部接口 HTTPS 证书；默认 false，适合内网或自签名证书服务。公网正式证书环境建议改为 true。
+    ssl_verify: false
+    # 调用外部接口的超时秒数。
+    timeout: 3
+    # 身份缓存有效期秒数，到期后重新向用户信息接口验证。
+    cache_ttl: 600
+    # 缓存过期后的宽限期秒数；宽限期内允许用过期缓存降级放行，0 表示不降级。
+    cache_grace: 600
+    # avatar_url_template 是头像地址模板，{user_id} 占位符会被替换为 avatar_field 指定的字段值（通常工号）。
+    # 留空则不显示头像。
+    avatar_url_template: "https://头像服务域名/face/{user_id}/120"
+    # avatar_field 指定从外部接口响应中取哪个字段填充头像模板的 {user_id}；通常填工号字段，留空时用 user_id。
+    avatar_field: "工号字段名"
+    # field_mapping 把外部接口返回 JSON 的字段名映射到应用内部身份字段。
+    field_mapping:
+      # user_id 必填，指向跨工号轮换不变的稳定人员标识字段（如 uuid），作为任务归属主键，不要填工号或姓名。
+      user_id: "uuid"
+      # username 可空，指向显示名字段名；留空时显示 user_id。
+      username: "姓名字段名"
+      # employee_number 可空，指向工号字段；与姓名一起展示并同步更新。
+      employee_number: "工号字段名"
+      # 可选扩展字段映射。
+      extra_fields: {}
+    # 未登录或会话失效时跳转的统一登录地址。cookie_session 模式下必填，否则返回 401。
+    login_url: "https://统一登录域名/login"

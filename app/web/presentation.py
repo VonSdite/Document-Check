@@ -1,8 +1,16 @@
-from flask import current_app, flash, redirect
+import json
+
+from flask import current_app, flash, g, redirect
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.contracts.task_types import task_type_label
-from app.identity.service import current_identity, subject_label
+from app.identity.models import UserIdentity, ip_subject
+from app.identity.service import (
+    AuthenticationRequired,
+    client_ip,
+    current_identity,
+    subject_label,
+)
 from app.reporting.constants import (
     REPORT_ACCEPTANCE_STATUSES,
     REPORT_ITEM_FIELDS,
@@ -12,7 +20,7 @@ from app.reporting.constants import (
 )
 from app.tasks.files import _task_source_files_available
 from app.tasks.submission import _consistency_task_title
-from app.web.auth import _identity_label, _owner_display, _owner_meta, _platform_enabled
+from app.web.auth import _identity_label, _owner_display, _owner_meta
 from app.web.common import (
     _current_relative_url,
     _max_upload_mb,
@@ -52,16 +60,46 @@ def register_presentation_routes(app):
 
     @app.context_processor
     def inject_globals():
-        identity = current_identity()
+        try:
+            identity = current_identity()
+        except AuthenticationRequired:
+            # console 页面未携带统一登录 Cookie 时回退到 IP 身份，保证页面可渲染。
+            ip = client_ip()
+            identity = UserIdentity(
+                subject=ip_subject(ip), display_name="", source="ip", ip=ip
+            )
         auth_config = current_app.config.get("AUTH", {})
         return {
-            "platform_mode": _platform_enabled(),
             "auth_mode": auth_config.get("mode", "ip"),
             "status_labels": STATUS_LABELS,
             "nav_identity": _identity_label(identity),
+            "nav_avatar": getattr(identity, "avatar", "") or "",
+            "nav_subject": identity.subject,
+            "nav_profile_version": identity.profile_version,
             "task_type_label": task_type_label,
             "max_upload_mb": _max_upload_mb(),
         }
+
+    @app.after_request
+    def include_user_profile(response):
+        identity = g.get("user_identity")
+        if (
+            identity is not None
+            and identity.source == "cookie_session"
+            and response.status_code < 400
+        ):
+            response.headers["X-User-Profile"] = json.dumps(
+                {
+                    "subject": identity.subject,
+                    "label": identity.label,
+                    "avatar": identity.avatar,
+                    "version": str(identity.profile_version),
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.errorhandler(RequestEntityTooLarge)
     def request_entity_too_large(error):

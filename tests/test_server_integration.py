@@ -33,14 +33,12 @@ class ServerIntegrationTest(unittest.TestCase):
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         config = {
-            "platform": True,
             "secret_key": "isolated-server-test",
             "admin_url": "/test-console",
             "admin": {"username": "test-admin", "password": "test-password"},
             "server": {"host": "127.0.0.1", "port": port, "web_workers": workers},
             "auth": {
-                "mode": "trusted_header",
-                "trusted_header": {"user_id": "X-Test-User"},
+                "mode": "ip",
             },
         }
         (root / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -240,7 +238,7 @@ class ServerIntegrationTest(unittest.TestCase):
             ).fetchone()[0]
             provider_id = db.execute(
                 "INSERT INTO user_model_providers(owner_subject, name, api_base, created_at, updated_at) VALUES (?, '本地检查', 'http://127.0.0.1:1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                ("trusted_header:integration",),
+                ("ip:127.0.0.1",),
             ).lastrowid
             db.execute(
                 "INSERT INTO user_model_configs(provider_id, model_name, created_at, updated_at) VALUES (?, 'local-check', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",

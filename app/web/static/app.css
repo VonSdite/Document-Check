@@ -375,6 +375,16 @@ body.table-column-resize-active * {
   font-weight: 700;
 }
 
+.nav-avatar {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #eef2f8;
+  border: 1px solid #d5e1f0;
+}
+
 .admin-tag {
   flex: 0 0 auto;
   min-height: 30px;

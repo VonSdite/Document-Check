@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 
-from flask import redirect, render_template, request, url_for
+from flask import render_template, request
 
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -13,8 +13,6 @@ from app.persistence.connection import get_db
 from app.reporting.statistics import _admin_report_item_totals_for_where
 from app.web.auth import (
     _auth_mode,
-    _mode_subject_filter,
-    _platform_enabled,
     admin_required,
 )
 
@@ -25,8 +23,6 @@ def register_overview_routes(app):
     @app.get(admin_prefix)
     @admin_required
     def admin_dashboard():
-        if not _platform_enabled():
-            return redirect(url_for("user_tasks"))
         selected_range = _admin_overview_range()
         overview = _admin_overview_data(
             selected_range["start_at"], selected_range["end_at"]
@@ -72,9 +68,8 @@ def _date_arg(name: str, default: date) -> date:
 
 def _admin_overview_data(start_at: str, end_at: str) -> dict:
     db = get_db()
-    mode_clause, mode_params = _mode_subject_filter("")
     totals = db.execute(
-        f"""
+        """
         SELECT
             COUNT(*) AS tasks,
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users,
@@ -90,7 +85,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
             COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0) AS canceled
         FROM tasks
-        WHERE task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND created_at >= ? AND created_at < ? AND {mode_clause}
+        WHERE task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND created_at >= ? AND created_at < ?
         """,
         (
             DOCUMENT_TASK_TYPE,
@@ -100,17 +95,15 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             VIDEO_TASK_TYPE,
             start_at,
             end_at,
-            *mode_params,
         ),
     ).fetchone()
     totals = dict(totals or {})
     totals["report_items"] = _admin_report_item_totals_for_where(
-        f"t.task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND t.created_at >= ? AND t.created_at < ? AND {mode_clause}",
-        (start_at, end_at, *mode_params),
+        "t.task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND t.created_at >= ? AND t.created_at < ?",
+        (start_at, end_at),
     )
-    mode_clause, mode_params = _mode_subject_filter("")
     daily_rows = db.execute(
-        f"""
+        """
         SELECT
             substr(created_at, 1, 10) AS day,
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users,
@@ -121,7 +114,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS image_tasks,
             COALESCE(SUM(CASE WHEN task_type = ? THEN 1 ELSE 0 END), 0) AS video_tasks
         FROM tasks
-        WHERE task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND created_at >= ? AND created_at < ? AND {mode_clause}
+        WHERE task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND created_at >= ? AND created_at < ?
         GROUP BY day
         ORDER BY day DESC
         LIMIT 30
@@ -134,7 +127,6 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             VIDEO_TASK_TYPE,
             start_at,
             end_at,
-            *mode_params,
         ),
     ).fetchall()
     join_ip_usernames = _auth_mode() == "ip"
@@ -146,7 +138,7 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
         if join_ip_usernames
         else "COALESCE(NULLIF(MAX(t.owner_name_snapshot), ''), NULLIF(MAX(t.username_snapshot), ''))"
     )
-    mode_clause, mode_params = _mode_subject_filter("t")
+    username_expr = f"COALESCE(NULLIF(MAX(json_extract(profile.value, '$.label')), ''), {username_expr})"
     user_rows = db.execute(
         f"""
         SELECT
@@ -162,7 +154,8 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             MAX(t.created_at) AS last_task_at
         FROM tasks t
         {ip_username_join}
-        WHERE t.task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND t.created_at >= ? AND t.created_at < ? AND {mode_clause}
+        LEFT JOIN settings profile ON profile.key = 'identity_profile:' || t.owner_subject
+        WHERE t.task_type IN ('document_check', 'consistency_check', 'language_consistency_check', 'image_check', 'video_check') AND t.created_at >= ? AND t.created_at < ?
         GROUP BY COALESCE(t.owner_subject, 'ip:' || t.ip)
         ORDER BY tasks DESC, last_task_at DESC, COALESCE(t.owner_subject, 'ip:' || t.ip) ASC
         LIMIT 10
@@ -175,7 +168,6 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
             VIDEO_TASK_TYPE,
             start_at,
             end_at,
-            *mode_params,
         ),
     ).fetchall()
     return {
@@ -187,9 +179,8 @@ def _admin_overview_data(start_at: str, end_at: str) -> dict:
 
 def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
     db = get_db()
-    mode_clause, mode_params = _mode_subject_filter("")
     row = db.execute(
-        f"""
+        """
         SELECT
             COUNT(*) AS tasks,
             COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,
@@ -198,22 +189,13 @@ def _admin_totals(task_type: str = DOCUMENT_TASK_TYPE) -> dict:
             COALESCE(SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END), 0) AS partial,
             COUNT(DISTINCT COALESCE(owner_subject, 'ip:' || ip)) AS users
         FROM tasks
-        WHERE task_type = ? AND {mode_clause}
+        WHERE task_type = ?
         """,
-        (task_type, *mode_params),
+        (task_type,),
     ).fetchone()
     totals = dict(row or {})
     totals["ips"] = totals.get("users", 0)
-    totals["report_items"] = _admin_report_item_totals(
-        task_type, mode_clause, mode_params
+    totals["report_items"] = _admin_report_item_totals_for_where(
+        "task_type = ?", (task_type,)
     )
     return totals
-
-
-def _admin_report_item_totals(
-    task_type: str, mode_clause: str, mode_params: tuple[str, ...]
-) -> dict:
-    return _admin_report_item_totals_for_where(
-        f"task_type = ? AND {mode_clause}",
-        (task_type, *mode_params),
-    )

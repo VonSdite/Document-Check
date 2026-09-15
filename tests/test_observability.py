@@ -41,7 +41,6 @@ class ObservabilityTest(unittest.TestCase):
             IMAGE_FOLDER=str(images_dir),
             LOG_FILE=str(logs_dir / "app.infrastructure.runtime.log"),
             ACCESS_LOG_FILE=str(self.access_log_file),
-            PLATFORM=True,
             LISTEN_HOST="0.0.0.0",
             LISTEN_PORT=31945,
             APPLICATION_ROOT="/infoCheck",

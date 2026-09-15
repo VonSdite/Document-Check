@@ -71,7 +71,7 @@ run.py 主进程
 | `contracts` | 任务类型、文件数量和输出条目限制等公共约束 |
 | `infrastructure` | 本地配置、网络、日志、文件操作；`runtime` 创建进程应用上下文 |
 | `persistence` | `connection` 管理连接，`schema` 管理初始化，`settings` 管理设置，`defaults` 管理默认检查项 |
-| `identity` | 独立身份数据类型、IP/可信请求头身份解析与 SAML 适配 |
+| `identity` | 独立身份数据类型、IP 与 cookie_session 身份解析 |
 | `models` | 提供商与模型配置、模型发现、模型请求和流式协议 |
 | `documents` | PDF、DOCX、表格和标记文本提取，图片提取、页面渲染与视频抽帧 |
 | `checks` | 检查项目录、词表检查、链接校验、语种分析、报告证据约束 |
@@ -174,8 +174,8 @@ app/                              Python 命名空间包
     defaults.py                   默认检查项与配置同步
   identity/
     models.py                     用户身份数据
-    service.py                    IP、可信请求头与会话身份
-    saml.py                       SAML 协议适配
+    service.py                    IP 与 cookie_session 身份解析
+    cookie_session.py             Cookie 转发换取用户信息与缓存降级
   models/
     service.py                    提供商与模型配置
     discovery.py                  模型发现

@@ -134,12 +134,11 @@ def log_startup_self_check(app) -> None:
     status = "ok" if all(value == "ok" for value in checks.values()) else "failed"
     app.extensions["readiness_status"] = status == "ok"
     logger.info(
-        "启动自检 status=%s pid=%s python=%s platform=%s host=%s port=%s "
+        "启动自检 status=%s pid=%s python=%s host=%s port=%s "
         "url_prefix=%s proxy_fix=%s checks=%s",
         status,
         os.getpid(),
         sys.version.split()[0],
-        app.config["PLATFORM"],
         app.config["LISTEN_HOST"],
         app.config["LISTEN_PORT"],
         app.config["APPLICATION_ROOT"],

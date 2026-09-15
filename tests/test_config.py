@@ -54,7 +54,7 @@ class ProviderConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = load_local_config(Path(temp_dir))
 
-        self.assertFalse(config["platform"])
+        self.assertNotIn("platform", config)
         self.assertEqual(config["admin_url"], "/console")
         self.assertEqual(config["server"]["host"], "127.0.0.1")
         self.assertEqual(config["server"]["port"], 31945)
@@ -67,10 +67,7 @@ class ProviderConfigTest(unittest.TestCase):
             {"proxy_mode": "direct", "proxy": "", "ssl_verify": False},
         )
         self.assertEqual(config["auth"]["mode"], "ip")
-        self.assertEqual(
-            config["auth"]["trusted_header"], {"user_id": "", "username": ""}
-        )
-        self.assertEqual(config["auth"]["saml"]["sp_entity_id"], "")
+        self.assertEqual(config["auth"]["cookie_session"]["userinfo_url"], "")
         self.assertEqual(config["logging"], {"console_level": "WARNING"})
 
     def test_console_logging_defaults_and_normalization_are_persisted(self):
@@ -96,7 +93,6 @@ class ProviderConfigTest(unittest.TestCase):
             _write_config(
                 temp_dir,
                 {
-                    "platform": True,
                     "secret_key": "test",
                     "admin": {"username": "admin", "password": "password"},
                     "admin_url": "/admin",
@@ -163,17 +159,10 @@ class ProviderConfigTest(unittest.TestCase):
             _write_config(
                 temp_dir,
                 {
-                    "platform": True,
                     "secret_key": None,
                     "admin": "invalid",
                     "server": ["invalid"],
-                    "auth": {
-                        "mode": "trusted_header",
-                        "trusted_header": {
-                            "user_id": "X Invalid Header",
-                            "username": ["invalid"],
-                        },
-                    },
+                    "auth": {"mode": "ip"},
                 },
             )
 
@@ -181,12 +170,9 @@ class ProviderConfigTest(unittest.TestCase):
 
         self.assertTrue(config["secret_key"])
         self.assertEqual(config["admin"], {"username": "admin", "password": "admin123"})
-        self.assertEqual(config["server"]["host"], "0.0.0.0")
+        self.assertEqual(config["server"]["host"], "127.0.0.1")
         self.assertEqual(config["server"]["port"], 31945)
-        self.assertEqual(config["auth"]["mode"], "trusted_header")
-        self.assertEqual(
-            config["auth"]["trusted_header"], {"user_id": "", "username": ""}
-        )
+        self.assertEqual(config["auth"]["mode"], "ip")
 
     def test_explicit_empty_admin_password_is_preserved(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -226,7 +212,7 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config["admin"]["note"], "保留")
         self.assertEqual(config["server"]["extension"], {"enabled": True})
 
-    def test_auth_trusted_header_config_is_normalized(self):
+    def test_auth_cookie_session_config_is_normalized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             _write_config(
                 temp_dir,
@@ -236,10 +222,23 @@ class ProviderConfigTest(unittest.TestCase):
                     "admin_url": "/admin",
                     "server": {"host": "127.0.0.1", "port": 5000},
                     "auth": {
-                        "mode": "trusted_header",
-                        "trusted_header": {
-                            "user_id": " X-SSO-User-Id ",
-                            "username": "X-SSO-User-Name",
+                        "mode": "cookie_session",
+                        "cookie_session": {
+                            "userinfo_url": " https://example.com/api/user ",
+                            "cookie_header_name": " cookie ",
+                            "ssl_verify": "false",
+                            "timeout": "5",
+                            "cache_ttl": "600",
+                            "cache_grace": "0",
+                            "avatar_url_template": " https://example.com/face/{user_id}/120 ",
+                            "avatar_field": " employeeNum ",
+                            "field_mapping": {
+                                "user_id": " employeeNum ",
+                                "username": "displayCnName",
+                                "employee_number": " employeeNum ",
+                                "extra_fields": {" ": " ", "dept": " department "},
+                            },
+                            "login_url": " https://login.example.com/ ",
                         },
                     },
                     "providers": [],
@@ -248,60 +247,23 @@ class ProviderConfigTest(unittest.TestCase):
 
             config = load_local_config(Path(temp_dir))
 
+        self.assertEqual(config["auth"]["mode"], "cookie_session")
+        cs = config["auth"]["cookie_session"]
+        self.assertEqual(cs["userinfo_url"], "https://example.com/api/user")
+        self.assertEqual(cs["cookie_header_name"], "cookie")
+        self.assertFalse(cs["ssl_verify"])
+        self.assertEqual(cs["timeout"], 5)
+        self.assertEqual(cs["cache_ttl"], 600)
+        self.assertEqual(cs["cache_grace"], 0)
         self.assertEqual(
-            config["auth"],
-            {
-                "mode": "trusted_header",
-                "trusted_header": {
-                    "user_id": "X-SSO-User-Id",
-                    "username": "X-SSO-User-Name",
-                },
-                "saml": {
-                    "sp_entity_id": "",
-                    "acs_url": "",
-                    "idp_entity_id": "",
-                    "idp_sso_url": "",
-                    "idp_x509_cert": "",
-                    "user_id_attribute": "",
-                    "username_attribute": "",
-                },
-            },
+            cs["avatar_url_template"], "https://example.com/face/{user_id}/120"
         )
-
-    def test_auth_saml_config_is_normalized(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            _write_config(
-                temp_dir,
-                {
-                    "secret_key": "test",
-                    "admin": {"username": "admin", "password": "password"},
-                    "admin_url": "/admin",
-                    "server": {"host": "127.0.0.1", "port": 5000},
-                    "auth": {
-                        "mode": "saml",
-                        "saml": {
-                            "sp_entity_id": " https://doc.example.com/auth/saml/metadata ",
-                            "acs_url": "https://doc.example.com/auth/saml/acs",
-                            "idp_entity_id": " https://sso.example.com/idp ",
-                            "idp_sso_url": "https://sso.example.com/login",
-                            "idp_x509_cert": " test-cert ",
-                            "user_id_attribute": " uid ",
-                            "username_attribute": "displayName",
-                        },
-                    },
-                    "providers": [],
-                },
-            )
-
-            config = load_local_config(Path(temp_dir))
-
-        self.assertEqual(config["auth"]["mode"], "saml")
-        self.assertEqual(
-            config["auth"]["saml"]["sp_entity_id"],
-            "https://doc.example.com/auth/saml/metadata",
-        )
-        self.assertEqual(config["auth"]["saml"]["idp_x509_cert"], "test-cert")
-        self.assertEqual(config["auth"]["saml"]["user_id_attribute"], "uid")
+        self.assertEqual(cs["avatar_field"], "employeeNum")
+        self.assertEqual(cs["field_mapping"]["user_id"], "employeeNum")
+        self.assertEqual(cs["field_mapping"]["username"], "displayCnName")
+        self.assertEqual(cs["field_mapping"]["employee_number"], "employeeNum")
+        self.assertEqual(cs["field_mapping"]["extra_fields"], {"dept": "department"})
+        self.assertEqual(cs["login_url"], "https://login.example.com/")
 
     def test_network_config_is_normalized(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -360,7 +322,6 @@ class ProviderConfigTest(unittest.TestCase):
             _write_config(
                 temp_dir,
                 {
-                    "platform": True,
                     "secret_key": "test",
                     "admin": {"username": "admin", "password": "password"},
                     "admin_url": "/admin",
@@ -393,7 +354,7 @@ class ProviderConfigTest(unittest.TestCase):
                 "ssl_verify": True,
             },
         )
-        self.assertTrue(config["platform"])
+        self.assertNotIn("platform", config)
         self.assertEqual(config["network"], network)
 
     def test_default_config_uses_yaml_filename(self):
@@ -403,30 +364,46 @@ class ProviderConfigTest(unittest.TestCase):
             self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())
             self.assertFalse((Path(temp_dir) / "config.local.json").exists())
 
-    def test_platform_accepts_false_like_values(self):
+    def test_invalid_auth_prevents_startup_and_preserves_config(self):
+        for auth in (
+            None,
+            [],
+            "ip",
+            *(
+                {"mode": mode}
+                for mode in ("saml", "trusted_header", "cookie_sesion", "", None, False)
+            ),
+        ):
+            with self.subTest(auth=auth), tempfile.TemporaryDirectory() as temp_dir:
+                _write_config(temp_dir, {"auth": auth})
+                path = Path(temp_dir) / CONFIG_FILENAME
+                original = path.read_bytes()
+                with self.assertRaisesRegex(ValueError, "auth"):
+                    create_app(Path(temp_dir))
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_extra_fields_type_is_validated(self):
+        for value in ("bad", ["bad"], 1):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temp_dir:
+                _write_config(
+                    temp_dir,
+                    {
+                        "auth": {
+                            "mode": "ip",
+                            "cookie_session": {
+                                "field_mapping": {"extra_fields": value}
+                            },
+                        }
+                    },
+                )
+                with self.assertRaisesRegex(ValueError, "extra_fields"):
+                    load_local_config(Path(temp_dir))
+
+    def test_app_uses_configured_listen_host(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             _write_config(
                 temp_dir,
                 {
-                    "platform": "false",
-                    "secret_key": "test",
-                    "admin": {"username": "admin", "password": "password"},
-                    "admin_url": "/admin",
-                    "server": {"host": "0.0.0.0", "port": 5000},
-                    "providers": [],
-                },
-            )
-
-            config = load_local_config(Path(temp_dir))
-
-        self.assertFalse(config["platform"])
-
-    def test_non_platform_app_forces_loopback_host(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            _write_config(
-                temp_dir,
-                {
-                    "platform": False,
                     "secret_key": "test",
                     "admin": {"username": "admin", "password": "password"},
                     "admin_url": "/admin",
@@ -443,8 +420,8 @@ class ProviderConfigTest(unittest.TestCase):
                 patch("app.infrastructure.runtime._configure_logging"),
             ):
                 created_app = create_app()
-            self.assertFalse(created_app.config["PLATFORM"])
-            self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
+            self.assertNotIn("PLATFORM", created_app.config)
+            self.assertEqual(created_app.config["LISTEN_HOST"], "0.0.0.0")
             self.assertEqual(created_app.config["LISTEN_PORT"], 5000)
             self.assertEqual(created_app.config["MAX_UPLOAD_MB"], DEFAULT_MAX_UPLOAD_MB)
             self.assertEqual(
@@ -455,7 +432,7 @@ class ProviderConfigTest(unittest.TestCase):
             self.assertEqual(created_app.config["WEB_THREADS"], 16)
             self.assertEqual(created_app.config["MAX_TASK_PROCESSES"], 4)
 
-    def test_app_without_config_defaults_to_non_platform(self):
+    def test_app_without_config_requires_admin_login(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
                 patch(
@@ -467,22 +444,24 @@ class ProviderConfigTest(unittest.TestCase):
                 created_app = create_app()
             config = load_local_config(Path(temp_dir))
 
-            self.assertFalse(created_app.config["PLATFORM"])
+            self.assertNotIn("PLATFORM", created_app.config)
             self.assertEqual(created_app.config["LISTEN_HOST"], "127.0.0.1")
-            self.assertFalse(config["platform"])
+            self.assertNotIn("platform", config)
             self.assertEqual(config["server"]["host"], "127.0.0.1")
             self.assertEqual(config["server"]["max_upload_mb"], DEFAULT_MAX_UPLOAD_MB)
             self.assertEqual(config["server"]["web_workers"], 1)
             self.assertEqual(config["server"]["web_threads"], 16)
             self.assertEqual(config["worker"]["max_task_processes"], 4)
             self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())
+            response = created_app.test_client().get("/console")
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.location.endswith("/console/login"))
 
     def test_app_uses_configured_url_prefix_for_generated_urls(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             _write_config(
                 temp_dir,
                 {
-                    "platform": False,
                     "secret_key": "test",
                     "admin": {"username": "admin", "password": "password"},
                     "admin_url": "/admin",
