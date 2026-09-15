@@ -542,19 +542,40 @@ class AdminSettingsRouteTest(unittest.TestCase):
                             ).status_code,
                             409,
                         )
-                        self.assertEqual(
-                            self.client.post(
-                                f"{url}/cancel-check", json={"code": "demo"}
-                            ).status_code,
-                            200,
+                        response = self.client.post(
+                            f"{url}/cancel-check", json={"code": "demo"}
                         )
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual(response.get_json()["status"], "canceled")
                         payload = self.client.get(
-                            url, query_string={"_poll": "1"}
+                            url,
+                            query_string={
+                                "_poll": "1",
+                                "revision": soup.select_one("[data-task-detail]")[
+                                    "data-detail-revision"
+                                ],
+                            },
                         ).get_json()
-                        self.assertEqual(
-                            payload["checks"]["demo"]["phase"], "canceling"
-                        )
+                        self.assertEqual(payload["checks"]["demo"]["phase"], "canceled")
                         self.assertEqual(payload["status"], status)
+                        canceled = BeautifulSoup(payload["html"], "html.parser")
+                        self.assertTrue(
+                            canceled.select_one("[data-check-activity]").has_attr(
+                                "hidden"
+                            )
+                        )
+                        self.assertIn(
+                            "本检查项已取消", canceled.select_one(".report-error").text
+                        )
+                        self.assertFalse(
+                            canceled.select_one("[data-retry-check]").has_attr("hidden")
+                        )
+                        self.assertTrue(
+                            canceled.select_one("[data-cancel-check]").has_attr(
+                                "hidden"
+                            )
+                        )
+                        self.assertIsNone(canceled.select_one(".result-text"))
 
     def test_cancel_check_is_scoped_to_active_supported_items(self):
         from app.tasks.activity import (
@@ -589,6 +610,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     f"/admin/tasks/{task_id}/cancel-check", json={"code": "demo"}
                 )
                 self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()["status"], "canceling")
                 with self.app.app_context():
                     self.assertTrue(
                         task_activities([task_id])[task_id]["checks"]["demo"][

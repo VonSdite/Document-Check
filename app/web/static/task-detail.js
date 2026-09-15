@@ -93,6 +93,21 @@
     root.dispatchEvent(new CustomEvent("check-output-reset", { detail: { code: node.dataset.detailResult } }));
   }
 
+  function showCanceledCheck(node) {
+    let error = node.querySelector(":scope > .report-error");
+    if (!error) {
+      error = document.createElement("div");
+      error.className = "error-box report-error";
+      const anchor = node.querySelector("[data-model-output]") || node.querySelector(".panel-head");
+      anchor.after(error);
+    }
+    const message = "本检查项已取消：本检查项已由用户取消，已接收的内容仅供参考。";
+    if (error.textContent !== message) {
+      error.textContent = message;
+      markup.delete(node);
+    }
+  }
+
   function applyCheckStates(data) {
     root.querySelectorAll("[data-detail-result]").forEach((node) => {
       const state = data.checks[node.dataset.detailResult] || {};
@@ -108,6 +123,7 @@
       node.dataset.checkPhase = phase;
       node.dataset.checkExecution = state.execution ?? node.dataset.checkExecution;
       node.dataset.checkTerminal = ["completed", "failed", "canceled"].includes(phase) ? "1" : "0";
+      if (phase === "canceled") showCanceledCheck(node);
       const label = node.querySelector("[data-check-activity]");
       const text = data.active ? phaseLabels[phase] || "" : "";
       label.textContent = text ? `状态：${text}` + (state.attempt > 1 ? ` · 第 ${state.attempt}/3 次尝试` : "") : "";
@@ -171,18 +187,24 @@
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "操作失败，请重试。");
+      root.dispatchEvent(new CustomEvent("task-check-action"));
+      const phase = data.status;
+      const text = phaseLabels[phase] || "";
       const label = node.querySelector("[data-check-activity]");
-      label.hidden = false;
-      label.textContent = action === "retry" ? "状态：待执行" : "状态：取消中";
+      label.hidden = !text;
+      label.textContent = text ? `状态：${text}` : "";
+      node.dataset.checkPhase = phase;
+      node.dataset.checkTerminal = ["completed", "failed", "canceled"].includes(phase) ? "1" : "0";
+      if (phase === "canceled") showCanceledCheck(node);
       node.querySelector("[data-cancel-check]").hidden = action !== "retry" || !singleCancel;
       node.querySelector("[data-retry-check]").hidden = action === "retry";
+      root.dataset.detailRevision = "";
       if (action === "retry") {
         resetCheck(node, data.output_execution ?? Number(node.dataset.checkExecution) + 1);
         node.dataset.checkExecution = data.execution ?? node.dataset.checkExecution;
         node.dataset.checkPhase = "pending";
         node.dataset.checkTerminal = "0";
         root.dataset.detailActive = "1";
-        root.dataset.detailRevision = "";
         root.dispatchEvent(new CustomEvent("task-detail-updated"));
       }
     } catch (error) {

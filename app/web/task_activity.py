@@ -14,6 +14,7 @@ from app.contracts.task_types import (
 )
 from app.tasks.activity import (
     CANCELABLE_PHASES,
+    CHECK_CANCELED_MESSAGE,
     PHASE_LABELS,
     RETRYABLE_PHASES,
     activity_label,
@@ -56,9 +57,9 @@ def detail_progress(task):
         + ":"
         + json.dumps(
             {
-                code: item["execution"]
+                code: [item.get("execution", 0), item.get("phase") == "canceled"]
                 for code, item in activity.get("checks", {}).items()
-                if item.get("execution")
+                if item.get("execution") or item.get("phase") == "canceled"
             },
             sort_keys=True,
         ),
@@ -146,6 +147,8 @@ def present_check_activity(task, results, progress):
             ):
                 phase = task["status"]
         result["execution_phase"] = "pending" if state.get("retry_requested") else phase
+        if result["execution_phase"] == "canceled":
+            result.update(canceled=True, error=CHECK_CANCELED_MESSAGE)
         result["execution"] = execution
         result["output_execution"] = output_execution
         result["execution_label"] = (
@@ -179,11 +182,12 @@ def cancel_check(task):
     execution = data.get("execution")
     if execution is not None and (type(execution) is not int or execution < 0):
         return {"error": "检查项取消请求格式无效。"}, 400
-    if not request_check_cancellation(
+    phase = request_check_cancellation(
         task["id"], task.get("claim_token"), code, execution=execution
-    ):
+    )
+    if not phase:
         return {"error": "此检查项当前无法取消，请刷新状态。"}, 409
-    return {"status": "canceling", "code": code}
+    return {"status": phase, "code": code}
 
 
 def retry_check(task):

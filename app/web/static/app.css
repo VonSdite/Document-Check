@@ -3984,7 +3984,8 @@ body.table-column-resize-active * {
 .confirm-popover {
   position: fixed;
   z-index: 100;
-  width: min(300px, calc(100vw - 24px));
+  width: max-content;
+  max-width: min(300px, calc(100vw - 24px));
   padding: 12px;
   border: 1px solid #cfe0f5;
   border-radius: var(--radius);
@@ -4017,6 +4018,7 @@ body.table-column-resize-active * {
   color: var(--text);
   font-size: 13px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .confirm-popover-actions {

@@ -286,6 +286,123 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(results[0]["result"], "第一项完成")
         self.assertTrue(all(result["canceled"] for result in results[1:]))
 
+    def test_pending_cancellation_and_retry_finish_queue_bookkeeping_while_busy(self):
+        from app.tasks.activity import request_check_cancellation, task_activities
+        from app.tasks.retries import request_check_retry
+        from app.tasks.runner import _save_intermediate_results, take_check_retries
+
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "检查"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+            {"id": 103, "code": "third", "name": "第三项", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        set_setting("check_item_concurrency", 1)
+        started, release_first, saved_cancellations, retry_accepted = (
+            Event(),
+            Event(),
+            Event(),
+            Event(),
+        )
+        calls, errors = [], []
+
+        def model(**kwargs):
+            calls.append(kwargs["check_name"])
+            if kwargs["check_name"] == "第一项":
+                started.set()
+                self.assertTrue(release_first.wait(10))
+            else:
+                self.assertEqual(kwargs["check_name"], "第二项")
+                self.assertEqual(kwargs["cancel_event"].execution, 1)
+                self.assertFalse(kwargs["cancel_event"].is_set())
+            return kwargs["check_name"] + "完成"
+
+        def save(db, task_id, results, *args):
+            _save_intermediate_results(db, task_id, results, *args)
+            if {item["code"] for item in results if item.get("canceled")} == {
+                "second",
+                "third",
+            }:
+                saved_cancellations.set()
+
+        def take(*args):
+            retries = take_check_retries(*args)
+            if retries:
+                retry_accepted.set()
+            return retries
+
+        def run():
+            try:
+                TaskRunner(self.app).run(task_id)
+            except BaseException as exc:
+                errors.append(exc)
+
+        with (
+            patch("app.tasks.runner.run_check", side_effect=model),
+            patch("app.tasks.runner._save_intermediate_results", side_effect=save),
+            patch("app.tasks.runner.take_check_retries", side_effect=take),
+        ):
+            thread = Thread(target=run)
+            thread.start()
+            try:
+                self.assertTrue(started.wait(5))
+                for code in ("second", "third"):
+                    self.assertEqual(
+                        request_check_cancellation(task_id, None, code), "canceled"
+                    )
+                self.assertEqual(
+                    task_activities([task_id])[task_id]["checks"]["third"]["phase"],
+                    "canceled",
+                )
+                self.assertTrue(saved_cancellations.wait(5))
+                request_check_retry(task_id, "second", 0)
+                self.assertTrue(retry_accepted.wait(5))
+                second = task_activities([task_id])[task_id]["checks"]["second"]
+                self.assertEqual(second["phase"], "pending")
+                self.assertEqual(second["execution"], 1)
+                self.assertFalse(
+                    request_check_cancellation(task_id, None, "second", execution=0)
+                )
+                self.assertEqual(calls, ["第一项"])
+            finally:
+                release_first.set()
+                thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(calls, ["第一项", "第二项"])
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "partial")
+        results = json.loads(task["result_json"])
+        self.assertEqual(results[0]["result"], "第一项完成")
+        self.assertEqual(results[1]["result"], "第二项完成")
+        self.assertEqual(results[1]["execution"], 1)
+        self.assertNotIn("canceled", results[1])
+        self.assertTrue(results[2]["canceled"])
+
+    def test_pending_cancellation_is_terminal_before_start(self):
+        from app.tasks.activity import (
+            initialize_activity,
+            request_check_cancellation,
+            start_check_activity,
+            task_activities,
+        )
+
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "检查"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        initialize_activity(task_id, None, checks=checks)
+        self.assertEqual(request_check_cancellation(task_id, None, "first"), "canceled")
+        self.assertFalse(start_check_activity(task_id, None, "first"))
+        self.assertTrue(start_check_activity(task_id, None, "second"))
+        self.assertEqual(
+            request_check_cancellation(task_id, None, "second"), "canceling"
+        )
+        states = task_activities([task_id])[task_id]["checks"]
+        self.assertEqual(states["first"]["phase"], "canceled")
+        self.assertEqual(states["second"]["phase"], "canceling")
+
     def test_recovered_lease_does_not_inherit_old_check_cancellation(self):
         from app.tasks.activity import (
             initialize_activity,

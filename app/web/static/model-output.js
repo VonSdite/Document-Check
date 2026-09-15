@@ -131,6 +131,7 @@
     } finally { pending = false; schedule(delay); }
   }
 
+  root.addEventListener("task-check-action", () => { version += 1; });
   root.addEventListener("check-output-reset", (event) => {
     version += 1;
     const code = event.detail.code;

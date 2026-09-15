@@ -21,6 +21,7 @@ PHASE_LABELS = {
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
 CANCELABLE_PHASES = {"pending", "checking", "waiting", "thinking", "output", "retrying"}
 RETRYABLE_PHASES = {"failed", "canceled", "canceling"}
+CHECK_CANCELED_MESSAGE = "本检查项已由用户取消，已接收的内容仅供参考。"
 
 
 class CheckCancelEvent(threading.Event):
@@ -139,12 +140,14 @@ def start_check_activity(task_id, claim_token, code):
 
 
 def request_check_cancellation(task_id, claim_token, code, *, execution=None):
+    """原子取消待执行项，向执行中的检查项发送取消信号，返回当前阶段。"""
+
     def change(state):
         item = state["checks"].get(code)
         if execution is not None and execution != (item or {}).get("execution", 0):
             return False
         if item and item.pop("retry_requested", False):
-            return True
+            return item["phase"]
         if item is None:
             db = get_db()
             task = db.execute(
@@ -162,10 +165,11 @@ def request_check_cancellation(task_id, claim_token, code, *, execution=None):
             item = state["checks"][code] = {"name": match["name"], "phase": "pending"}
         if item is None or item.get("phase") not in CANCELABLE_PHASES | {"canceling"}:
             return False
-        item.update(cancel_requested=True, phase="canceling")
-        return True
+        phase = "canceled" if item["phase"] == "pending" else "canceling"
+        item.update(cancel_requested=True, phase=phase)
+        return phase
 
-    return bool(_change_activity(task_id, claim_token, change, allow_queued=True))
+    return _change_activity(task_id, claim_token, change, allow_queued=True)
 
 
 def take_check_retries(task_id, claim_token, busy_codes):

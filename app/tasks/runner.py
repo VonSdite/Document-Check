@@ -47,6 +47,7 @@ from app.models.client import LLMError, run_check
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
 from app.tasks.activity import (
+    CHECK_CANCELED_MESSAGE,
     CheckCancelEvent,
     clear_activity,
     finish_check_activity,
@@ -509,6 +510,43 @@ def _run_check_items_concurrently(
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
 
+    def save_failed_result(item, execution, error, *, canceled):
+        progress = mark_unit_completed()
+        with result_lock:
+            result = dict(partial_by_code.pop(item["code"], None) or {})
+            result.update(
+                code=item["code"],
+                name=item["name"],
+                error=CHECK_CANCELED_MESSAGE if canceled else error,
+                issue_output_limit=issue_output_limit,
+            )
+            if execution:
+                result["execution"] = execution
+            if canceled:
+                result["canceled"] = True
+            result.setdefault("result", "")
+            completed_by_code[item["code"]] = result
+            completed_count = len(completed_by_code)
+        save_snapshot(
+            get_db(),
+            f"{item['name']}{'已取消' if canceled else '检查失败'}，已结束 {completed_count}/{total} 个检查项，继续检查其他项目。",
+            progress,
+        )
+        if canceled:
+            logger.info(
+                "任务检查项已取消，继续其他检查 task_id=%s item=%s",
+                task_id,
+                item["name"],
+            )
+        else:
+            logger.warning(
+                "任务检查项失败，继续其他检查 task_id=%s item=%s error=%s",
+                task_id,
+                item["name"],
+                error,
+            )
+        return result
+
     def run_item(index: int, item: dict) -> dict:
         with app.app_context():
             db = get_db()
@@ -644,48 +682,12 @@ def _run_check_items_concurrently(
                 canceled = finish_check_activity(
                     task_id, claim_token, item["code"], failed=True
                 )
-                progress = mark_unit_completed()
-                error = (
-                    "本检查项已由用户取消，已接收的内容仅供参考。"
-                    if canceled
-                    else str(exc).strip() or exc.__class__.__name__
+                return save_failed_result(
+                    item,
+                    execution,
+                    str(exc).strip() or exc.__class__.__name__,
+                    canceled=canceled,
                 )
-                with result_lock:
-                    partial_result = partial_by_code.pop(item["code"], None)
-                    result = dict(partial_result or {})
-                    result.update(
-                        {
-                            "code": item["code"],
-                            "name": item["name"],
-                            "error": error,
-                            "issue_output_limit": issue_output_limit,
-                            **execution_meta,
-                        }
-                    )
-                    if canceled:
-                        result["canceled"] = True
-                    result.setdefault("result", "")
-                    completed_by_code[item["code"]] = result
-                    completed_count = len(completed_by_code)
-                save_snapshot(
-                    db,
-                    f"{item['name']}{'已取消' if canceled else '检查失败'}，已结束 {completed_count}/{total} 个检查项，继续检查其他项目。",
-                    progress,
-                )
-                if canceled:
-                    logger.info(
-                        "任务检查项已取消，继续其他检查 task_id=%s item=%s",
-                        task_id,
-                        item["name"],
-                    )
-                else:
-                    logger.warning(
-                        "任务检查项失败，继续其他检查 task_id=%s item=%s error=%s",
-                        task_id,
-                        item["name"],
-                        error,
-                    )
-                return result
             progress = mark_unit_completed()
 
             if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
@@ -728,6 +730,14 @@ def _run_check_items_concurrently(
             for index, item in enumerate(check_items, start=1)
         }
         while True:
+            checks = task_activities([task_id]).get(task_id, {}).get("checks", {})
+            for future, code in list(futures.items()):
+                if checks.get(code, {}).get("phase") == "canceled" and future.cancel():
+                    # 队列中的已取消项由调度线程收尾，释放后即可接收该项重试。
+                    save_failed_result(
+                        catalog[code], check_events[code].execution, "", canceled=True
+                    )
+                    del futures[future]
             if futures:
                 done, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
                 for future in done:
