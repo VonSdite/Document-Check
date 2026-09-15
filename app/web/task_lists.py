@@ -50,7 +50,7 @@ def _task_filter_values():
     return {"status": status, "review_status": review_status, "keyword": keyword}
 
 
-def _task_filter_sql(filters, *, join_ip_usernames):
+def _task_filter_sql(filters, *, search_owner, join_ip_usernames):
     status, review_status, keyword = (
         filters[key] for key in ("status", "review_status", "keyword")
     )
@@ -77,41 +77,40 @@ def _task_filter_sql(filters, *, join_ip_usernames):
             f"t.status NOT IN ('queued', 'running', 'canceling') AND {report_total_expr} = 0"
         )
     if keyword:
-        owner_name_filter = (
-            "OR COALESCE(iu.username, '') LIKE ? ESCAPE '\\'"
-            if join_ip_usernames
-            else ""
-        )
-        clauses.append(
-            f"""
-            (
-                COALESCE(t.original_filename, '') LIKE ? ESCAPE '\\'
-                OR COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ? ESCAPE '\\'
-                OR t.ip LIKE ? ESCAPE '\\'
-                OR COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ? ESCAPE '\\'
-                {owner_name_filter}
-                OR CASE WHEN t.task_type IN ('consistency_check', 'language_consistency_check')
-                    THEN EXISTS (
-                        SELECT 1
-                        FROM json_each(
-                            CASE WHEN json_valid(t.document_meta_json)
-                                 THEN t.document_meta_json ELSE '{{}}' END, '$.groups'
-                        ) AS doc_group
-                        JOIN json_each(
-                            CASE WHEN doc_group.type = 'object'
-                                 THEN doc_group.value ELSE '{{}}' END, '$.files'
-                        ) AS doc_file
-                        WHERE CASE WHEN doc_file.type = 'object'
-                                   THEN json_extract(doc_file.value, '$.original_filename')
-                              END LIKE ? ESCAPE '\\'
-                    ) ELSE 0 END
+        keyword_clauses = ["COALESCE(t.original_filename, '') LIKE ? ESCAPE '\\'"]
+        if search_owner:
+            keyword_clauses.extend(
+                [
+                    "COALESCE(t.owner_subject, 'ip:' || t.ip) LIKE ? ESCAPE '\\'",
+                    "t.ip LIKE ? ESCAPE '\\'",
+                    "COALESCE(t.owner_name_snapshot, t.username_snapshot, '') LIKE ? ESCAPE '\\'",
+                ]
             )
+            if join_ip_usernames:
+                keyword_clauses.append("COALESCE(iu.username, '') LIKE ? ESCAPE '\\'")
+        keyword_clauses.append(
+            """
+            CASE WHEN t.task_type IN ('consistency_check', 'language_consistency_check')
+                THEN EXISTS (
+                    SELECT 1
+                    FROM json_each(
+                        CASE WHEN json_valid(t.document_meta_json)
+                             THEN t.document_meta_json ELSE '{}' END, '$.groups'
+                    ) AS doc_group
+                    JOIN json_each(
+                        CASE WHEN doc_group.type = 'object'
+                             THEN doc_group.value ELSE '{}' END, '$.files'
+                    ) AS doc_file
+                    WHERE CASE WHEN doc_file.type = 'object'
+                               THEN json_extract(doc_file.value, '$.original_filename')
+                          END LIKE ? ESCAPE '\\'
+                ) ELSE 0 END
             """
         )
-        # 文件名与用户信息按输入的文字匹配。
+        clauses.append(f"({' OR '.join(keyword_clauses)})")
         keyword = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         keyword_like = f"%{keyword}%"
-        params.extend([keyword_like] * (6 if join_ip_usernames else 5))
+        params.extend([keyword_like] * len(keyword_clauses))
     return clauses, params
 
 
@@ -155,6 +154,7 @@ def _render_user_task_list(identity, task_type, template_name):
         submission_token=uuid.uuid4().hex,
         refresh_url=url_for("user_task_statuses", task_type=task_type),
         active_nav=task_type,
+        keyword_placeholder="按文档名称搜索",
     )
 
 
@@ -173,8 +173,7 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
     params = (identity.subject, task_type)
     stats = _task_stats_for_where("owner_subject = ? AND task_type = ?", params)
     filters = _task_filter_values()
-    join_ip_usernames = bool(filters["keyword"]) and _auth_mode() == "ip"
-    joins = "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
+    joins = ""
     if filters["review_status"]:
         # 请求线程只准备本用户最近的一批统计，历史记录由后台持续维护。
         _task_report_stat_rows_for_where(
@@ -184,7 +183,7 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
         )
         joins += " LEFT JOIN task_report_stats trs ON trs.task_id = t.id"
     clauses, filter_params = _task_filter_sql(
-        filters, join_ip_usernames=join_ip_usernames
+        filters, search_owner=False, join_ip_usernames=False
     )
     where = "t.owner_subject = ? AND t.task_type = ?"
     if clauses:
@@ -493,7 +492,7 @@ def _render_admin_task_list(
     clauses.append(mode_clause)
     params.extend(mode_params)
     filter_clauses, filter_params = _task_filter_sql(
-        filters, join_ip_usernames=join_ip_usernames
+        filters, search_owner=True, join_ip_usernames=join_ip_usernames
     )
     clauses.extend(filter_clauses)
     params.extend(filter_params)
@@ -561,6 +560,7 @@ def _render_admin_task_list(
         submission_token=uuid.uuid4().hex,
         refresh_url=url_for("admin_task_statuses", task_type=task_type),
         active_nav=task_type,
+        keyword_placeholder="按文档名称、用户、账号或 IP 搜索",
     )
 
 

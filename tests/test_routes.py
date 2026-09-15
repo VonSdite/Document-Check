@@ -7066,6 +7066,48 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 )
                 self.assertEqual(filenames, [matching_filename])
 
+    def test_user_task_lists_search_document_names_only(self):
+        task_routes = (
+            (DOCUMENT_TASK_TYPE, "/", "/admin/tasks"),
+            (CONSISTENCY_TASK_TYPE, "/consistency", "/admin/consistency"),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "/language-consistency",
+                "/admin/language-consistency",
+            ),
+            (IMAGE_TASK_TYPE, "/images", "/admin/images"),
+            (VIDEO_TASK_TYPE, "/videos", "/admin/videos"),
+        )
+
+        for task_type, user_route, admin_route in task_routes:
+            owner_name = f"检索用户-{task_type}"
+            task_id = self._insert_task(
+                task_type=task_type,
+                original_filename=f"普通文件-{task_type}.pdf",
+                owner_name_snapshot=owner_name,
+            )
+            for keyword in (owner_name, "127.0.0.1", "ip:127.0.0.1"):
+                with self.subTest(task_type=task_type, keyword=keyword):
+                    response = self.client.get(
+                        user_route, query_string={"keyword": keyword}
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    self.assertFalse(soup.select("[data-task-id]"))
+                    keyword_input = _required_tag(
+                        soup.select_one('.filter-bar input[name="keyword"]')
+                    )
+                    self.assertEqual(keyword_input.get("placeholder"), "按文档名称搜索")
+
+            admin_response = self.client.get(
+                admin_route, query_string={"keyword": owner_name, "_partial": "1"}
+            )
+            self.assertEqual(admin_response.status_code, 200)
+            admin_soup = BeautifulSoup(
+                admin_response.get_data(as_text=True), "html.parser"
+            )
+            self.assertIsNotNone(admin_soup.select_one(f'[data-task-id="{task_id}"]'))
+
     def test_admin_task_list_searches_all_document_names_in_metadata(self):
         document_meta = {
             "groups": [
