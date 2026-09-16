@@ -13,6 +13,7 @@ from app.persistence.connection import get_db
 from app.persistence.settings import (
     get_setting,
     migrate_ip_owner_to_subject,
+    set_ip_username,
     sync_identity_profile,
 )
 from scripts.audit_ip_owners import remaining_ip_owners
@@ -128,7 +129,7 @@ class CookieSessionRoutesTest(unittest.TestCase):
         )
 
     def test_ip_audit_excludes_cookie_owners_and_reports_remaining_models(self):
-        self.fixture._insert_task(ip="10.0.0.8")
+        self.fixture._insert_task(ip="10.0.0.8", username_snapshot="王五")
         self.fixture._insert_task(ip="10.0.0.8")
         self.fixture._insert_task(
             ip="10.0.0.8",
@@ -136,18 +137,22 @@ class CookieSessionRoutesTest(unittest.TestCase):
             owner_source="cookie_session",
         )
         self.fixture._configure_provider("ip:10.0.0.9")
+        with self.app.app_context():
+            set_ip_username("10.0.0.9", "赵六")
         rows = remaining_ip_owners(Path(self.app.config["DATABASE"]))
         self.assertEqual(
             rows,
             [
                 {
                     "ip": "10.0.0.8",
+                    "username": "王五",
                     "task_count": 2,
                     "provider_count": 0,
                     "model_count": 0,
                 },
                 {
                     "ip": "10.0.0.9",
+                    "username": "赵六",
                     "task_count": 0,
                     "provider_count": 1,
                     "model_count": 1,

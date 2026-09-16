@@ -150,7 +150,7 @@ uv run python -m scripts.audit_ip_owners
 uv run python -m scripts.audit_ip_owners --database /path/to/document_check.sqlite3 --json
 ```
 
-脚本以只读方式输出每个 IP 的任务数、提供商数和模型数，不输出密钥，也不执行迁移。
+脚本以只读方式输出每个 IP 的用户名、任务数、提供商数和模型数，用户名依次取 `ip_usernames` 表和任务上的名称快照，没有时显示 `-`，不输出密钥，也不执行迁移。
 
 实际接入 `cookie_session` 时按下面顺序操作：
 

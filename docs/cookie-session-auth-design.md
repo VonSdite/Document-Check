@@ -32,7 +32,7 @@ uv run python -m scripts.audit_ip_owners
 uv run python -m scripts.audit_ip_owners --database /path/to/document_check.sqlite3 --json
 ```
 
-脚本按 IP 汇总任务数、提供商数和模型数，使用 SQLite 只读连接。
+脚本按 IP 汇总用户名、任务数、提供商数和模型数，用户名依次取 `ip_usernames` 表和任务上的名称快照，使用 SQLite 只读连接。
 
 ## 缓存
 

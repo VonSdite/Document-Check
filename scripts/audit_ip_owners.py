@@ -1,4 +1,4 @@
-"""只读统计仍归属于 IP 的任务和模型配置。"""
+"""只读统计仍归属于 IP 的任务和模型配置，并显示 IP 对应的用户名。"""
 
 import argparse
 import json
@@ -17,22 +17,29 @@ def remaining_ip_owners(database: Path) -> list[dict]:
             dict(row)
             for row in db.execute(
                 """
-                SELECT ip, SUM(task_count) AS task_count,
-                       SUM(provider_count) AS provider_count,
-                       SUM(model_count) AS model_count
+                SELECT owners.ip,
+                       COALESCE(NULLIF(MAX(u.username), ''),
+                                NULLIF(MAX(owners.task_username), ''), '') AS username,
+                       SUM(owners.task_count) AS task_count,
+                       SUM(owners.provider_count) AS provider_count,
+                       SUM(owners.model_count) AS model_count
                 FROM (
                     SELECT substr(owner_subject, 4) AS ip, COUNT(*) AS task_count,
-                           0 AS provider_count, 0 AS model_count
+                           0 AS provider_count, 0 AS model_count,
+                           COALESCE(MAX(NULLIF(owner_name_snapshot, '')),
+                                    MAX(NULLIF(username_snapshot, '')), '') AS task_username
                     FROM tasks WHERE owner_subject LIKE 'ip:%'
                     GROUP BY owner_subject
                     UNION ALL
-                    SELECT substr(p.owner_subject, 4), 0, COUNT(DISTINCT p.id), COUNT(m.id)
+                    SELECT substr(p.owner_subject, 4), 0, COUNT(DISTINCT p.id),
+                           COUNT(m.id), ''
                     FROM user_model_providers p
                     LEFT JOIN user_model_configs m ON m.provider_id = p.id
                     WHERE p.owner_subject LIKE 'ip:%'
                     GROUP BY p.owner_subject
-                )
-                GROUP BY ip ORDER BY ip
+                ) owners
+                LEFT JOIN ip_usernames u ON u.ip = owners.ip
+                GROUP BY owners.ip ORDER BY owners.ip
                 """
             )
         ]
@@ -56,10 +63,11 @@ def main():
     if args.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
     elif rows:
-        print("IP\t任务数\t提供商数\t模型数")
+        print("IP\t用户名\t任务数\t提供商数\t模型数")
         for row in rows:
             print(
-                f"{row['ip']}\t{row['task_count']}\t{row['provider_count']}\t{row['model_count']}"
+                f"{row['ip']}\t{row['username'] or '-'}\t{row['task_count']}"
+                f"\t{row['provider_count']}\t{row['model_count']}"
             )
     else:
         print("没有尚未迁移的 IP 归属数据。")
