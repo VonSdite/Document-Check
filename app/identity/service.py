@@ -28,14 +28,9 @@ def current_identity() -> UserIdentity:
         if g.user_identity is None:
             raise AuthenticationRequired("未收到有效登录信息")
         return g.user_identity
-    ip = (
-        _real_ip_header_value("X-Real-IP")
-        or _real_ip_header_value("X-Forwarded-For")
-        or str(request.remote_addr or "").strip()
-        or "0.0.0.0"
-    )
+    ip = _request_identity_ip()
     auth_config = current_app.config.get("AUTH", {})
-    if auth_config.get("mode") == "cookie_session":
+    if cookie_session_enabled_for_request():
         identity = _identity_from_cookie_session(auth_config, ip)
         g.user_identity = identity
         if identity is not None:
@@ -52,6 +47,34 @@ def client_ip() -> str:
     if header_ip:
         return header_ip
     return str(request.remote_addr or "").strip() or "0.0.0.0"
+
+
+def cookie_session_enabled_for_request() -> bool:
+    auth_config = current_app.config.get("AUTH", {})
+    return _cookie_session_enabled_for_ip(auth_config, _request_identity_ip())
+
+
+def _request_identity_ip() -> str:
+    return (
+        _real_ip_header_value("X-Real-IP")
+        or _real_ip_header_value("X-Forwarded-For")
+        or str(request.remote_addr or "").strip()
+        or "0.0.0.0"
+    )
+
+
+def _cookie_session_enabled_for_ip(auth_config: dict, ip: str) -> bool:
+    if not isinstance(auth_config, dict):
+        return False
+    mode = str(auth_config.get("mode") or "ip").strip().lower()
+    if mode == "cookie_session":
+        return True
+    if mode != "ip":
+        return False
+    session_config = auth_config.get("cookie_session", {})
+    if not isinstance(session_config, dict):
+        return False
+    return ip in set(session_config.get("enabled_ips") or [])
 
 
 def _real_ip_header_value(header_name) -> str:

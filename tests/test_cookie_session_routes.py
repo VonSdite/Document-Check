@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from bs4 import BeautifulSoup
 
+from app.identity import cookie_session as cookie_session_cache
 from app.identity.cookie_session import CookieSessionExpired
 from app.identity.service import current_identity
 from app.infrastructure.config import _normalize_auth
@@ -27,6 +28,9 @@ class CookieSessionRoutesTest(unittest.TestCase):
         self.addCleanup(self.fixture.tearDown)
         self.app = self.fixture.app
         self.client = self.fixture.client
+        cookie_session_cache._cache.clear()
+        cookie_session_cache._inflight.clear()
+        cookie_session_cache._next_cleanup = 0
         self.app.config["AUTH"] = _normalize_auth(
             {
                 "mode": "cookie_session",
@@ -48,6 +52,20 @@ class CookieSessionRoutesTest(unittest.TestCase):
         )
         self.resolve = resolver.start()
         self.addCleanup(resolver.stop)
+
+    def _enable_cookie_session_for_ips(self, *ips: str):
+        self.app.config["AUTH"] = _normalize_auth(
+            {
+                "mode": "ip",
+                "cookie_session": {
+                    "userinfo_url": "https://userinfo.example.test/user",
+                    "cookie_header_name": "X-Upstream-Cookie",
+                    "field_mapping": {"user_id": "uuid"},
+                    "login_url": "https://login.example.test/login?app=docs#signin",
+                    "enabled_ips": list(ips),
+                },
+            }
+        )
 
     def test_migrated_and_own_tasks_are_visible_but_same_ip_peer_is_private(self):
         insert = self.fixture._insert_task
@@ -99,6 +117,75 @@ class CookieSessionRoutesTest(unittest.TestCase):
                 .fetchone()[0]
             )
         self.assertEqual(owner, "cookie_session:user-a")
+
+    def test_ip_mode_cookie_session_rollout_migrates_enabled_ip_only(self):
+        self._enable_cookie_session_for_ips("10.0.0.8")
+        matching_task = self.fixture._insert_task(
+            ip="10.0.0.8", owner_subject="ip:10.0.0.8", owner_source="ip"
+        )
+        other_task = self.fixture._insert_task(
+            ip="10.0.0.9", owner_subject="ip:10.0.0.9", owner_source="ip"
+        )
+        self.fixture._configure_provider("ip:10.0.0.8")
+        self.fixture._configure_provider("ip:10.0.0.9")
+
+        response = self.client.get("/models", headers={"X-Real-IP": "10.0.0.8"})
+
+        self.assertEqual(response.status_code, 200)
+        self.resolve.assert_called_once()
+        with self.app.app_context():
+            tasks = {
+                row["id"]: row
+                for row in get_db()
+                .execute("SELECT id, owner_subject, owner_source, ip FROM tasks")
+                .fetchall()
+            }
+            provider_owners = [
+                row["owner_subject"]
+                for row in (
+                    get_db()
+                    .execute(
+                        "SELECT owner_subject FROM user_model_providers ORDER BY owner_subject"
+                    )
+                    .fetchall()
+                )
+            ]
+        self.assertEqual(tasks[matching_task]["owner_subject"], "cookie_session:user-a")
+        self.assertEqual(tasks[matching_task]["owner_source"], "cookie_session")
+        self.assertEqual(tasks[matching_task]["ip"], "10.0.0.8")
+        self.assertEqual(tasks[other_task]["owner_subject"], "ip:10.0.0.9")
+        self.assertEqual(provider_owners, ["cookie_session:user-a", "ip:10.0.0.9"])
+
+    def test_ip_mode_cookie_session_rollout_keeps_other_ips_on_ip_identity(self):
+        self._enable_cookie_session_for_ips("10.0.0.8")
+        self.fixture._configure_provider("ip:10.0.0.9")
+        self.resolve.reset_mock()
+
+        response = self.client.get("/models", headers={"X-Real-IP": "10.0.0.9"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("测试提供商", response.text)
+        self.resolve.assert_not_called()
+        with self.app.app_context():
+            owner = (
+                get_db()
+                .execute("SELECT owner_subject FROM user_model_providers")
+                .fetchone()["owner_subject"]
+            )
+        self.assertEqual(owner, "ip:10.0.0.9")
+
+    def test_ip_mode_cookie_session_rollout_requires_cookie_for_enabled_ip(self):
+        self._enable_cookie_session_for_ips("10.0.0.8")
+        self.resolve.return_value = (None, CookieSessionExpired("401"))
+
+        response = self.client.get("/", headers={"X-Real-IP": "10.0.0.8"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login.example.test", response.location)
+        self.assertEqual(
+            parse_qs(urlsplit(response.location).query)["redirect"],
+            ["/"],
+        )
 
     def test_login_redirect_preserves_query_and_existing_login_parameters(self):
         self.resolve.return_value = (None, CookieSessionExpired("401"))

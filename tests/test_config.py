@@ -232,6 +232,12 @@ class ProviderConfigTest(unittest.TestCase):
                             "cache_grace": "0",
                             "avatar_url_template": " https://example.com/face/{user_id}/120 ",
                             "avatar_field": " employeeNum ",
+                            "enabled_ips": [
+                                " 10.0.0.8 ",
+                                "10.0.0.8",
+                                "2001:db8::1",
+                                "",
+                            ],
                             "field_mapping": {
                                 "user_id": " employeeNum ",
                                 "username": "displayCnName",
@@ -259,6 +265,7 @@ class ProviderConfigTest(unittest.TestCase):
             cs["avatar_url_template"], "https://example.com/face/{user_id}/120"
         )
         self.assertEqual(cs["avatar_field"], "employeeNum")
+        self.assertEqual(cs["enabled_ips"], ["10.0.0.8", "2001:db8::1"])
         self.assertEqual(cs["field_mapping"]["user_id"], "employeeNum")
         self.assertEqual(cs["field_mapping"]["username"], "displayCnName")
         self.assertEqual(cs["field_mapping"]["employee_number"], "employeeNum")
@@ -397,6 +404,21 @@ class ProviderConfigTest(unittest.TestCase):
                     },
                 )
                 with self.assertRaisesRegex(ValueError, "extra_fields"):
+                    load_local_config(Path(temp_dir))
+
+    def test_cookie_session_enabled_ips_are_validated(self):
+        for value in ("10.0.0.8", ["not-an-ip"], {"ip": "10.0.0.8"}):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temp_dir:
+                _write_config(
+                    temp_dir,
+                    {
+                        "auth": {
+                            "mode": "ip",
+                            "cookie_session": {"enabled_ips": value},
+                        }
+                    },
+                )
+                with self.assertRaisesRegex(ValueError, "enabled_ips"):
                     load_local_config(Path(temp_dir))
 
     def test_app_uses_configured_listen_host(self):

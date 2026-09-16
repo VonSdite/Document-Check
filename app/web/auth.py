@@ -17,6 +17,7 @@ from flask import (
 from app.identity.service import (
     AuthenticationRequired,
     UserIdentity,
+    cookie_session_enabled_for_request,
     current_identity,
     subject_label,
 )
@@ -84,7 +85,7 @@ def _ip_username_management_enabled() -> bool:
 
 
 def _cookie_session_mode_enabled() -> bool:
-    return _auth_mode() == "cookie_session"
+    return cookie_session_enabled_for_request()
 
 
 def _cookie_session_login_url() -> str:

@@ -1,3 +1,4 @@
+import ipaddress
 import re
 import secrets
 from pathlib import Path
@@ -96,6 +97,7 @@ def _default_config() -> dict:
                 "cache_grace": 600,
                 "avatar_url_template": "",
                 "avatar_field": "",
+                "enabled_ips": [],
                 "field_mapping": {
                     "user_id": "",
                     "username": "",
@@ -243,6 +245,7 @@ def _normalize_cookie_session(cookie_session: dict, field_mapping: dict) -> dict
             cookie_session.get("avatar_url_template") or ""
         ).strip(),
         "avatar_field": str(cookie_session.get("avatar_field") or "").strip(),
+        "enabled_ips": _normalize_ip_list(cookie_session.get("enabled_ips", [])),
         "field_mapping": {
             "user_id": str(field_mapping.get("user_id") or "").strip(),
             "username": str(field_mapping.get("username") or "").strip(),
@@ -280,6 +283,29 @@ def _normalize_header_name(value: str) -> str:
     if not value or not HTTP_HEADER_NAME_RE.fullmatch(value):
         return ""
     return value
+
+
+def _normalize_ip_list(value) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("auth.cookie_session.enabled_ips 必须是 IP 字符串列表")
+    result = []
+    seen = set()
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        try:
+            ip = str(ipaddress.ip_address(text))
+        except ValueError as exc:
+            raise ValueError(
+                "auth.cookie_session.enabled_ips 必须只包含合法 IP"
+            ) from exc
+        if ip not in seen:
+            result.append(ip)
+            seen.add(ip)
+    return result
 
 
 def _normalize_port(value) -> int:

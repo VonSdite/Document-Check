@@ -63,6 +63,8 @@ auth:
     avatar_url_template: "https://头像服务域名/face/{user_id}/120"
     # avatar_field 指定从外部接口响应中取哪个字段填充头像模板的 {user_id}；通常填工号字段，留空时用 user_id。
     avatar_field: "工号字段名"
+    # mode: ip 时可先配置灰度 IP；这些 IP 会按 cookie_session 认证并触发 IP 归属迁移。留空表示不灰度。
+    enabled_ips: []
     # field_mapping 把外部接口返回 JSON 的字段名映射到应用内部身份字段。
     field_mapping:
       # user_id 必填，指向跨工号轮换不变的稳定人员标识字段（如 uuid），作为任务归属主键，不要填工号或姓名。

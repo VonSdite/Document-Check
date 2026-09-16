@@ -106,6 +106,7 @@ http://127.0.0.1:31945/
 - `cookie_session.cache_grace`：缓存过期后的宽限期秒数，宽限期内允许用过期缓存降级放行，`0` 表示不降级。
 - `cookie_session.avatar_url_template`：头像地址模板，`{user_id}` 占位符会被替换为 `avatar_field` 指定的字段值（通常工号），留空则不显示头像。
 - `cookie_session.avatar_field`：指定从外部接口响应中取哪个字段填充头像模板的 `{user_id}`，留空时用 `user_id`。
+- `cookie_session.enabled_ips`：`auth.mode: ip` 时的灰度 IP 列表，命中的访问 IP 按 `cookie_session` 认证并触发该 IP 的归属迁移；留空表示不灰度。
 - `cookie_session.field_mapping.user_id`：外部接口返回 JSON 中跨工号轮换不变的稳定人员标识字段名（如 `uuid`），作为任务归属主键，必填。
 - `cookie_session.field_mapping.username`：外部接口返回 JSON 中显示名的字段名，留空时显示稳定用户 ID。
 - `cookie_session.field_mapping.employee_number`：外部接口返回 JSON 中工号的字段名，可空；配置后展示为“姓名（工号）”。
@@ -127,6 +128,7 @@ auth:
     cache_grace: 600
     avatar_url_template: https://头像服务域名/face/{user_id}/120
     avatar_field: "工号字段名"
+    enabled_ips: []
     field_mapping:
       user_id: uuid
       username: 姓名字段名
@@ -143,6 +145,8 @@ auth:
 
 Cookie 身份解析成功后，系统将当前 IP 下 `owner_subject = ip:<当前IP>` 的任务和模型配置归属于当前稳定用户 ID。每个请求最多检查一次迁移，无对应数据时为空操作。
 
+需要分批迁移时，保持 `auth.mode: ip`，并在 `cookie_session.enabled_ips` 中写入灰度 IP。命中的 IP 按 `cookie_session` 认证和迁移，未命中的 IP 继续按 `ip:<访问IP>` 使用；灰度完成后再把 `auth.mode` 切到 `cookie_session`。
+
 查询尚未迁移的 IP 归属数据：
 
 ```bash
@@ -156,7 +160,7 @@ uv run python -m scripts.audit_ip_owners --database /path/to/document_check.sqli
 
 1. 确认公司存在支持 Cookie 认证的用户信息接口，以及未登录时跳转的统一登录地址。
 2. 把本服务部署在统一登录主域下，确保浏览器登录 Cookie 的 Domain 覆盖应用主机。
-3. 把 `config.yaml` 的 `auth.mode` 设为 `cookie_session`，并按公司接口预填 `cookie_session`（接口地址、字段名、头像模板、登录地址）。
+3. 按公司接口预填 `cookie_session`（接口地址、字段名、头像模板、登录地址）。灰度阶段保持 `auth.mode: ip` 并填写 `cookie_session.enabled_ips`；全量阶段把 `auth.mode` 设为 `cookie_session`。
 4. 访问用户入口验证任务归属：提交任务后，右上角应显示工号/姓名与头像，任务列表显示自己的稳定标识任务；首次登录会自动迁移该 IP 下的历史任务到稳定标识。
 5. 管理员入口仍使用本系统 `admin.username`、`admin.password` 和 `admin_url` 登录；console 内创建任务和管理模型时，使用与 `/` 相同的统一登录用户身份。
 

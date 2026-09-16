@@ -2,7 +2,7 @@
 
 ## 身份与权限
 
-`auth.mode` 支持 `ip` 和 `cookie_session`。配置对象或模式值不合法时启动失败。用户面与管理员管理面使用独立权限；管理员凭据在本地 `config.yaml` 中配置。
+`auth.mode` 支持 `ip` 和 `cookie_session`。配置对象或模式值不合法时启动失败。用户面与管理员管理面使用独立权限；管理员凭据在本地 `config.yaml` 中配置。`auth.mode: ip` 可通过 `auth.cookie_session.enabled_ips` 对指定 IP 启用 Cookie 身份灰度。
 
 `cookie_session` 从浏览器标准 `Cookie` 头读取凭据，转发至 `userinfo_url`。上游请求头名称由 `cookie_header_name` 指定。HTTP 2xx 且响应包含有效用户 ID 时建立身份：
 
@@ -23,7 +23,7 @@
 
 ## IP 数据归属
 
-Cookie 身份解析成功时，`migrate_ip_owner_to_subject()` 将当前 IP 下归属为 `ip:<IP>` 的任务和模型提供商转移到当前稳定用户 ID。更新在同一数据库事务内提交，已有 Cookie 用户的数据保持原归属。
+Cookie 身份解析成功时，`migrate_ip_owner_to_subject()` 将当前 IP 下归属为 `ip:<IP>` 的任务和模型提供商转移到当前稳定用户 ID。更新在同一数据库事务内提交，已有 Cookie 用户的数据保持原归属。`auth.mode: ip` 且当前 IP 命中 `auth.cookie_session.enabled_ips` 时执行同样的 Cookie 身份解析和迁移；未命中的 IP 保持 `ip:<IP>` 身份。
 
 `current_identity()` 在 Flask 请求上下文中复用解析结果，每个请求最多检查一次迁移。只读检查待迁移数据：
 
