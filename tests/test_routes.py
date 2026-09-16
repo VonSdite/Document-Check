@@ -7016,7 +7016,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertEqual(keyword_input.get("value"), "2000")
                 self.assertEqual(
                     keyword_input.get("placeholder"),
-                    "按文档名称、姓名、工号、账号或 IP 搜索",
+                    "按文档名称、IP 或用户搜索",
                 )
                 self.assertEqual(filenames, [matching_filename])
 

@@ -476,7 +476,8 @@ def _render_admin_task_list(
     params = []
     clauses = []
     totals = _admin_totals(totals_task_type)
-    join_ip_usernames = _auth_mode() == "ip"
+    auth_mode = _auth_mode()
+    join_ip_usernames = auth_mode == "ip"
     ip_username_join = (
         "LEFT JOIN ip_usernames iu ON iu.ip = t.ip" if join_ip_usernames else ""
     )
@@ -564,8 +565,14 @@ def _render_admin_task_list(
         submission_token=uuid.uuid4().hex,
         refresh_url=url_for("admin_task_statuses", task_type=task_type),
         active_nav=task_type,
-        keyword_placeholder="按文档名称、姓名、工号、账号或 IP 搜索",
+        keyword_placeholder=_admin_keyword_placeholder(auth_mode),
     )
+
+
+def _admin_keyword_placeholder(auth_mode: str) -> str:
+    if auth_mode == "ip":
+        return "按文档名称、IP 或用户搜索"
+    return "按文档名称、用户名称或 IP 搜索"
 
 
 def _page_arg() -> int:

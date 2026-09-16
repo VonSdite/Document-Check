@@ -252,6 +252,43 @@ class CookieSessionRoutesTest(unittest.TestCase):
                 "cookie_session:user-a",
             )
 
+    def test_admin_keyword_search_matches_ip_and_account_in_cookie_session_mode(self):
+        own = self.fixture._insert_task(
+            ip="10.1.2.3",
+            owner_subject="cookie_session:user-a",
+            owner_source="cookie_session",
+        )
+        peer = self.fixture._insert_task(
+            ip="10.9.9.9",
+            owner_subject="cookie_session:user-b",
+            owner_source="cookie_session",
+        )
+        page = self.client.get("/admin/tasks")
+        self.assertEqual(page.status_code, 200)
+        soup = BeautifulSoup(page.text, "html.parser")
+        keyword_input = soup.select_one('.filter-bar input[name="keyword"]')
+        self.assertIsNotNone(keyword_input)
+        self.assertEqual(
+            keyword_input.get("placeholder"), "按文档名称、用户名称或 IP 搜索"
+        )
+        for keyword, expected in (
+            ("10.1.2.3", {own}),
+            ("user-a", {own}),
+            ("cookie_session:user-a", {own}),
+            ("10.9.9.9", {peer}),
+            ("user-b", {peer}),
+        ):
+            with self.subTest(keyword=keyword):
+                page = self.client.get(
+                    "/admin/tasks", query_string={"keyword": keyword, "_partial": "1"}
+                )
+                self.assertEqual(page.status_code, 200)
+                soup = BeautifulSoup(page.text, "html.parser")
+                self.assertEqual(
+                    {int(row["data-task-id"]) for row in soup.select("[data-task-id]")},
+                    expected,
+                )
+
     def test_old_cookie_uses_latest_profile_without_writing_or_authorizing_expired_cookie(
         self,
     ):
