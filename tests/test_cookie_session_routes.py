@@ -414,6 +414,27 @@ class CookieSessionRoutesTest(unittest.TestCase):
         overview = self.client.get("/admin?start_date=2026-05-01&end_date=2026-05-01")
         self.assertIn("新姓名（00222）", overview.text)
 
+    def test_admin_pages_hide_raw_cookie_session_subject(self):
+        task = self.fixture._insert_task(
+            ip="10.0.0.1",
+            owner_subject="cookie_session:user-a",
+            owner_source="cookie_session",
+            owner_name_snapshot="张三",
+        )
+        for path in (
+            "/admin/tasks",
+            f"/admin/tasks/{task}",
+            "/admin?start_date=2026-05-01&end_date=2026-05-01",
+        ):
+            with self.subTest(path=path):
+                page = self.client.get(path)
+                self.assertEqual(page.status_code, 200)
+                soup = BeautifulSoup(page.get_data(as_text=True), "html.parser")
+                self.assertNotIn("cookie_session:user-a", soup.get_text())
+        list_page = self.client.get("/admin/tasks")
+        self.assertIn("张三", list_page.text)
+        self.assertIn("IP 10.0.0.1", list_page.text)
+
     def test_profile_change_refreshes_detail_even_without_new_model_output(self):
         task = self.fixture._insert_task(
             owner_subject="cookie_session:user-a",

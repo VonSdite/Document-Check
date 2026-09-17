@@ -182,10 +182,6 @@ def _owner_meta(task) -> str:
         if display and display not in {subject_ip, ip}:
             return f"IP {ip or subject_ip}"
         return ""
-    if subject and ip:
-        return f"{subject} · IP {ip}"
-    if subject:
-        return subject
     if ip:
         return f"IP {ip}"
     return ""
