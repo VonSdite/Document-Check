@@ -1,0 +1,25 @@
+<script>
+  (function (config) {
+    var namespace = config.namespace || "hwa";
+    if (self[namespace] || document.querySelector("script#uem_f")) {
+      return;
+    }
+    self[namespace] = function () {
+      (self[namespace].q = self[namespace].q || []).push(arguments);
+    };
+    var element = document.createElement("script");
+    element.TRACKER_CONFIG = config;
+    element.async = true;
+    element.id = "uem_f";
+    element.src = config.src + "?_" + new Date().toJSON().split("T")[0];
+    document.head.appendChild(element);
+  })({
+    platform: "web",
+    edition: "his",
+    env: "prod",
+    appKey: "替换为实际 appKey",
+    src: "https://hwa.example.com/dist/uem_f.js",
+  });
+
+  window.hwa("trackPageView", location.pathname);
+</script>

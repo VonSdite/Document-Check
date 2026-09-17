@@ -1,6 +1,8 @@
 import json
+from pathlib import Path
 
 from flask import current_app, flash, g, redirect
+from markupsafe import Markup
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.contracts.task_types import task_type_label
@@ -27,6 +29,8 @@ from app.web.common import (
     _request_entity_too_large_redirect,
 )
 from app.web.constants import STATUS_LABELS
+
+FRONTEND_INJECTION_FILENAME = "frontend-injection.html"
 
 
 def register_presentation_routes(app):
@@ -76,6 +80,7 @@ def register_presentation_routes(app):
             "nav_avatar": getattr(identity, "avatar", "") or "",
             "nav_subject": identity.subject,
             "nav_profile_version": identity.profile_version,
+            "local_frontend_injection": _local_frontend_injection_html(),
             "task_type_label": task_type_label,
             "max_upload_mb": _max_upload_mb(),
         }
@@ -110,3 +115,21 @@ def register_presentation_routes(app):
             "error",
         )
         return redirect(_request_entity_too_large_redirect()), 303
+
+
+def _local_frontend_injection_html() -> Markup:
+    path = _local_frontend_injection_path()
+    try:
+        if not path.is_file():
+            return Markup("")
+        return Markup(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        current_app.logger.warning("读取本地前端注入片段失败: %s", error)
+        return Markup("")
+
+
+def _local_frontend_injection_path() -> Path:
+    root_dir = current_app.config.get("ROOT_DIR")
+    if root_dir:
+        return Path(root_dir) / "instance" / FRONTEND_INJECTION_FILENAME
+    return Path(current_app.instance_path) / FRONTEND_INJECTION_FILENAME

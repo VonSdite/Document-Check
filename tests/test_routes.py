@@ -35,6 +35,7 @@ from app.tasks.files import UPLOAD_PATH_SAFE_CHARS, _upload_destination
 from app.tasks.submission import _consistency_task_title
 from app.web import register_routes
 from app.web.formatting import render_markdown
+from app.web.presentation import FRONTEND_INJECTION_FILENAME
 from app.web.task_actions import _delete_queued_task
 
 _TINY_PNG = (
@@ -109,6 +110,43 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def test_full_pages_include_local_frontend_injection(self):
+        injection_path = (
+            self.app.config["ROOT_DIR"] / "instance" / FRONTEND_INJECTION_FILENAME
+        )
+        injection_path.parent.mkdir(parents=True, exist_ok=True)
+        injection_path.write_text(
+            "<script data-local-frontend-injection>window.__uem_probe = true;</script>\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        response = self.client.get("/admin")
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        injected = soup.select_one("head script[data-local-frontend-injection]")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(injected)
+        self.assertIn("window.__uem_probe = true;", injected.string)
+
+    def test_list_partials_skip_local_frontend_injection(self):
+        injection_path = (
+            self.app.config["ROOT_DIR"] / "instance" / FRONTEND_INJECTION_FILENAME
+        )
+        injection_path.parent.mkdir(parents=True, exist_ok=True)
+        injection_path.write_text(
+            "<script data-local-frontend-injection>window.__uem_probe = true;</script>\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        response = self.client.get("/", query_string={"_partial": "1"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(
+            "data-local-frontend-injection", response.get_data(as_text=True)
+        )
 
     def test_user_filters_match_console_and_preserve_owner_scope(self):
         routes = (
