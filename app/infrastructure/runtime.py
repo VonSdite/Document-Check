@@ -6,6 +6,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.infrastructure.config import load_local_config
 from app.infrastructure.logging import _configure_logging
+from app.infrastructure.network import suppress_insecure_request_warning
 from app.persistence.connection import close_db
 
 
@@ -21,6 +22,10 @@ def _create_base_app(root_dir: Path | None = None):
     local_config = load_local_config(root_dir)
     server_config = local_config["server"]
     worker_config = local_config["worker"]
+    suppress_insecure_request_warning(local_config["network"]["ssl_verify"])
+    suppress_insecure_request_warning(
+        local_config["auth"]["cookie_session"]["ssl_verify"]
+    )
 
     app = Flask(
         "app",

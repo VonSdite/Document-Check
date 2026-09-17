@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
 import yaml
+from urllib3.exceptions import InsecureRequestWarning
 
 from app.bootstrap.factory import create_app
 from app.infrastructure.config import (
@@ -370,6 +372,42 @@ class ProviderConfigTest(unittest.TestCase):
 
             self.assertTrue((Path(temp_dir) / CONFIG_FILENAME).exists())
             self.assertFalse((Path(temp_dir) / "config.local.json").exists())
+
+    def test_insecure_request_warning_is_suppressed_when_verification_disabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                warnings.catch_warnings(),
+                patch("app.infrastructure.runtime._configure_logging"),
+            ):
+                warnings.resetwarnings()
+                create_app(Path(temp_dir))
+                self.assertTrue(self._ignores_insecure_request_warning())
+
+    def test_insecure_request_warning_is_kept_when_verification_enabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_config(
+                temp_dir,
+                {
+                    "network": {"ssl_verify": True},
+                    "auth": {
+                        "mode": "cookie_session",
+                        "cookie_session": {"ssl_verify": True},
+                    },
+                },
+            )
+            with (
+                warnings.catch_warnings(),
+                patch("app.infrastructure.runtime._configure_logging"),
+            ):
+                warnings.resetwarnings()
+                create_app(Path(temp_dir))
+                self.assertFalse(self._ignores_insecure_request_warning())
+
+    def _ignores_insecure_request_warning(self) -> bool:
+        return any(
+            filter_entry[0] == "ignore" and filter_entry[2] is InsecureRequestWarning
+            for filter_entry in warnings.filters
+        )
 
     def test_invalid_auth_prevents_startup_and_preserves_config(self):
         for auth in (

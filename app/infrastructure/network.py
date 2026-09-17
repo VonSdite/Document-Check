@@ -1,6 +1,7 @@
 import socket
 import struct
 
+import urllib3
 from flask import current_app
 
 from app.infrastructure.config import normalize_network_config
@@ -16,6 +17,12 @@ SIOCGIFADDR = 0x8915
 
 def outbound_network_config() -> dict:
     return normalize_network_config(current_app.config.get("NETWORK", {}))
+
+
+def suppress_insecure_request_warning(ssl_verify: bool) -> None:
+    """外呼证书校验由配置关闭时，关闭 urllib3 的未校验请求告警。"""
+    if not ssl_verify:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def access_urls(host: str, port: int) -> list[str]:

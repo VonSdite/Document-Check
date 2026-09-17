@@ -31,6 +31,7 @@ from app.contracts.task_types import (
 )
 from app.documents.images import DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES
 from app.infrastructure.config import save_network_config
+from app.infrastructure.network import suppress_insecure_request_warning
 from app.persistence.connection import get_db, now_text
 from app.persistence.defaults import (
     default_check_item_codes,
@@ -206,6 +207,7 @@ def register_settings_routes(app):
                     },
                 )
                 current_app.config["NETWORK"] = network
+                suppress_insecure_request_warning(network["ssl_verify"])
                 flash("系统出站网络配置已保存。", "success")
                 return redirect(url_for("admin_settings"))
 
