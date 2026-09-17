@@ -160,7 +160,14 @@ uv run python -m scripts.audit_ip_owners
 uv run python -m scripts.audit_ip_owners --database /path/to/document_check.sqlite3 --json
 ```
 
-脚本以只读方式输出每个 IP 的用户名、任务数、提供商数和模型数，用户名依次取 `ip_usernames` 表和任务上的名称快照，没有时显示 `-`，不输出密钥，也不执行迁移。
+脚本输出每个仍归属于 `ip:<IP>` 的用户名、未迁移任务数、未迁移提供商数和未迁移模型数。用户名依次取 `ip_usernames` 表和任务上的名称快照，没有时显示 `-`，不输出密钥。`tasks.ip` 是审计字段，已迁移到 `cookie_session:<稳定ID>` 的任务仍会保留原始 IP，但不会计入未迁移数据。
+
+删除某个 IP 尚未迁移的任务、提供商和模型归属数据时，先预览，再确认执行：
+
+```bash
+uv run python -m scripts.audit_ip_owners --delete-ip 127.0.0.1
+uv run python -m scripts.audit_ip_owners --delete-ip 127.0.0.1 --yes
+```
 
 实际接入 `cookie_session` 时按下面顺序操作：
 
