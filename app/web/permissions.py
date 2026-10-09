@@ -9,6 +9,7 @@ from flask import abort, flash, redirect, render_template, request, session, url
 from app.identity.permissions import ASSIGNABLE_PERMISSIONS, normalize_permissions
 from app.persistence.permissions import permission_users, replace_subject_permissions
 from app.web.auth import admin_required
+from app.web.common import _wants_json_response
 from app.web.task_lists import _page_arg, _pagination, _per_page_arg
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ def register_permission_routes(app):
                 subject,
                 sorted(permissions),
             )
+            if _wants_json_response():
+                return {"subject": subject, "permissions": sorted(permissions)}
             flash("用户权限已保存。", "success")
             return redirect(
                 url_for(

@@ -27,7 +27,6 @@ from app.web.auth import (
     _owner_display,
     _owner_meta,
     can_manage_task,
-    current_permissions,
     has_permission,
     is_superadmin,
     management_entry_endpoint,
@@ -87,7 +86,6 @@ def register_presentation_routes(app):
         return {
             "auth_mode": auth_config.get("mode", "ip"),
             "is_superadmin": is_superadmin(),
-            "management_available": bool(current_permissions()),
             "management_entry_endpoint": management_entry_endpoint(),
             "status_labels": STATUS_LABELS,
             "nav_identity": _identity_label(identity),

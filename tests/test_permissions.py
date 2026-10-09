@@ -37,7 +37,7 @@ class UserPermissionTest(unittest.TestCase):
                 subject, normalize_permissions(set(permissions))
             )
 
-    def save(self, subject, permissions, **extra):
+    def save(self, subject, permissions, *, headers=None, **extra):
         page = self.root.get("/admin/permissions")
         self.assertEqual(page.status_code, 200)
         with self.root.session_transaction() as session:
@@ -50,6 +50,7 @@ class UserPermissionTest(unittest.TestCase):
                 "csrf_token": token,
                 **extra,
             },
+            headers=headers,
         )
 
     def cookie_mode(self, *, rollout=False):
@@ -188,6 +189,21 @@ class UserPermissionTest(unittest.TestCase):
             set(ASSIGNABLE_PERMISSIONS),
         )
         self.assertIsNotNone(soup.select_one('nav a[href="/admin/permissions"]'))
+        self.assertIsNone(soup.select_one("[data-permission-form] button"))
+        self.assertEqual(
+            len(soup.select("[data-permission-status][role='status']")),
+            len(soup.select("[data-permission-user]")),
+        )
+        self.assertIsNone(soup.select_one('input[name="permissions"][disabled]'))
+        self.assertIsNone(soup.select_one(".topbar-account a"))
+        for row in soup.select("[data-permission-user]"):
+            form_id = row.select_one("[data-permission-form]")["id"]
+            self.assertTrue(
+                all(
+                    checkbox["form"] == form_id
+                    for checkbox in row.select('input[name="permissions"]')
+                )
+            )
         page = self.root.get("/admin/permissions?source=cookie_session&keyword=888")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertEqual(
@@ -250,6 +266,85 @@ class UserPermissionTest(unittest.TestCase):
         )
         with self.app.app_context():
             self.assertEqual(subject_permissions(self.subject), {"stats.view_all"})
+
+    def test_auto_save_returns_confirmed_permissions_and_supports_full_revocation(self):
+        headers = {"X-Requested-With": "fetch", "Accept": "application/json"}
+        for subject in (self.subject, "cookie_session:stable-b"):
+            with self.subTest(subject=subject):
+                self.grant(subject=subject)
+                for choices, expected in (
+                    (["tasks.manage_all"], ["tasks.manage_all", "tasks.view_all"]),
+                    (
+                        ["stats.view_all", "rules.manage"],
+                        ["rules.manage", "stats.view_all"],
+                    ),
+                    ([], []),
+                ):
+                    response = self.save(subject, choices, headers=headers)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(
+                        response.get_json(),
+                        {"subject": subject, "permissions": expected},
+                    )
+                    self.assertEqual(response.headers["Cache-Control"], "no-store")
+                    with self.app.app_context():
+                        self.assertEqual(subject_permissions(subject), set(expected))
+        with self.root.session_transaction() as session:
+            self.assertFalse(session.get("_flashes"))
+
+    def test_auto_save_preserves_authorization_and_page_token_validation(self):
+        self.grant("stats.view_all")
+        headers = {"X-Requested-With": "fetch"}
+        for subject, permissions, extra, status in (
+            (self.subject, [], {"csrf_token": "wrong-token"}, 400),
+            (self.subject, ["permissions.manage"], {}, 400),
+            ("cookie_session:unknown", ["tasks.view_all"], {}, 404),
+        ):
+            response = self.save(subject, permissions, headers=headers, **extra)
+            self.assertEqual(response.status_code, status)
+        self.assertEqual(
+            self.client.post(
+                "/admin/permissions",
+                data={"subject": self.subject, "permissions": "tasks.manage_all"},
+                headers=headers,
+            ).status_code,
+            403,
+        )
+        with self.app.app_context():
+            self.assertEqual(subject_permissions(self.subject), {"stats.view_all"})
+
+    def test_navigation_uses_grants_directly_on_user_and_management_pages(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            with self.subTest(cookie_mode=cookie_mode):
+                self.grant("tasks.view_all", "stats.view_all", "rules.manage")
+                for route in ("/", "/models", "/admin/tasks", "/admin/rules"):
+                    soup = BeautifulSoup(self.client.get(route).text, "html.parser")
+                    for href in (
+                        "/admin",
+                        "/admin/tasks",
+                        "/admin/consistency",
+                        "/admin/language-consistency",
+                        "/admin/images",
+                        "/admin/videos",
+                        "/admin/rules",
+                        "/models",
+                    ):
+                        self.assertIsNotNone(
+                            soup.select_one(f'nav.nav a[href="{href}"]')
+                        )
+                    self.assertIsNone(soup.select_one(".topbar-account a"))
+                    self.assertIsNone(
+                        soup.select_one('nav.nav a[href="/admin/permissions"]')
+                    )
+                self.grant("rules.manage")
+                soup = BeautifulSoup(
+                    self.client.get("/admin/rules").text, "html.parser"
+                )
+                self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
+                self.assertIsNone(soup.select_one('nav.nav a[href="/admin/tasks"]'))
+                self.assertIsNone(soup.select_one('nav.nav a[href="/admin"]'))
 
     def test_view_permission_reads_all_task_types_but_preserves_own_default_actions(
         self,
@@ -421,11 +516,13 @@ class UserPermissionTest(unittest.TestCase):
     def test_stats_permission_has_separate_navigation_and_no_task_access(self):
         self.grant("stats.view_all")
         soup = BeautifulSoup(self.client.get("/").text, "html.parser")
-        self.assertEqual(soup.select_one("[data-management-entry]")["href"], "/admin")
+        self.assertIsNotNone(soup.select_one('nav.nav a[href="/admin"]'))
+        self.assertIsNone(soup.select_one(".topbar-account a"))
         page = self.client.get("/admin")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertEqual(page.status_code, 200)
         self.assertIsNone(soup.select_one('nav a[href="/admin/tasks"]'))
+        self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
         self.assertIsNone(soup.select_one('nav a[href="/admin/permissions"]'))
         self.assertIsNone(soup.select_one('form[action="/admin/logout"]'))
         self.assertEqual(self.client.get("/admin/tasks").status_code, 403)
