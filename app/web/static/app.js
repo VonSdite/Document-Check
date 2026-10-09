@@ -306,7 +306,6 @@ document.addEventListener("change", (event) => {
 
 function reportItemControls(item) {
   return {
-    type: item.querySelectorAll("[data-report-item-type]"),
     acceptance: item.querySelectorAll("[data-report-acceptance-status]"),
     reason: item.querySelector("[data-report-rejection-reason]"),
     reasonTrigger: item.querySelector("[data-report-rejection-trigger]"),
@@ -390,9 +389,6 @@ function setReportItemControlsDisabled(item, disabled) {
 
 function revertReportItemControls(item) {
   const controls = reportItemControls(item);
-  const savedType = reportControlNodes(controls.type)[0]?.dataset.savedValue || "issue";
-  setReportControlValue(controls.type, savedType);
-  item.dataset.itemType = savedType;
   const savedAcceptance = reportControlNodes(controls.acceptance)[0]?.dataset.savedValue || "pending";
   setReportControlValue(controls.acceptance, savedAcceptance);
   item.dataset.acceptanceStatus = savedAcceptance;
@@ -408,12 +404,9 @@ function revertReportItemControls(item) {
 
 function applyReportItemSave(item, data) {
   const controls = reportItemControls(item);
-  const savedType = data.item_type || reportControlValue(controls.type, "issue");
   const savedAcceptance = data.acceptance_status || reportControlValue(controls.acceptance, "pending");
   const savedReason = data.rejection_reason || "";
   const savedNote = data.rejection_note || "";
-  setReportControlValue(controls.type, savedType);
-  setReportControlSavedValue(controls.type, savedType);
   setReportControlValue(controls.acceptance, savedAcceptance);
   setReportControlSavedValue(controls.acceptance, savedAcceptance);
   setReportControlValue(controls.reason, savedReason);
@@ -422,7 +415,6 @@ function applyReportItemSave(item, data) {
     controls.note.value = savedNote;
     controls.note.dataset.savedValue = savedNote;
   }
-  item.dataset.itemType = savedType;
   item.dataset.acceptanceStatus = savedAcceptance;
   syncReportAcceptanceFields(item);
   syncReportRejectionTrigger(item);
@@ -433,7 +425,6 @@ function reportItemPayload(item) {
   return {
     result_code: item.dataset.resultCode,
     item_id: item.dataset.itemId,
-    item_type: reportControlValue(controls.type, "issue"),
     acceptance_status: reportControlValue(controls.acceptance, "pending"),
     rejection_reason: reportControlValue(controls.reason),
     rejection_note: controls.note instanceof HTMLInputElement ? controls.note.value.trim() : "",
@@ -576,7 +567,7 @@ function saveReportItemReview(item) {
 
 document.addEventListener("change", (event) => {
   const control = event.target.closest(
-    "[data-report-item-type], [data-report-acceptance-status], [data-report-rejection-reason], [data-report-rejection-note]",
+    "[data-report-acceptance-status], [data-report-rejection-reason], [data-report-rejection-note]",
   );
   if (!(control instanceof HTMLSelectElement) && !(control instanceof HTMLInputElement)) {
     return;

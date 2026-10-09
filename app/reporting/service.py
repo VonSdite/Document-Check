@@ -80,20 +80,18 @@ def _write_task_report_stat_rows(cache_rows: list[tuple]) -> None:
             INSERT INTO task_report_stats(
                 task_id, source_updated_at, suppression_version,
                 issue_count, suggestion_count, non_issue_count,
-                accepted_issue_count, rejected_issue_count,
-                pending_issue_acceptance_count, suppressed_count,
+                accepted_count, rejected_count, suppressed_count,
                 reviewed_item_count, pending_review_item_count, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 source_updated_at = excluded.source_updated_at,
                 suppression_version = excluded.suppression_version,
                 issue_count = excluded.issue_count,
                 suggestion_count = excluded.suggestion_count,
                 non_issue_count = excluded.non_issue_count,
-                accepted_issue_count = excluded.accepted_issue_count,
-                rejected_issue_count = excluded.rejected_issue_count,
-                pending_issue_acceptance_count = excluded.pending_issue_acceptance_count,
+                accepted_count = excluded.accepted_count,
+                rejected_count = excluded.rejected_count,
                 suppressed_count = excluded.suppressed_count,
                 reviewed_item_count = excluded.reviewed_item_count,
                 pending_review_item_count = excluded.pending_review_item_count,
@@ -237,15 +235,10 @@ def _prepare_task_results(
                 else:
                     retained_report_items.append(report_item)
             report_items = retained_report_items
-        classifications = item.get("item_classifications")
-        if not isinstance(classifications, dict):
-            classifications = {}
         report_items = [
             report_item
             for report_item in report_items
             if report_item.get("type") != "non_issue"
-            or _normalize_report_item_type(classifications.get(report_item.get("id")))
-            is not None
         ]
         original_report_item_count = len(report_items)
         report_items = _deduplicate_report_items(report_items)
@@ -269,10 +262,6 @@ def _prepare_task_results(
         if not isinstance(acceptances, dict):
             acceptances = {}
         for report_item in report_items + suppressed_items:
-            saved_type = classifications.get(report_item["id"])
-            report_item["type"] = (
-                _normalize_report_item_type(saved_type) or report_item["type"]
-            )
             report_item["type_label"] = REPORT_ITEM_TYPES[report_item["type"]]
             acceptance = _normalize_report_acceptance(
                 acceptances.get(report_item["id"])
@@ -292,6 +281,14 @@ def _prepare_task_results(
         item["report_counts"] = _count_report_items(
             report_items, suppressed_count=len(suppressed_items)
         )
+        # 结论反馈按已保存的条目标识统计，报告过滤和折叠保留已提交的反馈。
+        feedback_counts = {"accepted": 0, "rejected": 0}
+        for saved_acceptance in acceptances.values():
+            status = _normalize_report_acceptance(saved_acceptance)["acceptance_status"]
+            if status in feedback_counts:
+                feedback_counts[status] += 1
+        item["report_counts"].update(feedback_counts)
+        _finalize_report_counts(item["report_counts"])
         prepared.append(item)
     return prepared
 
@@ -463,14 +460,12 @@ def _maybe_create_report_suppression_candidate(
     result_code: str,
     result: dict,
     item_id: str,
-    item_type: str,
     acceptance_status: str | None,
     rejection_reason: str,
     rejection_note: str,
 ) -> bool:
     if (
-        item_type != "non_issue"
-        or acceptance_status != "rejected"
+        acceptance_status != "rejected"
         or rejection_reason not in REPORT_SUPPRESSION_REJECTION_REASONS
     ):
         return False
@@ -1420,14 +1415,15 @@ def _report_rate_label(numerator: int, denominator: int) -> str:
 
 def _finalize_report_counts(counts: dict) -> dict:
     counts["total"] = sum(int(counts.get(key) or 0) for key in REPORT_ITEM_TYPE_ORDER)
-    confirmed_issues = int(counts.get("accepted_issue") or 0) + int(
-        counts.get("rejected_issue") or 0
-    )
-    counts["issue_detection_rate"] = _report_rate_label(
+    confirmed = int(counts.get("accepted") or 0) + int(counts.get("rejected") or 0)
+    counts["issue_item_ratio"] = _report_rate_label(
         int(counts.get("issue") or 0), counts["total"]
     )
-    counts["issue_acceptance_rate"] = _report_rate_label(
-        int(counts.get("accepted_issue") or 0), confirmed_issues
+    counts["conclusion_acceptance_rate"] = _report_rate_label(
+        int(counts.get("accepted") or 0), confirmed
+    )
+    counts["review_coverage_rate"] = _report_rate_label(
+        int(counts.get("reviewed") or 0), counts["total"]
     )
     return counts
 
@@ -1446,13 +1442,7 @@ def _count_report_items(items: list[dict], *, suppressed_count: int = 0) -> dict
             counts["pending_review"] += 1
         else:
             counts["reviewed"] += 1
-        if item_type == "issue":
-            if acceptance_status == "accepted":
-                counts["accepted_issue"] += 1
-            elif acceptance_status == "rejected":
-                counts["rejected_issue"] += 1
-            else:
-                counts["pending_issue_acceptance"] += 1
+            counts[acceptance_status] += 1
     return _finalize_report_counts(counts)
 
 
@@ -1465,44 +1455,39 @@ def _report_item_totals(results: list[dict]) -> dict:
     return _finalize_report_counts(totals)
 
 
-def update_report_item_type(task, data):
+def update_report_item_review(task, data):
     if task["status"] in {"queued", "running", "canceling"}:
-        return {"ok": False, "error": "任务尚未完成，暂不能修改报告条目判定。"}, 409
+        return {"ok": False, "error": "任务尚未完成，暂不能复核报告条目。"}, 409
     result_code = str(data.get("result_code") or "").strip()
     item_id = str(data.get("item_id") or "").strip()
-    item_type = _normalize_report_item_type(data.get("item_type"))
-    if not result_code or not item_id or not item_type:
-        return {"ok": False, "error": "报告条目判定数据无效。"}, 400
-    acceptance_supplied = "acceptance_status" in data
-    acceptance_status = None
-    rejection_reason = ""
-    rejection_note = ""
-    if acceptance_supplied:
-        acceptance_status = _normalize_report_acceptance_status(
-            data.get("acceptance_status")
-        )
-        rejection_reason = _normalize_report_rejection_reason(
-            data.get("rejection_reason")
-        )
-        rejection_note = str(data.get("rejection_note") or "").strip()
-        if acceptance_status is None:
-            return {"ok": False, "error": "接纳状态数据无效。"}, 400
-        if acceptance_status == "rejected":
-            if not rejection_reason:
-                return {"ok": False, "error": "选择不认可时必须选择原因。"}, 400
-            if rejection_reason == "other" and not rejection_note:
-                return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
+    if not result_code or not item_id:
+        return {"ok": False, "error": "报告条目复核数据无效。"}, 400
+    acceptance_status = _normalize_report_acceptance_status(
+        data.get("acceptance_status")
+    )
+    rejection_reason = _normalize_report_rejection_reason(data.get("rejection_reason"))
+    rejection_note = str(data.get("rejection_note") or "").strip()
+    if acceptance_status is None:
+        return {"ok": False, "error": "认可状态数据无效。"}, 400
+    if acceptance_status == "rejected":
+        if not rejection_reason:
+            return {"ok": False, "error": "选择不认可时必须选择原因。"}, 400
+        if rejection_reason == "other" and not rejection_note:
+            return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
 
     results = _raw_task_results(task)
     target = None
-    valid_item_ids = set()
+    report_item = None
     for result in results:
         if str(result.get("code") or "") != result_code:
             continue
         target = result
-        valid_item_ids = {item["id"] for item in _result_report_items(result)}
+        report_item = next(
+            (item for item in _result_report_items(result) if item["id"] == item_id),
+            None,
+        )
         break
-    if target is None or item_id not in valid_item_ids:
+    if target is None or report_item is None:
         return {"ok": False, "error": "报告条目不存在。"}, 404
 
     db = get_db()
@@ -1512,8 +1497,6 @@ def update_report_item_type(task, data):
         result_code=result_code,
         result=target,
         item_id=item_id,
-        item_type=item_type,
-        acceptance_supplied=acceptance_supplied,
         acceptance_status=acceptance_status,
         rejection_reason=rejection_reason,
         rejection_note=rejection_note,
@@ -1541,8 +1524,8 @@ def update_report_item_type(task, data):
     return {
         "ok": True,
         "item_id": item_id,
-        "item_type": item_type,
-        "item_type_label": REPORT_ITEM_TYPES[item_type],
+        "item_type": report_item["type"],
+        "item_type_label": REPORT_ITEM_TYPES[report_item["type"]],
         **updated_acceptance,
         "result_counts": (updated_result or {}).get("report_counts", {}),
         "totals": _report_item_totals(prepared),
@@ -1557,31 +1540,22 @@ def _apply_report_item_review(
     result_code: str,
     result: dict,
     item_id: str,
-    item_type: str,
-    acceptance_supplied: bool,
-    acceptance_status: str | None,
+    acceptance_status: str,
     rejection_reason: str,
     rejection_note: str,
 ) -> bool:
-    classifications = result.get("item_classifications")
-    if not isinstance(classifications, dict):
-        classifications = {}
-    classifications[item_id] = item_type
-    result["item_classifications"] = classifications
-
-    if acceptance_supplied:
-        acceptances = result.get("item_acceptances")
-        if not isinstance(acceptances, dict):
-            acceptances = {}
-        if acceptance_status == "pending":
-            acceptances.pop(item_id, None)
-        else:
-            record = {"status": acceptance_status}
-            if acceptance_status == "rejected":
-                record["rejection_reason"] = rejection_reason
-                record["rejection_note"] = rejection_note
-            acceptances[item_id] = record
-        result["item_acceptances"] = acceptances
+    acceptances = result.get("item_acceptances")
+    if not isinstance(acceptances, dict):
+        acceptances = {}
+    if acceptance_status == "pending":
+        acceptances.pop(item_id, None)
+    else:
+        record = {"status": acceptance_status}
+        if acceptance_status == "rejected":
+            record["rejection_reason"] = rejection_reason
+            record["rejection_note"] = rejection_note
+        acceptances[item_id] = record
+    result["item_acceptances"] = acceptances
 
     return _maybe_create_report_suppression_candidate(
         db,
@@ -1589,8 +1563,7 @@ def _apply_report_item_review(
         result_code=result_code,
         result=result,
         item_id=item_id,
-        item_type=item_type,
-        acceptance_status=acceptance_status if acceptance_supplied else None,
+        acceptance_status=acceptance_status,
         rejection_reason=rejection_reason,
         rejection_note=rejection_note,
     )

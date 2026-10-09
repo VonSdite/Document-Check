@@ -15,7 +15,6 @@ from app.contracts.task_types import DOCUMENT_TASK_TYPE, VIDEO_TASK_TYPE
 from app.reporting.constants import (
     REPORT_EXPORT_MIMETYPE,
     REPORT_IMPORT_MAX_BYTES,
-    REPORT_ITEM_TYPES,
     ReportExcelImportError,
 )
 from app.reporting.excel import _load_report_excel_reviews, build_report_workbook
@@ -25,7 +24,7 @@ from app.reporting.service import (
     _task_document_groups,
     _task_results,
     _uses_compact_media_report,
-    update_report_item_type,
+    update_report_item_review,
 )
 
 
@@ -73,7 +72,6 @@ def _export_task_report(task):
         task=task,
         results=results,
         report_totals=_report_item_totals(results),
-        report_item_types=REPORT_ITEM_TYPES,
         report_item_fields=_report_item_fields_for_task(task["task_type"]),
         media_report=_uses_compact_media_report(task["task_type"]),
         video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
@@ -94,7 +92,7 @@ def _update_report_item_type(task):
     data = request.get_json(silent=True) if request.is_json else None
     if not isinstance(data, dict):
         data = request.form
-    return update_report_item_type(task, data)
+    return update_report_item_review(task, data)
 
 
 def _export_task_report_excel(task):

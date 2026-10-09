@@ -2741,7 +2741,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()
             )
         self.assertEqual(cached["non_issue_count"], 0)
-        self.assertTrue(cached["suppression_version"].startswith("3|"))
+        self.assertTrue(cached["suppression_version"].startswith("4|"))
 
     def test_suppression_rule_change_refreshes_cached_report_totals(self):
         task_id = self._insert_task()
@@ -4700,32 +4700,27 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ),
             "1",
         )
-        self.assertEqual(
-            _required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(
-                strip=True
-            ),
-            "0",
-        )
+        self.assertIsNone(soup.select_one('[data-report-count="non_issue"]'))
         self.assertEqual(
             _required_tag(
-                soup.select_one('[data-report-count="pending_issue_acceptance"]')
+                soup.select_one('[data-report-count="pending_review"]')
             ).get_text(strip=True),
-            "1",
+            "2",
         )
         self.assertEqual(
             _required_tag(
-                soup.select_one('[data-report-count="issue_detection_rate"]')
+                soup.select_one('[data-report-count="issue_item_ratio"]')
             ).get_text(strip=True),
             "50.0%",
         )
         self.assertEqual(
             _required_tag(
-                soup.select_one('[data-report-count="issue_acceptance_rate"]')
+                soup.select_one('[data-report-count="conclusion_acceptance_rate"]')
             ).get_text(strip=True),
             "-",
         )
         detail_text = soup.get_text(" ", strip=True)
-        self.assertNotIn("可在条目判定列标记为问题、建议或非问题", detail_text)
+        self.assertNotIn("可在AI判定列标记为问题、建议或非问题", detail_text)
         self.assertNotIn("共 2 条：", detail_text)
         issue_count = _required_tag(soup.select_one('[data-report-count="issue"]'))
         self.assertEqual(
@@ -4746,8 +4741,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             node.get_text(strip=True)
             for node in exported_soup.select(".report-table th")
         ]
-        self.assertEqual(exported_headers[-2:], ["条目判定", "是否接纳"])
-        self.assertNotIn("不接纳原因", exported_headers)
+        self.assertEqual(exported_headers[-2:], ["AI判定", "是否认可 AI 结论"])
+        self.assertNotIn("不认可原因", exported_headers)
         self.assertIn("AI 检查条目统计", exported_text)
         self.assertNotIn("共 2 条：", exported_text)
         self.assertEqual(
@@ -4840,7 +4835,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         self.assertEqual(
             exported_acceptance.get_text(" ", strip=True),
-            "不接纳 模型误报：上下文可解释",
+            "不认可 模型误报：上下文可解释",
         )
         self.assertIsNone(exported_soup.select_one(".report-rejection-cell"))
 
@@ -4877,9 +4872,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "问题描述",
                     "影响",
                     "修改建议",
-                    "条目判定",
-                    "是否接纳",
-                    "不接纳原因",
+                    "AI判定",
+                    "是否认可 AI 结论",
+                    "不认可原因",
                     "人工原因",
                     "检查项编码（请勿修改）",
                     "条目标识（请勿修改）",
@@ -4892,7 +4887,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(report_rows[1][4], "条目 1")
             self.assertEqual(report_rows[1][7], "参数不一致")
             self.assertEqual(report_rows[1][13], "问题")
-            self.assertEqual(report_rows[1][14], "不接纳")
+            self.assertEqual(report_rows[1][14], "不认可")
             self.assertEqual(report_rows[1][15], "模型误报")
             self.assertEqual(report_rows[1][16], "上下文可解释")
             self.assertEqual(report_rows[1][17], "consistency")
@@ -4902,9 +4897,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             stats = dict(workbook["统计"].iter_rows(min_row=2, values_only=True))
             self.assertEqual(stats["问题"], 1)
             self.assertEqual(stats["建议"], 1)
-            self.assertEqual(stats["不接纳问题"], 1)
-            self.assertEqual(stats["问题检出率"], "50.0%")
-            self.assertEqual(stats["问题接纳率"], "0.0%")
+            self.assertEqual(stats["不认可结论"], 1)
+            self.assertEqual(stats["问题条目占比"], "50.0%")
+            self.assertEqual(stats["整体结论认可率"], "0.0%")
         finally:
             workbook.close()
 
@@ -4938,12 +4933,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     sheet.cell(1, item_id_column).column_letter
                 ].hidden
             )
-            self.assertEqual(len(sheet.data_validations.dataValidation), 3)
+            self.assertEqual(len(sheet.data_validations.dataValidation), 2)
+            self.assertTrue(
+                all(
+                    "问题" not in validation.formula1
+                    for validation in sheet.data_validations.dataValidation
+                )
+            )
 
             item_id = sheet.cell(2, item_id_column).value
-            sheet.cell(2, headers["条目判定"]).value = "非问题"
-            sheet.cell(2, headers["是否接纳"]).value = "不接纳"
-            sheet.cell(2, headers["不接纳原因"]).value = "模型误报"
+            sheet.cell(2, headers["AI判定"]).value = "非问题"
+            sheet.cell(2, headers["是否认可 AI 结论"]).value = "不认可"
+            sheet.cell(2, headers["不认可原因"]).value = "模型误报"
             sheet.cell(2, headers["人工原因"]).value = "已由业务人员确认"
             annotated = io.BytesIO()
             workbook.save(annotated)
@@ -4986,7 +4987,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 )
                 .fetchone()
             )
-        self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
+        self.assertNotIn("item_classifications", stored[0])
         self.assertEqual(
             stored[0]["item_acceptances"][item_id],
             {
@@ -5006,8 +5007,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         try:
             sheet = workbook["报告条目"]
             headers = {cell.value: cell.column for cell in sheet[1]}
-            sheet.cell(2, headers["条目判定"]).value = "非问题"
-            sheet.cell(3, headers["条目判定"]).value = "无法判断"
+            sheet.cell(2, headers["是否认可 AI 结论"]).value = "认可"
+            sheet.cell(3, headers["是否认可 AI 结论"]).value = "无法判断"
             annotated = io.BytesIO()
             workbook.save(annotated)
         finally:
@@ -5022,7 +5023,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("第 3 行“条目判定”无效", response.get_data(as_text=True))
+        self.assertIn("第 3 行“是否认可 AI 结论”无效", response.get_data(as_text=True))
         with self.app.app_context():
             task = (
                 get_db()
@@ -5050,7 +5051,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
             sheet = workbook["报告条目"]
             headers = {cell.value: cell.column for cell in sheet[1]}
             item_id = sheet.cell(2, headers["条目标识（请勿修改）"]).value
-            sheet.cell(2, headers["条目判定"]).value = "非问题"
+            sheet.cell(2, headers["AI判定"]).value = "非问题"
+            sheet.cell(1, headers["AI判定"]).value = "条目判定"
+            sheet.cell(1, headers["是否认可 AI 结论"]).value = "是否接纳"
+            sheet.cell(1, headers["不认可原因"]).value = "不接纳原因"
+            sheet.cell(2, headers["是否认可 AI 结论"]).value = "接纳"
             sheet.delete_cols(headers["检查项编码（请勿修改）"], 2)
             legacy = io.BytesIO()
             workbook.save(legacy)
@@ -5074,7 +5079,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()
             )
             stored = json.loads(task["result_json"])
-        self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
+        self.assertNotIn("item_classifications", stored[0])
+        self.assertEqual(stored[0]["item_acceptances"][item_id], {"status": "accepted"})
 
     def test_video_task_report_exports_excel_with_document_report_columns(self):
         with self.app.app_context():
@@ -5145,9 +5151,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "问题描述",
                     "影响",
                     "修改建议",
-                    "条目判定",
-                    "是否接纳",
-                    "不接纳原因",
+                    "AI判定",
+                    "是否认可 AI 结论",
+                    "不认可原因",
                     "人工原因",
                     "检查项编码（请勿修改）",
                     "条目标识（请勿修改）",
@@ -5265,7 +5271,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "问题描述",
                 "影响",
                 "修改建议",
-                "条目判定",
+                "AI判定",
                 "是否认可 AI 结论",
             ],
         )
@@ -5373,7 +5379,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "问题描述",
                 "影响",
                 "修改建议",
-                "条目判定",
+                "AI判定",
                 "是否认可 AI 结论",
             ],
         )
@@ -5391,19 +5397,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         rows = soup.select("tr[data-report-item]")
         self.assertEqual(len(rows), 1)
-        item_type_radios = rows[0].select("input[type='radio'][data-report-item-type]")
-        self.assertEqual(
-            [radio.get("value") for radio in item_type_radios],
-            ["issue", "suggestion", "non_issue"],
-        )
+        self.assertFalse(rows[0].select("[data-report-item-type]"))
         self.assertEqual(len(rows[0].select(".report-status-cell select")), 0)
         self.assertEqual(
-            [
-                radio.get("value")
-                for radio in item_type_radios
-                if radio.has_attr("checked")
-            ],
-            ["issue"],
+            _required_tag(rows[0].select_one(".report-item-type-badge")).get_text(
+                strip=True
+            ),
+            "问题",
         )
         acceptance = _required_tag(
             rows[0].select_one("[data-report-acceptance-status]")
@@ -5430,6 +5430,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "model_hallucination",
                 "evidence_insufficient",
                 "not_applicable",
+                "classification_inaccurate",
                 "other",
             ],
         )
@@ -5537,9 +5538,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         headers = [
             node.get_text(strip=True) for node in soup.select(".report-table th")
         ]
-        self.assertEqual(
-            headers, ["条目", "AI检查结论", "条目判定", "是否认可 AI 结论"]
-        )
+        self.assertEqual(headers, ["条目", "AI检查结论", "AI判定", "是否认可 AI 结论"])
         table = _required_tag(soup.select_one(".report-table-media"))
         self.assertIn("report-table-media", table.get("class", []))
         row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(
@@ -5675,9 +5674,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIn("额定功率不一致", rows[0].get_text(" ", strip=True))
         self.assertEqual(
-            _required_tag(rows[0].select_one("[data-report-item-type]")).get(
-                "data-saved-value"
-            ),
+            rows[0]["data-item-type"],
             "issue",
         )
         self.assertEqual(
@@ -5686,15 +5683,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ),
             "1",
         )
-        self.assertEqual(
-            _required_tag(soup.select_one('[data-report-count="non_issue"]')).get_text(
-                strip=True
-            ),
-            "0",
-        )
+        self.assertIsNone(soup.select_one('[data-report-count="non_issue"]'))
         self.assertEqual(
             _required_tag(
-                soup.select_one('[data-report-count="issue_detection_rate"]')
+                soup.select_one('[data-report-count="issue_item_ratio"]')
             ).get_text(strip=True),
             "100.0%",
         )
@@ -6116,7 +6108,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         self.assertEqual(len(image_prepared[0]["report_items"]), 2)
 
-    def test_human_non_issue_classification_is_preserved(self):
+    def test_report_displays_original_ai_type_and_preserves_historical_classification(
+        self,
+    ):
         raw_item = {
             "status": "issue",
             "category": "参数问题",
@@ -6134,21 +6128,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         item_id = initial[0]["report_items"][0]["id"]
 
-        prepared = _prepare_task_results(
-            [
-                {
-                    "code": "consistency",
-                    "result": json.dumps(
-                        {"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False
-                    ),
-                    "item_classifications": {item_id: "non_issue"},
-                }
-            ]
-        )
+        source = [
+            {
+                "code": "consistency",
+                "result": json.dumps(
+                    {"summary": "检查完成", "items": [raw_item]}, ensure_ascii=False
+                ),
+                "item_classifications": {item_id: "non_issue"},
+            }
+        ]
+        prepared = _prepare_task_results(source)
 
         self.assertEqual(len(prepared[0]["report_items"]), 1)
-        self.assertEqual(prepared[0]["report_items"][0]["type"], "non_issue")
-        self.assertEqual(prepared[0]["report_counts"]["non_issue"], 1)
+        self.assertEqual(prepared[0]["report_items"][0]["type"], "issue")
+        self.assertEqual(prepared[0]["report_counts"]["issue"], 1)
+        self.assertEqual(source[0]["item_classifications"][item_id], "non_issue")
 
     def test_task_detail_repairs_duplicate_status_json_value(self):
         with self.app.app_context():
@@ -6197,9 +6191,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("文档名称和前言称谓不一致。", row_text)
         self.assertNotIn('"items"', row_text)
         self.assertEqual(
-            _required_tag(row.select_one("[data-report-item-type]")).get(
-                "data-saved-value"
-            ),
+            row["data-item-type"],
             "suggestion",
         )
 
@@ -7281,7 +7273,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         back_link = _required_tag(detail_soup.select_one(".report-toolbar > a"))
         self.assertEqual(back_link.get("href"), "/admin/tasks")
 
-    def test_report_item_type_update_persists_classification(self):
+    def test_report_review_preserves_ai_classification_and_updates_overall_acceptance(
+        self,
+    ):
         with self.app.app_context():
             now = "2026-05-24 12:00:00"
             result_json = [
@@ -7339,13 +7333,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["totals"]["issue"], 0)
-        self.assertEqual(payload["totals"]["non_issue"], 1)
+        self.assertEqual(payload["totals"]["issue"], 1)
+        self.assertEqual(payload["totals"]["non_issue"], 0)
+        self.assertEqual(payload["item_type"], "issue")
         self.assertEqual(payload["acceptance_status"], "rejected")
         self.assertEqual(payload["rejection_reason"], "false_positive")
         self.assertEqual(payload["rejection_note"], "原文上下文可解释")
-        self.assertEqual(payload["totals"]["issue_detection_rate"], "0.0%")
-        self.assertEqual(payload["totals"]["issue_acceptance_rate"], "-")
+        self.assertEqual(payload["totals"]["issue_item_ratio"], "100.0%")
+        self.assertEqual(payload["totals"]["conclusion_acceptance_rate"], "0.0%")
         with self.app.app_context():
             task = (
                 get_db()
@@ -7353,7 +7348,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()
             )
             stored = json.loads(task["result_json"])
-        self.assertEqual(stored[0]["item_classifications"][item_id], "non_issue")
+        self.assertNotIn("item_classifications", stored[0])
         self.assertEqual(
             stored[0]["item_acceptances"][item_id],
             {
@@ -7376,10 +7371,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(accepted_response.status_code, 200)
         accepted_payload = accepted_response.get_json()
         self.assertEqual(accepted_payload["totals"]["issue"], 1)
-        self.assertEqual(accepted_payload["totals"]["accepted_issue"], 1)
-        self.assertEqual(accepted_payload["totals"]["pending_issue_acceptance"], 0)
-        self.assertEqual(accepted_payload["totals"]["issue_detection_rate"], "100.0%")
-        self.assertEqual(accepted_payload["totals"]["issue_acceptance_rate"], "100.0%")
+        self.assertEqual(accepted_payload["totals"]["accepted"], 1)
+        self.assertEqual(accepted_payload["totals"]["pending_review"], 0)
+        self.assertEqual(accepted_payload["totals"]["issue_item_ratio"], "100.0%")
+        self.assertEqual(
+            accepted_payload["totals"]["conclusion_acceptance_rate"], "100.0%"
+        )
 
     def test_report_review_keeps_limited_item_visible_and_returns_saved_acceptance(
         self,
@@ -7456,7 +7453,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(type_response.status_code, 200)
-        self.assertEqual(type_response.get_json()["item_type"], "non_issue")
+        self.assertEqual(type_response.get_json()["item_type"], "issue")
         refreshed = self.client.get(f"/admin/tasks/{task_id}")
         refreshed_soup = BeautifulSoup(refreshed.get_data(as_text=True), "html.parser")
         refreshed_rows = refreshed_soup.select("[data-report-item]")
@@ -7468,10 +7465,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             " ".join(row.get_text(" ", strip=True) for row in refreshed_rows),
         )
         self.assertEqual(
-            _required_tag(
-                refreshed_rows[0].select_one("[data-report-item-type][checked]")
-            )["value"],
-            "non_issue",
+            refreshed_rows[0]["data-item-type"],
+            "issue",
         )
 
         accepted_response = self.client.post(
@@ -7553,7 +7548,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         ]
 
         with patch(
-            "app.reporting.excel._prepare_task_results",
+            "app.reporting.service._prepare_task_results",
             return_value=filtered_prepared,
         ):
             response = self.client.post(
@@ -7568,8 +7563,117 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertEqual(payload["item_type"], "non_issue")
+        self.assertEqual(payload["item_type"], "issue")
         self.assertEqual(payload["acceptance_status"], "accepted")
+
+    def test_report_review_only_saves_feedback_and_counts_classification_rejection(
+        self,
+    ):
+        task_id = self._insert_report_task()
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET owner_subject = 'ip:127.0.0.1', owner_source = 'ip' WHERE id = ?",
+                (task_id,),
+            )
+            get_db().commit()
+        detail = self.client.get(f"/admin/tasks/{task_id}")
+        soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+        issue, suggestion = soup.select("[data-report-item]")
+        issue_payload = {"result_code": "consistency", "item_id": issue["data-item-id"]}
+        type_only = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={**issue_payload, "item_type": "non_issue"},
+        )
+        self.assertEqual(type_only.status_code, 400)
+        accepted = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={**issue_payload, "acceptance_status": "accepted"},
+        )
+        self.assertEqual(accepted.status_code, 200)
+        rejected = self.client.post(
+            f"/tasks/{task_id}/report-items",
+            json={
+                "result_code": "consistency",
+                "item_id": suggestion["data-item-id"],
+                "acceptance_status": "rejected",
+                "rejection_reason": "classification_inaccurate",
+            },
+        )
+        self.assertEqual(rejected.status_code, 200)
+        payload = rejected.get_json()
+        self.assertEqual(payload["item_type"], "suggestion")
+        self.assertEqual(payload["rejection_reason_label"], "分类不准确")
+        self.assertFalse(payload["suppression_candidate_created"])
+        self.assertEqual(payload["totals"]["accepted"], 1)
+        self.assertEqual(payload["totals"]["rejected"], 1)
+        self.assertEqual(payload["totals"]["conclusion_acceptance_rate"], "50.0%")
+        self.assertEqual(payload["totals"]["review_coverage_rate"], "100.0%")
+        with self.app.app_context():
+            db = get_db()
+            stored = json.loads(
+                db.execute(
+                    "SELECT result_json FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()[0]
+            )
+            self.assertNotIn("item_classifications", stored[0])
+            cached = db.execute(
+                "SELECT accepted_count, rejected_count FROM task_report_stats WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            self.assertEqual(tuple(cached), (1, 1))
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM report_suppression_rules").fetchone()[
+                    0
+                ],
+                0,
+            )
+        admin_list = self.client.get("/admin/tasks")
+        admin_soup = BeautifulSoup(admin_list.get_data(as_text=True), "html.parser")
+        self.assertEqual(
+            _required_tag(
+                admin_soup.select_one(
+                    '[data-admin-report-count="conclusion_acceptance_rate"]'
+                )
+            ).get_text(strip=True),
+            "50.0%",
+        )
+
+    def test_report_excel_rejection_requires_reason_and_other_requires_note(self):
+        task_id = self._insert_report_task()
+        for reason, error in (
+            ("", "必须填写“不认可原因”"),
+            ("其他", "必须填写人工原因"),
+        ):
+            with self.subTest(reason=reason):
+                exported = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+                workbook = load_workbook(io.BytesIO(exported.data))
+                try:
+                    sheet = workbook["报告条目"]
+                    headers = {cell.value: cell.column for cell in sheet[1]}
+                    sheet.cell(2, headers["是否认可 AI 结论"]).value = "认可"
+                    sheet.cell(3, headers["是否认可 AI 结论"]).value = "不认可"
+                    sheet.cell(3, headers["不认可原因"]).value = reason
+                    annotated = io.BytesIO()
+                    workbook.save(annotated)
+                finally:
+                    workbook.close()
+                annotated.seek(0)
+                response = self.client.post(
+                    f"/admin/tasks/{task_id}/import.xlsx",
+                    data={"report_excel": (annotated, "feedback.xlsx")},
+                    content_type="multipart/form-data",
+                    follow_redirects=True,
+                )
+                self.assertIn(error, response.get_data(as_text=True))
+                with self.app.app_context():
+                    stored = json.loads(
+                        get_db()
+                        .execute(
+                            "SELECT result_json FROM tasks WHERE id = ?", (task_id,)
+                        )
+                        .fetchone()[0]
+                    )
+                    self.assertNotIn("item_acceptances", stored[0])
 
     def test_report_suppression_candidate_can_hide_future_similar_description(self):
         result_json = [
@@ -7618,7 +7722,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
             json={
                 "result_code": "compliance",
                 "item_id": item_id,
-                "item_type": "non_issue",
                 "acceptance_status": "rejected",
                 "rejection_reason": "false_positive",
                 "rejection_note": "公司规范允许该表述",
@@ -7740,6 +7843,18 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "客户交付文档仍保留研发内部备注", detail_after_enable.get_data(as_text=True)
         )
         self.assertIn("描述相似度 71%", detail_after_enable.get_data(as_text=True))
+        source_after_enable = self.client.get(f"/admin/tasks/{source_task_id}")
+        source_soup = BeautifulSoup(
+            source_after_enable.get_data(as_text=True), "html.parser"
+        )
+        self.assertEqual(
+            _required_tag(
+                source_soup.select_one(
+                    '[data-report-count="conclusion_acceptance_rate"]'
+                )
+            ).get_text(strip=True),
+            "0.0%",
+        )
         with self.app.app_context():
             updated_rule = (
                 get_db()
@@ -7749,7 +7864,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 )
                 .fetchone()
             )
-            self.assertEqual(updated_rule["hit_count"], 1)
+            self.assertEqual(updated_rule["hit_count"], 2)
 
     def test_report_item_reject_requires_reason_and_other_requires_note(self):
         with self.app.app_context():

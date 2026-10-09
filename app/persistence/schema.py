@@ -176,9 +176,8 @@ def init_db():
             issue_count INTEGER NOT NULL DEFAULT 0,
             suggestion_count INTEGER NOT NULL DEFAULT 0,
             non_issue_count INTEGER NOT NULL DEFAULT 0,
-            accepted_issue_count INTEGER NOT NULL DEFAULT 0,
-            rejected_issue_count INTEGER NOT NULL DEFAULT 0,
-            pending_issue_acceptance_count INTEGER NOT NULL DEFAULT 0,
+            accepted_count INTEGER NOT NULL DEFAULT 0,
+            rejected_count INTEGER NOT NULL DEFAULT 0,
             suppressed_count INTEGER NOT NULL DEFAULT 0,
             reviewed_item_count INTEGER NOT NULL DEFAULT 0,
             pending_review_item_count INTEGER NOT NULL DEFAULT 0,
@@ -232,6 +231,12 @@ def init_db():
     _ensure_column(db, "tasks", "claim_token", "TEXT")
     _ensure_column(db, "tasks", "lease_expires_at", "TEXT")
     _ensure_column(db, "tasks", "source_files_cleaned_at", "TEXT")
+    _ensure_column(
+        db, "task_report_stats", "accepted_count", "INTEGER NOT NULL DEFAULT 0"
+    )
+    _ensure_column(
+        db, "task_report_stats", "rejected_count", "INTEGER NOT NULL DEFAULT 0"
+    )
     _ensure_column(
         db, "task_report_stats", "reviewed_item_count", "INTEGER NOT NULL DEFAULT 0"
     )

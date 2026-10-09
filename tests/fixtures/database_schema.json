@@ -165,7 +165,7 @@
     "table",
     "task_report_stats",
     "task_report_stats",
-    "CREATE TABLE task_report_stats (\n            task_id INTEGER PRIMARY KEY,\n            source_updated_at TEXT NOT NULL,\n            suppression_version TEXT NOT NULL DEFAULT '',\n            issue_count INTEGER NOT NULL DEFAULT 0,\n            suggestion_count INTEGER NOT NULL DEFAULT 0,\n            non_issue_count INTEGER NOT NULL DEFAULT 0,\n            accepted_issue_count INTEGER NOT NULL DEFAULT 0,\n            rejected_issue_count INTEGER NOT NULL DEFAULT 0,\n            pending_issue_acceptance_count INTEGER NOT NULL DEFAULT 0,\n            suppressed_count INTEGER NOT NULL DEFAULT 0,\n            reviewed_item_count INTEGER NOT NULL DEFAULT 0,\n            pending_review_item_count INTEGER NOT NULL DEFAULT 0,\n            updated_at TEXT NOT NULL,\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE\n        )"
+    "CREATE TABLE task_report_stats (\n            task_id INTEGER PRIMARY KEY,\n            source_updated_at TEXT NOT NULL,\n            suppression_version TEXT NOT NULL DEFAULT '',\n            issue_count INTEGER NOT NULL DEFAULT 0,\n            suggestion_count INTEGER NOT NULL DEFAULT 0,\n            non_issue_count INTEGER NOT NULL DEFAULT 0,\n            accepted_count INTEGER NOT NULL DEFAULT 0,\n            rejected_count INTEGER NOT NULL DEFAULT 0,\n            suppressed_count INTEGER NOT NULL DEFAULT 0,\n            reviewed_item_count INTEGER NOT NULL DEFAULT 0,\n            pending_review_item_count INTEGER NOT NULL DEFAULT 0,\n            updated_at TEXT NOT NULL,\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE\n        )"
   ],
   [
     "table",

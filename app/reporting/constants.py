@@ -9,9 +9,8 @@ REPORT_ITEM_TYPES = {
 }
 REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
 REPORT_COUNT_KEYS = REPORT_ITEM_TYPE_ORDER + (
-    "accepted_issue",
-    "rejected_issue",
-    "pending_issue_acceptance",
+    "accepted",
+    "rejected",
     "suppressed",
     "reviewed",
     "pending_review",
@@ -31,14 +30,15 @@ REPORT_REVIEW_FILTERS = {
 }
 REPORT_ACCEPTANCE_STATUSES = {
     "pending": "未确认",
-    "accepted": "接纳",
-    "rejected": "不接纳",
+    "accepted": "认可",
+    "rejected": "不认可",
 }
 REPORT_REJECTION_REASONS = {
     "false_positive": "模型误报",
     "model_hallucination": "模型幻觉",
     "evidence_insufficient": "证据不足",
     "not_applicable": "不适用",
+    "classification_inaccurate": "分类不准确",
     "other": "其他",
 }
 REPORT_REJECTION_REASON_HINTS = {
@@ -46,6 +46,7 @@ REPORT_REJECTION_REASON_HINTS = {
     "model_hallucination": "找不到模型引用的原文、位置或事实",
     "evidence_insufficient": "信息不完整，暂时无法判断结论对错",
     "not_applicable": "这条检查规则不适用于当前文档或场景",
+    "classification_inaccurate": "条目有依据，但问题或建议的分类不准确",
     "other": "无法归入以上原因，请补充说明",
 }
 REPORT_SUPPRESSION_REJECTION_REASONS = {
@@ -54,7 +55,7 @@ REPORT_SUPPRESSION_REJECTION_REASONS = {
     "not_applicable",
 }
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
-REPORT_STATS_PREPARATION_VERSION = "3"
+REPORT_STATS_PREPARATION_VERSION = "4"
 # 报告统计按批次在后台刷新，请求线程只同步处理少量记录。
 REPORT_STATS_INLINE_REBUILD_LIMIT = 20
 REPORT_STATS_BACKGROUND_BATCH_SIZE = 100
@@ -131,13 +132,13 @@ REPORT_EXPORT_EDITABLE_FILL = PatternFill("solid", fgColor="FFF4CC")
 REPORT_TOTAL_EXPORT_ROWS = (
     ("问题", "issue"),
     ("建议", "suggestion"),
-    ("非问题", "non_issue"),
-    ("接纳问题", "accepted_issue"),
-    ("不接纳问题", "rejected_issue"),
-    ("待确认问题", "pending_issue_acceptance"),
+    ("认可结论", "accepted"),
+    ("不认可结论", "rejected"),
+    ("待确认条目", "pending_review"),
     ("已忽略误报", "suppressed"),
-    ("问题检出率", "issue_detection_rate"),
-    ("问题接纳率", "issue_acceptance_rate"),
+    ("问题条目占比", "issue_item_ratio"),
+    ("整体结论认可率", "conclusion_acceptance_rate"),
+    ("复核覆盖率", "review_coverage_rate"),
     ("合计", "total"),
 )
 
@@ -146,7 +147,9 @@ class ReportExcelImportError(ValueError):
     pass
 
 
-REPORT_ITEM_TYPE_LABEL = "条目判定"
+REPORT_ITEM_TYPE_LABEL = "AI判定"
+REPORT_ACCEPTANCE_LABEL = "是否认可 AI 结论"
+REPORT_REJECTION_REASON_LABEL = "不认可原因"
 REPORT_ITEM_START_RE = re.compile(
     r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
     r"(?:\d{1,3}[.、)]|\(\d{1,3}\)|（\d{1,3}）)\s*(?:[*_`~]{1,3}\s*)?\S)"

@@ -14,6 +14,7 @@ from app.contracts.task_types import (
 )
 from app.persistence.connection import get_db, now_text
 from app.reporting.constants import (
+    REPORT_ACCEPTANCE_LABEL,
     REPORT_ACCEPTANCE_STATUSES,
     REPORT_EXPORT_EDITABLE_FILL,
     REPORT_EXPORT_HEADER_FILL,
@@ -23,7 +24,7 @@ from app.reporting.constants import (
     REPORT_EXPORT_SHEET_NAME,
     REPORT_IMPORT_MAX_ROWS,
     REPORT_ITEM_TYPE_LABEL,
-    REPORT_ITEM_TYPES,
+    REPORT_REJECTION_REASON_LABEL,
     REPORT_REJECTION_REASONS,
     REPORT_TOTAL_EXPORT_ROWS,
     ReportExcelImportError,
@@ -100,8 +101,6 @@ def _load_report_excel_reviews(task, payload: bytes) -> int:
             result_code=review["result_code"],
             result=result,
             item_id=review["item_id"],
-            item_type=review["item_type"],
-            acceptance_supplied=review["acceptance_supplied"],
             acceptance_status=review["acceptance_status"],
             rejection_reason=review["rejection_reason"],
             rejection_note=review["rejection_note"],
@@ -139,9 +138,23 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
             )
         columns[header] = index
 
-    for required_header in ("任务ID", REPORT_ITEM_TYPE_LABEL):
+    for required_header in ("任务ID",):
         if required_header not in columns:
             raise ReportExcelImportError(f"回填文件缺少“{required_header}”列。")
+    acceptance_header = next(
+        (label for label in (REPORT_ACCEPTANCE_LABEL, "是否接纳") if label in columns),
+        None,
+    )
+    if acceptance_header is None:
+        raise ReportExcelImportError(f"回填文件缺少“{REPORT_ACCEPTANCE_LABEL}”列。")
+    rejection_header = next(
+        (
+            label
+            for label in (REPORT_REJECTION_REASON_LABEL, "不接纳原因")
+            if label in columns
+        ),
+        REPORT_REJECTION_REASON_LABEL,
+    )
 
     metadata_headers = (REPORT_EXPORT_RESULT_CODE_HEADER, REPORT_EXPORT_ITEM_ID_HEADER)
     has_metadata = all(header in columns for header in metadata_headers)
@@ -153,13 +166,11 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
     results = _raw_task_results(task)
     item_targets = _report_excel_item_targets(results)
     legacy_targets = _legacy_report_excel_item_targets(task, results)
-    type_values = {
-        **{code: code for code in REPORT_ITEM_TYPES},
-        **{label: code for code, label in REPORT_ITEM_TYPES.items()},
-    }
     acceptance_values = {
         **{code: code for code in REPORT_ACCEPTANCE_STATUSES},
         **{label: code for code, label in REPORT_ACCEPTANCE_STATUSES.items()},
+        "接纳": "accepted",
+        "不接纳": "rejected",
     }
     rejection_values = {
         **{code: code for code in REPORT_REJECTION_REASONS},
@@ -178,15 +189,15 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
         if not item_marker and not metadata_item_id:
             continue
 
-        item_type_text = _excel_import_text(
-            _excel_row_value(row, columns, REPORT_ITEM_TYPE_LABEL)
+        acceptance_text = _excel_import_text(
+            _excel_row_value(row, columns, acceptance_header)
         )
-        if not item_type_text:
+        if not acceptance_text:
             continue
-        item_type = type_values.get(item_type_text)
-        if item_type is None:
+        acceptance_status = acceptance_values.get(acceptance_text)
+        if acceptance_status is None:
             raise ReportExcelImportError(
-                f"第 {row_number} 行“{REPORT_ITEM_TYPE_LABEL}”无效，请选择问题、建议或非问题。"
+                f"第 {row_number} 行“{REPORT_ACCEPTANCE_LABEL}”无效，请选择未确认、认可或不认可。"
             )
 
         task_id = _excel_import_task_id(_excel_row_value(row, columns, "任务ID"))
@@ -222,48 +233,33 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
             )
         seen_targets.add(target_key)
 
-        acceptance_supplied = False
-        acceptance_status = None
         rejection_reason = ""
         rejection_note = ""
-        if "是否接纳" in columns:
-            acceptance_text = _excel_import_text(
-                _excel_row_value(row, columns, "是否接纳")
+        if acceptance_status == "rejected":
+            reason_text = _excel_import_text(
+                _excel_row_value(row, columns, rejection_header)
             )
-            if acceptance_text:
-                acceptance_status = acceptance_values.get(acceptance_text)
-                if acceptance_status is None:
-                    raise ReportExcelImportError(
-                        f"第 {row_number} 行“是否接纳”无效，请选择未确认、接纳或不接纳。"
-                    )
-                acceptance_supplied = True
-                if acceptance_status == "rejected":
-                    reason_text = _excel_import_text(
-                        _excel_row_value(row, columns, "不接纳原因")
-                    )
-                    if not reason_text:
-                        raise ReportExcelImportError(
-                            f"第 {row_number} 行选择不接纳时必须填写“不接纳原因”。"
-                        )
-                    rejection_reason = rejection_values.get(reason_text, "")
-                    if not rejection_reason:
-                        raise ReportExcelImportError(
-                            f"第 {row_number} 行“不接纳原因”无效。"
-                        )
-                    rejection_note = _excel_import_text(
-                        _excel_row_value(row, columns, "人工原因")
-                    )
-                    if rejection_reason == "other" and not rejection_note:
-                        raise ReportExcelImportError(
-                            f"第 {row_number} 行选择其他原因时必须填写人工原因。"
-                        )
+            if not reason_text:
+                raise ReportExcelImportError(
+                    f"第 {row_number} 行选择不认可时必须填写“{REPORT_REJECTION_REASON_LABEL}”。"
+                )
+            rejection_reason = rejection_values.get(reason_text, "")
+            if not rejection_reason:
+                raise ReportExcelImportError(
+                    f"第 {row_number} 行“{REPORT_REJECTION_REASON_LABEL}”无效。"
+                )
+            rejection_note = _excel_import_text(
+                _excel_row_value(row, columns, "人工原因")
+            )
+            if rejection_reason == "other" and not rejection_note:
+                raise ReportExcelImportError(
+                    f"第 {row_number} 行选择其他原因时必须填写人工原因。"
+                )
 
         reviews.append(
             {
                 "result_code": target_key[0],
                 "item_id": target_key[1],
-                "item_type": item_type,
-                "acceptance_supplied": acceptance_supplied,
                 "acceptance_status": acceptance_status,
                 "rejection_reason": rejection_reason,
                 "rejection_note": rejection_note,
@@ -335,8 +331,8 @@ def _fill_report_items_sheet(
         "条目",
         *[label for _, label in report_item_fields],
         REPORT_ITEM_TYPE_LABEL,
-        "是否接纳",
-        "不接纳原因",
+        REPORT_ACCEPTANCE_LABEL,
+        REPORT_REJECTION_REASON_LABEL,
         "人工原因",
         REPORT_EXPORT_RESULT_CODE_HEADER,
         REPORT_EXPORT_ITEM_ID_HEADER,
@@ -410,9 +406,8 @@ def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
     columns = {header: index + 1 for index, header in enumerate(headers)}
     last_row = max(sheet.max_row, 2)
     validation_choices = (
-        (REPORT_ITEM_TYPE_LABEL, tuple(REPORT_ITEM_TYPES.values())),
-        ("是否接纳", tuple(REPORT_ACCEPTANCE_STATUSES.values())),
-        ("不接纳原因", tuple(REPORT_REJECTION_REASONS.values())),
+        (REPORT_ACCEPTANCE_LABEL, tuple(REPORT_ACCEPTANCE_STATUSES.values())),
+        (REPORT_REJECTION_REASON_LABEL, tuple(REPORT_REJECTION_REASONS.values())),
     )
     for header, choices in validation_choices:
         column = columns[header]
@@ -420,7 +415,7 @@ def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
         validation = DataValidation(
             type="list",
             formula1=f'"{",".join(choices)}"',
-            allow_blank=header == "不接纳原因",
+            allow_blank=header == REPORT_REJECTION_REASON_LABEL,
         )
         validation.error = f"请从下拉列表中选择有效的{header}。"
         validation.errorTitle = "标注值无效"

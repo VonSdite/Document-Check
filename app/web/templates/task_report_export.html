@@ -96,12 +96,12 @@
       <div class="report-counts">
         <span>问题<strong>{{ report_totals.issue }}</strong></span>
         <span>建议<strong>{{ report_totals.suggestion }}</strong></span>
-        <span>非问题<strong>{{ report_totals.non_issue }}</strong></span>
-        <span>接纳问题<strong>{{ report_totals.accepted_issue }}</strong></span>
-        <span>不接纳问题<strong>{{ report_totals.rejected_issue }}</strong></span>
-        <span>待确认问题<strong>{{ report_totals.pending_issue_acceptance }}</strong></span>
-        <span>问题检出率<strong>{{ report_totals.issue_detection_rate }}</strong></span>
-        <span>问题接纳率<strong>{{ report_totals.issue_acceptance_rate }}</strong></span>
+        <span>认可结论<strong>{{ report_totals.accepted }}</strong></span>
+        <span>不认可结论<strong>{{ report_totals.rejected }}</strong></span>
+        <span>待确认条目<strong>{{ report_totals.pending_review }}</strong></span>
+        <span>问题条目占比<strong>{{ report_totals.issue_item_ratio }}</strong></span>
+        <span>整体结论认可率<strong>{{ report_totals.conclusion_acceptance_rate }}</strong></span>
+        <span>复核覆盖率<strong>{{ report_totals.review_coverage_rate }}</strong></span>
         <span>已忽略误报<strong>{{ report_totals.suppressed or 0 }}</strong></span>
         <span>合计<strong>{{ report_totals.total }}</strong></span>
       </div>
@@ -141,7 +141,7 @@
                 <th class="report-field-{{ field }}">{{ label }}</th>
                 {% endfor %}
                 <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
-                <th class="report-acceptance-cell">是否接纳</th>
+                <th class="report-acceptance-cell">是否认可 AI 结论</th>
               </tr>
             </thead>
             <tbody>

@@ -144,16 +144,17 @@
 <section class="panel report-classification-summary" data-report-summary data-detail-region="summary">
   <div>
     <h2>AI 检查条目统计</h2>
+    <p class="muted">AI 判定按模型结果展示。认可建议表示认可其核查价值；选择不认可时必须选择原因。</p>
   </div>
   <div class="report-counts">
     <span>问题<strong data-report-count="issue">{{ report_totals.issue }}</strong></span>
     <span>建议<strong data-report-count="suggestion">{{ report_totals.suggestion }}</strong></span>
-    <span>非问题<strong data-report-count="non_issue">{{ report_totals.non_issue }}</strong></span>
-    <span>接纳问题<strong data-report-count="accepted_issue">{{ report_totals.accepted_issue }}</strong></span>
-    <span>不接纳问题<strong data-report-count="rejected_issue">{{ report_totals.rejected_issue }}</strong></span>
-    <span>待确认问题<strong data-report-count="pending_issue_acceptance">{{ report_totals.pending_issue_acceptance }}</strong></span>
-    <span>问题检出率<strong data-report-count="issue_detection_rate">{{ report_totals.issue_detection_rate }}</strong></span>
-    <span>问题接纳率<strong data-report-count="issue_acceptance_rate">{{ report_totals.issue_acceptance_rate }}</strong></span>
+    <span>认可结论<strong data-report-count="accepted">{{ report_totals.accepted }}</strong></span>
+    <span>不认可结论<strong data-report-count="rejected">{{ report_totals.rejected }}</strong></span>
+    <span>待确认条目<strong data-report-count="pending_review">{{ report_totals.pending_review }}</strong></span>
+    <span>问题条目占比<strong data-report-count="issue_item_ratio">{{ report_totals.issue_item_ratio }}</strong></span>
+    <span title="认可结论数 ÷（认可结论数 + 不认可结论数）；已提交反馈在报告过滤或折叠后仍计入统计">整体结论认可率<strong data-report-count="conclusion_acceptance_rate">{{ report_totals.conclusion_acceptance_rate }}</strong></span>
+    <span>复核覆盖率<strong data-report-count="review_coverage_rate">{{ report_totals.review_coverage_rate }}</strong></span>
     <span>已忽略误报<strong data-report-count="suppressed">{{ report_totals.suppressed or 0 }}</strong></span>
     <span>合计<strong data-report-count="total">{{ report_totals.total }}</strong></span>
   </div>
@@ -225,14 +226,7 @@
             </td>
             {% endfor %}
             <td class="report-status-cell">
-              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} {{ REPORT_ITEM_TYPE_LABEL }}">
-                {% for type, label in report_item_types.items() %}
-                <label class="report-radio-option report-radio-option-{{ type }}">
-                  <input type="radio" name="report-item-type-{{ item.id }}" value="{{ type }}" data-report-item-type data-saved-value="{{ item.type }}" aria-label="{{ label }}" {{ "checked" if item.type == type else "" }} {{ "disabled" if controls_disabled else "" }}>
-                  <span>{{ label }}</span>
-                </label>
-                {% endfor %}
-              </div>
+              <span class="report-item-type-badge">{{ item.type_label }}</span>
             </td>
             <td class="report-acceptance-cell">
               <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">

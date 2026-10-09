@@ -1,7 +1,6 @@
 from flask import flash, redirect, render_template, request, url_for
 
 from app.contracts.task_types import DOCUMENT_TASK_TYPE, VIDEO_TASK_TYPE
-from app.reporting.constants import REPORT_ITEM_TYPES
 from app.reporting.service import (
     _report_item_fields_for_task,
     _report_item_totals,
@@ -149,7 +148,6 @@ def register_admin_tasks_routes(app):
             task=task,
             results=results,
             report_totals=_report_item_totals(results),
-            report_item_types=REPORT_ITEM_TYPES,
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
             media_report=_uses_compact_media_report(task["task_type"]),
             video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,
