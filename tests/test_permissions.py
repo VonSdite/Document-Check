@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -190,10 +191,8 @@ class UserPermissionTest(unittest.TestCase):
         )
         self.assertIsNotNone(soup.select_one('nav a[href="/admin/permissions"]'))
         self.assertIsNone(soup.select_one("[data-permission-form] button"))
-        self.assertEqual(
-            len(soup.select("[data-permission-status][role='status']")),
-            len(soup.select("[data-permission-user]")),
-        )
+        self.assertIsNone(soup.select_one("[data-permission-status]"))
+        self.assertEqual(len(soup.select(".permission-table th")), 6)
         self.assertIsNone(soup.select_one('input[name="permissions"][disabled]'))
         self.assertIsNone(soup.select_one(".topbar-account a"))
         for row in soup.select("[data-permission-user]"):
@@ -215,6 +214,98 @@ class UserPermissionTest(unittest.TestCase):
         )
         page = self.root.get("/admin/permissions?source=ip&keyword=办公室")
         self.assertIn('data-permission-user="ip:10.0.0.8"', page.text)
+
+    def test_user_pagination_preserves_filters_and_uses_shared_page_controls(self):
+        with self.app.app_context():
+            for index in range(61):
+                register_subject(f"cookie_session:permission-user-{index:03d}")
+            register_subject("cookie_session:unrelated-user")
+            register_subject("ip:10.0.0.8")
+        for per_page, page, expected_page, pages, rows in (
+            (20, 2, 2, 4, 20),
+            (50, 2, 2, 2, 11),
+            (100, 2, 1, 1, 61),
+            (20, 999, 4, 4, 1),
+            (999, 2, 2, 4, 20),
+        ):
+            with self.subTest(per_page=per_page, page=page):
+                response = self.root.get(
+                    "/admin/permissions",
+                    query_string={
+                        "source": "cookie_session",
+                        "keyword": "permission-user-",
+                        "per_page": per_page,
+                        "page": page,
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.text, "html.parser")
+                self.assertEqual(len(soup.select("[data-permission-user]")), rows)
+                size = per_page if per_page in (20, 50, 100) else 20
+                filters = {
+                    "source": "cookie_session",
+                    "keyword": "permission-user-",
+                }
+                size_form = soup.select_one(".pagination .page-size-form")
+                jump_form = soup.select_one(".pagination .page-jump-form")
+                for form in (size_form, jump_form):
+                    self.assertEqual(form["action"], "/admin/permissions")
+                    for name, value in filters.items():
+                        self.assertEqual(
+                            form.select_one(f'input[name="{name}"]')["value"], value
+                        )
+                self.assertEqual(
+                    size_form.select_one('input[name="page"]')["value"], "1"
+                )
+                select = size_form.select_one("[data-page-size-select]")
+                self.assertEqual(
+                    [option["value"] for option in select.select("option")],
+                    ["20", "50", "100"],
+                )
+                self.assertEqual(
+                    select.select_one("option[selected]")["value"], str(size)
+                )
+                page_input = jump_form.select_one('input[name="page"]')
+                self.assertEqual(page_input["value"], str(expected_page))
+                self.assertEqual(page_input["max"], str(pages))
+                self.assertEqual(
+                    jump_form.select_one('input[name="per_page"]')["value"], str(size)
+                )
+                self.assertIsNone(
+                    soup.select_one('.filter-bar select[name="per_page"]')
+                )
+                self.assertEqual(
+                    soup.select_one('.filter-bar input[name="per_page"]')["value"],
+                    str(size),
+                )
+                self.assertEqual(
+                    soup.select_one(".pagination-summary > span").text, "共 61 条"
+                )
+                links = soup.select(".pagination-controls a")
+                for link, destination in zip(
+                    links, (max(1, expected_page - 1), min(pages, expected_page + 1))
+                ):
+                    self.assertEqual(
+                        parse_qs(urlparse(link["href"]).query),
+                        {
+                            "source": [filters["source"]],
+                            "keyword": [filters["keyword"]],
+                            "per_page": [str(size)],
+                            "page": [str(destination)],
+                        },
+                    )
+        response = self.root.get("/admin/permissions?keyword=missing-user&page=999")
+        soup = BeautifulSoup(response.text, "html.parser")
+        self.assertEqual(soup.select_one(".pagination-summary > span").text, "共 0 条")
+        self.assertEqual(
+            soup.select_one('.page-jump-form input[name="page"]')["max"], "1"
+        )
+        self.assertTrue(
+            all(
+                "disabled" in link["class"]
+                for link in soup.select(".pagination-controls a")
+            )
+        )
 
     def test_root_can_grant_replace_and_revoke_without_losing_its_session(self):
         self.client.get("/")

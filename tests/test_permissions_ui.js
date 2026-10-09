@@ -10,9 +10,9 @@ const settle = () => new Promise(setImmediate);
 
 function createUi(initial = [[]]) {
   const requests = [];
+  const toasts = [];
   const windowEvents = {};
   const rows = initial.map((selected, index) => {
-    const status = { textContent: "", className: "muted" };
     const choices = codes.map((value) => ({
       name: "permissions", value, type: "checkbox",
       checked: selected.includes(value), disabled: false, events: {},
@@ -26,11 +26,10 @@ function createUi(initial = [[]]) {
         { name: "subject", value: `ip:10.0.0.${index + 1}`, type: "hidden" },
         { name: "csrf_token", value: "page-token", type: "hidden" },
       ],
-      querySelector() { return status; },
       addEventListener(type, listener) { this.events[type] = listener; },
     };
     return {
-      form, status, choices,
+      form, choices,
       checked() { return choices.filter((input) => input.checked).map((input) => input.value); },
       change(value, checked) {
         const input = choices.find((choice) => choice.value === value);
@@ -55,12 +54,13 @@ function createUi(initial = [[]]) {
     },
     window: { addEventListener(type, listener) { windowEvents[type] = listener; } },
     FormData,
+    showToast(message, category) { toasts.push({ message, category }); },
     fetch(url, options) {
       return new Promise((resolve, reject) => requests.push({ url, ...options, resolve, reject }));
     },
   });
   return {
-    rows, requests,
+    rows, requests, toasts,
     leave() {
       const event = { prevented: false, preventDefault() { this.prevented = true; } };
       windowEvents.beforeunload(event);
@@ -88,11 +88,11 @@ test("checking manage includes view and saves immediately with the page token", 
   assert.deepEqual(request.body.getAll("permissions"), row.checked());
   assert.deepEqual(request.body.getAll("subject"), ["ip:10.0.0.1"]);
   assert.deepEqual(request.body.getAll("csrf_token"), ["page-token"]);
-  assert.equal(row.status.textContent, "保存中…");
+  assert.equal(row.form.dataset.saving, "true");
   assert.equal(ui.leave(), true);
   saved(request);
   await settle();
-  assert.equal(row.status.textContent, "已保存");
+  assert.deepEqual(ui.toasts, []);
   assert.equal(ui.leave(), false);
 });
 
@@ -133,11 +133,11 @@ test("rapid clicks serialize saves and stale responses preserve the latest choic
   assert.equal(ui.requests.length, 2);
   assert.deepEqual(row.checked(), ["stats.view_all"]);
   assert.deepEqual(ui.requests[1].body.getAll("permissions"), ["stats.view_all"]);
-  assert.equal(row.status.textContent, "保存中…");
+  assert.equal(row.form.dataset.saving, "true");
   saved(ui.requests[1]);
   await settle();
   assert.deepEqual(row.checked(), ["stats.view_all"]);
-  assert.equal(row.status.textContent, "已保存");
+  assert.deepEqual(ui.toasts, []);
 });
 
 test("failed saves restore the confirmed choices and allow another change", async (t) => {
@@ -157,14 +157,15 @@ test("failed saves restore the confirmed choices and allow another change", asyn
       });
       await settle();
       assert.deepEqual(row.checked(), ["rules.manage"]);
-      assert.match(row.status.textContent, /保存失败/);
-      assert.equal(row.status.className, "danger");
+      assert.equal(ui.toasts.length, 1);
+      assert.match(ui.toasts[0].message, /保存失败/);
+      assert.equal(ui.toasts[0].category, "error");
       assert.equal(ui.leave(), false);
       row.change("stats.view_all", true);
       saved(ui.requests[1]);
       await settle();
       assert.deepEqual(row.checked(), ["stats.view_all", "rules.manage"]);
-      assert.equal(row.status.textContent, "已保存");
+      assert.equal(ui.toasts.length, 1);
     });
   }
 });
@@ -180,7 +181,7 @@ test("a failed earlier request still saves the newer queued selection", async ()
   assert.deepEqual(ui.requests[1].body.getAll("permissions"), ["rules.manage"]);
   saved(ui.requests[1]);
   await settle();
-  assert.equal(row.status.textContent, "已保存");
+  assert.deepEqual(ui.toasts, []);
   assert.deepEqual(row.checked(), ["rules.manage"]);
 });
 
@@ -193,8 +194,8 @@ test("different user rows save independently", async () => {
   assert.deepEqual(ui.requests[1].body.getAll("subject"), ["ip:10.0.0.2"]);
   saved(ui.requests[1]);
   await settle();
-  assert.equal(ui.rows[0].status.textContent, "保存中…");
-  assert.equal(ui.rows[1].status.textContent, "已保存");
+  assert.equal(ui.rows[0].form.dataset.saving, "true");
+  assert.equal(ui.rows[1].form.dataset.saving, undefined);
   saved(ui.requests[0]);
   await settle();
   assert.deepEqual(ui.rows[0].checked(), ["tasks.view_all"]);

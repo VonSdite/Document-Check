@@ -7,7 +7,7 @@
   <title>{% block title %}文档智能门禁{% endblock %}</title>
   <script src="{{ url_for('static', filename='auth.js', v='20260915-2') }}"></script>
   {% block extra_head %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20261009-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20261009-2') }}">
   {{ local_frontend_injection }}
 </head>
 <body>
@@ -70,8 +70,8 @@
     {% block content %}{% endblock %}
 {% if not list_partial %}
   </main>
-  <script src="{{ url_for('static', filename='app.js', v='20260915-1') }}"></script>
-  <script src="{{ url_for('static', filename='task-list.js', v='20261009-1') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20261009-1') }}"></script>
+  <script src="{{ url_for('static', filename='task-list.js', v='20261009-2') }}"></script>
   <script src="{{ url_for('static', filename='table-resize.js') }}"></script>
 </body>
 </html>

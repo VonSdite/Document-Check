@@ -1,6 +1,12 @@
 let activeConfirmPopover = null;
 let activeConfirmAnchor = null;
 
+document.addEventListener("change", (event) => {
+  if (event.target instanceof HTMLSelectElement && event.target.matches("[data-page-size-select]")) {
+    event.target.form?.requestSubmit();
+  }
+});
+
 function closeConfirmPopover() {
   if (!activeConfirmPopover) {
     return;

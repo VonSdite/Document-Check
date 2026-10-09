@@ -448,10 +448,6 @@
     if (form.matches("[data-task-filters]")) url.searchParams.set("page", "1");
     navigateTaskList(url);
   });
-  document.addEventListener("change", (event) => {
-    if (event.target.matches("[data-page-size-select]"))
-      event.target.form.requestSubmit();
-  });
   document.addEventListener("click", (event) => {
     if (event.target.closest("[data-manual-task-refresh]")) {
       runTaskListRefresh({ full: true, force: true });

@@ -4429,8 +4429,6 @@ body.table-column-resize-active * {
 .task-list-feedback { color: var(--muted); font-size: 12px; }
 .task-list-feedback:empty { display: none; }
 @keyframes task-refresh-spin { to { transform: rotate(360deg); } }
-.permission-filter { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
-.permission-search { flex: 1; min-width: 220px; }
 .permission-table { min-width: 900px; }
 .permission-table th, .permission-choice { text-align: center; }
 .permission-table th:first-child { text-align: left; }

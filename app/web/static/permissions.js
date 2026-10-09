@@ -3,16 +3,11 @@ document.querySelectorAll("[data-permission-form]").forEach((form) => {
   const viewAll = choices.find((input) => input.value === "tasks.view_all");
   const manageAll = choices.find((input) => input.value === "tasks.manage_all");
   if (!viewAll || !manageAll) return;
-  const status = form.querySelector("[data-permission-status]");
   let saved = choices.filter((input) => input.checked).map((input) => input.value);
   let saving = false;
   let pending = false;
   const apply = (permissions) => {
     choices.forEach((input) => { input.checked = permissions.includes(input.value); });
-  };
-  const showStatus = (message, error = false) => {
-    status.textContent = message;
-    status.className = error ? "danger" : "muted";
   };
   const save = async () => {
     pending = true;
@@ -21,7 +16,6 @@ document.querySelectorAll("[data-permission-form]").forEach((form) => {
     form.dataset.saving = "true";
     while (pending) {
       pending = false;
-      showStatus("保存中…");
       try {
         const response = await fetch(form.action, {
           method: "POST",
@@ -34,12 +28,11 @@ document.querySelectorAll("[data-permission-form]").forEach((form) => {
         saved = result.permissions;
         if (!pending) {
           apply(saved);
-          showStatus("已保存");
         }
       } catch {
         if (!pending) {
           apply(saved);
-          showStatus("保存失败，请刷新后重试", true);
+          showToast("保存失败，请刷新后重试", "error");
         }
       }
     }

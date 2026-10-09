@@ -1,7 +1,8 @@
 {% extends "base.html" %}
+{% import "_task_pagination.html" as table_pagination %}
 {% block title %}用户权限 - 文档智能门禁{% endblock %}
 {% block extra_head %}
-<script src="{{ url_for('static', filename='permissions.js', v='20261009-3') }}" defer></script>
+<script src="{{ url_for('static', filename='permissions.js', v='20261009-4') }}" defer></script>
 {% endblock %}
 {% block content %}
 <section class="page-title">
@@ -11,7 +12,8 @@
   </div>
 </section>
 <section class="panel">
-  <form method="get" class="permission-filter">
+  <form method="get" class="filter-bar">
+    <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
     <label>用户来源
       <select name="source">
         <option value="">全部来源</option>
@@ -19,17 +21,10 @@
         <option value="cookie_session" {{ 'selected' if source == 'cookie_session' else '' }}>统一登录用户</option>
       </select>
     </label>
-    <label class="permission-search">用户
+    <label>用户
       <input name="keyword" value="{{ keyword }}" placeholder="姓名、工号、IP 或用户 ID">
     </label>
-    <label>每页条数
-      <select name="per_page">
-        {% for option in pagination.per_page_options %}
-        <option value="{{ option }}" {{ 'selected' if option == pagination.per_page else '' }}>{{ option }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <button type="submit" class="primary-button">筛选</button>
+    <button type="submit" class="secondary-button">筛选</button>
   </form>
   {% if users %}
   <div class="table-wrap">
@@ -41,21 +36,14 @@
           {% for code, permission in permissions.items() %}
           <th title="{{ permission.description }}">{{ permission.label }}</th>
           {% endfor %}
-          <th class="right">保存状态</th>
         </tr>
       </thead>
       <tbody>
         {% for user in users %}
         {% set form_id = 'permission-user-' ~ loop.index %}
         <tr data-permission-user="{{ user.subject }}">
-          <td><strong>{{ user.label }}</strong><div class="subline">{{ user.subject }}</div></td>
-          <td>{{ 'IP' if user.subject.startswith('ip:') else '统一登录' }}</td>
-          {% for code, permission in permissions.items() %}
-          <td class="permission-choice">
-            <input type="checkbox" form="{{ form_id }}" name="permissions" value="{{ code }}" aria-label="{{ user.label }}：{{ permission.label }}" {{ 'checked' if code in user.permissions else '' }}>
-          </td>
-          {% endfor %}
-          <td class="right">
+          <td>
+            <strong>{{ user.label }}</strong><div class="subline">{{ user.subject }}</div>
             <form id="{{ form_id }}" method="post" data-permission-form>
               <input type="hidden" name="subject" value="{{ user.subject }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -63,9 +51,14 @@
               <input type="hidden" name="keyword" value="{{ keyword }}">
               <input type="hidden" name="page" value="{{ pagination.page }}">
               <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
-              <span class="muted" data-permission-status role="status" aria-live="polite"></span>
             </form>
           </td>
+          <td>{{ 'IP' if user.subject.startswith('ip:') else '统一登录' }}</td>
+          {% for code, permission in permissions.items() %}
+          <td class="permission-choice">
+            <input type="checkbox" form="{{ form_id }}" name="permissions" value="{{ code }}" aria-label="{{ user.label }}：{{ permission.label }}" {{ 'checked' if code in user.permissions else '' }}>
+          </td>
+          {% endfor %}
         </tr>
         {% endfor %}
       </tbody>
@@ -74,13 +67,6 @@
   {% else %}
   <div class="empty-state compact"><h3>暂无匹配用户</h3></div>
   {% endif %}
-  <nav class="pagination" aria-label="用户分页">
-    <span>共 {{ pagination.total }} 位用户</span>
-    <div class="pagination-controls">
-      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('admin_permissions', source=source, keyword=keyword, per_page=pagination.per_page, page=pagination.prev_page) }}">上一页</a>
-      <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
-      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('admin_permissions', source=source, keyword=keyword, per_page=pagination.per_page, page=pagination.next_page) }}">下一页</a>
-    </div>
-  </nav>
+  {{ table_pagination.render('admin_permissions', pagination, filters={'source': source, 'keyword': keyword}, aria_label='用户分页') }}
 </section>
 {% endblock %}
