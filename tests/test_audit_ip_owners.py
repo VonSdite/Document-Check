@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from scripts.audit_ip_owners import (
@@ -109,7 +110,7 @@ class AuditIpOwnersTest(unittest.TestCase):
             self.assertEqual(len(self._table_rows(database, "user_model_configs")), 1)
 
     def _create_database(self, database: Path):
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database)) as db, db:
             db.executescript(
                 """
                 CREATE TABLE tasks (
@@ -208,7 +209,7 @@ class AuditIpOwnersTest(unittest.TestCase):
             )
 
     def _table_rows(self, database: Path, table: str):
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database)) as db, db:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute(f"SELECT * FROM {table}")]
 
@@ -216,7 +217,7 @@ class AuditIpOwnersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database = Path(temp_dir) / "document_check.sqlite3"
             self._create_database(database)
-            with sqlite3.connect(database) as db:
+            with closing(sqlite3.connect(database)) as db, db:
                 db.execute(
                     """
                     INSERT INTO tasks (

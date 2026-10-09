@@ -54,10 +54,11 @@ from app.tasks.supervisor import TaskSupervisor
 class TaskExecutionTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        root_dir = Path(self.temp_dir.name).resolve()
         self.app = Flask(__name__)
-        self.app.config["DATABASE"] = str(Path(self.temp_dir.name) / "test.sqlite3")
-        self.app.config["UPLOAD_FOLDER"] = str(Path(self.temp_dir.name) / "uploads")
-        self.app.config["IMAGE_FOLDER"] = str(Path(self.temp_dir.name) / "images")
+        self.app.config["DATABASE"] = str(root_dir / "test.sqlite3")
+        self.app.config["UPLOAD_FOLDER"] = str(root_dir / "uploads")
+        self.app.config["IMAGE_FOLDER"] = str(root_dir / "images")
         self.app.config["NETWORK"] = {
             "proxy_mode": "direct",
             "proxy": "",

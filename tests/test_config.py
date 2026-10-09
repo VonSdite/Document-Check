@@ -500,6 +500,7 @@ class ProviderConfigTest(unittest.TestCase):
                     return_value=Path(temp_dir),
                 ),
                 patch("app.infrastructure.runtime._configure_logging"),
+                patch("app.bootstrap.factory.configure_access_logging"),
             ):
                 created_app = create_app()
             config = load_local_config(Path(temp_dir))
@@ -539,6 +540,7 @@ class ProviderConfigTest(unittest.TestCase):
                     return_value=Path(temp_dir),
                 ),
                 patch("app.infrastructure.runtime._configure_logging"),
+                patch("app.bootstrap.factory.configure_access_logging"),
             ):
                 created_app = create_app()
             response = created_app.test_client().get("/")

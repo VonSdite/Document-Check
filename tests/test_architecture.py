@@ -205,7 +205,7 @@ class ModuleArchitectureTest(unittest.TestCase):
                 routes, json.loads((FIXTURES / "http_routes.json").read_text())
             )
             self.assertEqual(Path(app.static_folder), PROJECT_ROOT / "app/web/static")
-            self.assertEqual(app.config["ROOT_DIR"], Path(root))
+            self.assertEqual(app.config["ROOT_DIR"], Path(root).resolve())
             with app.app_context():
                 schema = [
                     list(row)
