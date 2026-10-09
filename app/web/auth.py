@@ -39,6 +39,27 @@ def register_auth_routes(app):
     admin_prefix = app.config["ADMIN_URL"]
 
     @app.before_request
+    def require_superadmin_for_console():
+        if (
+            request.endpoint
+            and (
+                request.path == admin_prefix
+                or request.path.startswith(f"{admin_prefix}/")
+            )
+            and request.endpoint != "admin_login"
+            and not is_superadmin()
+        ):
+            if request.endpoint != "admin_dashboard" and (
+                current_permissions()
+                or request.is_json
+                or _wants_json_response()
+                or request.method not in {"GET", "HEAD", "OPTIONS"}
+            ):
+                abort(403, description="此功能仅限超级管理员使用。")
+            return redirect(url_for("admin_login"))
+        return None
+
+    @app.before_request
     def require_cookie_session_login():
         if not _cookie_session_mode_enabled() or not _needs_cookie_session_login(
             request.endpoint
@@ -262,12 +283,6 @@ def permission_required(permission: str):
             except AuthenticationRequired:
                 return _login_required_response()
             if not has_permission(permission):
-                if (
-                    not _is_user_endpoint(request.endpoint)
-                    and not current_permissions()
-                    and not (request.is_json or _wants_json_response())
-                ):
-                    return redirect(url_for("admin_login"))
                 abort(403, description="当前用户未获得此管理权限。")
             return view(*args, **kwargs)
 
@@ -280,7 +295,7 @@ def management_entry_endpoint() -> str:
     if has_permission("stats.view_all"):
         return "admin_dashboard" if is_superadmin() else "user_overview"
     if has_permission("tasks.view_all"):
-        return "admin_tasks"
+        return "admin_tasks" if is_superadmin() else "user_all_tasks"
     if has_permission("rules.manage"):
-        return "admin_rules"
+        return "admin_rules" if is_superadmin() else "user_rules"
     return "user_tasks"

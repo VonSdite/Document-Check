@@ -11,7 +11,7 @@
   {% if task.status in ["completed", "partial", "failed", "canceled"] %}
   <div class="report-export-actions" aria-label="报告操作">
     {% if task.status in ["completed", "partial"] %}
-    <a class="primary-button report-export-button" href="{{ url_for('admin_export_task' if mode == 'admin' else 'user_export_task', task_id=task.id) }}">
+    <a class="primary-button report-export-button" href="{{ url_for(task_endpoint('export_task'), task_id=task.id) }}">
       <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 3v11"></path>
         <path d="m7 10 5 5 5-5"></path>
@@ -19,7 +19,7 @@
       </svg>
       <span>导出 HTML</span>
     </a>
-    <a class="primary-button report-export-button" href="{{ url_for('admin_export_task_excel' if mode == 'admin' else 'user_export_task_excel', task_id=task.id) }}">
+    <a class="primary-button report-export-button" href="{{ url_for(task_endpoint('export_task_excel'), task_id=task.id) }}">
       <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <rect x="4" y="3" width="16" height="18" rx="2"></rect>
         <path d="M8 8h8M8 12h8M8 16h3M13 16h3"></path>
@@ -27,7 +27,7 @@
       <span>导出 EXCEL</span>
     </a>
     {% if task_editable %}
-    <form class="report-import-form" method="post" enctype="multipart/form-data" action="{{ url_for('admin_import_task_excel' if mode == 'admin' else 'user_import_task_excel', task_id=task.id) }}" data-prevent-double-submit="true">
+    <form class="report-import-form" method="post" enctype="multipart/form-data" action="{{ url_for(task_endpoint('import_task_excel'), task_id=task.id) }}" data-prevent-double-submit="true">
       <input class="report-import-input" name="report_excel" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-report-import-input required>
       <button class="primary-button report-export-button report-import-button" type="button" data-report-import-trigger>
         <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -41,7 +41,7 @@
     {% endif %}
     {% endif %}
     {% if task_editable and task.status in ["partial", "failed", "canceled"] %}
-    <form class="report-import-form" method="post" action="{{ url_for('admin_retry_task' if mode == 'admin' else 'user_retry_task', task_id=task.id) }}" data-prevent-double-submit="true">
+    <form class="report-import-form" method="post" action="{{ url_for(task_endpoint('retry_task'), task_id=task.id) }}" data-prevent-double-submit="true">
       <input type="hidden" name="next" value="{{ task_detail_url }}">
       <button class="primary-button report-export-button" type="submit">
         <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -80,7 +80,7 @@
       <dt>原文件</dt>
       <dd>
         {% if source_files_available %}
-        <a class="source-file-status source-file-status-available source-file-download-link" href="{{ url_for('admin_download_task_document' if mode == 'admin' else 'user_download_task_document', task_id=task.id) }}" title="下载原文件">
+        <a class="source-file-status source-file-status-available source-file-download-link" href="{{ url_for(task_endpoint('download_task_document'), task_id=task.id) }}" title="下载原文件">
           <svg class="source-file-download-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M12 3v11"></path>
             <path d="m7 10 5 5 5-5"></path>

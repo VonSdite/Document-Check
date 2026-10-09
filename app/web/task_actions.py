@@ -229,9 +229,7 @@ def _bulk_delete_tasks(task_loader, *, admin_created: bool):
     raw_task_ids = request.form.getlist("task_ids")
     if len(raw_task_ids) > MAX_BULK_DELETE_TASKS:
         flash(f"每次最多批量删除 {MAX_BULK_DELETE_TASKS} 个任务。", "error")
-        return redirect(
-            _task_action_redirect("admin_tasks" if admin_created else "user_tasks")
-        )
+        return redirect(_task_action_redirect(_task_list_endpoint(admin_created)))
 
     task_ids = []
     for raw_task_id in raw_task_ids:
@@ -244,9 +242,7 @@ def _bulk_delete_tasks(task_loader, *, admin_created: bool):
 
     if not task_ids:
         flash("请先选择需要删除的任务。", "error")
-        return redirect(
-            _task_action_redirect("admin_tasks" if admin_created else "user_tasks")
-        )
+        return redirect(_task_action_redirect(_task_list_endpoint(admin_created)))
 
     tasks = [task_loader(task_id) for task_id in task_ids]
     fallback_endpoint = _task_list_endpoint(admin_created, tasks[0]["task_type"])

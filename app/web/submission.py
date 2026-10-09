@@ -17,6 +17,7 @@ from app.tasks.submission import (
     submit_language_consistency_task,
     submit_video_task,
 )
+from app.web.common import _task_endpoint
 
 
 def _submission_input() -> TaskSubmission:
@@ -39,19 +40,13 @@ def _submission_response(result: SubmissionResult, *, admin_created: bool):
 def _task_list_endpoint(
     admin_created: bool, task_type: str | None = DOCUMENT_TASK_TYPE
 ) -> str:
-    if task_type == CONSISTENCY_TASK_TYPE:
-        return "admin_consistency" if admin_created else "user_consistency"
-    if task_type == LANGUAGE_CONSISTENCY_TASK_TYPE:
-        return (
-            "admin_language_consistency"
-            if admin_created
-            else "user_language_consistency"
-        )
-    if task_type == IMAGE_TASK_TYPE:
-        return "admin_images" if admin_created else "user_images"
-    if task_type == VIDEO_TASK_TYPE:
-        return "admin_videos" if admin_created else "user_videos"
-    return "admin_tasks" if admin_created else "user_tasks"
+    name = {
+        CONSISTENCY_TASK_TYPE: "consistency",
+        LANGUAGE_CONSISTENCY_TASK_TYPE: "language_consistency",
+        IMAGE_TASK_TYPE: "images",
+        VIDEO_TASK_TYPE: "videos",
+    }.get(task_type, "tasks")
+    return _task_endpoint(name) if admin_created else f"user_{name}"
 
 
 def create_task_for_identity(identity: UserIdentity, *, admin_created: bool):

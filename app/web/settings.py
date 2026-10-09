@@ -122,8 +122,13 @@ def register_settings_routes(app):
         return settings_response()
 
     @app.route(f"{admin_prefix}/rules", methods=["GET", "POST"])
-    @permission_required("rules.manage")
+    @admin_required
     def admin_rules():
+        return settings_response(rules_only=True)
+
+    @app.route("/rules", methods=["GET", "POST"])
+    @permission_required("rules.manage")
+    def user_rules():
         return settings_response(rules_only=True)
 
     def settings_response(rules_only=False):
@@ -651,4 +656,6 @@ def _ip_username_rows():
 
 
 def _settings_endpoint():
-    return "admin_rules" if request.endpoint == "admin_rules" else "admin_settings"
+    if request.endpoint in {"admin_rules", "user_rules"}:
+        return request.endpoint
+    return "admin_settings"

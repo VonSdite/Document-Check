@@ -1,3 +1,4 @@
+import io
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -5,11 +6,12 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
+from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.identity.permissions import ASSIGNABLE_PERMISSIONS, normalize_permissions
 from app.infrastructure.config import _normalize_auth
-from app.persistence.connection import get_db
+from app.persistence.connection import close_db, get_db
 from app.persistence.permissions import (
     register_subject,
     replace_subject_permissions,
@@ -17,6 +19,7 @@ from app.persistence.permissions import (
 )
 from app.persistence.schema import init_db
 from app.persistence.settings import get_setting, set_ip_username, sync_identity_profile
+from app.web import register_routes
 from tests import test_routes
 
 
@@ -168,6 +171,74 @@ class UserPermissionTest(unittest.TestCase):
         self.assertEqual(self.client.get("/admin").status_code, 200)
         self.assertEqual(self.client.get("/admin/settings").status_code, 200)
 
+    def test_all_console_routes_require_superadmin_even_with_all_user_grants(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            self.grant(*ASSIGNABLE_PERMISSIONS)
+            for rule in self.app.url_map.iter_rules():
+                if not rule.endpoint.startswith("admin_") or rule.endpoint in {
+                    "admin_login",
+                    "admin_dashboard",
+                }:
+                    continue
+                path = rule.rule.replace("<int:task_id>", "1").replace(
+                    "<media_id>", "missing"
+                )
+                for method in sorted(rule.methods):
+                    with self.subTest(
+                        cookie_mode=cookie_mode, path=path, method=method
+                    ):
+                        response = self.client.open(path, method=method)
+                        self.assertEqual(response.status_code, 403)
+                        self.assertEqual(response.headers["Cache-Control"], "no-store")
+            for path in (
+                "/admin/tasks",
+                "/admin/rules",
+                "/admin/settings",
+                "/admin/models",
+            ):
+                with self.subTest(cookie_mode=cookie_mode, superadmin_path=path):
+                    self.assertEqual(self.root.get(path).status_code, 200)
+
+    def test_custom_console_prefix_is_superadmin_only_and_user_paths_stay_independent(
+        self,
+    ):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            self.grant(*ASSIGNABLE_PERMISSIONS)
+            app = Flask(
+                __name__,
+                template_folder=self.app.template_folder,
+                static_folder=self.app.static_folder,
+            )
+            app.config.update(self.app.config, ADMIN_URL="/private/ops")
+            app.teardown_appcontext(close_db)
+            app.add_template_filter(self.app.jinja_env.filters["markdown"], "markdown")
+            register_routes(app)
+            client = app.test_client()
+            client.set_cookie("enterprise-ticket", "a")
+            for path in ("/all/tasks", "/rules", "/overview"):
+                with self.subTest(cookie_mode=cookie_mode, user_path=path):
+                    response = client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertNotIn("/private/ops", response.text)
+            self.assertEqual(client.get("/private/ops").location, "/private/ops/login")
+            self.assertEqual(client.get("/private/ops/tasks").status_code, 403)
+            self.assertEqual(client.get("/private/ops-extra").status_code, 404)
+            response = client.post(
+                "/private/ops/login", data={"username": "root", "password": "test-root"}
+            )
+            self.assertEqual(response.location, "/private/ops")
+            page = client.get("/private/ops/tasks")
+            self.assertEqual(page.status_code, 200)
+            soup = BeautifulSoup(page.text, "html.parser")
+            self.assertIsNotNone(
+                soup.select_one('nav.nav a[href="/private/ops/tasks"]')
+            )
+            self.assertIsNone(soup.select_one('nav.nav a[href="/all/tasks"]'))
+
     def test_ip_permissions_ignore_unconfigured_headers_and_use_configured_proxy_identity(
         self,
     ):
@@ -175,7 +246,7 @@ class UserPermissionTest(unittest.TestCase):
         for name in ("X-Real-IP", "X-Forwarded-For"):
             self.assertEqual(
                 self.client.get(
-                    "/admin/rules",
+                    "/rules",
                     headers={name: "10.0.0.8", "X-Requested-With": "fetch"},
                 ).status_code,
                 403,
@@ -183,14 +254,14 @@ class UserPermissionTest(unittest.TestCase):
         self.app.config["REAL_IP_HEADER"] = "X-Verified-IP"
         self.assertEqual(
             self.client.get(
-                "/admin/rules",
+                "/rules",
                 headers={"X-Verified-IP": "10.0.0.8", "X-Real-IP": "10.0.0.9"},
             ).status_code,
             200,
         )
         self.assertEqual(
             self.client.get(
-                "/admin/rules",
+                "/rules",
                 headers={
                     "X-Verified-IP": "invalid",
                     "X-Forwarded-For": "10.0.0.8",
@@ -203,7 +274,7 @@ class UserPermissionTest(unittest.TestCase):
         self.app.wsgi_app = ProxyFix(self.app.wsgi_app, x_for=1)
         self.assertEqual(
             self.client.get(
-                "/admin/rules", headers={"X-Forwarded-For": "10.0.0.8"}
+                "/rules", headers={"X-Forwarded-For": "10.0.0.8"}
             ).status_code,
             200,
         )
@@ -399,10 +470,10 @@ class UserPermissionTest(unittest.TestCase):
                 subject_permissions(self.subject),
                 {"tasks.view_all", "tasks.manage_all", "rules.manage"},
             )
-        self.assertEqual(self.client.get("/admin/tasks").status_code, 200)
+        self.assertEqual(self.client.get("/all/tasks").status_code, 200)
         self.assertEqual(self.save(self.subject, ["stats.view_all"]).status_code, 302)
         self.assertEqual(self.client.get("/overview").status_code, 200)
-        self.assertEqual(self.client.get("/admin/tasks").status_code, 403)
+        self.assertEqual(self.client.get("/all/tasks").status_code, 403)
         self.assertEqual(self.save(self.subject, []).status_code, 302)
         self.assertEqual(
             self.client.get(
@@ -491,16 +562,16 @@ class UserPermissionTest(unittest.TestCase):
                 self.cookie_mode()
             with self.subTest(cookie_mode=cookie_mode):
                 self.grant("tasks.view_all", "stats.view_all", "rules.manage")
-                for route in ("/", "/models", "/admin/tasks", "/admin/rules"):
+                for route in ("/", "/models", "/all/tasks", "/rules"):
                     soup = BeautifulSoup(self.client.get(route).text, "html.parser")
                     for href in (
                         "/overview",
-                        "/admin/tasks",
-                        "/admin/consistency",
-                        "/admin/language-consistency",
-                        "/admin/images",
-                        "/admin/videos",
-                        "/admin/rules",
+                        "/all/tasks",
+                        "/all/consistency",
+                        "/all/language-consistency",
+                        "/all/images",
+                        "/all/videos",
+                        "/rules",
                         "/models",
                     ):
                         self.assertIsNotNone(
@@ -511,11 +582,9 @@ class UserPermissionTest(unittest.TestCase):
                         soup.select_one('nav.nav a[href="/admin/permissions"]')
                     )
                 self.grant("rules.manage")
-                soup = BeautifulSoup(
-                    self.client.get("/admin/rules").text, "html.parser"
-                )
+                soup = BeautifulSoup(self.client.get("/rules").text, "html.parser")
                 self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
-                self.assertIsNone(soup.select_one('nav.nav a[href="/admin/tasks"]'))
+                self.assertIsNone(soup.select_one('nav.nav a[href="/all/tasks"]'))
                 self.assertIsNone(soup.select_one('nav.nav a[href="/overview"]'))
 
     def test_view_permission_reads_all_task_types_but_preserves_own_default_actions(
@@ -523,11 +592,11 @@ class UserPermissionTest(unittest.TestCase):
     ):
         self.grant("tasks.view_all")
         routes = (
-            ("document_check", "/admin/tasks"),
-            ("consistency_check", "/admin/consistency"),
-            ("language_consistency_check", "/admin/language-consistency"),
-            ("image_check", "/admin/images"),
-            ("video_check", "/admin/videos"),
+            ("document_check", "/all/tasks"),
+            ("consistency_check", "/all/consistency"),
+            ("language_consistency_check", "/all/language-consistency"),
+            ("image_check", "/all/images"),
+            ("video_check", "/all/videos"),
         )
         for task_type, route in routes:
             with self.subTest(task_type=task_type):
@@ -545,13 +614,116 @@ class UserPermissionTest(unittest.TestCase):
                 )
                 self.assertIsNone(soup.select_one(f'[data-task-id="{other}"] form'))
                 self.assertEqual(
-                    self.client.get(f"/admin/tasks/{other}").status_code, 200
+                    self.client.get(f"/all/tasks/{other}").status_code, 200
                 )
         own = self.fixture._insert_task()
-        self.assertEqual(
-            self.client.post(f"/admin/tasks/{own}/delete").status_code, 302
-        )
+        self.assertEqual(self.client.post(f"/all/tasks/{own}/delete").status_code, 302)
         self.assertEqual(self.client.get("/overview").status_code, 403)
+
+    def test_all_task_pages_and_refreshes_keep_user_links_in_both_identity_modes(self):
+        Path(self.app.config["UPLOAD_FOLDER"], "stored.txt").write_text(
+            "原始文件", encoding="utf-8"
+        )
+        routes = (
+            ("document_check", "/all/tasks"),
+            ("consistency_check", "/all/consistency"),
+            ("language_consistency_check", "/all/language-consistency"),
+            ("image_check", "/all/images"),
+            ("video_check", "/all/videos"),
+        )
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            self.grant(*ASSIGNABLE_PERMISSIONS)
+            for task_type, route in routes:
+                task = self.fixture._insert_task(task_type=task_type, status="partial")
+                for path in (route, f"{route}?_partial=1", f"/all/tasks/{task}"):
+                    with self.subTest(cookie_mode=cookie_mode, path=path):
+                        page = self.client.get(path)
+                        self.assertEqual(page.status_code, 200)
+                        self.assertEqual(page.headers["Cache-Control"], "no-store")
+                        self.assertNotIn("/admin", page.text)
+                        soup = BeautifulSoup(page.text, "html.parser")
+                        if urlparse(path).path == route:
+                            self.assertIsNotNone(
+                                soup.select_one(f'a[href="/all/tasks/{task}"]')
+                            )
+                            refresh = soup.select_one("[data-refresh-url]")
+                            self.assertEqual(
+                                urlparse(refresh["data-refresh-url"]).path,
+                                "/all/task-statuses",
+                            )
+                            for link in soup.select(".pagination-controls a"):
+                                self.assertEqual(urlparse(link["href"]).path, route)
+                        else:
+                            self.assertEqual(
+                                soup.select_one(".report-back-button")["href"], route
+                            )
+                refreshed = self.client.get(f"/all/tasks/{task}?_poll=1").json
+                self.assertNotIn("/admin", refreshed["html"])
+                self.assertIn(f"/all/tasks/{task}/export", refreshed["html"])
+
+    def test_all_task_submissions_and_action_redirects_keep_user_paths(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            self.grant("tasks.manage_all")
+            for path, destination in (
+                ("/all/tasks", "/all/tasks"),
+                ("/all/tasks/new", "/all/tasks"),
+                ("/all/consistency", "/all/consistency"),
+                ("/all/language-consistency", "/all/language-consistency"),
+                ("/all/images", "/all/images"),
+                ("/all/videos", "/all/videos"),
+                ("/all/tasks/bulk-delete", "/all/tasks"),
+            ):
+                with self.subTest(cookie_mode=cookie_mode, path=path):
+                    response = self.client.post(path)
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response.location, destination)
+            task = self.fixture._insert_task(task_type="image_check")
+            response = self.client.get(f"/all/tasks/{task}/document")
+            self.assertEqual(response.location, f"/all/tasks/{task}")
+            response = self.client.post(f"/all/tasks/{task}/import.xlsx")
+            self.assertEqual(response.location, f"/all/tasks/{task}")
+            response = self.client.post(f"/all/tasks/{task}/delete")
+            self.assertEqual(response.location, "/all/images")
+            model_id = self.fixture._configure_provider(self.subject)
+            with self.app.app_context():
+                check_id = (
+                    get_db()
+                    .execute(
+                        "SELECT id FROM check_items WHERE task_type = 'document_check' AND enabled = 1 LIMIT 1"
+                    )
+                    .fetchone()["id"]
+                )
+            response = self.client.post(
+                "/all/tasks",
+                data={
+                    "document": (io.BytesIO("待检查文档".encode("utf-8")), "检查.txt"),
+                    "checks": [str(check_id)],
+                    "model_id": model_id,
+                },
+            )
+            self.assertEqual(response.location, "/all/tasks")
+            with self.app.app_context():
+                task = (
+                    get_db()
+                    .execute(
+                        "SELECT owner_subject, status FROM tasks ORDER BY id DESC LIMIT 1"
+                    )
+                    .fetchone()
+                )
+                self.assertEqual(tuple(task), (self.subject, "queued"))
+
+    def test_all_task_upload_limit_redirects_to_same_user_page(self):
+        self.grant("tasks.view_all")
+        self.app.config["MAX_CONTENT_LENGTH"] = 1
+        response = self.client.post(
+            "/all/videos", data={"video": (io.BytesIO(b"video"), "test.mp4")}
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.location, "/all/videos")
 
     def test_view_only_report_has_readonly_reviews_and_covers_download_export_and_polling(
         self,
@@ -561,7 +733,7 @@ class UserPermissionTest(unittest.TestCase):
         Path(self.app.config["UPLOAD_FOLDER"], "stored.txt").write_text(
             "原始文件", encoding="utf-8"
         )
-        page = self.client.get(f"/admin/tasks/{task}")
+        page = self.client.get(f"/all/tasks/{task}")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertEqual(page.status_code, 200)
         self.assertEqual(page.headers["Cache-Control"], "no-store")
@@ -576,16 +748,16 @@ class UserPermissionTest(unittest.TestCase):
             "/model-output?state_only=1",
         ):
             with self.subTest(suffix=suffix):
-                response = self.client.get(f"/admin/tasks/{task}{suffix}")
+                response = self.client.get(f"/all/tasks/{task}{suffix}")
                 self.assertEqual(response.status_code, 200)
                 response.close()
-        progress = self.client.get(f"/admin/tasks/{task}?_poll=1").get_json()
+        progress = self.client.get(f"/all/tasks/{task}?_poll=1").get_json()
         self.assertFalse(progress["can_manage"])
         states = self.client.get(
-            f"/admin/tasks/{task}/model-output?state_only=1"
+            f"/all/tasks/{task}/model-output?state_only=1"
         ).get_json()
         self.assertFalse(states["can_manage"])
-        statuses = self.client.get(f"/admin/task-statuses?ids={task}").get_json()
+        statuses = self.client.get(f"/all/task-statuses?ids={task}").get_json()
         self.assertEqual(statuses["counts"], {})
         self.assertEqual([row["id"] for row in statuses["tasks"]], [task])
 
@@ -606,10 +778,10 @@ class UserPermissionTest(unittest.TestCase):
         ):
             with self.subTest(suffix=suffix):
                 self.assertEqual(
-                    self.client.post(f"/admin/tasks/{other}{suffix}").status_code, 403
+                    self.client.post(f"/all/tasks/{other}{suffix}").status_code, 403
                 )
         response = self.client.post(
-            "/admin/tasks/bulk-delete", data={"task_ids": [str(own), str(other)]}
+            "/all/tasks/bulk-delete", data={"task_ids": [str(own), str(other)]}
         )
         self.assertEqual(response.status_code, 403)
         with self.app.app_context():
@@ -625,13 +797,13 @@ class UserPermissionTest(unittest.TestCase):
     ):
         self.grant("tasks.manage_all")
         task = self.report_task()
-        page = self.client.get(f"/admin/tasks/{task}")
+        page = self.client.get(f"/all/tasks/{task}")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertIsNotNone(soup.select_one("[data-report-acceptance-status]"))
         self.assertIsNotNone(soup.select_one("[data-report-import-trigger]"))
         item = soup.select_one("[data-report-item]")
         response = self.client.post(
-            f"/admin/tasks/{task}/report-items",
+            f"/all/tasks/{task}/report-items",
             json={
                 "result_code": item["data-result-code"],
                 "item_id": item["data-item-id"],
@@ -641,11 +813,11 @@ class UserPermissionTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         queued = self.fixture._insert_task(ip="10.0.0.9", status="queued")
         self.assertEqual(
-            self.client.post(f"/admin/tasks/{queued}/cancel").status_code, 302
+            self.client.post(f"/all/tasks/{queued}/cancel").status_code, 302
         )
         self.assertEqual(
             self.client.post(
-                "/admin/tasks/bulk-delete", data={"task_ids": [str(task), str(queued)]}
+                "/all/tasks/bulk-delete", data={"task_ids": [str(task), str(queued)]}
             ).status_code,
             302,
         )
@@ -657,18 +829,16 @@ class UserPermissionTest(unittest.TestCase):
     def test_revoking_management_updates_detail_revision_and_output_flags(self):
         self.grant("tasks.manage_all")
         task = self.report_task()
-        before = self.client.get(f"/admin/tasks/{task}?_poll=1").get_json()
+        before = self.client.get(f"/all/tasks/{task}?_poll=1").get_json()
         self.assertTrue(before["can_manage"])
         self.grant("tasks.view_all")
         after = self.client.get(
-            f"/admin/tasks/{task}?_poll=1&revision={before['revision']}"
+            f"/all/tasks/{task}?_poll=1&revision={before['revision']}"
         ).get_json()
         self.assertFalse(after["can_manage"])
         self.assertIn("html", after)
         self.assertNotIn("data-report-acceptance-status", after["html"])
-        self.assertEqual(
-            self.client.post(f"/admin/tasks/{task}/delete").status_code, 403
-        )
+        self.assertEqual(self.client.post(f"/all/tasks/{task}/delete").status_code, 403)
         self.grant()
         for suffix in (
             "",
@@ -679,7 +849,7 @@ class UserPermissionTest(unittest.TestCase):
         ):
             self.assertEqual(
                 self.client.get(
-                    f"/admin/tasks/{task}{suffix}",
+                    f"/all/tasks/{task}{suffix}",
                     headers={"X-Requested-With": "fetch"},
                 ).status_code,
                 403,
@@ -701,11 +871,11 @@ class UserPermissionTest(unittest.TestCase):
                 self.assertIsNotNone(
                     soup.select_one('nav.nav a.active[href="/overview"]')
                 )
-                self.assertIsNone(soup.select_one('nav a[href="/admin/tasks"]'))
+                self.assertIsNone(soup.select_one('nav a[href="/all/tasks"]'))
                 self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
                 self.assertIsNone(soup.select_one('nav a[href="/admin/permissions"]'))
                 self.assertIsNone(soup.select_one('form[action="/admin/logout"]'))
-                self.assertEqual(self.client.get("/admin/tasks").status_code, 403)
+                self.assertEqual(self.client.get("/all/tasks").status_code, 403)
                 self.assertEqual(self.client.get("/admin/overview").status_code, 403)
                 self.assertEqual(
                     soup.select_one(".overview-filter")["action"], "/overview"
@@ -771,7 +941,7 @@ class UserPermissionTest(unittest.TestCase):
         self,
     ):
         self.grant("rules.manage")
-        page = self.client.get("/admin/rules")
+        page = self.client.get("/rules")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertEqual(page.status_code, 200)
         self.assertIsNotNone(soup.select_one("[data-prompt-tabs]"))
@@ -781,11 +951,11 @@ class UserPermissionTest(unittest.TestCase):
                 soup.select_one(f'input[name="action"][value="{action}"]')
             )
             self.assertEqual(
-                self.client.post("/admin/rules", data={"action": action}).status_code,
+                self.client.post("/rules", data={"action": action}).status_code,
                 403,
             )
         response = self.client.post(
-            "/admin/rules",
+            "/rules",
             data={
                 "action": "create_check_item",
                 "task_type": "document_check",
@@ -795,7 +965,7 @@ class UserPermissionTest(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/admin/rules")
+        self.assertEqual(response.headers["Location"], "/rules")
         with self.app.app_context():
             self.assertIsNotNone(
                 get_db()
@@ -822,11 +992,11 @@ class UserPermissionTest(unittest.TestCase):
             self.assertEqual(
                 self.client.post(route, json={"task_ids": [1]}).status_code, 403
             )
-        page = self.client.get("/admin/tasks")
+        page = self.client.get("/all/tasks")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertIsNone(soup.select_one('nav a[href="/admin/permissions"]'))
         self.assertIsNone(soup.select_one('nav a[href="/admin/settings"]'))
-        self.assertIsNotNone(soup.select_one('nav a[href="/admin/rules"]'))
+        self.assertIsNotNone(soup.select_one('nav a[href="/rules"]'))
 
     def test_management_mutations_reject_cross_site_browser_requests(self):
         self.grant("tasks.manage_all", "rules.manage")
@@ -839,13 +1009,13 @@ class UserPermissionTest(unittest.TestCase):
             with self.subTest(headers=headers):
                 self.assertEqual(
                     self.client.post(
-                        f"/admin/tasks/{task}/cancel", headers=headers
+                        f"/all/tasks/{task}/cancel", headers=headers
                     ).status_code,
                     403,
                 )
                 self.assertEqual(
                     self.client.post(
-                        "/admin/rules",
+                        "/rules",
                         headers=headers,
                         data={
                             "action": "create_check_item",
@@ -869,7 +1039,7 @@ class UserPermissionTest(unittest.TestCase):
             )
         self.assertEqual(
             self.client.post(
-                f"/admin/tasks/{task}/cancel", headers={"Origin": "http://localhost"}
+                f"/all/tasks/{task}/cancel", headers={"Origin": "http://localhost"}
             ).status_code,
             302,
         )
@@ -877,12 +1047,12 @@ class UserPermissionTest(unittest.TestCase):
     def test_stats_grant_changes_list_metrics_and_polling_permissions(self):
         self.grant("tasks.view_all")
         task = self.fixture._insert_task(ip="10.0.0.9")
-        before = self.client.get(f"/admin/task-statuses?ids={task}").get_json()
+        before = self.client.get(f"/all/task-statuses?ids={task}").get_json()
         self.assertEqual(before["permission_signature"], "0:0")
         self.grant("tasks.view_all", "stats.view_all")
-        soup = BeautifulSoup(self.client.get("/admin/tasks").text, "html.parser")
+        soup = BeautifulSoup(self.client.get("/all/tasks").text, "html.parser")
         self.assertTrue(soup.select(".admin-metric-group"))
-        after = self.client.get(f"/admin/task-statuses?ids={task}").get_json()
+        after = self.client.get(f"/all/task-statuses?ids={task}").get_json()
         self.assertEqual(after["counts"]["tasks"], 1)
         self.assertEqual(after["permission_signature"], "0:1")
 
@@ -894,7 +1064,7 @@ class UserPermissionTest(unittest.TestCase):
         task = self.fixture._insert_task(
             owner_subject="cookie_session:b", owner_source="cookie_session"
         )
-        self.assertEqual(self.client.get(f"/admin/tasks/{task}").status_code, 200)
+        self.assertEqual(self.client.get(f"/all/tasks/{task}").status_code, 200)
         self.resolve.return_value = (
             {"user_id": "b", "username": "同 IP 用户", "_profile_version": 2},
             None,
@@ -902,7 +1072,7 @@ class UserPermissionTest(unittest.TestCase):
         self.client.set_cookie("enterprise-ticket", "b")
         self.assertEqual(
             self.client.get(
-                f"/admin/tasks/{task}", headers={"X-Requested-With": "fetch"}
+                f"/all/tasks/{task}", headers={"X-Requested-With": "fetch"}
             ).status_code,
             403,
         )
@@ -918,13 +1088,11 @@ class UserPermissionTest(unittest.TestCase):
         self.client.set_cookie("enterprise-ticket", "new-ticket")
         self.assertEqual(
             self.client.get(
-                f"/admin/tasks/{task}", environ_overrides={"REMOTE_ADDR": "10.0.0.8"}
+                f"/all/tasks/{task}", environ_overrides={"REMOTE_ADDR": "10.0.0.8"}
             ).status_code,
             200,
         )
-        self.assertEqual(
-            self.client.post(f"/admin/tasks/{task}/delete").status_code, 403
-        )
+        self.assertEqual(self.client.post(f"/all/tasks/{task}/delete").status_code, 403)
 
     def test_cookie_auth_failure_never_uses_ip_grants_and_root_can_still_manage_permissions(
         self,
@@ -933,7 +1101,7 @@ class UserPermissionTest(unittest.TestCase):
         self.grant(*ASSIGNABLE_PERMISSIONS, subject="ip:127.0.0.1")
         self.grant("rules.manage")
         self.resolve.return_value = (None, None)
-        for route in ("/admin/rules", "/admin/tasks", "/overview"):
+        for route in ("/rules", "/all/tasks", "/overview"):
             self.assertEqual(
                 self.client.get(
                     route, headers={"X-Requested-With": "fetch"}
@@ -971,13 +1139,13 @@ class UserPermissionTest(unittest.TestCase):
             )
         self.assertEqual(
             self.client.get(
-                "/admin/tasks", headers={"X-Requested-With": "fetch"}
+                "/all/tasks", headers={"X-Requested-With": "fetch"}
             ).status_code,
             403,
         )
         self.assertEqual(
             self.client.get(
-                "/admin/tasks",
+                "/all/tasks",
                 environ_overrides={"REMOTE_ADDR": "10.0.0.8"},
                 headers={"X-Requested-With": "fetch"},
             ).status_code,
@@ -986,7 +1154,7 @@ class UserPermissionTest(unittest.TestCase):
         self.grant("rules.manage", subject="ip:10.0.0.8")
         self.assertEqual(
             self.client.get(
-                "/admin/rules", environ_overrides={"REMOTE_ADDR": "10.0.0.8"}
+                "/rules", environ_overrides={"REMOTE_ADDR": "10.0.0.8"}
             ).status_code,
             200,
         )

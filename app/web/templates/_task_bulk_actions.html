@@ -8,7 +8,7 @@
   id="bulk-delete-tasks"
   class="bulk-task-form"
   method="post"
-  action="{{ url_for('admin_bulk_delete_tasks' if mode == 'admin' else 'user_bulk_delete_tasks') }}"
+  action="{{ url_for(task_endpoint('bulk_delete_tasks')) }}"
   data-bulk-delete-form
   data-confirm="确认删除选中的任务？排队中的任务将先取消，删除后不可恢复。"
 >

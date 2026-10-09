@@ -35,6 +35,7 @@ from app.web.common import (
     _current_relative_url,
     _max_upload_mb,
     _request_entity_too_large_redirect,
+    _task_endpoint,
 )
 from app.web.constants import STATUS_LABELS
 
@@ -44,6 +45,7 @@ FRONTEND_INJECTION_FILENAME = "frontend-injection.html"
 def register_presentation_routes(app):
     app.add_template_global(has_permission, "has_permission")
     app.add_template_global(can_manage_task, "can_manage_task")
+    app.add_template_global(_task_endpoint, "task_endpoint")
     app.add_template_global(STATUS_LABELS, "STATUS_LABELS")
 
     app.add_template_global(REPORT_ITEM_FIELDS, "REPORT_ITEM_FIELDS")
@@ -100,7 +102,8 @@ def register_presentation_routes(app):
     @app.after_request
     def include_user_profile(response):
         if request.endpoint and (
-            request.endpoint.startswith("admin_") or request.endpoint == "user_overview"
+            request.endpoint.startswith(("admin_", "user_all_"))
+            or request.endpoint in {"user_overview", "user_rules"}
         ):
             response.headers["Cache-Control"] = "no-store"
         identity = g.get("user_identity")

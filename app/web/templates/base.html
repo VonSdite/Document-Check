@@ -12,11 +12,13 @@
 </head>
 <body>
   {% set is_admin = (request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login') %}
+  {% set is_management = is_admin or (request.endpoint and request.endpoint.startswith('user_all_')) or request.endpoint == 'user_rules' %}
+  {% set all_tasks_nav_prefix = 'admin_' if is_superadmin else 'user_all_' %}
   {% set view_all_tasks = has_permission('tasks.view_all') %}
   {% set is_ip_users_page = request.endpoint == 'admin_settings' and request.args.get('tab') == 'ip_users' %}
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="{{ url_for(management_entry_endpoint) if is_admin else url_for('user_tasks') }}">
+      <a class="brand" href="{{ url_for(management_entry_endpoint) if is_management else url_for('user_tasks') }}">
         <span class="brand-mark">文</span>
         <span>
           <strong>文档智能门禁</strong>
@@ -26,11 +28,11 @@
         {% if has_permission('stats.view_all') %}
         <a href="{{ url_for('admin_dashboard' if is_superadmin else 'user_overview') }}" class="{{ 'active' if active_nav|default('') == 'overview' or request.endpoint in ['admin_dashboard', 'admin_overview', 'user_overview'] else '' }}" title="统计概览">概览</a>
         {% endif %}
-        <a href="{{ url_for('admin_tasks' if view_all_tasks else 'user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks', 'user_new_task'] else '' }}" title="单文档检查">单文档</a>
-        <a href="{{ url_for('admin_consistency' if view_all_tasks else 'user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档对照</a>
-        <a href="{{ url_for('admin_language_consistency' if view_all_tasks else 'user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_language_consistency'] else '' }}" title="跨语种文档一致性检查">跨语种</a>
-        <a href="{{ url_for('admin_images' if view_all_tasks else 'user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}" title="图片检查">图片</a>
-        <a href="{{ url_for('admin_videos' if view_all_tasks else 'user_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_videos'] else '' }}" title="视频检查">视频</a>
+        <a href="{{ url_for(all_tasks_nav_prefix ~ 'tasks' if view_all_tasks else 'user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_all_tasks', 'user_all_new_task', 'user_tasks', 'user_new_task'] else '' }}" title="单文档检查">单文档</a>
+        <a href="{{ url_for(all_tasks_nav_prefix ~ 'consistency' if view_all_tasks else 'user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_all_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档对照</a>
+        <a href="{{ url_for(all_tasks_nav_prefix ~ 'language_consistency' if view_all_tasks else 'user_language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_all_language_consistency', 'user_language_consistency'] else '' }}" title="跨语种文档一致性检查">跨语种</a>
+        <a href="{{ url_for(all_tasks_nav_prefix ~ 'images' if view_all_tasks else 'user_images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_all_images', 'user_images'] else '' }}" title="图片检查">图片</a>
+        <a href="{{ url_for(all_tasks_nav_prefix ~ 'videos' if view_all_tasks else 'user_videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_all_videos', 'user_videos'] else '' }}" title="视频检查">视频</a>
         <a href="{{ url_for('admin_models' if is_admin and is_superadmin else 'user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}" title="模型管理">模型</a>
         {% if is_superadmin and auth_mode == 'ip' %}
         <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if is_ip_users_page else '' }}" title="IP 用户标记">IP 用户</a>
@@ -39,7 +41,7 @@
         <a href="{{ url_for('admin_permissions') }}" class="{{ 'active' if request.endpoint == 'admin_permissions' else '' }}" title="用户权限设置">用户权限</a>
         <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] and not is_ip_users_page else '' }}" title="系统设置">设置</a>
         {% elif has_permission('rules.manage') %}
-        <a href="{{ url_for('admin_rules') }}" class="{{ 'active' if request.endpoint == 'admin_rules' else '' }}" title="公共规则">规则</a>
+        <a href="{{ url_for('user_rules') }}" class="{{ 'active' if request.endpoint == 'user_rules' else '' }}" title="公共规则">规则</a>
         {% endif %}
       </nav>
       <div class="topbar-account">

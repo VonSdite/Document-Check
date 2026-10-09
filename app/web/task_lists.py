@@ -27,7 +27,7 @@ from app.reporting.service import (
 from app.reporting.statistics import _task_report_stat_rows_for_where
 from app.tasks.activity import activity_label, task_activities
 from app.web.auth import _auth_mode, _current_user_identity
-from app.web.common import _row_value
+from app.web.common import _row_value, _task_endpoint
 from app.web.constants import (
     DEFAULT_TASKS_PER_PAGE,
     STATUS_LABELS,
@@ -563,7 +563,7 @@ def _render_admin_task_list(
         check_items=check_items,
         models=[] if _task_list_partial() else get_enabled_models(identity.subject),
         submission_token=uuid.uuid4().hex,
-        refresh_url=url_for("admin_task_statuses", task_type=task_type),
+        refresh_url=url_for(_task_endpoint("task_statuses"), task_type=task_type),
         active_nav=task_type,
         keyword_placeholder=_admin_keyword_placeholder(auth_mode),
     )
