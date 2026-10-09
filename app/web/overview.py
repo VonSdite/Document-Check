@@ -13,6 +13,7 @@ from app.persistence.connection import get_db
 from app.reporting.statistics import _admin_report_item_totals_for_where
 from app.web.auth import (
     _auth_mode,
+    admin_required,
     is_superadmin,
     permission_required,
 )
@@ -28,8 +29,13 @@ def register_overview_routes(app):
         return dashboard_response()
 
     @app.get(f"{admin_prefix}/overview")
-    @permission_required("stats.view_all")
+    @admin_required
     def admin_overview():
+        return dashboard_response()
+
+    @app.get("/overview")
+    @permission_required("stats.view_all")
+    def user_overview():
         return dashboard_response()
 
     def dashboard_response():

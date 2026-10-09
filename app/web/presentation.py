@@ -99,7 +99,9 @@ def register_presentation_routes(app):
 
     @app.after_request
     def include_user_profile(response):
-        if request.endpoint and request.endpoint.startswith("admin_"):
+        if request.endpoint and (
+            request.endpoint.startswith("admin_") or request.endpoint == "user_overview"
+        ):
             response.headers["Cache-Control"] = "no-store"
         identity = g.get("user_identity")
         if (

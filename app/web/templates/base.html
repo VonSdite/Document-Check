@@ -24,7 +24,7 @@
       </a>
       <nav class="nav" aria-label="主导航">
         {% if has_permission('stats.view_all') %}
-        <a href="{{ url_for('admin_dashboard' if is_superadmin else 'admin_overview') }}" class="{{ 'active' if active_nav|default('') == 'overview' or request.endpoint in ['admin_dashboard', 'admin_overview'] else '' }}" title="统计概览">概览</a>
+        <a href="{{ url_for('admin_dashboard' if is_superadmin else 'user_overview') }}" class="{{ 'active' if active_nav|default('') == 'overview' or request.endpoint in ['admin_dashboard', 'admin_overview', 'user_overview'] else '' }}" title="统计概览">概览</a>
         {% endif %}
         <a href="{{ url_for('admin_tasks' if view_all_tasks else 'user_tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks', 'user_new_task'] else '' }}" title="单文档检查">单文档</a>
         <a href="{{ url_for('admin_consistency' if view_all_tasks else 'user_consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档对照</a>

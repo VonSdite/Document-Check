@@ -262,8 +262,10 @@ def permission_required(permission: str):
             except AuthenticationRequired:
                 return _login_required_response()
             if not has_permission(permission):
-                if not current_permissions() and not (
-                    request.is_json or _wants_json_response()
+                if (
+                    not _is_user_endpoint(request.endpoint)
+                    and not current_permissions()
+                    and not (request.is_json or _wants_json_response())
                 ):
                     return redirect(url_for("admin_login"))
                 abort(403, description="当前用户未获得此管理权限。")
@@ -276,7 +278,7 @@ def permission_required(permission: str):
 
 def management_entry_endpoint() -> str:
     if has_permission("stats.view_all"):
-        return "admin_dashboard" if is_superadmin() else "admin_overview"
+        return "admin_dashboard" if is_superadmin() else "user_overview"
     if has_permission("tasks.view_all"):
         return "admin_tasks"
     if has_permission("rules.manage"):

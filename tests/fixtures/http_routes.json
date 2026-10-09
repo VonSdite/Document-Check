@@ -383,6 +383,15 @@
     ]
   ],
   [
+    "/overview",
+    "user_overview",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ]
+  ],
+  [
     "/static/<path:filename>",
     "static",
     [

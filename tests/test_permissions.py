@@ -1,4 +1,5 @@
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -400,12 +401,12 @@ class UserPermissionTest(unittest.TestCase):
             )
         self.assertEqual(self.client.get("/admin/tasks").status_code, 200)
         self.assertEqual(self.save(self.subject, ["stats.view_all"]).status_code, 302)
-        self.assertEqual(self.client.get("/admin/overview").status_code, 200)
+        self.assertEqual(self.client.get("/overview").status_code, 200)
         self.assertEqual(self.client.get("/admin/tasks").status_code, 403)
         self.assertEqual(self.save(self.subject, []).status_code, 302)
         self.assertEqual(
             self.client.get(
-                "/admin/overview", headers={"X-Requested-With": "fetch"}
+                "/overview", headers={"X-Requested-With": "fetch"}
             ).status_code,
             403,
         )
@@ -493,7 +494,7 @@ class UserPermissionTest(unittest.TestCase):
                 for route in ("/", "/models", "/admin/tasks", "/admin/rules"):
                     soup = BeautifulSoup(self.client.get(route).text, "html.parser")
                     for href in (
-                        "/admin/overview",
+                        "/overview",
                         "/admin/tasks",
                         "/admin/consistency",
                         "/admin/language-consistency",
@@ -515,7 +516,7 @@ class UserPermissionTest(unittest.TestCase):
                 )
                 self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
                 self.assertIsNone(soup.select_one('nav.nav a[href="/admin/tasks"]'))
-                self.assertIsNone(soup.select_one('nav.nav a[href="/admin/overview"]'))
+                self.assertIsNone(soup.select_one('nav.nav a[href="/overview"]'))
 
     def test_view_permission_reads_all_task_types_but_preserves_own_default_actions(
         self,
@@ -550,7 +551,7 @@ class UserPermissionTest(unittest.TestCase):
         self.assertEqual(
             self.client.post(f"/admin/tasks/{own}/delete").status_code, 302
         )
-        self.assertEqual(self.client.get("/admin/overview").status_code, 403)
+        self.assertEqual(self.client.get("/overview").status_code, 403)
 
     def test_view_only_report_has_readonly_reviews_and_covers_download_export_and_polling(
         self,
@@ -685,18 +686,86 @@ class UserPermissionTest(unittest.TestCase):
             )
 
     def test_stats_permission_has_separate_navigation_and_no_task_access(self):
-        self.grant("stats.view_all")
-        soup = BeautifulSoup(self.client.get("/").text, "html.parser")
-        self.assertIsNotNone(soup.select_one('nav.nav a[href="/admin/overview"]'))
-        self.assertIsNone(soup.select_one(".topbar-account a"))
-        page = self.client.get("/admin/overview")
-        soup = BeautifulSoup(page.text, "html.parser")
-        self.assertEqual(page.status_code, 200)
-        self.assertIsNone(soup.select_one('nav a[href="/admin/tasks"]'))
-        self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
-        self.assertIsNone(soup.select_one('nav a[href="/admin/permissions"]'))
-        self.assertIsNone(soup.select_one('form[action="/admin/logout"]'))
-        self.assertEqual(self.client.get("/admin/tasks").status_code, 403)
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            with self.subTest(cookie_mode=cookie_mode):
+                self.grant("stats.view_all")
+                soup = BeautifulSoup(self.client.get("/").text, "html.parser")
+                self.assertIsNotNone(soup.select_one('nav.nav a[href="/overview"]'))
+                self.assertIsNone(soup.select_one(".topbar-account a"))
+                page = self.client.get("/overview")
+                soup = BeautifulSoup(page.text, "html.parser")
+                self.assertEqual(page.status_code, 200)
+                self.assertEqual(page.headers["Cache-Control"], "no-store")
+                self.assertIsNotNone(
+                    soup.select_one('nav.nav a.active[href="/overview"]')
+                )
+                self.assertIsNone(soup.select_one('nav a[href="/admin/tasks"]'))
+                self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
+                self.assertIsNone(soup.select_one('nav a[href="/admin/permissions"]'))
+                self.assertIsNone(soup.select_one('form[action="/admin/logout"]'))
+                self.assertEqual(self.client.get("/admin/tasks").status_code, 403)
+                self.assertEqual(self.client.get("/admin/overview").status_code, 403)
+                self.assertEqual(
+                    soup.select_one(".overview-filter")["action"], "/overview"
+                )
+                today = date.today()
+                for period, days in (("today", 1), ("7-days", 7), ("30-days", 30)):
+                    href = soup.select_one(f'[data-range="{period}"]')["href"]
+                    self.assertEqual(urlparse(href).path, "/overview")
+                    dates = {
+                        "start_date": [(today - timedelta(days=days - 1)).isoformat()],
+                        "end_date": [today.isoformat()],
+                    }
+                    self.assertEqual(parse_qs(urlparse(href).query), dates)
+                    filtered = self.client.get(href)
+                    self.assertEqual(filtered.status_code, 200)
+                    filtered_soup = BeautifulSoup(filtered.text, "html.parser")
+                    self.assertIsNotNone(
+                        filtered_soup.select_one(f'[data-range="{period}"].active')
+                    )
+                    for name, value in dates.items():
+                        self.assertEqual(
+                            filtered_soup.select_one(f'input[name="{name}"]')["value"],
+                            value[0],
+                        )
+
+    def test_user_overview_requires_stats_permission_after_revocation(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            for grants in ((), ("tasks.manage_all",), ("rules.manage",)):
+                with self.subTest(cookie_mode=cookie_mode, grants=grants):
+                    self.grant(*grants)
+                    self.assertEqual(self.client.get("/overview").status_code, 403)
+                    self.grant(*grants, "stats.view_all")
+                    self.assertEqual(self.client.get("/overview").status_code, 200)
+                    self.grant(*grants)
+                    for headers in ({}, {"X-Requested-With": "fetch"}):
+                        response = self.client.get("/overview", headers=headers)
+                        self.assertEqual(response.status_code, 403)
+                        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_superadmin_overview_links_keep_console_path(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+                self.resolve.return_value = (None, None)
+            for route in ("/admin", "/admin/overview"):
+                with self.subTest(cookie_mode=cookie_mode, route=route):
+                    response = self.root.get(route)
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    self.assertIsNotNone(
+                        soup.select_one('nav.nav a.active[href="/admin"]')
+                    )
+                    self.assertEqual(
+                        soup.select_one(".overview-filter")["action"], route
+                    )
+                    for link in soup.select(".overview-quick-filters a"):
+                        self.assertEqual(urlparse(link["href"]).path, route)
+                        self.assertEqual(self.root.get(link["href"]).status_code, 200)
 
     def test_rules_permission_uses_separate_page_and_rejects_runtime_setting_actions(
         self,
@@ -864,13 +933,22 @@ class UserPermissionTest(unittest.TestCase):
         self.grant(*ASSIGNABLE_PERMISSIONS, subject="ip:127.0.0.1")
         self.grant("rules.manage")
         self.resolve.return_value = (None, None)
-        for route in ("/admin/rules", "/admin/tasks", "/admin/overview"):
+        for route in ("/admin/rules", "/admin/tasks", "/overview"):
             self.assertEqual(
                 self.client.get(
                     route, headers={"X-Requested-With": "fetch"}
                 ).status_code,
                 401,
             )
+        response = self.client.get(
+            "/overview?start_date=2026-05-01&end_date=2026-05-07"
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(urlparse(response.location).netloc, "login.example.test")
+        self.assertEqual(
+            parse_qs(urlparse(response.location).query)["redirect"],
+            ["/overview?start_date=2026-05-01&end_date=2026-05-07"],
+        )
         self.assertEqual(self.root.get("/admin/permissions").status_code, 200)
         self.assertEqual(self.root.get("/admin/settings").status_code, 200)
 

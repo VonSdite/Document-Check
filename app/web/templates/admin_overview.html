@@ -11,7 +11,7 @@
 </div>
 
 <section class="panel">
-  <form method="get" class="overview-filter">
+  <form method="get" action="{{ url_for(request.endpoint) }}" class="overview-filter">
     <label>
       开始日期
       <input type="date" name="start_date" value="{{ selected_range.start_date }}">
@@ -25,19 +25,19 @@
         <a
           class="overview-quick-filter{% if selected_range.start_date == selected_range.today and selected_range.end_date == selected_range.today %} active{% endif %}"
           data-range="today"
-          href="{{ url_for('admin_dashboard', start_date=selected_range.today, end_date=selected_range.today) }}"
+          href="{{ url_for(request.endpoint, start_date=selected_range.today, end_date=selected_range.today) }}"
           {% if selected_range.start_date == selected_range.today and selected_range.end_date == selected_range.today %}aria-current="page"{% endif %}
         >今天</a>
         <a
           class="overview-quick-filter{% if selected_range.start_date == selected_range.last_7_start and selected_range.end_date == selected_range.today %} active{% endif %}"
           data-range="7-days"
-          href="{{ url_for('admin_dashboard', start_date=selected_range.last_7_start, end_date=selected_range.today) }}"
+          href="{{ url_for(request.endpoint, start_date=selected_range.last_7_start, end_date=selected_range.today) }}"
           {% if selected_range.start_date == selected_range.last_7_start and selected_range.end_date == selected_range.today %}aria-current="page"{% endif %}
         >近7天</a>
         <a
           class="overview-quick-filter{% if selected_range.start_date == selected_range.last_30_start and selected_range.end_date == selected_range.today %} active{% endif %}"
           data-range="30-days"
-          href="{{ url_for('admin_dashboard', start_date=selected_range.last_30_start, end_date=selected_range.today) }}"
+          href="{{ url_for(request.endpoint, start_date=selected_range.last_30_start, end_date=selected_range.today) }}"
           {% if selected_range.start_date == selected_range.last_30_start and selected_range.end_date == selected_range.today %}aria-current="page"{% endif %}
         >近30天</a>
       </div>
