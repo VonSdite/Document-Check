@@ -87,6 +87,15 @@
     ]
   ],
   [
+    "/console/overview",
+    "admin_overview",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ]
+  ],
+  [
     "/console/permissions",
     "admin_permissions",
     [

@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 
-from flask import render_template, request
+from flask import redirect, render_template, request, url_for
 
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -13,6 +13,7 @@ from app.persistence.connection import get_db
 from app.reporting.statistics import _admin_report_item_totals_for_where
 from app.web.auth import (
     _auth_mode,
+    is_superadmin,
     permission_required,
 )
 
@@ -21,8 +22,17 @@ def register_overview_routes(app):
     admin_prefix = app.config["ADMIN_URL"]
 
     @app.get(admin_prefix)
-    @permission_required("stats.view_all")
     def admin_dashboard():
+        if not is_superadmin():
+            return redirect(url_for("admin_login"))
+        return dashboard_response()
+
+    @app.get(f"{admin_prefix}/overview")
+    @permission_required("stats.view_all")
+    def admin_overview():
+        return dashboard_response()
+
+    def dashboard_response():
         selected_range = _admin_overview_range()
         overview = _admin_overview_data(
             selected_range["start_at"], selected_range["end_at"]

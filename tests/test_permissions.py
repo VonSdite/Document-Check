@@ -123,6 +123,50 @@ class UserPermissionTest(unittest.TestCase):
             )
         self.assertEqual(self.client.post(f"/tasks/{own}/delete").status_code, 302)
 
+    def test_console_entry_remains_accessible_after_user_grants(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            for grants in (
+                (),
+                *((permission,) for permission in ASSIGNABLE_PERMISSIONS),
+                tuple(ASSIGNABLE_PERMISSIONS),
+            ):
+                with self.subTest(cookie_mode=cookie_mode, grants=grants):
+                    self.grant(*grants)
+                    response = self.client.get("/admin")
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response.location, "/admin/login")
+                    self.assertEqual(self.client.get("/admin/login").status_code, 200)
+            self.grant("tasks.manage_all")
+            response = self.client.post(
+                "/admin/login", data={"username": "root", "password": "test-root"}
+            )
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, "/admin")
+            self.assertEqual(self.client.get("/admin").status_code, 200)
+            self.assertEqual(self.client.get("/admin/settings").status_code, 200)
+            self.assertEqual(self.client.get("/admin/permissions").status_code, 200)
+            with self.app.app_context():
+                self.assertEqual(
+                    subject_permissions(self.subject),
+                    {"tasks.view_all", "tasks.manage_all"},
+                )
+            self.client.post("/admin/logout")
+
+    def test_console_login_is_independent_of_cookie_identity_validity(self):
+        self.cookie_mode()
+        self.grant("stats.view_all")
+        self.resolve.return_value = (None, None)
+        self.assertEqual(self.client.get("/admin").location, "/admin/login")
+        self.assertEqual(self.client.get("/admin/login").status_code, 200)
+        response = self.client.post(
+            "/admin/login", data={"username": "root", "password": "test-root"}
+        )
+        self.assertEqual(response.location, "/admin")
+        self.assertEqual(self.client.get("/admin").status_code, 200)
+        self.assertEqual(self.client.get("/admin/settings").status_code, 200)
+
     def test_ip_permissions_ignore_unconfigured_headers_and_use_configured_proxy_identity(
         self,
     ):
@@ -356,12 +400,12 @@ class UserPermissionTest(unittest.TestCase):
             )
         self.assertEqual(self.client.get("/admin/tasks").status_code, 200)
         self.assertEqual(self.save(self.subject, ["stats.view_all"]).status_code, 302)
-        self.assertEqual(self.client.get("/admin").status_code, 200)
+        self.assertEqual(self.client.get("/admin/overview").status_code, 200)
         self.assertEqual(self.client.get("/admin/tasks").status_code, 403)
         self.assertEqual(self.save(self.subject, []).status_code, 302)
         self.assertEqual(
             self.client.get(
-                "/admin", headers={"X-Requested-With": "fetch"}
+                "/admin/overview", headers={"X-Requested-With": "fetch"}
             ).status_code,
             403,
         )
@@ -449,7 +493,7 @@ class UserPermissionTest(unittest.TestCase):
                 for route in ("/", "/models", "/admin/tasks", "/admin/rules"):
                     soup = BeautifulSoup(self.client.get(route).text, "html.parser")
                     for href in (
-                        "/admin",
+                        "/admin/overview",
                         "/admin/tasks",
                         "/admin/consistency",
                         "/admin/language-consistency",
@@ -471,7 +515,7 @@ class UserPermissionTest(unittest.TestCase):
                 )
                 self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
                 self.assertIsNone(soup.select_one('nav.nav a[href="/admin/tasks"]'))
-                self.assertIsNone(soup.select_one('nav.nav a[href="/admin"]'))
+                self.assertIsNone(soup.select_one('nav.nav a[href="/admin/overview"]'))
 
     def test_view_permission_reads_all_task_types_but_preserves_own_default_actions(
         self,
@@ -506,7 +550,7 @@ class UserPermissionTest(unittest.TestCase):
         self.assertEqual(
             self.client.post(f"/admin/tasks/{own}/delete").status_code, 302
         )
-        self.assertEqual(self.client.get("/admin").status_code, 403)
+        self.assertEqual(self.client.get("/admin/overview").status_code, 403)
 
     def test_view_only_report_has_readonly_reviews_and_covers_download_export_and_polling(
         self,
@@ -643,9 +687,9 @@ class UserPermissionTest(unittest.TestCase):
     def test_stats_permission_has_separate_navigation_and_no_task_access(self):
         self.grant("stats.view_all")
         soup = BeautifulSoup(self.client.get("/").text, "html.parser")
-        self.assertIsNotNone(soup.select_one('nav.nav a[href="/admin"]'))
+        self.assertIsNotNone(soup.select_one('nav.nav a[href="/admin/overview"]'))
         self.assertIsNone(soup.select_one(".topbar-account a"))
-        page = self.client.get("/admin")
+        page = self.client.get("/admin/overview")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertEqual(page.status_code, 200)
         self.assertIsNone(soup.select_one('nav a[href="/admin/tasks"]'))
@@ -820,7 +864,7 @@ class UserPermissionTest(unittest.TestCase):
         self.grant(*ASSIGNABLE_PERMISSIONS, subject="ip:127.0.0.1")
         self.grant("rules.manage")
         self.resolve.return_value = (None, None)
-        for route in ("/admin/rules", "/admin/tasks", "/admin"):
+        for route in ("/admin/rules", "/admin/tasks", "/admin/overview"):
             self.assertEqual(
                 self.client.get(
                     route, headers={"X-Requested-With": "fetch"}

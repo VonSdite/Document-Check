@@ -276,7 +276,7 @@ def permission_required(permission: str):
 
 def management_entry_endpoint() -> str:
     if has_permission("stats.view_all"):
-        return "admin_dashboard"
+        return "admin_dashboard" if is_superadmin() else "admin_overview"
     if has_permission("tasks.view_all"):
         return "admin_tasks"
     if has_permission("rules.manage"):
