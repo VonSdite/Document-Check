@@ -4436,7 +4436,6 @@ body.table-column-resize-active * {
 .permission-table th:first-child { text-align: left; }
 .permission-table td:first-child { min-width: 230px; }
 .permission-choice input { width: 18px; height: 18px; accent-color: var(--primary); }
-.permission-note { margin-top: 16px; }
 @media (prefers-reduced-motion: reduce) {
   .task-refresh-button[aria-busy="true"] svg { animation: none; }
 }

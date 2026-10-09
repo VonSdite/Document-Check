@@ -39,7 +39,7 @@ document.querySelectorAll("[data-permission-form]").forEach((form) => {
       } catch {
         if (!pending) {
           apply(saved);
-          showStatus("保存失败，请刷新确认后重试", true);
+          showStatus("保存失败，请刷新后重试", true);
         }
       }
     }
