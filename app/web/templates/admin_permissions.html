@@ -40,6 +40,7 @@
         <tr data-permission-user="{{ user.subject }}">
           <td>
             <strong>{{ user.label }}</strong>
+            {% if user.subject.startswith('ip:') %}<div class="subline">{{ user.subject }}</div>{% endif %}
             <form id="{{ form_id }}" method="post" data-permission-form>
               <input type="hidden" name="subject" value="{{ user.subject }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -1477,6 +1477,7 @@ body.table-column-resize-active * {
 }
 
 .help-tip::after {
+  display: none;
   content: attr(data-tip);
   position: absolute;
   left: 50%;
@@ -1501,6 +1502,7 @@ body.table-column-resize-active * {
 }
 
 .help-tip::before {
+  display: none;
   content: "";
   position: absolute;
   left: 50%;
@@ -1518,6 +1520,7 @@ body.table-column-resize-active * {
 
 .help-tip:hover::after,
 .help-tip:focus::after {
+  display: block;
   opacity: 1;
   visibility: visible;
   transform: translate(-50%, 0);
@@ -1525,6 +1528,7 @@ body.table-column-resize-active * {
 
 .help-tip:hover::before,
 .help-tip:focus::before {
+  display: block;
   opacity: 1;
   visibility: visible;
   transform: translate(-50%, 0) rotate(45deg);

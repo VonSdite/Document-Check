@@ -194,7 +194,13 @@ class UserPermissionTest(unittest.TestCase):
         self.assertIsNone(soup.select_one("[data-permission-status]"))
         self.assertEqual(len(soup.select(".permission-table th")), 5)
         self.assertIsNone(soup.select_one('[name="source"]'))
-        self.assertIsNone(soup.select_one(".permission-table .subline"))
+        self.assertEqual(
+            soup.select_one('[data-permission-user="ip:10.0.0.8"] .subline').text,
+            "ip:10.0.0.8",
+        )
+        self.assertIsNone(
+            soup.select_one('[data-permission-user="cookie_session:stable-b"] .subline')
+        )
         self.assertIsNone(soup.select_one(".page-title p"))
         self.assertEqual(
             soup.select_one('input[name="keyword"]')["placeholder"], "搜索用户"
@@ -231,8 +237,22 @@ class UserPermissionTest(unittest.TestCase):
             ],
             ["cookie_session:stable-b"],
         )
-        page = self.root.get("/admin/permissions?keyword=办公室")
-        self.assertIn('data-permission-user="ip:10.0.0.8"', page.text)
+        for keyword in ("办公室", "ip:10.0.0.8", "10.0.0.8"):
+            with self.subTest(keyword=keyword):
+                page = self.root.get(
+                    "/admin/permissions", query_string={"keyword": keyword}
+                )
+                soup = BeautifulSoup(page.text, "html.parser")
+                self.assertEqual(
+                    [
+                        row["data-permission-user"]
+                        for row in soup.select("[data-permission-user]")
+                    ],
+                    ["ip:10.0.0.8"],
+                )
+                row = soup.select_one('[data-permission-user="ip:10.0.0.8"]')
+                self.assertEqual(row.select_one("strong").text, "办公室")
+                self.assertEqual(row.select_one(".subline").text, "ip:10.0.0.8")
 
     def test_user_pagination_preserves_filters_and_uses_shared_page_controls(self):
         with self.app.app_context():
