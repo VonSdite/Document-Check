@@ -308,6 +308,10 @@
     const returned = new Map(
       (data.tasks || []).map((task) => [String(task.id), task]),
     );
+    if (data.permission_signature !== undefined && stats?.dataset.permissionSignature !== data.permission_signature) {
+      window.location.reload();
+      return;
+    }
     const changed =
       stats?.dataset.refreshActive !== (data.active ? "1" : "0") ||
       Object.entries(data.counts || {}).some(

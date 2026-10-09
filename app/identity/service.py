@@ -7,6 +7,7 @@ from app.identity.cookie_session import resolve_userinfo
 from app.identity.models import UserIdentity as UserIdentity
 from app.identity.models import ip_subject as ip_subject
 from app.identity.models import subject_label as subject_label
+from app.persistence.permissions import register_subject
 from app.persistence.settings import (
     get_ip_username,
     migrate_ip_owner_to_subject,
@@ -28,7 +29,7 @@ def current_identity() -> UserIdentity:
         if g.user_identity is None:
             raise AuthenticationRequired("未收到有效登录信息")
         return g.user_identity
-    ip = _request_identity_ip()
+    ip = client_ip()
     auth_config = current_app.config.get("AUTH", {})
     if cookie_session_enabled_for_request():
         identity = _identity_from_cookie_session(auth_config, ip)
@@ -39,6 +40,7 @@ def current_identity() -> UserIdentity:
     g.user_identity = UserIdentity(
         subject=ip_subject(ip), display_name=get_ip_username(ip), source="ip", ip=ip
     )
+    register_subject(g.user_identity.subject)
     return g.user_identity
 
 
@@ -51,16 +53,7 @@ def client_ip() -> str:
 
 def cookie_session_enabled_for_request() -> bool:
     auth_config = current_app.config.get("AUTH", {})
-    return _cookie_session_enabled_for_ip(auth_config, _request_identity_ip())
-
-
-def _request_identity_ip() -> str:
-    return (
-        _real_ip_header_value("X-Real-IP")
-        or _real_ip_header_value("X-Forwarded-For")
-        or str(request.remote_addr or "").strip()
-        or "0.0.0.0"
-    )
+    return _cookie_session_enabled_for_ip(auth_config, client_ip())
 
 
 def _cookie_session_enabled_for_ip(auth_config: dict, ip: str) -> bool:
@@ -109,6 +102,7 @@ def _identity_from_cookie_session(auth_config: dict, ip: str) -> UserIdentity | 
     username = str(user_info.get("username") or "").strip() or user_id
     avatar = str(user_info.get("avatar") or "").strip()
     subject = f"cookie_session:{user_id}"
+    register_subject(subject)
     try:
         if migrate_ip_owner_to_subject(ip, subject):
             logger.info("cookie_session 懒迁移完成 ip=%s subject=%s", ip, subject)

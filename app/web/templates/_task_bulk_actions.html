@@ -1,4 +1,9 @@
 {% macro delete_form(tasks, mode) -%}
+{% set allowed = namespace(value=mode != 'admin') %}
+{% for task in tasks %}
+{% if can_manage_task(task) %}{% set allowed.value = true %}{% endif %}
+{% endfor %}
+{% if allowed.value %}
 <form
   id="bulk-delete-tasks"
   class="bulk-task-form"
@@ -12,24 +17,30 @@
     批量删除<span data-bulk-delete-count></span>
   </button>
 </form>
+{% endif %}
 {%- endmacro %}
 
-{% macro select_header(tasks) -%}
-{% set deletable_count = tasks|selectattr('status', 'in', ['queued', 'completed', 'partial', 'failed', 'canceled'])|list|length %}
+{% macro select_header(tasks, management=false) -%}
+{% set deletable = namespace(count=0) %}
+{% for task in tasks %}
+{% if task.status in ['queued', 'completed', 'partial', 'failed', 'canceled'] and (not management or can_manage_task(task)) %}
+{% set deletable.count = deletable.count + 1 %}
+{% endif %}
+{% endfor %}
 <th class="task-select-cell">
   <input
     class="task-select-checkbox"
     type="checkbox"
     data-bulk-task-toggle
     aria-label="选择本页全部可批量删除任务"
-    {{ 'disabled' if not deletable_count else '' }}
+    {{ 'disabled' if not deletable.count else '' }}
   >
 </th>
 {%- endmacro %}
 
-{% macro select_cell(task) -%}
+{% macro select_cell(task, management=false) -%}
 <td class="task-select-cell">
-  {% if task.status in ['queued', 'completed', 'partial', 'failed', 'canceled'] %}
+  {% if task.status in ['queued', 'completed', 'partial', 'failed', 'canceled'] and (not management or can_manage_task(task)) %}
   <input
     class="task-select-checkbox"
     type="checkbox"

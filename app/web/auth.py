@@ -7,6 +7,7 @@ from flask import (
     abort,
     current_app,
     flash,
+    g,
     redirect,
     render_template,
     request,
@@ -14,6 +15,7 @@ from flask import (
     url_for,
 )
 
+from app.identity.permissions import ASSIGNABLE_PERMISSIONS, effective_permissions
 from app.identity.service import (
     AuthenticationRequired,
     UserIdentity,
@@ -22,7 +24,12 @@ from app.identity.service import (
     subject_label,
 )
 from app.persistence.settings import get_ip_username, owner_subject_from_ip
-from app.web.common import _current_relative_url, _row_value, _safe_next_path
+from app.web.common import (
+    _current_relative_url,
+    _row_value,
+    _safe_next_path,
+    _wants_json_response,
+)
 from app.web.constants import CONSOLE_USER_ENDPOINTS
 
 logger = logging.getLogger(__name__)
@@ -61,6 +68,7 @@ def register_auth_routes(app):
     @app.post(f"{admin_prefix}/logout")
     def admin_logout():
         session.pop("admin_logged_in", None)
+        session.pop("permission_csrf_token", None)
         flash("管理员已退出。", "success")
         return redirect(url_for("admin_login"))
 
@@ -191,6 +199,8 @@ def admin_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("admin_logged_in"):
+            if current_permissions():
+                abort(403, description="此功能仅限超级管理员使用。")
             return redirect(url_for("admin_login"))
         if _cookie_session_mode_enabled():
             try:
@@ -200,3 +210,75 @@ def admin_required(view):
         return view(*args, **kwargs)
 
     return wrapped
+
+
+def is_superadmin() -> bool:
+    return bool(session.get("admin_logged_in"))
+
+
+def current_permissions() -> frozenset[str]:
+    if is_superadmin():
+        return frozenset(ASSIGNABLE_PERMISSIONS)
+    if "user_permissions" not in g:
+        try:
+            identity = current_identity()
+        except AuthenticationRequired:
+            g.user_permissions = frozenset()
+        else:
+            g.user_permissions = effective_permissions(identity.subject)
+    return g.user_permissions
+
+
+def has_permission(permission: str) -> bool:
+    return permission in current_permissions()
+
+
+def can_manage_task(task) -> bool:
+    if is_superadmin() or has_permission("tasks.manage_all"):
+        return True
+    owner = _row_value(task, "effective_owner_subject") or _row_value(
+        task, "owner_subject"
+    )
+    try:
+        return bool(owner and owner == current_identity().subject)
+    except AuthenticationRequired:
+        return False
+
+
+def permission_required(permission: str):
+    def decorate(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                origin = request.headers.get("Origin")
+                if request.headers.get("Sec-Fetch-Site") == "cross-site" or (
+                    origin and origin.rstrip("/") != request.host_url.rstrip("/")
+                ):
+                    abort(403, description="管理操作需要从本站页面发起。")
+            if is_superadmin():
+                return admin_required(view)(*args, **kwargs)
+            try:
+                current_identity()
+            except AuthenticationRequired:
+                return _login_required_response()
+            if not has_permission(permission):
+                if not current_permissions() and not (
+                    request.is_json or _wants_json_response()
+                ):
+                    return redirect(url_for("admin_login"))
+                abort(403, description="当前用户未获得此管理权限。")
+            return view(*args, **kwargs)
+
+        return wrapped
+
+    return decorate
+
+
+def management_entry_endpoint() -> str:
+    if has_permission("stats.view_all"):
+        return "admin_dashboard"
+    if has_permission("tasks.view_all"):
+        return "admin_tasks"
+    if has_permission("rules.manage"):
+        return "admin_rules"
+    return "user_tasks"

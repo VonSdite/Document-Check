@@ -8,7 +8,7 @@ from app.reporting.service import (
     _uses_compact_media_report,
 )
 from app.tasks.files import _task_document_groups
-from app.web.auth import _current_user_identity, admin_required
+from app.web.auth import _current_user_identity, has_permission, permission_required
 from app.web.common import _safe_next_path
 from app.web.reports import (
     _export_task_report,
@@ -28,6 +28,7 @@ from app.web.task_actions import (
     _bulk_delete_tasks,
     _cancel_task,
     _delete_task,
+    _get_manageable_task,
     _get_task_or_404,
     _retry_task,
     _task_action_redirect,
@@ -61,7 +62,7 @@ def register_admin_tasks_routes(app):
     admin_prefix = app.config["ADMIN_URL"]
 
     @app.route(f"{admin_prefix}/tasks", methods=["GET", "POST"])
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_tasks():
         if request.method == "POST":
             return create_task_for_identity(
@@ -70,7 +71,7 @@ def register_admin_tasks_routes(app):
         return _render_admin_tasks_page()
 
     @app.route(f"{admin_prefix}/tasks/new", methods=["GET", "POST"])
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_new_task():
         if request.method == "POST":
             return create_task_for_identity(
@@ -79,15 +80,21 @@ def register_admin_tasks_routes(app):
         return redirect(url_for("admin_tasks"))
 
     @app.get(f"{admin_prefix}/task-statuses")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_task_statuses():
         task_type = _validated_task_status_type()
         if task_type is None:
             return {"error": "任务类型无效。"}, 400
-        return _task_status_payload(task_type, owner_clause="1=1", owner_params=())
+        payload = _task_status_payload(task_type, owner_clause="1=1", owner_params=())
+        payload["permission_signature"] = (
+            f"{int(has_permission('tasks.manage_all'))}:{int(has_permission('stats.view_all'))}"
+        )
+        if not has_permission("stats.view_all"):
+            payload["counts"] = {}
+        return payload
 
     @app.route(f"{admin_prefix}/consistency", methods=["GET", "POST"])
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_consistency():
         if request.method == "POST":
             return create_consistency_task_for_identity(
@@ -96,7 +103,7 @@ def register_admin_tasks_routes(app):
         return _render_admin_consistency_page()
 
     @app.route(f"{admin_prefix}/language-consistency", methods=["GET", "POST"])
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_language_consistency():
         if request.method == "POST":
             return create_language_consistency_task_for_identity(
@@ -105,7 +112,7 @@ def register_admin_tasks_routes(app):
         return _render_admin_language_consistency_page()
 
     @app.route(f"{admin_prefix}/images", methods=["GET", "POST"])
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_images():
         if request.method == "POST":
             return create_image_task_for_identity(
@@ -114,7 +121,7 @@ def register_admin_tasks_routes(app):
         return _render_admin_images_page()
 
     @app.route(f"{admin_prefix}/videos", methods=["GET", "POST"])
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_videos():
         if request.method == "POST":
             return create_video_task_for_identity(
@@ -123,7 +130,7 @@ def register_admin_tasks_routes(app):
         return _render_admin_videos_page()
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_task_detail(task_id):
         polling = request.args.get("_poll") == "1"
         task = _get_task_or_404(task_id, lightweight=polling)
@@ -165,91 +172,91 @@ def register_admin_tasks_routes(app):
         return html
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/model-output")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_model_output(task_id):
         task = _get_task_or_404(task_id, lightweight=True, include_revision=False)
         return model_output_response(task)
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/retry-check")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_retry_check(task_id):
-        task = _get_task_or_404(task_id, lightweight=True)
+        task = _get_manageable_task(task_id, lightweight=True)
         return retry_check(task)
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/cancel-check")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_cancel_check(task_id):
-        task = _get_task_or_404(task_id, lightweight=True)
+        task = _get_manageable_task(task_id, lightweight=True)
         return cancel_check(task)
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/report-items")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_update_report_item_type(task_id):
-        task = _get_task_or_404(task_id)
+        task = _get_manageable_task(task_id)
         return _update_report_item_type(task)
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/export")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_export_task(task_id):
         task = _get_task_or_404(task_id)
         return _export_task_report(task)
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/export.xlsx")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_export_task_excel(task_id):
         task = _get_task_or_404(task_id)
         return _export_task_report_excel(task)
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/import.xlsx")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_import_task_excel(task_id):
-        task = _get_task_or_404(task_id)
+        task = _get_manageable_task(task_id)
         return _import_task_report_excel(task, "admin_task_detail")
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/document")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_download_task_document(task_id):
         task = _get_task_or_404(task_id)
         return _download_task_document(task, "admin_task_detail")
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/media/<media_id>")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_task_media(task_id, media_id):
         task = _get_task_or_404(task_id)
         return _send_task_media(task, media_id)
 
     @app.get(f"{admin_prefix}/tasks/<int:task_id>/video")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_task_video(task_id):
         task = _get_task_or_404(task_id)
         return _stream_task_video(task)
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/cancel")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_cancel_task(task_id):
-        task = _get_task_or_404(task_id)
+        task = _get_manageable_task(task_id)
         _cancel_task(task)
         flash("已提交取消请求。", "success")
         return redirect(_task_action_redirect("admin_tasks"))
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/retry")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_retry_task(task_id):
-        task = _get_task_or_404(task_id)
+        task = _get_manageable_task(task_id)
         _retry_task(task)
         return redirect(
             _task_action_redirect(_task_list_endpoint(True, task["task_type"]))
         )
 
     @app.post(f"{admin_prefix}/tasks/<int:task_id>/delete")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_delete_task(task_id):
-        task = _get_task_or_404(task_id)
+        task = _get_manageable_task(task_id)
         if _delete_task(task):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(True, task["task_type"])))
 
     @app.post(f"{admin_prefix}/tasks/bulk-delete")
-    @admin_required
+    @permission_required("tasks.view_all")
     def admin_bulk_delete_tasks():
-        return _bulk_delete_tasks(_get_task_or_404, admin_created=True)
+        return _bulk_delete_tasks(_get_manageable_task, admin_created=True)

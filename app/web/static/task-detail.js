@@ -109,6 +109,8 @@
   }
 
   function applyCheckStates(data) {
+    if (typeof data.can_manage === "boolean") root.dataset.canManage = data.can_manage ? "1" : "0";
+    const canManage = root.dataset.canManage !== "0";
     root.querySelectorAll("[data-detail-result]").forEach((node) => {
       const state = data.checks[node.dataset.detailResult] || {};
       const execution = state.execution ?? Number(node.dataset.checkExecution);
@@ -129,8 +131,9 @@
       label.textContent = text ? `状态：${text}` + (state.attempt > 1 ? ` · 第 ${state.attempt}/3 次尝试` : "") : "";
       label.hidden = !text;
       const button = node.querySelector("[data-cancel-check]");
-      button.hidden = !(singleCancel && ["queued", "running"].includes(data.status) && ["pending", "checking", "waiting", "thinking", "output", "retrying"].includes(phase));
-      node.querySelector("[data-retry-check]").hidden = !((singleCancel || !data.active) && data.status !== "canceling" && data.phase !== "finalizing" && ["failed", "canceled", "canceling"].includes(phase));
+      if (button) button.hidden = !(canManage && singleCancel && ["queued", "running"].includes(data.status) && ["pending", "checking", "waiting", "thinking", "output", "retrying"].includes(phase));
+      const retryButton = node.querySelector("[data-retry-check]");
+      if (retryButton) retryButton.hidden = !(canManage && (singleCancel || !data.active) && data.status !== "canceling" && data.phase !== "finalizing" && ["failed", "canceled", "canceling"].includes(phase));
     });
   }
 

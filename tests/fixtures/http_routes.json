@@ -87,8 +87,28 @@
     ]
   ],
   [
+    "/console/permissions",
+    "admin_permissions",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
     "/console/prompts",
     "admin_prompts",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
+    "/console/rules",
+    "admin_rules",
     [
       "GET",
       "HEAD",

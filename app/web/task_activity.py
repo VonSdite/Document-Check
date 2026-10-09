@@ -23,6 +23,7 @@ from app.tasks.activity import (
 )
 from app.tasks.model_output import read_model_output
 from app.tasks.retries import CheckRetryError, request_check_retry
+from app.web.auth import can_manage_task
 from app.web.constants import STATUS_LABELS
 
 SINGLE_CANCEL_TASK_TYPES = {
@@ -35,7 +36,9 @@ SINGLE_CANCEL_TASK_TYPES = {
 def detail_progress(task):
     activity = task_activities([task["id"]]).get(task["id"], {})
     status = task["status"]
+    manageable = can_manage_task(task)
     return {
+        "can_manage": manageable,
         "status": status,
         "active": status in {"queued", "running", "canceling"},
         "status_label": activity_label(activity)
@@ -44,7 +47,9 @@ def detail_progress(task):
         "progress": task["progress"],
         "checks": activity.get("checks", {}),
         "phase": activity.get("phase", ""),
-        "revision": ":".join(
+        "revision": str(int(manageable))
+        + ":"
+        + ":".join(
             str(task.get(key) or "")
             for key in (
                 "status",
@@ -226,6 +231,7 @@ def model_output_response(task):
     )
     payload["active"] = task["status"] in {"queued", "running", "canceling"}
     payload["status"] = task["status"]
+    payload["can_manage"] = can_manage_task(task)
     activity = task_activities([task["id"]]).get(task["id"], {})
     payload["checks"] = activity.get("checks", {})
     payload["phase"] = activity.get("phase", "")

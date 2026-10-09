@@ -50,6 +50,20 @@ def init_db():
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS user_identities (
+            subject TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            subject TEXT NOT NULL,
+            permission TEXT NOT NULL CHECK(permission IN (
+                'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage'
+            )),
+            PRIMARY KEY(subject, permission),
+            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS check_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_type TEXT NOT NULL DEFAULT 'document_check',
@@ -281,12 +295,32 @@ def init_db():
         "WHERE submission_token IS NOT NULL"
     )
     _migrate_task_owners(db)
+    if "user_identities" not in existing_tables:
+        _register_existing_subjects(db)
     _migrate_model_thinking_defaults(db)
     _clear_finished_task_api_keys(db)
     _initialize_query_indexes(db, existing_tables)
     _cleanup_orphaned_report_suppression_hits(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
+
+
+def _register_existing_subjects(db):
+    db.execute(
+        """
+        INSERT OR IGNORE INTO user_identities(subject, created_at)
+        SELECT subject, ? FROM (
+            SELECT owner_subject AS subject FROM tasks
+            UNION SELECT owner_subject FROM user_model_providers
+            UNION SELECT 'ip:' || ip FROM ip_usernames
+            UNION SELECT substr(key, 18) FROM settings
+                  WHERE substr(key, 1, 17) = 'identity_profile:'
+        )
+        WHERE (subject LIKE 'ip:%' AND length(subject) > 3)
+           OR (subject LIKE 'cookie_session:%' AND length(subject) > 15)
+        """,
+        (now_text(),),
+    )
 
 
 def _initialize_query_indexes(db, existing_tables: set[str]):

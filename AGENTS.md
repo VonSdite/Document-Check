@@ -13,6 +13,7 @@
 ## 文档索引
 
 - [README.md](README.md)：项目功能、配置、运行和使用说明。
+- [用户权限](docs/permissions.md)：两种用户身份的授权、页面范围和超级管理员专属能力。
 - [4+1 架构视图](docs/architecture-4plus1.md)：系统的场景、逻辑、开发、进程和物理视图。
 
 - [开发与模块边界](docs/development.md)：模块职责、依赖方向、扩展方式和回归验证。

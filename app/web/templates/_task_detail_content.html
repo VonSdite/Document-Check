@@ -1,4 +1,5 @@
 {% set source_files_available = task_source_files_available(task) %}
+{% set task_editable = mode != "admin" or can_manage_task(task) %}
 <div class="report-toolbar" data-detail-region="toolbar">
   <a class="report-back-button" href="{{ back_url }}">
     <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -25,6 +26,7 @@
       </svg>
       <span>导出 EXCEL</span>
     </a>
+    {% if task_editable %}
     <form class="report-import-form" method="post" enctype="multipart/form-data" action="{{ url_for('admin_import_task_excel' if mode == 'admin' else 'user_import_task_excel', task_id=task.id) }}" data-prevent-double-submit="true">
       <input class="report-import-input" name="report_excel" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-report-import-input required>
       <button class="primary-button report-export-button report-import-button" type="button" data-report-import-trigger>
@@ -37,7 +39,8 @@
       </button>
     </form>
     {% endif %}
-    {% if task.status in ["partial", "failed", "canceled"] %}
+    {% endif %}
+    {% if task_editable and task.status in ["partial", "failed", "canceled"] %}
     <form class="report-import-form" method="post" action="{{ url_for('admin_retry_task' if mode == 'admin' else 'user_retry_task', task_id=task.id) }}" data-prevent-double-submit="true">
       <input type="hidden" name="next" value="{{ task_detail_url }}">
       <button class="primary-button report-export-button" type="submit">
@@ -166,8 +169,10 @@
     <div class="panel-head">
       <div class="check-heading">
         <h2 class="check-title">{{ result.name }}</h2>
+        {% if task_editable %}
         <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消执行</button>
         <button type="button" class="small-button" data-retry-check="{{ result.code }}"{% if not result.can_retry %} hidden{% endif %}>重试</button>
+        {% endif %}
         <small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{% if result.execution_label %}状态：{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}{% endif %}</small>
       </div>
     </div>
@@ -229,6 +234,7 @@
               <span class="report-item-type-badge">{{ item.type_label }}</span>
             </td>
             <td class="report-acceptance-cell">
+              {% if task_editable %}
               <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">
                 {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
                 <label class="report-radio-option report-radio-option-{{ status }}">
@@ -247,6 +253,11 @@
                 {% endif %}
                 {% endfor %}
               </div>
+              {% else %}
+              <span>{{ item.acceptance_label }}</span>
+              {% if item.rejection_reason_label %}<div class="subline">{{ item.rejection_reason_label }}</div>{% endif %}
+              {% if item.rejection_note %}<div class="subline">{{ item.rejection_note }}</div>{% endif %}
+              {% endif %}
             </td>
           </tr>
           {% endfor %}

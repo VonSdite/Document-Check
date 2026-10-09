@@ -1,6 +1,7 @@
 import json
 
 from app.persistence.connection import get_db, now_text
+from app.persistence.permissions import register_subject
 
 
 def delete_task_record(db, task_id: int):
@@ -123,6 +124,8 @@ def set_ip_username(ip: str, username: str):
     username = str(username or "").strip()
     if not ip:
         return
+    if username:
+        register_subject(owner_subject_from_ip(ip))
     db = get_db()
     if not username:
         db.execute("DELETE FROM ip_usernames WHERE ip = ?", (ip,))

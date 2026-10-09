@@ -13,7 +13,7 @@ from app.persistence.connection import get_db
 from app.reporting.statistics import _admin_report_item_totals_for_where
 from app.web.auth import (
     _auth_mode,
-    admin_required,
+    permission_required,
 )
 
 
@@ -21,7 +21,7 @@ def register_overview_routes(app):
     admin_prefix = app.config["ADMIN_URL"]
 
     @app.get(admin_prefix)
-    @admin_required
+    @permission_required("stats.view_all")
     def admin_dashboard():
         selected_range = _admin_overview_range()
         overview = _admin_overview_data(

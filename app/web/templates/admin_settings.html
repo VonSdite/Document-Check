@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}{{ "IP 用户标记" if settings_tab == "ip_users" else "系统设置" }} - 文档智能门禁{% endblock %}
+{% set settings_title = "公共规则" if rules_only else "IP 用户标记" if settings_tab == "ip_users" else "系统设置" %}
+{% block title %}{{ settings_title }} - 文档智能门禁{% endblock %}
 
 {% block content %}
 <section class="page-title">
   <div>
-    <h1>{{ "IP 用户标记" if settings_tab == "ip_users" else "系统设置" }}</h1>
-    <p>{{ "为 IP 地址设置易识别的显示名称。" if settings_tab == "ip_users" else "维护运行参数、检查项与提示词配置。" }}</p>
+    <h1>{{ settings_title }}</h1>
+    <p>{{ "维护公共检查项、提示词和全局误报忽略规则。" if rules_only else "为 IP 地址设置易识别的显示名称。" if settings_tab == "ip_users" else "维护运行参数、检查项与提示词配置。" }}</p>
   </div>
 </section>
 
@@ -62,6 +63,7 @@
 </section>
 {% else %}
 
+{% if not rules_only %}
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
@@ -172,6 +174,8 @@
     </div>
   </div>
 </dialog>
+
+{% endif %}
 
 <section class="panel settings-section" id="report-suppression-rules" data-report-suppression-rules>
   <div class="settings-section-head">
@@ -362,6 +366,7 @@
 {% endfor %}
 </section>
 
+{% if not rules_only %}
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
@@ -411,5 +416,6 @@
     </label>
   </form>
 </section>
+{% endif %}
 {% endif %}
 {% endblock %}

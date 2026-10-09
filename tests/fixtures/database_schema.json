@@ -175,6 +175,12 @@
   ],
   [
     "table",
+    "user_identities",
+    "user_identities",
+    "CREATE TABLE user_identities (\n            subject TEXT PRIMARY KEY,\n            created_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
     "user_model_configs",
     "user_model_configs",
     "CREATE TABLE user_model_configs (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            provider_id INTEGER NOT NULL,\n            model_name TEXT NOT NULL,\n            force_disable_thinking INTEGER NOT NULL DEFAULT 0,\n            reasoning_effort TEXT,\n            sort_order INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            FOREIGN KEY(provider_id) REFERENCES user_model_providers(id) ON DELETE CASCADE,\n            UNIQUE(provider_id, model_name, force_disable_thinking)\n        )"
@@ -184,6 +190,12 @@
     "user_model_providers",
     "user_model_providers",
     "CREATE TABLE user_model_providers (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_subject TEXT NOT NULL,\n            name TEXT NOT NULL,\n            api_base TEXT NOT NULL,\n            api_key TEXT,\n            request_timeout INTEGER NOT NULL DEFAULT 3600,\n            max_input_chars INTEGER NOT NULL DEFAULT 500000,\n            is_active INTEGER NOT NULL DEFAULT 1,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
+    "user_permissions",
+    "user_permissions",
+    "CREATE TABLE user_permissions (\n            subject TEXT NOT NULL,\n            permission TEXT NOT NULL CHECK(permission IN (\n                'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage'\n            )),\n            PRIMARY KEY(subject, permission),\n            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE\n        )"
   ],
   [
     "trigger",

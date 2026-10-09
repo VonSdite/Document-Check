@@ -71,7 +71,7 @@ run.py 主进程
 | `contracts` | 任务类型、文件数量和输出条目限制等公共约束 |
 | `infrastructure` | 本地配置、网络、日志、文件操作；`runtime` 创建进程应用上下文 |
 | `persistence` | `connection` 管理连接，`schema` 管理初始化，`settings` 管理设置，`defaults` 管理默认检查项 |
-| `identity` | 独立身份数据类型、IP 与 cookie_session 身份解析 |
+| `identity` | 独立身份数据类型、IP 与 cookie_session 身份解析、管理权限定义与包含关系 |
 | `models` | 提供商与模型配置、模型发现、模型请求和流式协议 |
 | `documents` | PDF、DOCX、表格和标记文本提取，图片提取、页面渲染与视频抽帧 |
 | `checks` | 检查项目录、词表检查、链接校验、语种分析、报告证据约束 |

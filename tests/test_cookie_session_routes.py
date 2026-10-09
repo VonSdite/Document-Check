@@ -54,6 +54,7 @@ class CookieSessionRoutesTest(unittest.TestCase):
         self.addCleanup(resolver.stop)
 
     def _enable_cookie_session_for_ips(self, *ips: str):
+        self.app.config["REAL_IP_HEADER"] = "X-Real-IP"
         self.app.config["AUTH"] = _normalize_auth(
             {
                 "mode": "ip",

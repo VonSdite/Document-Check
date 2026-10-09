@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}用户权限 - 文档智能门禁{% endblock %}
+{% block extra_head %}
+<script src="{{ url_for('static', filename='permissions.js', v='20261009-1') }}" defer></script>
+{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <h1>用户权限</h1>
+    <p>为已有 IP 用户和统一登录用户设置管理权限，保存后在后续请求生效。</p>
+  </div>
+</section>
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>管理权限设置</h2>
+      <p>IP 权限随地址生效，统一登录权限随稳定用户 ID 生效，两种身份分别授权。</p>
+    </div>
+  </div>
+  <form method="get" class="permission-filter">
+    <label>用户来源
+      <select name="source">
+        <option value="">全部来源</option>
+        <option value="ip" {{ 'selected' if source == 'ip' else '' }}>IP 用户</option>
+        <option value="cookie_session" {{ 'selected' if source == 'cookie_session' else '' }}>统一登录用户</option>
+      </select>
+    </label>
+    <label class="permission-search">用户
+      <input name="keyword" value="{{ keyword }}" placeholder="按姓名、工号、IP 或稳定 ID 搜索">
+    </label>
+    <label>每页条数
+      <select name="per_page">
+        {% for option in pagination.per_page_options %}
+        <option value="{{ option }}" {{ 'selected' if option == pagination.per_page else '' }}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="primary-button">筛选</button>
+  </form>
+  {% if users %}
+  <div class="table-wrap">
+    <table class="permission-table">
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th>来源</th>
+          {% for code, permission in permissions.items() %}
+          <th title="{{ permission.description }}">{{ permission.label }}</th>
+          {% endfor %}
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        {% set form_id = 'permission-user-' ~ loop.index %}
+        <tr data-permission-user="{{ user.subject }}">
+          <td><strong>{{ user.label }}</strong><div class="subline">{{ user.subject }}</div></td>
+          <td>{{ 'IP' if user.subject.startswith('ip:') else '统一登录' }}</td>
+          {% for code, permission in permissions.items() %}
+          <td class="permission-choice">
+            <input type="checkbox" form="{{ form_id }}" name="permissions" value="{{ code }}" aria-label="{{ user.label }}：{{ permission.label }}" title="{{ permission.description }}" {{ 'checked' if code in user.permissions else '' }}>
+          </td>
+          {% endfor %}
+          <td class="right">
+            <form id="{{ form_id }}" method="post" data-permission-form data-prevent-double-submit="true">
+              <input type="hidden" name="subject" value="{{ user.subject }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="source" value="{{ source }}">
+              <input type="hidden" name="keyword" value="{{ keyword }}">
+              <input type="hidden" name="page" value="{{ pagination.page }}">
+              <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+              <button type="submit" class="small-button">保存</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state compact"><h3>没有匹配用户</h3><p>用户首次访问后会自动登记，也可调整筛选条件查看。</p></div>
+  {% endif %}
+  <nav class="pagination" aria-label="用户分页">
+    <span>共 {{ pagination.total }} 位用户</span>
+    <div class="pagination-controls">
+      <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for('admin_permissions', source=source, keyword=keyword, per_page=pagination.per_page, page=pagination.prev_page) }}">上一页</a>
+      <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
+      <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for('admin_permissions', source=source, keyword=keyword, per_page=pagination.per_page, page=pagination.next_page) }}">下一页</a>
+    </div>
+  </nav>
+  <p class="muted permission-note">管理全部任务包含查看权限。系统运行设置与用户授权由超级管理员维护。</p>
+</section>
+{% endblock %}

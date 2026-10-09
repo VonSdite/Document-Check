@@ -836,7 +836,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 f"/admin/tasks/{foreign_id}/retry-check",
                 json={"code": "check-b", "execution": 0},
             ).status_code,
-            302,
+            403,
         )
         for task_type in (IMAGE_TASK_TYPE, VIDEO_TASK_TYPE):
             media_id, _, _, _ = self._insert_retryable_task(task_type=task_type)

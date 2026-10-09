@@ -15,6 +15,7 @@ from app.tasks.retries import TaskRetryError, request_task_retry
 from app.web.auth import (
     _auth_mode,
     _current_user_identity,
+    can_manage_task,
 )
 from app.web.common import _safe_next_path
 from app.web.constants import (
@@ -99,6 +100,13 @@ def _get_user_task(task_id: int, *, lightweight=False, include_revision=True):
     if task is None:
         abort(404)
     return _task_with_live_result(task)
+
+
+def _get_manageable_task(task_id: int, **kwargs):
+    task = _get_task_or_404(task_id, **kwargs)
+    if not can_manage_task(task):
+        abort(403, description="当前用户只能管理自己的任务。")
+    return task
 
 
 def _task_with_live_result(task) -> dict:

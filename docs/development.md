@@ -72,6 +72,7 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 
 - `TaskSubmission` 承载文件列表、检查项、模型选择和提交令牌。`submit_document_task` 等提交服务返回 `SubmissionResult`，Web 层将消息和任务类型转换为提示与页面跳转。
 - `identity.models.UserIdentity` 是独立的身份数据类型。模型查询显式接收用户主体，任务提交使用身份快照保存归属信息。
+- `identity/permissions.py` 定义四项可分配管理权限；`persistence/permissions.py` 登记用户并保存授权，`web/auth.py` 在每个请求检查管理能力和任务范围。系统设置与用户授权使用独立的超级管理员登录。具体边界见 [用户权限](permissions.md)。
 - `models.service` 管理提供商与模型配置，`models.client` 管理模型协议请求，`models.discovery` 管理模型列表发现。
 - `reporting.service.update_report_item_type(task, data)` 接收复核数据，`reporting.excel.build_report_workbook(task)` 返回工作簿内容；下载响应由 `web.reports` 构造。
 - `reporting.statistics.refresh_stale_report_stats_batch()` 在后台应用上下文中运行。监督器直接调用报告模块。
@@ -97,6 +98,8 @@ Uvicorn 使用 `log_config=None` 保留应用日志配置，每个 Web worker �
 
 `web/__init__.py` 统一注册认证、用户任务、模型管理、管理概览、管理任务和系统设置路由。模板和静态资源分别保存在 `web/templates/` 与 `web/static/`。
 
+用户权限设置与公共规则入口分别由 `web/permissions.py` 和 `web/settings.py` 注册。管理页面按权限展示导航、统计和操作控件，服务端对对应请求执行相同的能力和数据范围检查。
+
 五类任务的用户端和管理端共用 `_task_check_picker.html`。单文档、跨语种、图片和视频检查默认全选，多文档对照检查传入 `check_first_only` 并默认选择第一项。各页面提交前统一校验至少选择一项。
 
 ## 回归验证
@@ -108,6 +111,7 @@ uv run python -m unittest discover -s tests
 ```
 
 - `tests/test_architecture.py` 检查目录约束、模块依赖、后台导入独立性、HTTP 路由和数据库结构。
+- `tests/test_permissions.py` 检查用户登记、IP 与 Cookie 授权隔离、只读报告、跨用户操作、批量越权、权限撤销和超级管理员专属功能。
 - `tests/fixtures/http_routes.json` 定义默认配置下的路由、端点名称与 HTTP 方法契约；代理前缀、认证、下载和参数行为由配置与路由测试覆盖。
 - `tests/fixtures/database_schema.json` 定义 SQLite 表、索引和触发器的兼容契约。
 - `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
