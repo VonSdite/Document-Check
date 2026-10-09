@@ -19,9 +19,6 @@ def register_permission_routes(app):
     @app.route(f"{app.config['ADMIN_URL']}/permissions", methods=["GET", "POST"])
     @admin_required
     def admin_permissions():
-        source = str(request.values.get("source") or "").strip()
-        if source not in {"ip", "cookie_session"}:
-            source = ""
         keyword = str(request.values.get("keyword") or "").strip()[:200]
         if request.method == "POST":
             token = session.get("permission_csrf_token", "")
@@ -48,7 +45,6 @@ def register_permission_routes(app):
             return redirect(
                 url_for(
                     "admin_permissions",
-                    source=source,
                     keyword=keyword,
                     page=request.form.get("page", "1"),
                     per_page=request.form.get("per_page", "20"),
@@ -56,14 +52,13 @@ def register_permission_routes(app):
             )
         per_page = _per_page_arg()
         users, page, total = permission_users(
-            source=source, keyword=keyword, page=_page_arg(), per_page=per_page
+            keyword=keyword, page=_page_arg(), per_page=per_page
         )
         token = session.setdefault("permission_csrf_token", secrets.token_urlsafe(32))
         return render_template(
             "admin_permissions.html",
             users=users,
             permissions=ASSIGNABLE_PERMISSIONS,
-            source=source,
             keyword=keyword,
             csrf_token=token,
             pagination=_pagination(page, total, per_page),

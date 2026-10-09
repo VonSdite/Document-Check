@@ -192,7 +192,26 @@ class UserPermissionTest(unittest.TestCase):
         self.assertIsNotNone(soup.select_one('nav a[href="/admin/permissions"]'))
         self.assertIsNone(soup.select_one("[data-permission-form] button"))
         self.assertIsNone(soup.select_one("[data-permission-status]"))
-        self.assertEqual(len(soup.select(".permission-table th")), 6)
+        self.assertEqual(len(soup.select(".permission-table th")), 5)
+        self.assertIsNone(soup.select_one('[name="source"]'))
+        self.assertIsNone(soup.select_one(".permission-table .subline"))
+        self.assertIsNone(soup.select_one(".page-title p"))
+        self.assertEqual(
+            soup.select_one('input[name="keyword"]')["placeholder"], "搜索用户"
+        )
+        self.assertEqual(
+            soup.select_one(
+                '[data-permission-user="cookie_session:stable-b"] strong'
+            ).text,
+            "李四（888）",
+        )
+        tips = soup.select(".permission-table th .help-tip")
+        self.assertEqual(len(tips), len(ASSIGNABLE_PERMISSIONS))
+        for tip, permission in zip(tips, ASSIGNABLE_PERMISSIONS.values()):
+            self.assertEqual(tip.text, "?")
+            self.assertEqual(tip["data-tip"], permission["description"])
+            self.assertEqual(tip["aria-label"], permission["label"] + "说明")
+            self.assertEqual(tip["type"], "button")
         self.assertIsNone(soup.select_one('input[name="permissions"][disabled]'))
         self.assertIsNone(soup.select_one(".topbar-account a"))
         for row in soup.select("[data-permission-user]"):
@@ -203,7 +222,7 @@ class UserPermissionTest(unittest.TestCase):
                     for checkbox in row.select('input[name="permissions"]')
                 )
             )
-        page = self.root.get("/admin/permissions?source=cookie_session&keyword=888")
+        page = self.root.get("/admin/permissions?keyword=888")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertEqual(
             [
@@ -212,7 +231,7 @@ class UserPermissionTest(unittest.TestCase):
             ],
             ["cookie_session:stable-b"],
         )
-        page = self.root.get("/admin/permissions?source=ip&keyword=办公室")
+        page = self.root.get("/admin/permissions?keyword=办公室")
         self.assertIn('data-permission-user="ip:10.0.0.8"', page.text)
 
     def test_user_pagination_preserves_filters_and_uses_shared_page_controls(self):
@@ -232,7 +251,6 @@ class UserPermissionTest(unittest.TestCase):
                 response = self.root.get(
                     "/admin/permissions",
                     query_string={
-                        "source": "cookie_session",
                         "keyword": "permission-user-",
                         "per_page": per_page,
                         "page": page,
@@ -243,7 +261,6 @@ class UserPermissionTest(unittest.TestCase):
                 self.assertEqual(len(soup.select("[data-permission-user]")), rows)
                 size = per_page if per_page in (20, 50, 100) else 20
                 filters = {
-                    "source": "cookie_session",
                     "keyword": "permission-user-",
                 }
                 size_form = soup.select_one(".pagination .page-size-form")
@@ -288,7 +305,6 @@ class UserPermissionTest(unittest.TestCase):
                     self.assertEqual(
                         parse_qs(urlparse(link["href"]).query),
                         {
-                            "source": [filters["source"]],
                             "keyword": [filters["keyword"]],
                             "per_page": [str(size)],
                             "page": [str(destination)],

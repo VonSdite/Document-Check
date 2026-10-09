@@ -3467,6 +3467,10 @@ body.table-column-resize-active * {
   margin-bottom: 16px;
 }
 
+.filter-bar:has(> label:only-of-type) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .task-filter-bar {
   grid-template-columns: minmax(150px, 180px) minmax(150px, 180px) minmax(280px, 1fr) auto;
 }

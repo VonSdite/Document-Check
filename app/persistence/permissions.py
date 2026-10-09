@@ -46,12 +46,9 @@ def replace_subject_permissions(subject: str, permissions: set[str]) -> bool:
     return True
 
 
-def permission_users(*, source: str, keyword: str, page: int, per_page: int):
+def permission_users(*, keyword: str, page: int, per_page: int):
     db = get_db()
     clauses, params = [], []
-    if source:
-        clauses.append("u.subject LIKE ?")
-        params.append(f"{source}:%")
     joins = """
         LEFT JOIN settings profile ON profile.key = 'identity_profile:' || u.subject
         LEFT JOIN ip_usernames names ON u.subject = 'ip:' || names.ip

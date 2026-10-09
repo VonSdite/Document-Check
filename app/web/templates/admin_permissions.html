@@ -8,21 +8,13 @@
 <section class="page-title">
   <div>
     <h1>用户权限</h1>
-    <p>修改后自动保存。</p>
   </div>
 </section>
 <section class="panel">
   <form method="get" class="filter-bar">
     <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
-    <label>用户来源
-      <select name="source">
-        <option value="">全部来源</option>
-        <option value="ip" {{ 'selected' if source == 'ip' else '' }}>IP 用户</option>
-        <option value="cookie_session" {{ 'selected' if source == 'cookie_session' else '' }}>统一登录用户</option>
-      </select>
-    </label>
     <label>用户
-      <input name="keyword" value="{{ keyword }}" placeholder="姓名、工号、IP 或用户 ID">
+      <input name="keyword" value="{{ keyword }}" placeholder="搜索用户">
     </label>
     <button type="submit" class="secondary-button">筛选</button>
   </form>
@@ -32,9 +24,13 @@
       <thead>
         <tr>
           <th>用户</th>
-          <th>来源</th>
           {% for code, permission in permissions.items() %}
-          <th title="{{ permission.description }}">{{ permission.label }}</th>
+          <th>
+            <span class="table-heading-help">
+              <span>{{ permission.label }}</span>
+              <button class="help-tip" type="button" aria-label="{{ permission.label }}说明" data-tip="{{ permission.description }}">?</button>
+            </span>
+          </th>
           {% endfor %}
         </tr>
       </thead>
@@ -43,17 +39,15 @@
         {% set form_id = 'permission-user-' ~ loop.index %}
         <tr data-permission-user="{{ user.subject }}">
           <td>
-            <strong>{{ user.label }}</strong><div class="subline">{{ user.subject }}</div>
+            <strong>{{ user.label }}</strong>
             <form id="{{ form_id }}" method="post" data-permission-form>
               <input type="hidden" name="subject" value="{{ user.subject }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="source" value="{{ source }}">
               <input type="hidden" name="keyword" value="{{ keyword }}">
               <input type="hidden" name="page" value="{{ pagination.page }}">
               <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
             </form>
           </td>
-          <td>{{ 'IP' if user.subject.startswith('ip:') else '统一登录' }}</td>
           {% for code, permission in permissions.items() %}
           <td class="permission-choice">
             <input type="checkbox" form="{{ form_id }}" name="permissions" value="{{ code }}" aria-label="{{ user.label }}：{{ permission.label }}" {{ 'checked' if code in user.permissions else '' }}>
@@ -67,6 +61,6 @@
   {% else %}
   <div class="empty-state compact"><h3>暂无匹配用户</h3></div>
   {% endif %}
-  {{ table_pagination.render('admin_permissions', pagination, filters={'source': source, 'keyword': keyword}, aria_label='用户分页') }}
+  {{ table_pagination.render('admin_permissions', pagination, filters={'keyword': keyword}, aria_label='用户分页') }}
 </section>
 {% endblock %}
