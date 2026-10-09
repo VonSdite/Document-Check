@@ -13,6 +13,7 @@ from app.checks.term_locations import (
     DocumentLocationIndex,
     excerpt_for,
 )
+from app.checks.text_content import DocumentBodyView, document_body_view
 from app.checks.text_language import (
     TEXT_LANGUAGE_CHINESE,
     estimate_text_language,
@@ -171,10 +172,11 @@ def build_common_terms_report(
     source_path: Path,
     issue_limit: int,
 ) -> dict:
-    language = estimate_text_language(document_text)
+    body = document_body_view(document_text)
+    language = estimate_text_language(body)
     active_rules = [rule for rule in rules if _rule_applies_to_language(rule, language)]
     skipped_rule_count = len(rules) - len(active_rules)
-    matches = _find_common_term_matches(document_text, active_rules)
+    matches = _find_common_term_matches(body, active_rules)
     context_summary = _common_terms_context_summary(
         source_path=source_path,
         language=language,
@@ -470,20 +472,20 @@ def _common_terms_context_summary(
 
 
 def _find_common_term_matches(
-    document_text: str, rules: list[CommonTermRule]
+    body: DocumentBodyView, rules: list[CommonTermRule]
 ) -> list[dict]:
-    text = str(document_text or "")
+    text = body.text
     candidates = []
     for rule in rules:
         for discouraged in rule.discouraged:
             if discouraged == rule.standard:
                 continue
             for match in _term_pattern(discouraged).finditer(text):
-                candidates.append(_candidate(match, rule.standard, "discouraged"))
+                candidates.append(_candidate(match, rule.standard, "discouraged", body))
         if _has_case(rule.standard):
             for match in _term_pattern(rule.standard, ignore_case=True).finditer(text):
                 if match.group(0) != rule.standard:
-                    candidates.append(_candidate(match, rule.standard, "case"))
+                    candidates.append(_candidate(match, rule.standard, "case", body))
 
     selected = []
     last_end = -1
@@ -501,7 +503,7 @@ def _find_common_term_matches(
         selected.append(candidate)
         last_end = candidate["end"]
 
-    document_index = DocumentLocationIndex(text)
+    document_index = DocumentLocationIndex(body.source)
     grouped = {}
     for candidate in selected:
         key = (candidate["observed"], candidate["standard"], candidate["kind"])
@@ -523,17 +525,24 @@ def _find_common_term_matches(
                 document_index.location_for(candidate["start"], candidate["observed"])
             )
             match["excerpts"].append(
-                excerpt_for(text, candidate["start"], len(candidate["observed"]))
+                excerpt_for(
+                    body.source,
+                    candidate["start"],
+                    candidate["end"] - candidate["start"],
+                )
             )
     return sorted(
         grouped.values(), key=lambda item: (item["first_position"], item["observed"])
     )
 
 
-def _candidate(match: re.Match, standard: str, kind: str) -> dict:
+def _candidate(
+    match: re.Match, standard: str, kind: str, body: DocumentBodyView
+) -> dict:
+    start, end = body.source_span(match.start(), match.end())
     return {
-        "start": match.start(),
-        "end": match.end(),
+        "start": start,
+        "end": end,
         "observed": match.group(0),
         "standard": standard,
         "kind": kind,

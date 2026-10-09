@@ -237,7 +237,7 @@ class CommonTermsTest(unittest.TestCase):
         )
 
         self.assertEqual(report["items"], [])
-        self.assertIn("文档语种估计：拉丁语系为主", report["summary"])
+        self.assertIn("文档语种估计：拉丁字母为主（含英文）", report["summary"])
         self.assertIn("已跳过 1 条不适用于当前文档语种", report["summary"])
 
     def test_chinese_only_scope_also_controls_automatic_case_check(self):
@@ -331,6 +331,130 @@ class CommonTermsTest(unittest.TestCase):
 
         self.assertEqual(len(report["items"]), 1)
         self.assertIn("不推荐用法“Open AI”", report["items"][0]["description"])
+
+    def test_smartlogger_url_paths_do_not_trigger_case_issues(self):
+        document_text = (
+            "file: User Manual.pdf\n[第59页]\n"
+            "This section describes how to log in to the SmartLogger and perform initial operations.\n"
+            "https://support.example.com/enterprise/en/smartlogger-pid-21294677/software\n"
+            "[超链接] https://support.example.com/enterprise/en/smartlogger-\n"
+            "pid-21294677/software（超链接：https://support.example.com/en/smartlogger/software）\n"
+            "[第60页]\nDownload the required software and verify the device configuration."
+        )
+
+        report = build_common_terms_report(
+            document_text,
+            [CommonTermRule("SmartLogger")],
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+
+        self.assertEqual(report["items"], [])
+        self.assertIn("文档语种估计：拉丁字母为主（含英文）", report["summary"])
+        self.assertNotIn("已跳过", report["summary"])
+
+    def test_keeps_visible_link_errors_and_original_locations(self):
+        document_text = (
+            "file: openai.pdf\n[第3页]\n"
+            "[openai](https://example.test/openai)\n"
+            "openai（超链接：#openai）\n"
+            "[超链接] openai（超链接：https://example.test/openai）\n"
+            "[第4页]\nOpenAI is the standard spelling."
+        )
+
+        report = build_common_terms_report(
+            document_text,
+            [CommonTermRule("OpenAI")],
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+
+        self.assertEqual(len(report["items"]), 1)
+        item = report["items"][0]
+        self.assertIn("共 2 处", item["description"])
+        self.assertIn("文件：openai.pdf，页码：第3页，行：3", item["location"])
+        self.assertIn("页码：第3页，行：4", item["location"])
+        self.assertIn("[openai](https://example.test/openai)", item["excerpt"])
+
+    def test_checks_table_anchors_and_decoded_entities_once(self):
+        document_text = (
+            "file: table.pdf\n[第5页]\n"
+            "[PDF结构化表格 page005-table001 开始；1行×2列；置信度=high]\n"
+            '<table id="page005-table001"><tr>\n'
+            '<td data-cell="A1" data-original-range="A1:B1">at&amp;t</td>\n'
+            '<td data-cell="B1" data-inherited-from="A1">at&amp;t</td>\n'
+            "</tr></table>\n[PDF结构化表格 page005-table001 结束]\n"
+            "[第6页]\nopen<b>ai</b> is mentioned in the next section."
+        )
+
+        report = build_common_terms_report(
+            document_text,
+            [CommonTermRule("AT&T"), CommonTermRule("OpenAI")],
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+
+        self.assertEqual(len(report["items"]), 2)
+        first, second = report["items"]
+        self.assertIn("“at&t”", first["description"])
+        self.assertIn("共 1 处", first["description"])
+        self.assertIn("页码：第5页，行：5", first["location"])
+        self.assertIn("at&amp;t", first["excerpt"])
+        self.assertIn("“openai”", second["description"])
+        self.assertIn("页码：第6页，行：10", second["location"])
+
+    def test_excludes_discouraged_terms_in_network_targets_and_code(self):
+        document_text = (
+            "[第7页]\n"
+            "https://example.test/Open-AI ftp://example.test/Open-AI www.example.test/Open-AI\n"
+            "Open-AI@example.test D:\\docs\\Open-AI\\guide /opt/Open-AI/config\n"
+            "`Open-AI --help`\n```text\nOpen-AI\n```\n"
+            "The Open-AI service is available."
+        )
+
+        report = build_common_terms_report(
+            document_text,
+            [CommonTermRule("OpenAI", ("Open-AI",))],
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+
+        self.assertEqual(len(report["items"]), 1)
+        self.assertIn("共 1 处", report["items"][0]["description"])
+        self.assertIn(
+            "The Open-AI service is available.", report["items"][0]["excerpt"]
+        )
+
+    def test_abbreviations_do_not_skip_chinese_rules(self):
+        document_text = (
+            "这是中文产品资料，用于说明设备安装、配置、操作、验证和维护方法。" * 3
+            + " TCP HTTP HTTPS API SDK CPU GPU VLAN WLAN SSH SNMP " * 16
+            + " https://support.example.com/documentation/configuration/troubleshooting "
+            * 14
+            + "请打开 APP，并完成设备配置。"
+        )
+
+        report = build_common_terms_report(
+            document_text,
+            [CommonTermRule("App", ("APP",), language_scope="zh")],
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+
+        self.assertEqual(len(report["items"]), 1)
+        self.assertIn("文档语种估计：中文为主", report["summary"])
+        self.assertNotIn("已跳过", report["summary"])
+
+    def test_explicit_alphanumeric_term_rule_checks_visible_product_name(self):
+        report = build_common_terms_report(
+            "This product supports wifi6 connections.",
+            [CommonTermRule("WiFi6")],
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+
+        self.assertEqual(len(report["items"]), 1)
+        self.assertIn("“wifi6”", report["items"][0]["description"])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from app.checks.text_content import DocumentBodyView, document_body_view
+
 TEXT_LANGUAGE_CHINESE = "zh"
 TEXT_LANGUAGE_MIXED = "mixed"
 TEXT_LANGUAGE_LATIN = "latin"
@@ -11,17 +13,40 @@ TEXT_LANGUAGE_UNKNOWN = "unknown"
 _TEXT_LANGUAGE_LABELS = {
     TEXT_LANGUAGE_CHINESE: "中文为主",
     TEXT_LANGUAGE_MIXED: "中英混合",
-    TEXT_LANGUAGE_LATIN: "拉丁语系为主",
+    TEXT_LANGUAGE_LATIN: "拉丁字母为主（含英文）",
     TEXT_LANGUAGE_OTHER: "其他语种为主",
     TEXT_LANGUAGE_UNCERTAIN: "语种特征较少，需人工确认",
     TEXT_LANGUAGE_UNKNOWN: "未识别",
 }
 
 _ASCII_TECHNICAL_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/+#-]*")
+_SHORT_UPPERCASE_TOKEN_RE = re.compile(r"\b[A-Z]{2,8}\b")
+_UPPERCASE_PROSE_WORDS = {
+    "A",
+    "AN",
+    "THE",
+    "THIS",
+    "THAT",
+    "IS",
+    "ARE",
+    "AND",
+    "OR",
+    "OF",
+    "FOR",
+    "TO",
+    "WITH",
+    "IN",
+    "ON",
+    "DO",
+    "NOT",
+    "PLEASE",
+    "USE",
+}
 
 
-def estimate_text_language(text: str) -> str:
-    value = str(text or "")
+def estimate_text_language(text: str | DocumentBodyView) -> str:
+    body = text if isinstance(text, DocumentBodyView) else document_body_view(text)
+    value = body.text
     cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", value))
     latin_chars = _latin_prose_character_count(value)
     japanese_chars = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff]", value))
@@ -97,7 +122,19 @@ def _latin_prose_character_count(value: str) -> int:
         ),
         value,
     )
+    if re.search(r"[a-z\u4e00-\u9fff]", text_without_identifiers):
+        text_without_identifiers = "\n".join(
+            _without_uppercase_abbreviations(line)
+            for line in text_without_identifiers.splitlines()
+        )
     return sum(_is_latin(character) for character in text_without_identifiers)
+
+
+def _without_uppercase_abbreviations(line: str) -> str:
+    words = re.findall(r"\b[A-Z]+\b", line)
+    if len(words) >= 4 and sum(word in _UPPERCASE_PROSE_WORDS for word in words) >= 2:
+        return line
+    return _SHORT_UPPERCASE_TOKEN_RE.sub("", line)
 
 
 def _is_alphanumeric_identifier(token: str) -> bool:

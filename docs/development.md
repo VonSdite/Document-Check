@@ -34,6 +34,8 @@ app = create_app()
 
 ## 文档解析与列表读取
 
+`checks/text_content.py` 提供 `DocumentBodyView`，供常用词匹配与语种估计共用。正文视图保留真实段落和表格锚点文字，过滤提取器标记、重复继承值、补充链接注释及技术内容，并解码 HTML 实体。区间映射将命中范围还原到原始提取文本，常用词报告从原文读取文件、页码、行号和片段。敏感词检查使用自身规则，超链接目标由独立的超链接检查处理。
+
 `documents/extraction/spreadsheets.py` 将 openpyxl 内部流式接口限定在 Excel 解析器内，使用已锁定的 `openpyxl==3.1.5`。`_WorksheetValuesAndFormulas` 继承 `WorkSheetParser`，一次解析保留缓存值和公式，并沿用其日期、时长、共享公式及单元格类型规则。超链接元数据单独流式读取，再通过行列范围索引参与文本生成。升级 openpyxl 时运行公式、日期、链接、稀疏行列和取消回归测试。
 
 `documents/extraction/pdf.py` 使用页面 rawdict 字符边界筛选可能含文字的单元格，字符信息不完整时保留原生提取回退。同页表格共用 TextPage，图片与绘图使用中心坐标索引。索引仅缩小候选范围，文本及非文本内容仍按现有坐标容差判定。
