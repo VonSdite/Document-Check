@@ -75,22 +75,8 @@ def register_user_tasks_routes(app):
                 _check_write_origin()
                 return view(*args, **kwargs)
 
-            def legacy_redirect(**kwargs):
-                target = url_for(view.__name__, **kwargs)
-                if request.query_string:
-                    target += "?" + request.query_string.decode("latin-1")
-                return redirect(
-                    target, code=302 if request.method in {"GET", "HEAD"} else 307
-                )
-
             app.add_url_rule(
                 rule, endpoint=view.__name__, view_func=protected, methods=methods
-            )
-            app.add_url_rule(
-                "/all/tasks" if rule == "/" else f"/all{rule}",
-                endpoint="user_all_" + view.__name__.removeprefix("user_"),
-                view_func=legacy_redirect,
-                methods=methods,
             )
             return protected
 

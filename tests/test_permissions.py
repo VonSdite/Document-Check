@@ -891,34 +891,6 @@ class UserPermissionTest(unittest.TestCase):
                 if console_logged_in:
                     self.client.post("/admin/logout")
 
-    def test_existing_all_task_addresses_redirect_to_the_shared_user_paths(self):
-        task = self.fixture._insert_task()
-        for cookie_mode in (False, True):
-            if cookie_mode:
-                self.cookie_mode()
-            for grants in ((), ("tasks.view_all",)):
-                self.grant(*grants)
-                for old, current in (
-                    ("/all/tasks", "/"),
-                    ("/all/consistency", "/consistency"),
-                    ("/all/language-consistency", "/language-consistency"),
-                    ("/all/images", "/images"),
-                    ("/all/videos", "/videos"),
-                    (f"/all/tasks/{task}", f"/tasks/{task}"),
-                    ("/all/task-statuses", "/task-statuses"),
-                ):
-                    with self.subTest(cookie_mode=cookie_mode, grants=grants, path=old):
-                        response = self.client.get(old + "?per_page=50&keyword=a%20b")
-                        self.assertEqual(response.status_code, 302)
-                        self.assertEqual(
-                            response.location, current + "?per_page=50&keyword=a%20b"
-                        )
-                response = self.client.post(
-                    "/all/tasks", data={"submission_token": "same-request"}
-                )
-                self.assertEqual(response.status_code, 307)
-                self.assertEqual(response.location, "/")
-
     def test_all_task_pages_and_refreshes_keep_user_links_in_both_identity_modes(self):
         Path(self.app.config["UPLOAD_FOLDER"], "stored.txt").write_text(
             "原始文件", encoding="utf-8"
