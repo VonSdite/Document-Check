@@ -16,6 +16,8 @@ from app.web.auth import (
     _auth_mode,
     _current_user_identity,
     can_manage_task,
+    has_permission,
+    is_superadmin,
 )
 from app.web.common import _safe_next_path
 from app.web.constants import (
@@ -78,6 +80,10 @@ def _get_task_or_404(task_id: int, *, lightweight=False, include_revision=True):
 
 
 def _get_user_task(task_id: int, *, lightweight=False, include_revision=True):
+    if has_permission("tasks.view_all"):
+        return _get_task_or_404(
+            task_id, lightweight=lightweight, include_revision=include_revision
+        )
     selection = _task_detail_selection(lightweight, include_revision)
     identity = _current_user_identity()
     task = (
@@ -103,7 +109,8 @@ def _get_user_task(task_id: int, *, lightweight=False, include_revision=True):
 
 
 def _get_manageable_task(task_id: int, **kwargs):
-    task = _get_task_or_404(task_id, **kwargs)
+    loader = _get_task_or_404 if is_superadmin() else _get_user_task
+    task = loader(task_id, **kwargs)
     if not can_manage_task(task):
         abort(403, description="当前用户只能管理自己的任务。")
     return task

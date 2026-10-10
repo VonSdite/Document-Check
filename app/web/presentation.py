@@ -30,6 +30,7 @@ from app.web.auth import (
     has_permission,
     is_superadmin,
     management_entry_endpoint,
+    task_permission_signature,
 )
 from app.web.common import (
     _current_relative_url,
@@ -45,6 +46,7 @@ FRONTEND_INJECTION_FILENAME = "frontend-injection.html"
 def register_presentation_routes(app):
     app.add_template_global(has_permission, "has_permission")
     app.add_template_global(can_manage_task, "can_manage_task")
+    app.add_template_global(task_permission_signature, "task_permission_signature")
     app.add_template_global(_task_endpoint, "task_endpoint")
     app.add_template_global(STATUS_LABELS, "STATUS_LABELS")
 
@@ -101,10 +103,7 @@ def register_presentation_routes(app):
 
     @app.after_request
     def include_user_profile(response):
-        if request.endpoint and (
-            request.endpoint.startswith(("admin_", "user_all_"))
-            or request.endpoint in {"user_overview", "user_rules"}
-        ):
+        if request.endpoint and request.endpoint.startswith(("admin_", "user_")):
             response.headers["Cache-Control"] = "no-store"
         identity = g.get("user_identity")
         if (

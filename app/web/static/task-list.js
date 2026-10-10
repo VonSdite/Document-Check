@@ -222,6 +222,10 @@
     );
     if (!next || !nextStats)
       throw new Error("任务列表读取失败，请重试或重新登录。");
+    if (stats?.dataset.permissionSignature !== nextStats.dataset.permissionSignature) {
+      window.location.reload();
+      return;
+    }
     const scrollX = window.scrollX;
     const scrollY = window.scrollY;
     current.style.minHeight = "";

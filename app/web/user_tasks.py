@@ -1,3 +1,5 @@
+from functools import wraps
+
 from flask import flash, redirect, render_template, request, url_for
 
 from app.contracts.task_types import (
@@ -14,7 +16,12 @@ from app.reporting.service import (
     _uses_compact_media_report,
 )
 from app.tasks.files import _task_document_groups
-from app.web.auth import _current_user_identity
+from app.web.auth import (
+    _check_write_origin,
+    _current_user_identity,
+    has_permission,
+    task_permission_signature,
+)
 from app.web.common import _safe_next_path
 from app.web.reports import (
     _export_task_report,
@@ -34,6 +41,7 @@ from app.web.task_actions import (
     _bulk_delete_tasks,
     _cancel_task,
     _delete_task,
+    _get_manageable_task,
     _get_user_task,
     _retry_task,
     _task_action_redirect,
@@ -60,21 +68,49 @@ from app.web.task_media import (
 
 
 def register_user_tasks_routes(app):
-    @app.route("/", methods=["GET", "POST"])
+    def route(rule, *, methods=("GET",)):
+        def register(view):
+            @wraps(view)
+            def protected(*args, **kwargs):
+                _check_write_origin()
+                return view(*args, **kwargs)
+
+            def legacy_redirect(**kwargs):
+                target = url_for(view.__name__, **kwargs)
+                if request.query_string:
+                    target += "?" + request.query_string.decode("latin-1")
+                return redirect(
+                    target, code=302 if request.method in {"GET", "HEAD"} else 307
+                )
+
+            app.add_url_rule(
+                rule, endpoint=view.__name__, view_func=protected, methods=methods
+            )
+            app.add_url_rule(
+                "/all/tasks" if rule == "/" else f"/all{rule}",
+                endpoint="user_all_" + view.__name__.removeprefix("user_"),
+                view_func=legacy_redirect,
+                methods=methods,
+            )
+            return protected
+
+        return register
+
+    @route("/", methods=["GET", "POST"])
     def user_tasks():
         identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
         return _render_user_task_list(identity, DOCUMENT_TASK_TYPE, "user_tasks.html")
 
-    @app.route("/tasks/new", methods=["GET", "POST"])
+    @route("/tasks/new", methods=["GET", "POST"])
     def user_new_task():
         identity = _current_user_identity()
         if request.method == "POST":
             return create_task_for_identity(identity, admin_created=False)
         return redirect(url_for("user_tasks"))
 
-    @app.route("/consistency", methods=["GET", "POST"])
+    @route("/consistency", methods=["GET", "POST"])
     def user_consistency():
         identity = _current_user_identity()
         if request.method == "POST":
@@ -84,7 +120,7 @@ def register_user_tasks_routes(app):
             identity, CONSISTENCY_TASK_TYPE, "user_consistency.html"
         )
 
-    @app.route("/language-consistency", methods=["GET", "POST"])
+    @route("/language-consistency", methods=["GET", "POST"])
     def user_language_consistency():
         identity = _current_user_identity()
         if request.method == "POST":
@@ -96,7 +132,7 @@ def register_user_tasks_routes(app):
             identity, LANGUAGE_CONSISTENCY_TASK_TYPE, "user_language_consistency.html"
         )
 
-    @app.route("/images", methods=["GET", "POST"])
+    @route("/images", methods=["GET", "POST"])
     def user_images():
         identity = _current_user_identity()
         if request.method == "POST":
@@ -104,7 +140,7 @@ def register_user_tasks_routes(app):
 
         return _render_user_task_list(identity, IMAGE_TASK_TYPE, "user_images.html")
 
-    @app.route("/videos", methods=["GET", "POST"])
+    @route("/videos", methods=["GET", "POST"])
     def user_videos():
         identity = _current_user_identity()
         if request.method == "POST":
@@ -112,19 +148,24 @@ def register_user_tasks_routes(app):
 
         return _render_user_task_list(identity, VIDEO_TASK_TYPE, "user_videos.html")
 
-    @app.get("/task-statuses")
+    @route("/task-statuses")
     def user_task_statuses():
         identity = _current_user_identity()
         task_type = _validated_task_status_type()
         if task_type is None:
             return {"error": "任务类型无效。"}, 400
-        return _task_status_payload(
+        all_tasks = has_permission("tasks.view_all")
+        payload = _task_status_payload(
             task_type,
-            owner_clause="t.owner_subject = ?",
-            owner_params=(identity.subject,),
+            owner_clause="1=1" if all_tasks else "t.owner_subject = ?",
+            owner_params=() if all_tasks else (identity.subject,),
         )
+        payload["permission_signature"] = task_permission_signature()
+        if all_tasks and not has_permission("stats.view_all"):
+            payload["counts"] = {}
+        return payload
 
-    @app.get("/tasks/<int:task_id>")
+    @route("/tasks/<int:task_id>")
     def user_task_detail(task_id):
         polling = request.args.get("_poll") == "1"
         task = _get_user_task(task_id, lightweight=polling)
@@ -145,7 +186,6 @@ def register_user_tasks_routes(app):
             cancel_check_url=url_for("user_cancel_check", task_id=task_id),
             retry_check_url=url_for("user_retry_check", task_id=task_id),
             model_output_url=url_for("user_model_output", task_id=task_id),
-            mode="user",
             task=task,
             results=results,
             report_totals=_report_item_totals(results),
@@ -166,78 +206,78 @@ def register_user_tasks_routes(app):
             return progress
         return html
 
-    @app.get("/tasks/<int:task_id>/model-output")
+    @route("/tasks/<int:task_id>/model-output")
     def user_model_output(task_id):
         task = _get_user_task(task_id, lightweight=True, include_revision=False)
         return model_output_response(task)
 
-    @app.post("/tasks/<int:task_id>/retry-check")
+    @route("/tasks/<int:task_id>/retry-check", methods=["POST"])
     def user_retry_check(task_id):
-        task = _get_user_task(task_id, lightweight=True)
+        task = _get_manageable_task(task_id, lightweight=True)
         return retry_check(task)
 
-    @app.post("/tasks/<int:task_id>/cancel-check")
+    @route("/tasks/<int:task_id>/cancel-check", methods=["POST"])
     def user_cancel_check(task_id):
-        task = _get_user_task(task_id, lightweight=True)
+        task = _get_manageable_task(task_id, lightweight=True)
         return cancel_check(task)
 
-    @app.post("/tasks/<int:task_id>/report-items")
+    @route("/tasks/<int:task_id>/report-items", methods=["POST"])
     def user_update_report_item_type(task_id):
-        task = _get_user_task(task_id)
+        task = _get_manageable_task(task_id)
         return _update_report_item_type(task)
 
-    @app.get("/tasks/<int:task_id>/export")
+    @route("/tasks/<int:task_id>/export")
     def user_export_task(task_id):
         task = _get_user_task(task_id)
         return _export_task_report(task)
 
-    @app.get("/tasks/<int:task_id>/export.xlsx")
+    @route("/tasks/<int:task_id>/export.xlsx")
     def user_export_task_excel(task_id):
         task = _get_user_task(task_id)
         return _export_task_report_excel(task)
 
-    @app.post("/tasks/<int:task_id>/import.xlsx")
+    @route("/tasks/<int:task_id>/import.xlsx", methods=["POST"])
     def user_import_task_excel(task_id):
-        task = _get_user_task(task_id)
+        task = _get_manageable_task(task_id)
         return _import_task_report_excel(task, "user_task_detail")
 
-    @app.get("/tasks/<int:task_id>/document")
+    @route("/tasks/<int:task_id>/document")
     def user_download_task_document(task_id):
         task = _get_user_task(task_id)
         return _download_task_document(task, "user_task_detail")
 
-    @app.get("/tasks/<int:task_id>/media/<media_id>")
+    @route("/tasks/<int:task_id>/media/<media_id>")
     def user_task_media(task_id, media_id):
         task = _get_user_task(task_id)
         return _send_task_media(task, media_id)
 
-    @app.get("/tasks/<int:task_id>/video")
+    @route("/tasks/<int:task_id>/video")
     def user_task_video(task_id):
         task = _get_user_task(task_id)
         return _stream_task_video(task)
 
-    @app.post("/tasks/<int:task_id>/cancel")
+    @route("/tasks/<int:task_id>/cancel", methods=["POST"])
     def user_cancel_task(task_id):
-        task = _get_user_task(task_id)
+        task = _get_manageable_task(task_id)
         _cancel_task(task)
         flash("已提交取消请求。", "success")
         return redirect(_task_action_redirect("user_tasks"))
 
-    @app.post("/tasks/<int:task_id>/retry")
+    @route("/tasks/<int:task_id>/retry", methods=["POST"])
     def user_retry_task(task_id):
-        task = _get_user_task(task_id)
+        task = _get_manageable_task(task_id)
         _retry_task(task)
         return redirect(
             _task_action_redirect(_task_list_endpoint(False, task["task_type"]))
         )
 
-    @app.post("/tasks/<int:task_id>/delete")
+    @route("/tasks/<int:task_id>/delete", methods=["POST"])
     def user_delete_task(task_id):
-        task = _get_user_task(task_id)
+        task = _get_manageable_task(task_id)
         if _delete_task(task):
             flash("任务已删除。", "success")
         return redirect(url_for(_task_list_endpoint(False, task["task_type"])))
 
-    @app.post("/tasks/bulk-delete")
+    @route("/tasks/bulk-delete", methods=["POST"])
     def user_bulk_delete_tasks():
-        return _bulk_delete_tasks(_get_user_task, admin_created=False)
+        return _bulk_delete_tasks(_get_manageable_task, admin_created=False)

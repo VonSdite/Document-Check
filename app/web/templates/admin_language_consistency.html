@@ -83,7 +83,7 @@
 
 {% endif %}
 
-<div class="admin-metric-groups" data-refresh-region="stats" data-permission-signature="{{ '1' if has_permission('tasks.manage_all') else '0' }}:{{ '1' if has_permission('stats.view_all') else '0' }}" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}" data-refresh-url="{{ refresh_url }}">
+<div class="admin-metric-groups" data-refresh-region="stats" data-permission-signature="{{ task_permission_signature() }}" data-refresh-active="{{ '1' if totals.queued or totals.running else '0' }}" data-refresh-url="{{ refresh_url }}">
 {% if has_permission("stats.view_all") %}
   <section class="admin-metric-group">
     <h2 class="admin-metric-group-title">任务概况</h2>

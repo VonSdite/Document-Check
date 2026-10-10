@@ -26,7 +26,7 @@ from app.reporting.service import (
 )
 from app.reporting.statistics import _task_report_stat_rows_for_where
 from app.tasks.activity import activity_label, task_activities
-from app.web.auth import _auth_mode, _current_user_identity
+from app.web.auth import _auth_mode, _current_user_identity, has_permission
 from app.web.common import _row_value, _task_endpoint
 from app.web.constants import (
     DEFAULT_TASKS_PER_PAGE,
@@ -138,6 +138,15 @@ def _render_list_template(template_name, **context):
 
 
 def _render_user_task_list(identity, task_type, template_name):
+    if has_permission("tasks.view_all"):
+        return _render_admin_task_list(
+            task_type=task_type,
+            template_name=template_name.replace("user_", "admin_", 1),
+            totals_task_type=task_type,
+            check_items=[]
+            if _task_list_partial()
+            else get_enabled_check_items(task_type),
+        )
     page, per_page, total, rows, stats = _user_task_list_data(identity, task_type)
     partial = _task_list_partial()
     return _render_list_template(

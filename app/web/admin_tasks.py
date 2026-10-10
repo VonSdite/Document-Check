@@ -8,7 +8,12 @@ from app.reporting.service import (
     _uses_compact_media_report,
 )
 from app.tasks.files import _task_document_groups
-from app.web.auth import _current_user_identity, has_permission, permission_required
+from app.web.auth import (
+    _current_user_identity,
+    has_permission,
+    permission_required,
+    task_permission_signature,
+)
 from app.web.common import _safe_next_path, _task_endpoint
 from app.web.reports import (
     _export_task_report,
@@ -60,7 +65,6 @@ from app.web.task_media import (
 
 def register_admin_tasks_routes(app):
     _register_all_task_routes(app, app.config["ADMIN_URL"], "admin_")
-    _register_all_task_routes(app, "/all", "user_all_")
 
 
 def _register_all_task_routes(app, route_prefix, endpoint_prefix):
@@ -99,9 +103,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
         if task_type is None:
             return {"error": "任务类型无效。"}, 400
         payload = _task_status_payload(task_type, owner_clause="1=1", owner_params=())
-        payload["permission_signature"] = (
-            f"{int(has_permission('tasks.manage_all'))}:{int(has_permission('stats.view_all'))}"
-        )
+        payload["permission_signature"] = task_permission_signature()
         if not has_permission("stats.view_all"):
             payload["counts"] = {}
         return payload
@@ -159,7 +161,6 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             cancel_check_url=url_for(_task_endpoint("cancel_check"), task_id=task_id),
             retry_check_url=url_for(_task_endpoint("retry_check"), task_id=task_id),
             model_output_url=url_for(_task_endpoint("model_output"), task_id=task_id),
-            mode="admin",
             task=task,
             results=results,
             report_totals=_report_item_totals(results),

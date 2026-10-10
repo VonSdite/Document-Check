@@ -83,7 +83,7 @@
 
 {% endif %}
 
-<section class="metric-grid five" data-refresh-region="stats" data-refresh-active="{{ '1' if stats.queued or stats.running else '0' }}" data-refresh-url="{{ refresh_url }}">
+<section class="metric-grid five" data-refresh-region="stats" data-permission-signature="{{ task_permission_signature() }}" data-refresh-active="{{ '1' if stats.queued or stats.running else '0' }}" data-refresh-url="{{ refresh_url }}">
   <div class="metric"><span>全部</span><strong data-task-stat="tasks">{{ stats.total }}</strong></div>
   <div class="metric"><span>排队</span><strong data-task-stat="queued">{{ stats.queued }}</strong></div>
   <div class="metric"><span>检查中</span><strong data-task-stat="running">{{ stats.running }}</strong></div>

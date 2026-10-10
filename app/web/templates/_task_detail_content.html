@@ -1,5 +1,5 @@
 {% set source_files_available = task_source_files_available(task) %}
-{% set task_editable = mode != "admin" or can_manage_task(task) %}
+{% set task_editable = can_manage_task(task) %}
 <div class="report-toolbar" data-detail-region="toolbar">
   <a class="report-back-button" href="{{ back_url }}">
     <svg class="report-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">

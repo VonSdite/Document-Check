@@ -258,6 +258,21 @@ def has_permission(permission: str) -> bool:
     return permission in current_permissions()
 
 
+def task_permission_signature() -> str:
+    return ":".join(
+        str(int(has_permission(permission))) for permission in ASSIGNABLE_PERMISSIONS
+    )
+
+
+def _check_write_origin():
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("Origin")
+        if request.headers.get("Sec-Fetch-Site") == "cross-site" or (
+            origin and origin.rstrip("/") != request.host_url.rstrip("/")
+        ):
+            abort(403, description="管理操作需要从本站页面发起。")
+
+
 def can_manage_task(task) -> bool:
     if is_superadmin() or has_permission("tasks.manage_all"):
         return True
@@ -274,12 +289,7 @@ def permission_required(permission: str, *, page: bool = False):
     def decorate(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
-            if request.method not in {"GET", "HEAD", "OPTIONS"}:
-                origin = request.headers.get("Origin")
-                if request.headers.get("Sec-Fetch-Site") == "cross-site" or (
-                    origin and origin.rstrip("/") != request.host_url.rstrip("/")
-                ):
-                    abort(403, description="管理操作需要从本站页面发起。")
+            _check_write_origin()
             if is_superadmin():
                 return admin_required(view)(*args, **kwargs)
             try:
@@ -308,7 +318,7 @@ def management_entry_endpoint() -> str:
     if has_permission("stats.view_all"):
         return "admin_dashboard" if is_superadmin() else "user_overview"
     if has_permission("tasks.view_all"):
-        return "admin_tasks" if is_superadmin() else "user_all_tasks"
+        return "admin_tasks" if is_superadmin() else "user_tasks"
     if has_permission("rules.manage"):
         return "admin_rules" if is_superadmin() else "user_rules"
     return "user_tasks"

@@ -7,8 +7,6 @@ def _task_endpoint(name: str) -> str:
     endpoint = request.endpoint or ""
     if endpoint.startswith("admin_"):
         return f"admin_{name}"
-    if endpoint.startswith("user_all_"):
-        return f"user_all_{name}"
     return f"user_{name}"
 
 
@@ -50,12 +48,6 @@ def _request_entity_too_large_redirect() -> str:
         "admin_language_consistency",
         "admin_images",
         "admin_videos",
-        "user_all_tasks",
-        "user_all_new_task",
-        "user_all_consistency",
-        "user_all_language_consistency",
-        "user_all_images",
-        "user_all_videos",
     }
     if request.endpoint in upload_endpoints:
         return url_for(request.endpoint)
