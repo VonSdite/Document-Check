@@ -270,7 +270,7 @@ def can_manage_task(task) -> bool:
         return False
 
 
-def permission_required(permission: str):
+def permission_required(permission: str, *, page: bool = False):
     def decorate(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
@@ -287,6 +287,15 @@ def permission_required(permission: str):
             except AuthenticationRequired:
                 return _login_required_response()
             if not has_permission(permission):
+                if (
+                    page
+                    and request.method in {"GET", "HEAD"}
+                    and not request.is_json
+                    and not _wants_json_response()
+                    and request.args.get("_partial") != "1"
+                    and request.args.get("_poll") != "1"
+                ):
+                    return redirect(url_for(management_entry_endpoint()))
                 abort(403, description="当前用户未获得此管理权限。")
             return view(*args, **kwargs)
 

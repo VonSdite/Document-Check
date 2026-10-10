@@ -223,7 +223,9 @@ class UserPermissionTest(unittest.TestCase):
             )
             for path in ("/overview", "/rules"):
                 with self.subTest(cookie_mode=cookie_mode, path=path):
-                    self.assertEqual(self.client.get(path).status_code, 403)
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response.location, "/all/tasks")
             page = self.client.get(f"/all/tasks/{task}")
             self.assertEqual(page.status_code, 200)
             soup = BeautifulSoup(page.text, "html.parser")
@@ -242,7 +244,9 @@ class UserPermissionTest(unittest.TestCase):
             self.grant()
             for path in ("/all/tasks", f"/all/tasks/{task}", "/overview", "/rules"):
                 with self.subTest(cookie_mode=cookie_mode, revoked_path=path):
-                    self.assertEqual(self.client.get(path).status_code, 403)
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(response.location, "/")
             soup = BeautifulSoup(self.client.get("/").text, "html.parser")
             self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
             self.assertIsNone(soup.select_one('nav.nav a[href="/all/tasks"]'))
@@ -283,6 +287,90 @@ class UserPermissionTest(unittest.TestCase):
             ):
                 with self.subTest(cookie_mode=cookie_mode, superadmin_path=path):
                     self.assertEqual(self.root.get(path).status_code, 200)
+
+    def test_denied_user_pages_redirect_to_authorized_pages_without_console_links(self):
+        task_pages = (
+            "/all/tasks",
+            "/all/tasks/new",
+            "/all/consistency",
+            "/all/language-consistency",
+            "/all/images",
+            "/all/videos",
+            "/all/tasks/9999",
+        )
+        cases = (
+            ((), "/", (*task_pages, "/overview", "/rules")),
+            (("stats.view_all",), "/overview", (*task_pages, "/rules")),
+            (("tasks.view_all",), "/all/tasks", ("/overview", "/rules")),
+            (("rules.manage",), "/rules", (*task_pages, "/overview")),
+        )
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            for console_logged_in in (False, True):
+                if console_logged_in:
+                    self.client.post(
+                        "/admin/login",
+                        data={"username": "root", "password": "test-root"},
+                    )
+                for grants, destination, paths in cases:
+                    self.grant(*grants)
+                    for path in paths:
+                        with self.subTest(
+                            cookie_mode=cookie_mode,
+                            console_logged_in=console_logged_in,
+                            grants=grants,
+                            path=path,
+                        ):
+                            page = self.client.get(path, follow_redirects=True)
+                            self.assertEqual(len(page.history), 1)
+                            self.assertEqual(page.history[0].status_code, 302)
+                            self.assertEqual(page.history[0].location, destination)
+                            self.assertEqual(page.status_code, 200)
+                            self.assertEqual(page.request.path, destination)
+                            soup = BeautifulSoup(page.text, "html.parser")
+                            self.assertFalse(
+                                any(
+                                    link["href"].startswith("/admin")
+                                    for link in soup.select(".topbar a[href]")
+                                )
+                            )
+                if console_logged_in:
+                    self.client.post("/admin/logout")
+
+    def test_denied_interfaces_and_partial_requests_return_403_without_redirects(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            self.grant()
+            for path in ("/all/tasks", "/all/tasks/9999", "/overview", "/rules"):
+                for headers, query in (
+                    ({"X-Requested-With": "fetch"}, {}),
+                    ({"Accept": "application/json"}, {}),
+                    ({"Content-Type": "application/json"}, {}),
+                    ({}, {"_partial": "1"}),
+                    ({}, {"_poll": "1"}),
+                ):
+                    with self.subTest(cookie_mode=cookie_mode, path=path, query=query):
+                        response = self.client.get(
+                            path, headers=headers, query_string=query
+                        )
+                        self.assertEqual(response.status_code, 403)
+                        self.assertNotIn("Location", response.headers)
+            for path in (
+                "/all/task-statuses",
+                "/all/tasks/9999/model-output",
+                "/all/tasks/9999/export",
+                "/all/tasks/9999/export.xlsx",
+                "/all/tasks/9999/document",
+                "/all/tasks/9999/media/missing",
+                "/all/tasks/9999/video",
+            ):
+                with self.subTest(cookie_mode=cookie_mode, interface=path):
+                    self.assertEqual(self.client.get(path).status_code, 403)
+            for path in ("/all/tasks", "/all/tasks/9999/delete", "/rules"):
+                with self.subTest(cookie_mode=cookie_mode, mutation=path):
+                    self.assertEqual(self.client.post(path).status_code, 403)
 
     def test_custom_console_prefix_is_superadmin_only_and_user_paths_stay_independent(
         self,
@@ -556,7 +644,7 @@ class UserPermissionTest(unittest.TestCase):
         self.assertEqual(self.client.get("/all/tasks").status_code, 200)
         self.assertEqual(self.save(self.subject, ["stats.view_all"]).status_code, 302)
         self.assertEqual(self.client.get("/overview").status_code, 200)
-        self.assertEqual(self.client.get("/all/tasks").status_code, 403)
+        self.assertEqual(self.client.get("/all/tasks").location, "/overview")
         self.assertEqual(self.save(self.subject, []).status_code, 302)
         self.assertEqual(
             self.client.get(
@@ -701,7 +789,7 @@ class UserPermissionTest(unittest.TestCase):
                 )
         own = self.fixture._insert_task()
         self.assertEqual(self.client.post(f"/all/tasks/{own}/delete").status_code, 302)
-        self.assertEqual(self.client.get("/overview").status_code, 403)
+        self.assertEqual(self.client.get("/overview").location, "/all/tasks")
 
     def test_all_task_pages_and_refreshes_keep_user_links_in_both_identity_modes(self):
         Path(self.app.config["UPLOAD_FOLDER"], "stored.txt").write_text(
@@ -958,7 +1046,7 @@ class UserPermissionTest(unittest.TestCase):
                 self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
                 self.assertIsNone(soup.select_one('nav a[href="/admin/permissions"]'))
                 self.assertIsNone(soup.select_one('form[action="/admin/logout"]'))
-                self.assertEqual(self.client.get("/all/tasks").status_code, 403)
+                self.assertEqual(self.client.get("/all/tasks").location, "/overview")
                 self.assertEqual(self.client.get("/admin/overview").status_code, 403)
                 self.assertEqual(
                     soup.select_one(".overview-filter")["action"], "/overview"
@@ -988,16 +1076,22 @@ class UserPermissionTest(unittest.TestCase):
         for cookie_mode in (False, True):
             if cookie_mode:
                 self.cookie_mode()
-            for grants in ((), ("tasks.manage_all",), ("rules.manage",)):
+            for grants, destination in (
+                ((), "/"),
+                (("tasks.manage_all",), "/all/tasks"),
+                (("rules.manage",), "/rules"),
+            ):
                 with self.subTest(cookie_mode=cookie_mode, grants=grants):
                     self.grant(*grants)
-                    self.assertEqual(self.client.get("/overview").status_code, 403)
+                    self.assertEqual(self.client.get("/overview").location, destination)
                     self.grant(*grants, "stats.view_all")
                     self.assertEqual(self.client.get("/overview").status_code, 200)
                     self.grant(*grants)
                     for headers in ({}, {"X-Requested-With": "fetch"}):
                         response = self.client.get("/overview", headers=headers)
-                        self.assertEqual(response.status_code, 403)
+                        self.assertEqual(response.status_code, 403 if headers else 302)
+                        if not headers:
+                            self.assertEqual(response.location, destination)
                         self.assertEqual(response.headers["Cache-Control"], "no-store")
 
     def test_superadmin_overview_links_keep_console_path(self):

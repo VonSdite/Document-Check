@@ -34,7 +34,7 @@ def register_overview_routes(app):
         return dashboard_response()
 
     @app.get("/overview")
-    @permission_required("stats.view_all")
+    @permission_required("stats.view_all", page=True)
     def user_overview():
         return dashboard_response()
 

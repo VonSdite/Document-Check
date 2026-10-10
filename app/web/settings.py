@@ -127,7 +127,7 @@ def register_settings_routes(app):
         return settings_response(rules_only=True)
 
     @app.route("/rules", methods=["GET", "POST"])
-    @permission_required("rules.manage")
+    @permission_required("rules.manage", page=True)
     def user_rules():
         return settings_response(rules_only=True)
 

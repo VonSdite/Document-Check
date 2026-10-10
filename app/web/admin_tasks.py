@@ -64,9 +64,9 @@ def register_admin_tasks_routes(app):
 
 
 def _register_all_task_routes(app, route_prefix, endpoint_prefix):
-    def route(rule, *, methods=("GET",)):
+    def route(rule, *, methods=("GET",), page=False):
         def register(view):
-            protected = permission_required("tasks.view_all")(view)
+            protected = permission_required("tasks.view_all", page=page)(view)
             app.add_url_rule(
                 f"{route_prefix}{rule}",
                 endpoint=endpoint_prefix + view.__name__.removeprefix("admin_"),
@@ -77,7 +77,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
 
         return register
 
-    @route("/tasks", methods=["GET", "POST"])
+    @route("/tasks", methods=["GET", "POST"], page=True)
     def admin_tasks():
         if request.method == "POST":
             return create_task_for_identity(
@@ -85,7 +85,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             )
         return _render_admin_tasks_page()
 
-    @route("/tasks/new", methods=["GET", "POST"])
+    @route("/tasks/new", methods=["GET", "POST"], page=True)
     def admin_new_task():
         if request.method == "POST":
             return create_task_for_identity(
@@ -106,7 +106,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             payload["counts"] = {}
         return payload
 
-    @route("/consistency", methods=["GET", "POST"])
+    @route("/consistency", methods=["GET", "POST"], page=True)
     def admin_consistency():
         if request.method == "POST":
             return create_consistency_task_for_identity(
@@ -114,7 +114,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             )
         return _render_admin_consistency_page()
 
-    @route("/language-consistency", methods=["GET", "POST"])
+    @route("/language-consistency", methods=["GET", "POST"], page=True)
     def admin_language_consistency():
         if request.method == "POST":
             return create_language_consistency_task_for_identity(
@@ -122,7 +122,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             )
         return _render_admin_language_consistency_page()
 
-    @route("/images", methods=["GET", "POST"])
+    @route("/images", methods=["GET", "POST"], page=True)
     def admin_images():
         if request.method == "POST":
             return create_image_task_for_identity(
@@ -130,7 +130,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             )
         return _render_admin_images_page()
 
-    @route("/videos", methods=["GET", "POST"])
+    @route("/videos", methods=["GET", "POST"], page=True)
     def admin_videos():
         if request.method == "POST":
             return create_video_task_for_identity(
@@ -138,7 +138,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             )
         return _render_admin_videos_page()
 
-    @route("/tasks/<int:task_id>")
+    @route("/tasks/<int:task_id>", page=True)
     def admin_task_detail(task_id):
         polling = request.args.get("_poll") == "1"
         task = _get_task_or_404(task_id, lightweight=polling)
