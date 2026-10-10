@@ -171,6 +171,89 @@ class UserPermissionTest(unittest.TestCase):
         self.assertEqual(self.client.get("/admin").status_code, 200)
         self.assertEqual(self.client.get("/admin/settings").status_code, 200)
 
+    def test_console_login_keeps_same_browser_user_navigation_on_user_paths(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            self.grant("tasks.view_all", "stats.view_all", "rules.manage")
+            response = self.client.post(
+                "/admin/login", data={"username": "root", "password": "test-root"}
+            )
+            self.assertEqual(response.location, "/admin")
+            for path in (
+                "/",
+                "/models",
+                "/all/tasks",
+                "/all/consistency",
+                "/all/language-consistency",
+                "/all/images",
+                "/all/videos",
+                "/overview",
+                "/rules",
+            ):
+                with self.subTest(cookie_mode=cookie_mode, user_path=path):
+                    page = self.client.get(path)
+                    self.assertEqual(page.status_code, 200)
+                    soup = BeautifulSoup(page.text, "html.parser")
+                    links = [link["href"] for link in soup.select(".topbar a[href]")]
+                    self.assertFalse(any(href.startswith("/admin") for href in links))
+                    self.assertIn("/all/tasks", links)
+                    self.assertIn("/overview", links)
+                    self.assertIn("/rules", links)
+                    self.assertIsNone(soup.select_one(".admin-tag"))
+                    self.assertIsNone(soup.select_one(".logout-form"))
+            page = self.client.get("/admin/tasks")
+            self.assertEqual(page.status_code, 200)
+            soup = BeautifulSoup(page.text, "html.parser")
+            self.assertIsNotNone(soup.select_one('nav.nav a[href="/admin/tasks"]'))
+            self.assertIsNotNone(
+                soup.select_one('nav.nav a[href="/admin/permissions"]')
+            )
+            self.assertIsNotNone(soup.select_one(".admin-tag"))
+            self.client.post("/admin/logout")
+
+    def test_console_session_preserves_actual_user_grants_and_revocation(self):
+        for cookie_mode in (False, True):
+            if cookie_mode:
+                self.cookie_mode()
+            self.grant("tasks.view_all")
+            task = self.report_task(subject="ip:10.0.0.9")
+            self.client.post(
+                "/admin/login", data={"username": "root", "password": "test-root"}
+            )
+            for path in ("/overview", "/rules"):
+                with self.subTest(cookie_mode=cookie_mode, path=path):
+                    self.assertEqual(self.client.get(path).status_code, 403)
+            page = self.client.get(f"/all/tasks/{task}")
+            self.assertEqual(page.status_code, 200)
+            soup = BeautifulSoup(page.text, "html.parser")
+            self.assertIsNone(soup.select_one("[data-report-acceptance-status]"))
+            self.assertFalse(
+                self.client.get(f"/all/tasks/{task}?_poll=1").json["can_manage"]
+            )
+            self.assertFalse(
+                self.client.get(f"/all/tasks/{task}/model-output?state_only=1").json[
+                    "can_manage"
+                ]
+            )
+            self.assertEqual(
+                self.client.post(f"/all/tasks/{task}/delete").status_code, 403
+            )
+            self.grant()
+            for path in ("/all/tasks", f"/all/tasks/{task}", "/overview", "/rules"):
+                with self.subTest(cookie_mode=cookie_mode, revoked_path=path):
+                    self.assertEqual(self.client.get(path).status_code, 403)
+            soup = BeautifulSoup(self.client.get("/").text, "html.parser")
+            self.assertIsNotNone(soup.select_one('nav.nav a[href="/"]'))
+            self.assertIsNone(soup.select_one('nav.nav a[href="/all/tasks"]'))
+            self.assertIsNone(soup.select_one('nav.nav a[href="/overview"]'))
+            self.assertIsNone(soup.select_one('nav.nav a[href="/rules"]'))
+            self.assertTrue(
+                self.client.get(f"/admin/tasks/{task}?_poll=1").json["can_manage"]
+            )
+            self.assertEqual(self.client.get("/admin/permissions").status_code, 200)
+            self.client.post("/admin/logout")
+
     def test_all_console_routes_require_superadmin_even_with_all_user_grants(self):
         for cookie_mode in (False, True):
             if cookie_mode:

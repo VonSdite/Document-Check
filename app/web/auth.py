@@ -219,7 +219,7 @@ def _owner_meta(task) -> str:
 def admin_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if not session.get("admin_logged_in"):
+        if not is_superadmin():
             if current_permissions():
                 abort(403, description="此功能仅限超级管理员使用。")
             return redirect(url_for("admin_login"))
@@ -234,7 +234,11 @@ def admin_required(view):
 
 
 def is_superadmin() -> bool:
-    return bool(session.get("admin_logged_in"))
+    """超级管理员会话仅在配置的管理路径内生效。"""
+    if not session.get("admin_logged_in"):
+        return False
+    admin_prefix = current_app.config["ADMIN_URL"]
+    return request.path == admin_prefix or request.path.startswith(f"{admin_prefix}/")
 
 
 def current_permissions() -> frozenset[str]:
