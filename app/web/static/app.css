@@ -2816,6 +2816,7 @@ body.table-column-resize-active * {
 
 .report-classification-summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -2829,21 +2830,21 @@ body.table-column-resize-active * {
 .report-counts {
   display: flex;
   min-width: 0;
-  flex-wrap: nowrap;
-  gap: 8px;
-  justify-content: flex-start;
-  overflow-x: auto;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .report-counts span {
   flex: 0 0 auto;
-  min-width: 82px;
-  padding: 8px 10px;
+  min-width: 64px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #f8fbff;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   text-align: center;
   white-space: nowrap;
 }
@@ -2859,11 +2860,6 @@ body.table-column-resize-active * {
   .report-classification-summary {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .report-counts {
-    flex-wrap: wrap;
-    overflow: visible;
   }
 }
 
