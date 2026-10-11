@@ -68,7 +68,7 @@ http://127.0.0.1:31945/
 
 ## 本地配置
 
-系统统一采用用户面与管理面分离的运行方式。参考 [配置样例](config.platform.example.yaml)，复制为 `config.yaml` 后填写真实配置。
+系统统一采用用户面与管理面分离的运行方式。参考 [配置样例](config.example.yaml)，复制为 `config.yaml` 后填写真实配置。
 
 - `admin.username`、`admin.password`、`admin_url`：管理员凭据和管理入口。`admin_url` 会规范为以斜杠开头的路径。
 - `server.host`、`server.port`：监听地址和端口；可用 `HOST`、`PORT` 环境变量临时覆盖。默认地址为 `127.0.0.1`；监听所有网卡时填写 `0.0.0.0`。
