@@ -78,6 +78,18 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 - `reporting.statistics.refresh_stale_report_stats_batch()` 在后台应用上下文中运行。监督器直接调用报告模块。
 - `documents.extraction` 按文件类型分派，具体格式由 `pdf.py`、`docx.py`、`spreadsheets.py` 和 `markup.py` 实现。
 
+## 证据审查模块
+
+- `contracts/agent.py` 定义策略预算、要求、事实、候选、工具动作、审查决定和报告的严格 Pydantic 契约。阶段输出在使用前校验。
+- `documents/index.py` 保存稳定来源、文档边界、精确引用、上下文、检索和覆盖。来源索引在任务内部共享，版本化标准按检查项独立加入。
+- `checks/agent_policy.py` 管理检查策略与设置快照；`checks/evidence_tools.py` 通过传入的来源接口执行只读工具；`checks/evaluation.py` 计算人工标注指标。这些规则模块遵循现有依赖方向。
+- `models/agent.py` 负责结构化输出、原生工具、兼容切换、流式响应与用量，复用模型网络配置与 HTTP 连接池。`models/client.py` 的可选 `on_usage` 回调为整文调用提供实际用量记录。
+- `tasks/runtime/evidence_agent.py` 在每个文本检查项内部构建 LangGraph，保存分批游标与取证状态，复用任务取消和活动回调。`SharedFacts` 是任务范围内、线程安全的事实池，复用事实需重新核对来源。
+- `persistence/checkpoints.py` 按任务与检查项保存状态，写入核对认领令牌和取消状态。签名覆盖来源、配置、模型和流程版本，恢复累计保留请求预算。
+- `reporting/service.py` 使用严格契约读取审查报告；待核实与撤回记录分别展示，Excel 增加审查与用量工作表。误报规则同时核对证据上下文指纹。
+
+扩展节点时维护输入契约、覆盖、预算、取消和持久化边界。新增工具通过白名单注册，参数经契约验证，结果受返回量预算约束。业务提示词与参考标准由检查项配置提供，执行节点控制权由代码管理。配置和人工标注方法见 [证据审查与评估](evidence-agent.md)。
+
 ## 日志约定
 
 各模块使用 `logging.getLogger(__name__)` 记录日志。`app.infrastructure.logging` 集中配置模块名、进程 ID、控制台过滤及多进程安全文件轮转。`app.tasks` 及其子模块写入 `task.log`，`app.models` 及其子模块写入 `llm.log`，其余 `app` 模块、Werkzeug 和 Uvicorn 写入 `app.log`。文件固定记录 INFO 及以上日志；`logging.console_level` 控制终端输出，默认 WARNING。启动入口使用 `app.run` logger，启动摘要和访问地址通过 `console_notice` 标记显示。
@@ -111,6 +123,8 @@ uv run python -m unittest discover -s tests
 ```
 
 - `tests/test_architecture.py` 检查目录约束、模块依赖、后台导入独立性、HTTP 路由和数据库结构。
+- `tests/test_document_index.py`、`tests/test_evidence_agent.py`、`tests/test_agent_model.py` 和 `tests/test_evidence_integration.py` 检查来源隔离、全文覆盖、缺失门槛、版本标准、跨语种对齐、共享事实、结构修复、取证上限、恢复、取消、任务快照及报告导出。
+- `tests/test_agent_http.py` 使用本地 HTTP 服务验证原生工具往返、真实响应流和用量回调；`tests/test_check_evaluation.py` 与 `tests/test_evaluation_cli.py` 验证人工指标、未知结果、失败样本、只读反馈导出和密钥字段隔离。
 - `tests/test_permissions.py` 检查用户登记、IP 与 Cookie 授权隔离、只读报告、跨用户操作、批量越权、权限撤销和超级管理员专属功能。
 - `tests/fixtures/http_routes.json` 定义默认配置下的路由、端点名称与 HTTP 方法契约；代理前缀、认证、下载和参数行为由配置与路由测试覆盖。
 - `tests/fixtures/database_schema.json` 定义 SQLite 表、索引和触发器的兼容契约。

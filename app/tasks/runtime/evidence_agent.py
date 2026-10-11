@@ -945,6 +945,25 @@ class EvidenceAgent:
         self.state["report"] = report
         self.state["next"] = "done"
 
+    def _report_references(self, references):
+        refs = []
+        for ref in references:
+            if not self.index.verify(ref):
+                continue
+            source = self.index.by_id[ref["source_id"]]
+            refs.append(
+                {
+                    "id": source.id,
+                    "filename": source.filename,
+                    "position": source.location,
+                    "kind": "document_text",
+                    "quote": ref["quote"],
+                    "section": source.section,
+                    "role": source.role,
+                }
+            )
+        return refs
+
     def build_report(self):
         decisions = {d["candidate_id"]: d for d in self.state["decisions"]}
         items, pending, withdrawn = [], [], []
@@ -961,26 +980,17 @@ class EvidenceAgent:
                 "requirement_ids": candidate["requirement_ids"],
                 "counterevidence": decision["counterevidence"] if decision else [],
             }
+            audit["evidence_refs"] = self._report_references(audit["evidence"])
+            audit["counterevidence_refs"] = self._report_references(
+                audit["counterevidence"]
+            )
             if not decision or decision["outcome"] == "insufficient":
                 pending.append(audit)
                 continue
             if decision["outcome"] == "explained":
                 withdrawn.append(audit)
                 continue
-            refs = []
-            for ref in decision["evidence"]:
-                source = self.index.by_id[ref["source_id"]]
-                refs.append(
-                    {
-                        "id": source.id,
-                        "filename": source.filename,
-                        "position": source.location,
-                        "kind": "document_text",
-                        "quote": ref["quote"],
-                        "section": source.section,
-                        "role": source.role,
-                    }
-                )
+            refs = self._report_references(decision["evidence"])
             if candidate["absence_claim"]:
                 for requirement in self.state["requirements"]:
                     if requirement["id"] in candidate["requirement_ids"]:

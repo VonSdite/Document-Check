@@ -243,6 +243,9 @@ class EvidenceAgentTest(unittest.TestCase):
         ).run()
         self.assertEqual(result["report"]["items"], [])
         self.assertEqual(len(result["report"]["withdrawn_items"]), 1)
+        refs = result["report"]["withdrawn_items"][0]["evidence_refs"]
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(refs[0]["filename"], "a")
 
     def test_fabricated_quote_cannot_enter_report(self):
         def handler(messages, title, tools, force):
@@ -269,6 +272,7 @@ class EvidenceAgentTest(unittest.TestCase):
         result = self.make_agent(handler).run()
         self.assertEqual(result["report"]["items"], [])
         self.assertEqual(len(result["report"]["pending_items"]), 1)
+        self.assertEqual(result["report"]["pending_items"][0]["evidence_refs"], [])
 
     def test_missing_content_requires_requirement_and_full_coverage(self):
         def handler(messages, title, tools, force):

@@ -7,11 +7,17 @@
   {% if not result.agent.coverage.text_complete %}<p>部分原文未可靠解析，结论仅覆盖已读取内容。</p>{% endif %}
   {% if result.pending_items %}
   <h3>待核实</h3>
-  <ul>{% for candidate in result.pending_items %}<li><strong>{{ candidate.description }}</strong><br>{{ candidate.rationale }}</li>{% endfor %}</ul>
+  <ul>{% for candidate in result.pending_items %}<li><strong>{{ candidate.description }}</strong><br>{{ candidate.rationale }}
+    {% for ref in candidate.evidence_refs|default([]) %}<p class="muted">{{ ref.filename }} / {{ ref.position }}：{{ ref.quote }}</p>{% endfor %}
+    {% for ref in candidate.counterevidence_refs|default([]) %}<p class="muted">解释或反证 · {{ ref.filename }} / {{ ref.position }}：{{ ref.quote }}</p>{% endfor %}
+  </li>{% endfor %}</ul>
   {% endif %}
   {% if result.withdrawn_items %}
   <h3>已撤回候选</h3>
-  <ul>{% for candidate in result.withdrawn_items %}<li><strong>{{ candidate.description }}</strong><br>{{ candidate.rationale }}</li>{% endfor %}</ul>
+  <ul>{% for candidate in result.withdrawn_items %}<li><strong>{{ candidate.description }}</strong><br>{{ candidate.rationale }}
+    {% for ref in candidate.evidence_refs|default([]) %}<p class="muted">{{ ref.filename }} / {{ ref.position }}：{{ ref.quote }}</p>{% endfor %}
+    {% for ref in candidate.counterevidence_refs|default([]) %}<p class="muted">解释或反证 · {{ ref.filename }} / {{ ref.position }}：{{ ref.quote }}</p>{% endfor %}
+  </li>{% endfor %}</ul>
   {% endif %}
 </details>
 {% endif %}

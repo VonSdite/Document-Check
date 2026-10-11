@@ -98,6 +98,9 @@ def build_report_workbook(task):
                 ("已撤回", result.get("withdrawn_items", [])),
             ):
                 for candidate in entries:
+                    refs = candidate.get("evidence_refs", []) + candidate.get(
+                        "counterevidence_refs", []
+                    )
                     audit_sheet.append(
                         [
                             _excel_cell_text(v)
@@ -106,8 +109,13 @@ def build_report_workbook(task):
                                 kind,
                                 candidate["description"],
                                 candidate["rationale"],
-                                "",
-                                "",
+                                "\n".join(
+                                    dict.fromkeys(
+                                        ref["filename"] + " / " + ref["position"]
+                                        for ref in refs
+                                    )
+                                ),
+                                "\n".join(dict.fromkeys(ref["quote"] for ref in refs)),
                             )
                         ]
                     )

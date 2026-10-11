@@ -8,7 +8,7 @@ from docx import Document
 from pydantic import ValidationError
 
 from app.checks.evidence_tools import execute_tool
-from app.contracts.agent import Candidate, strict_schema
+from app.contracts.agent import AgentOptions, Candidate, strict_schema
 from app.documents.extraction import extract_document
 from app.documents.extraction.common import DocumentReadCanceled
 from app.documents.index import DocumentIndex, text_blocks
@@ -171,6 +171,9 @@ class DocumentIndexTest(unittest.TestCase):
         schema = strict_schema(Candidate)
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        for invalid_price in (float("nan"), float("inf"), -1.0):
+            with self.assertRaises(ValidationError):
+                AgentOptions(input_price=invalid_price)
 
 
 if __name__ == "__main__":

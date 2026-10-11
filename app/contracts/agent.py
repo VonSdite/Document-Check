@@ -39,9 +39,9 @@ class AgentOptions(Contract):
     review_batch_size: int = Field(default=4, ge=1, le=12)
     max_candidates: int = Field(default=200, ge=1, le=1000)
     standards: list[Standard] = Field(default_factory=list, max_length=12)
-    input_price: float | None = Field(default=None, ge=0)
-    output_price: float | None = Field(default=None, ge=0)
-    currency: str = Field(default="CNY", max_length=12)
+    input_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    output_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    currency: str = Field(default="CNY", min_length=1, max_length=12)
 
 
 class EvidenceRef(Contract):
