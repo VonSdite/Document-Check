@@ -2823,16 +2823,20 @@ body.table-column-resize-active * {
 
 .report-classification-summary h2 {
   margin: 0;
+  white-space: nowrap;
 }
 
 .report-counts {
   display: flex;
-  flex-wrap: wrap;
+  min-width: 0;
+  flex-wrap: nowrap;
   gap: 8px;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  overflow-x: auto;
 }
 
 .report-counts span {
+  flex: 0 0 auto;
   min-width: 82px;
   padding: 8px 10px;
   border: 1px solid var(--line);
@@ -2841,6 +2845,7 @@ body.table-column-resize-active * {
   color: var(--muted);
   font-size: 13px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .report-counts strong {
@@ -2848,6 +2853,18 @@ body.table-column-resize-active * {
   color: var(--text);
   font-size: 20px;
   line-height: 1.1;
+}
+
+@media print {
+  .report-classification-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .report-counts {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
 }
 
 .result-summary {
@@ -4301,14 +4318,6 @@ body.table-column-resize-active * {
   .report-classification-summary {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .report-counts {
-    justify-content: stretch;
-  }
-
-  .report-counts span {
-    flex: 1 1 120px;
   }
 }
 
