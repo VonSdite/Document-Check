@@ -64,6 +64,19 @@ def _extract_docx(
                     )
         return "\n".join(value for value in values if value).strip()
 
+    def append_table(table, prefix=""):
+        nonlocal table_index
+        table_index += 1
+        for row_index, row in enumerate(table.rows, start=1):
+            check_extraction_canceled(cancel_event)
+            location = f"{prefix}表格{table_index} > 第{row_index}行"
+            cells = [
+                cell_text(cell, f"{location} > 第{column_index}列")
+                for column_index, cell in enumerate(row.cells, start=1)
+            ]
+            if any(cells):
+                append(" | ".join(cells), "table", location)
+
     for content in document.iter_inner_content():
         check_extraction_canceled(cancel_event)
         if isinstance(content, Paragraph):
@@ -82,41 +95,48 @@ def _extract_docx(
                 section = text
             append(text, "heading" if heading else "paragraph", location)
         elif isinstance(content, Table):
-            table_index += 1
-            for row_index, row in enumerate(content.rows, start=1):
-                check_extraction_canceled(cancel_event)
-                cells = [
-                    cell_text(
-                        cell,
-                        f"表格{table_index} > 第{row_index}行 > 第{column_index}列",
-                    )
-                    for column_index, cell in enumerate(row.cells, start=1)
-                ]
-                if any(cells):
-                    append(
-                        " | ".join(cells),
-                        "table",
-                        f"表格{table_index} > 第{row_index}行",
-                    )
+            append_table(content)
     if blocks is not None:
+        unresolved = [document.element]
         for section_number, document_section in enumerate(document.sections, start=1):
             for label, container in (
                 ("页眉", document_section.header),
                 ("页脚", document_section.footer),
+                ("首页页眉", document_section.first_page_header),
+                ("首页页脚", document_section.first_page_footer),
+                ("偶数页页眉", document_section.even_page_header),
+                ("偶数页页脚", document_section.even_page_footer),
             ):
+                if (
+                    label.startswith("首页")
+                    and not document_section.different_first_page_header_footer
+                ):
+                    continue
+                if (
+                    label.startswith("偶数")
+                    and not document.settings.odd_and_even_pages_header_footer
+                ):
+                    continue
                 if section_number > 1 and container.is_linked_to_previous:
                     continue
-                for paragraph in container.paragraphs:
+                section = f"第{section_number}节 / {label}"
+                unresolved.append(container._element)
+                for content in container.iter_inner_content():
                     check_extraction_canceled(cancel_event)
-                    text = _docx_paragraph_text(
-                        paragraph,
-                        hyperlinks,
-                        location=label,
-                        internal_targets=internal_targets,
-                    )
-                    append(text, "paragraph", f"第{section_number}节 / {label}")
-        if any(document.element.iter(qn("w:txbxContent"))) or any(
-            document.element.iter(qn("w:sdt"))
+                    if isinstance(content, Paragraph):
+                        text = _docx_paragraph_text(
+                            content,
+                            hyperlinks,
+                            location=section,
+                            internal_targets=internal_targets,
+                        )
+                        append(text, "paragraph", section)
+                    elif isinstance(content, Table):
+                        append_table(content, section + " / ")
+        if any(
+            any(element.iter(tag))
+            for element in unresolved
+            for tag in (qn("w:txbxContent"), qn("w:sdt"))
         ):
             blocks.append(
                 {

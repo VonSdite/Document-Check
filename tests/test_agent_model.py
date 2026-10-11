@@ -113,6 +113,83 @@ class AgentModelTest(unittest.TestCase):
             model.turn([], schema=None, tools=[{"type": "function"}])
         self.assertFalse(model.capabilities["native_tools"])
 
+    def test_tool_history_rejection_is_explicit_without_tools_in_final_call(self):
+        model = self.make_model()
+        session = FakeSession(
+            [FakeResponse(status_code=400, text="role 'tool' not allowed")]
+        )
+        with (
+            patch("app.models.agent._pooled_http_session", return_value=session),
+            self.assertRaises(ToolsUnsupported),
+        ):
+            model.turn(
+                [{"role": "tool", "tool_call_id": "read", "content": "{}"}],
+                schema={"type": "object"},
+            )
+        self.assertFalse(model.capabilities["native_tools"])
+
+    def test_optional_parameter_fallbacks_are_cached_for_following_calls(self):
+        success = {"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]}
+        for parameter, message in (
+            (
+                "temperature",
+                "temperature does not support 0; only default is supported",
+            ),
+            (
+                "max_completion_tokens",
+                "max_completion_tokens unsupported; use max_tokens",
+            ),
+            ("stream_options", "stream_options not supported"),
+        ):
+            with self.subTest(parameter=parameter):
+                model = self.make_model()
+                session = FakeSession(
+                    [
+                        FakeResponse(status_code=400, text=message),
+                        FakeResponse(
+                            data=success, headers={"Content-Type": "application/json"}
+                        ),
+                        FakeResponse(
+                            data=success, headers={"Content-Type": "application/json"}
+                        ),
+                    ]
+                )
+                with patch(
+                    "app.models.agent._pooled_http_session", return_value=session
+                ):
+                    model.turn([], schema=None)
+                    model.turn([], schema=None)
+                self.assertEqual(len(self.reservations), 3)
+                self.assertIn(parameter, session.calls[0][1]["json"])
+                self.assertNotIn(parameter, session.calls[-1][1]["json"])
+
+    def test_truncated_response_preserves_actual_usage_and_error(self):
+        model = self.make_model()
+        session = FakeSession(
+            [
+                FakeResponse(
+                    data={
+                        "choices": [
+                            {
+                                "message": {"content": "{unfinished"},
+                                "finish_reason": "length",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 15, "completion_tokens": 20},
+                    },
+                    headers={"Content-Type": "application/json"},
+                )
+            ]
+        )
+        with (
+            patch("app.models.agent._pooled_http_session", return_value=session),
+            self.assertRaises(IncompleteResponse),
+        ):
+            model.turn([], schema=None)
+        self.assertEqual(len(self.completed), 1)
+        self.assertEqual(self.completed[0][1].usage["completion_tokens"], 20)
+        self.assertIn("length", self.completed[0][3])
+
     def test_refusal_truncation_and_unfinished_stream_do_not_become_empty_success(self):
         for frames in (
             [

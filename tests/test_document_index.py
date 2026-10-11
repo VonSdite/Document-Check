@@ -7,6 +7,7 @@ import fitz
 from docx import Document
 from pydantic import ValidationError
 
+from app.checks.evidence_tools import execute_tool
 from app.contracts.agent import Candidate, strict_schema
 from app.documents.extraction import extract_document
 from app.documents.extraction.common import DocumentReadCanceled
@@ -43,6 +44,27 @@ class DocumentIndexTest(unittest.TestCase):
             with self.assertRaises(DocumentReadCanceled):
                 extract_document(path, "docx", cancel_event=canceled)
 
+    def test_docx_headers_footers_and_their_tables_keep_source_locations(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "guide.docx"
+            doc = Document()
+            doc.add_paragraph("安装指南正文")
+            section = doc.sections[0]
+            section.header.paragraphs[0].text = "A型号 / 版本2"
+            table = section.footer.add_table(rows=1, cols=2, width=section.page_width)
+            table.cell(0, 0).text = "发布日期"
+            table.cell(0, 1).text = "2026-01-01"
+            section.different_first_page_header_footer = True
+            section.first_page_header.paragraphs[0].text = "首页说明"
+            doc.save(path)
+            blocks = []
+            text, _ = extract_document(path, "docx", blocks=blocks)
+            self.assertIn("首页说明", text)
+            self.assertIn("发布日期 | 2026-01-01", text)
+            footer = next(b for b in blocks if b["kind"] == "table")
+            self.assertIn("页脚 / 表格", footer["location"])
+            self.assertEqual(footer["section"], "第1节 / 页脚")
+
     def test_pdf_records_unread_pages(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "guide.pdf"
@@ -77,6 +99,51 @@ class DocumentIndexTest(unittest.TestCase):
         self.assertEqual(index.signature, DocumentIndex(documents).signature)
         self.assertNotEqual(index.blocks[0].id, index.blocks[1].id)
         self.assertEqual(len(index.context(index.blocks[0].id, 3)), 1)
+
+    def test_duplicate_filenames_do_not_mix_context_or_table_rows(self):
+        index = DocumentIndex(
+            [
+                {
+                    "filename": "guide.docx",
+                    "role": "master",
+                    "blocks": [
+                        {"kind": "table", "location": "表格1 > 第1行", "text": text}
+                    ],
+                    "text_complete": True,
+                }
+                for text in ("A型号 | 220 V", "B型号 | 110 V")
+            ]
+        )
+        source = index.blocks[0]
+        self.assertEqual(
+            [b["text"] for b in index.context(source.id, 3)], [source.text]
+        )
+        result = execute_tool("read_table", {"source_id": source.id}, index, {})
+        self.assertEqual([b["text"] for b in result["sources"]], [source.text])
+
+    def test_table_read_keeps_requested_distant_row_and_headers(self):
+        index = DocumentIndex(
+            [
+                {
+                    "filename": "guide.docx",
+                    "text_complete": True,
+                    "blocks": [
+                        {
+                            "kind": "table",
+                            "location": f"表格1 > 第{i + 1}行",
+                            "text": f"型号{i} | 参数{i}",
+                        }
+                        for i in range(80)
+                    ],
+                }
+            ]
+        )
+        target = index.blocks[65]
+        result = execute_tool("read_table", {"source_id": target.id}, index, {})
+        self.assertEqual(result["sources"][0]["id"], target.id)
+        self.assertIn(index.blocks[0].id, {b["id"] for b in result["sources"]})
+        self.assertEqual(len(result["sources"]), 20)
+        self.assertTrue(result["truncated"])
 
     def test_missing_hits_do_not_establish_complete_coverage(self):
         index = DocumentIndex(

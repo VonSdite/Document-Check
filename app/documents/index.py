@@ -26,6 +26,10 @@ class SourceBlock:
     def as_dict(self):
         return asdict(self)
 
+    @property
+    def document_id(self):
+        return self.id.rsplit("-b", 1)[0]
+
 
 class DocumentIndex:
     def __init__(self, documents: list[dict]):
@@ -144,7 +148,7 @@ class DocumentIndex:
             for b in self.blocks[
                 max(0, block.ordinal - radius) : block.ordinal + radius + 1
             ]
-            if b.filename == block.filename and b.role == block.role
+            if b.document_id == block.document_id
         ]
 
     def search(self, query: str, limit: int = 8):

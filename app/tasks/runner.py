@@ -73,7 +73,11 @@ from app.tasks.runtime.common import (
     _ordered_results,
     _task_value,
 )
-from app.tasks.runtime.evidence_agent import EvidenceAgent, workflow_signature
+from app.tasks.runtime.evidence_agent import (
+    EvidenceAgent,
+    SharedFacts,
+    workflow_signature,
+)
 from app.tasks.runtime.image_checks import _run_image_check_items_concurrently
 from app.tasks.runtime.preprocessing import _prepare_task_inputs
 from app.tasks.runtime.state import (
@@ -518,6 +522,13 @@ def _run_check_items_concurrently(
     source_index = DocumentIndex.from_task(
         document_text, document_meta or {}, task["original_filename"]
     )
+    shared_facts = SharedFacts()
+    for checkpoint in get_db().execute(
+        "SELECT state_json FROM task_checkpoints WHERE task_id = ?", (task_id,)
+    ):
+        cached = json.loads(checkpoint["state_json"])
+        if cached.get("fact_cache_key"):
+            shared_facts.put(cached["fact_cache_key"], cached.get("facts", []))
 
     def save_failed_result(item, execution, error, *, canceled):
         progress = mark_unit_completed()
@@ -657,6 +668,7 @@ def _run_check_items_concurrently(
                         task_type=task_type,
                         connection=connection,
                         options=options,
+                        shared_facts=shared_facts,
                         store=CheckpointStore(
                             task_id, item["code"], signature, claim_token
                         ),

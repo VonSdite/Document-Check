@@ -73,9 +73,12 @@ class AgentModel:
         payload = {
             "model": connection["model_name"],
             "messages": messages,
-            "temperature": 0,
-            "max_completion_tokens": max_output_tokens,
+            self.capabilities.get(
+                "output_token_parameter", "max_completion_tokens"
+            ): max_output_tokens,
         }
+        if self.capabilities.get("temperature") is not False:
+            payload["temperature"] = 0
         _apply_reasoning_effort(payload, connection.get("reasoning_effort"))
         if connection.get("force_disable_thinking"):
             _disable_thinking_in_payload(
@@ -116,24 +119,42 @@ class AgentModel:
                 self.on_output(
                     {"kind": "start", "stream": request_id, "attempt": retries + 1}
                 )
+            turn = None
             try:
                 turn = self._request(payload, request_id)
-                self.after_request(payload, turn, time.monotonic() - started, None)
                 if turn.finish_reason in {"length", "content_filter"}:
                     raise IncompleteResponse(
                         f"模型响应未完整完成：{turn.finish_reason}"
                     )
                 if not turn.content and not turn.tool_calls:
                     raise IncompleteResponse("模型未返回可校验的正文或工具调用")
+                self.after_request(payload, turn, time.monotonic() - started, None)
                 return turn
-            except IncompleteResponse:
+            except IncompleteResponse as exc:
+                self.after_request(payload, turn, time.monotonic() - started, str(exc))
                 raise
             except LLMError as exc:
                 last_error = exc
                 self.after_request(payload, None, time.monotonic() - started, str(exc))
                 lower = str(exc).lower()
+                incompatible = any(
+                    word in lower
+                    for word in (
+                        "unsupported",
+                        "not support",
+                        "not allowed",
+                        "不支持",
+                        "unknown",
+                        "invalid",
+                        "400",
+                        "422",
+                    )
+                )
                 if (
-                    tools
+                    (
+                        tools
+                        or any(message.get("role") == "tool" for message in messages)
+                    )
                     and any(
                         word in lower
                         for word in (
@@ -141,31 +162,26 @@ class AgentModel:
                             "tool_choice",
                             "function calling",
                             "tool calling",
+                            "tool_call_id",
+                            "role 'tool'",
+                            'role "tool"',
                         )
                     )
-                    and any(
-                        word in lower
-                        for word in (
-                            "unsupported",
-                            "not support",
-                            "not allowed",
-                            "不支持",
-                            "unknown",
-                            "invalid",
-                            "400",
-                            "422",
-                        )
-                    )
+                    and incompatible
                 ):
                     self.capabilities["native_tools"] = False
                     raise ToolsUnsupported("模型服务不支持原生工具调用") from exc
-                if "response_format" in payload and any(
-                    word in lower
-                    for word in (
-                        "response_format",
-                        "json_schema",
-                        "json_object",
-                        "json mode",
+                if (
+                    incompatible
+                    and "response_format" in payload
+                    and any(
+                        word in lower
+                        for word in (
+                            "response_format",
+                            "json_schema",
+                            "json_object",
+                            "json mode",
+                        )
                     )
                 ):
                     if payload["response_format"]["type"] == "json_schema":
@@ -175,11 +191,23 @@ class AgentModel:
                         payload.pop("response_format")
                         self.capabilities["schema"] = "prompt"
                     continue
+                if incompatible and "temperature" in lower and "temperature" in payload:
+                    payload.pop("temperature")
+                    self.capabilities["temperature"] = False
+                    continue
+                if (
+                    incompatible
+                    and "stream_options" in lower
+                    and self.capabilities.get("stream_usage") is not False
+                ):
+                    self.capabilities["stream_usage"] = False
+                    continue
                 if (
                     "max_completion_tokens" in payload
                     and _is_output_token_limit_unsupported_error(exc)
                 ):
                     payload["max_tokens"] = payload.pop("max_completion_tokens")
+                    self.capabilities["output_token_parameter"] = "max_tokens"
                     continue
                 if retries >= 2 or not any(
                     word in lower
@@ -240,7 +268,11 @@ class AgentModel:
                     json={
                         **payload,
                         "stream": True,
-                        "stream_options": {"include_usage": True},
+                        **(
+                            {"stream_options": {"include_usage": True}}
+                            if self.capabilities.get("stream_usage") is not False
+                            else {}
+                        ),
                     },
                     stream=True,
                     **request_kwargs,
@@ -319,7 +351,7 @@ class AgentModel:
                         self.on_output(
                             {"kind": "content", "text": text, "stream": request_id}
                         )
-                reasoning, _ = _extract_reasoning(message)
+                _, reasoning = _extract_reasoning(message)
                 reasoning_chars += len(reasoning)
                 if reasoning and self.on_output:
                     self.on_output(

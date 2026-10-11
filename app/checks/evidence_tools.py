@@ -1,6 +1,7 @@
 """只读取当前任务来源的审查工具。"""
 
 import re
+from collections import Counter
 from decimal import Decimal
 
 from pydantic import Field
@@ -67,6 +68,40 @@ def tool_definitions():
     ]
 
 
+def observation_summary(state: dict, requirement_id: str) -> dict:
+    """保留所有覆盖状态计数，提供有界的原文观察供进一步取证。"""
+    observations = [
+        o
+        for o in state.get("observations", [])
+        if o["requirement_id"] == requirement_id
+    ]
+    samples, seen = [], set()
+    for status in ("uncertain", "covered", "not_applicable", "not_found"):
+        selected = 0
+        for observation in observations:
+            if observation["status"] != status:
+                continue
+            sample = {
+                "status": status,
+                "rationale": observation["rationale"][:1000],
+                "evidence": observation["evidence"][:4],
+            }
+            identity = repr(sample)
+            if identity not in seen:
+                seen.add(identity)
+                samples.append(sample)
+                selected += 1
+                if selected >= 3:
+                    break
+    return {
+        "requirement_id": requirement_id,
+        "counts": dict(Counter(o["status"] for o in observations)),
+        "total_observations": len(observations),
+        "samples": samples,
+        "sampled": len(samples) < len(observations),
+    }
+
+
 def execute_tool(name: str, arguments: dict, index, state: dict) -> dict:
     if name not in TOOLS:
         raise ValueError("工具名称不在允许范围内")
@@ -88,23 +123,48 @@ def execute_tool(name: str, arguments: dict, index, state: dict) -> dict:
             sources = [
                 b.as_dict()
                 for b in index.blocks
-                if b.filename == source.filename
-                and b.role == source.role
+                if b.document_id == source.document_id
                 and b.kind == "table"
                 and re.search(r"表格\s*([^ /；>]+)", b.location)
                 and re.search(r"表格\s*([^ /；>]+)", b.location).group(1)
                 == table.group(1)
             ]
-        return {"sources": sources[:20], "truncated": len(sources) > 20}
+        target = next(i for i, row in enumerate(sources) if row["id"] == source.id)
+        selected = {target, *range(min(2, len(sources)))}
+        for distance in range(1, len(sources)):
+            for row_index in (target - distance, target + distance):
+                if 0 <= row_index < len(sources):
+                    selected.add(row_index)
+                if len(selected) >= 20:
+                    break
+            if len(selected) >= 20:
+                break
+        # 请求行优先返回，随后是表头与相邻行，字符预算仍保留请求行。
+        order = [target] + sorted(selected - {target})
+        return {
+            "sources": [sources[i] for i in order],
+            "truncated": len(sources) > len(selected),
+        }
     if name == "coverage_status":
-        observations = state.get("observations", [])
+        requirements = [
+            r
+            for r in state.get("requirements", [])
+            if not args.requirement_id or r["id"] == args.requirement_id
+        ]
+        if args.requirement_id and not requirements:
+            raise ValueError("业务要求标识不存在")
         return {
             **index.coverage(state.get("checked_ids", [])),
-            "observations": [
-                o
-                for o in observations
-                if not args.requirement_id or o["requirement_id"] == args.requirement_id
+            "requirements": [
+                {
+                    **observation_summary(state, r["id"]),
+                    "coverage": index.coverage(
+                        state.get("requirement_coverage", {}).get(r["id"], [])
+                    ),
+                }
+                for r in requirements[:8]
             ],
+            "truncated": len(requirements) > 8,
             "sources": [],
         }
     left, right = args.left.model_dump(), args.right.model_dump()

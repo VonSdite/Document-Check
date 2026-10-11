@@ -6,7 +6,7 @@ from app.documents.index import DocumentIndex
 from app.models.agent import AgentTurn, ToolsUnsupported
 from app.models.client import LLMError
 from app.persistence.checkpoints import MemoryCheckpointStore
-from app.tasks.runtime.evidence_agent import EvidenceAgent
+from app.tasks.runtime.evidence_agent import EvidenceAgent, SharedFacts
 
 
 def candidate(refs, **changes):
@@ -106,7 +106,11 @@ class EvidenceAgentTest(unittest.TestCase):
         store=None,
         ensure=None,
         code="consistency",
+        item=None,
+        task_type="document_check",
+        shared_facts=None,
     ):
+        options = options or AgentOptions(protocol="structured")
         index = DocumentIndex(
             documents
             or [
@@ -116,18 +120,20 @@ class EvidenceAgentTest(unittest.TestCase):
                     "text_complete": True,
                 }
             ]
-        )
+        ).with_standards([s.model_dump(mode="json") for s in options.standards])
         return EvidenceAgent(
             index=index,
-            item={"code": code, "name": "一致性", "prompt": "检查同一型号参数一致性。"},
-            task_type="document_check",
+            item=item
+            or {"code": code, "name": "一致性", "prompt": "检查同一型号参数一致性。"},
+            task_type=task_type,
             connection={
                 "api_base": "http://model/v1/chat/completions",
                 "model_name": "test",
                 "max_input_chars": 80000,
             },
-            options=options or AgentOptions(protocol="structured"),
+            options=options,
             store=store or MemoryCheckpointStore(),
+            shared_facts=shared_facts,
             ensure_active=ensure or (lambda: None),
             model_factory=lambda connection, **kwargs: ScriptedModel(
                 handler, connection, **kwargs
@@ -418,6 +424,423 @@ class EvidenceAgentTest(unittest.TestCase):
         agent = self.make_agent(lambda *args: self.fail("不能调用模型"), ensure=ensure)
         with self.assertRaisesRegex(RuntimeError, "已取消"):
             agent.run()
+
+    def test_absence_requires_full_coverage_without_positive_or_uncertain_observations(
+        self,
+    ):
+        prompt = "安装指南必须说明接线前断电。"
+        for status, complete, expected in (
+            ("not_found", True, True),
+            ("not_found", False, False),
+            ("covered", True, False),
+            ("uncertain", True, False),
+        ):
+            with self.subTest(status=status, text_complete=complete):
+
+                def handler(messages, title, tools, force):
+                    context = input_context(messages)
+                    if title == "CheckPlan":
+                        return {
+                            **empty_plan(),
+                            "requirements": [
+                                {
+                                    "id": "safety",
+                                    "text": "接线前断电",
+                                    "applicability": "安装指南",
+                                    "origin": "prompt",
+                                    "source_id": "",
+                                    "quote": prompt,
+                                }
+                            ],
+                        }
+                    if title == "Discovery":
+                        req = context["requirements"][0]
+                        source = context["sources"][0]
+                        return {
+                            **discovery(context),
+                            "observations": [
+                                {
+                                    "requirement_id": req["id"],
+                                    "status": status,
+                                    "rationale": "本批检查结果",
+                                    "evidence": [
+                                        {
+                                            "source_id": source["id"],
+                                            "quote": source["text"],
+                                        }
+                                    ]
+                                    if status == "covered"
+                                    else [],
+                                }
+                            ],
+                        }
+                    if title == "Comparison":
+                        req = context["requirement"]
+                        return {
+                            "candidates": [
+                                candidate(
+                                    [],
+                                    description="未说明接线前断电",
+                                    absence_claim=True,
+                                    requirement_ids=[req["id"]],
+                                )
+                            ]
+                        }
+                    self.assertEqual(
+                        context["requirement_observations"][0]["counts"][status], 1
+                    )
+                    c = context["candidates"][0]
+                    return {
+                        "actions": [],
+                        "decisions": [
+                            decision(c["id"], [], description=c["description"])
+                        ],
+                    }
+
+                result = self.make_agent(
+                    handler,
+                    item={"code": "completeness", "name": "完整性", "prompt": prompt},
+                    documents=[
+                        {
+                            "filename": "guide.txt",
+                            "text": "断电后接线。"
+                            if status == "covered"
+                            else "连接电源后启动设备。",
+                            "text_complete": complete,
+                        }
+                    ],
+                ).run()
+                self.assertEqual(bool(result["report"]["items"]), expected)
+                if expected:
+                    self.assertEqual(
+                        result["report"]["items"][0]["evidence_refs"][0]["quote"],
+                        prompt,
+                    )
+                else:
+                    self.assertEqual(len(result["report"]["pending_items"]), 1)
+
+    def test_versioned_standard_and_document_evidence_are_both_verified(self):
+        standard = {
+            "name": "交付规范",
+            "version": "2026.1",
+            "text": "紧固扭矩必须为2 N·m。",
+        }
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                requirements = []
+                if context["sources"]:
+                    source = context["sources"][0]
+                    requirements = [
+                        {
+                            "id": "torque",
+                            "text": standard["text"],
+                            "applicability": "交付安装步骤",
+                            "origin": "standard",
+                            "source_id": source["id"],
+                            "quote": standard["text"],
+                        }
+                    ]
+                return {**empty_plan(), "requirements": requirements}
+            if title == "Discovery":
+                source = context["sources"][0]
+                return {
+                    **discovery(context),
+                    "observations": [
+                        {
+                            "requirement_id": context["requirements"][0]["id"],
+                            "status": "covered",
+                            "rationale": "原文写明扭矩",
+                            "evidence": [
+                                {"source_id": source["id"], "quote": source["text"]}
+                            ],
+                        }
+                    ],
+                }
+            if title == "Comparison":
+                req = context["requirement"]
+                refs = context["observations"][0]["evidence"] + [
+                    {"source_id": req["source_id"], "quote": req["quote"]}
+                ]
+                return {
+                    "candidates": [
+                        candidate(
+                            refs,
+                            description="扭矩3 N·m与交付规范2 N·m不一致",
+                            requirement_ids=[req["id"]],
+                        )
+                    ]
+                }
+            c = context["candidates"][0]
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(c["id"], c["evidence"], description=c["description"])
+                ],
+            }
+
+        result = self.make_agent(
+            handler,
+            code="compliance",
+            documents=[
+                {
+                    "filename": "guide.txt",
+                    "text": "紧固扭矩为3 N·m。",
+                    "text_complete": True,
+                }
+            ],
+            options=AgentOptions(protocol="structured", standards=[standard]),
+        ).run()
+        self.assertEqual(result["error"], "")
+        refs = result["report"]["items"][0]["evidence_refs"]
+        self.assertEqual({ref["role"] for ref in refs}, {"document", "standard"})
+        self.assertTrue(any("2026.1" in ref["position"] for ref in refs))
+
+    def test_cross_language_alignment_compares_opposite_operation_requirements(self):
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            if title == "Discovery":
+                source = context["sources"][0]
+                english = source["role"] == "document_a"
+                return discovery(
+                    context,
+                    facts=[
+                        {
+                            "subject": "设备",
+                            "attribute": "connection rule" if english else "接线规则",
+                            "value": "prohibited" if english else "允许",
+                            "unit": "",
+                            "conditions": "设备通电",
+                            "version": "1",
+                            "reference": {
+                                "source_id": source["id"],
+                                "quote": source["text"],
+                            },
+                        }
+                    ],
+                )
+            if title == "Alignment":
+                return {
+                    "keys": [
+                        {"fact_id": f["fact_id"], "attribute_key": "通电接线要求"}
+                        for f in context["facts"]
+                    ]
+                }
+            if title == "Comparison":
+                self.assertEqual(len(context["facts"]), 2)
+                return {
+                    "candidates": [
+                        candidate(
+                            [f["reference"] for f in context["facts"]],
+                            description="禁止通电接线与通电接线的含义相反",
+                            severity="critical",
+                        )
+                    ]
+                }
+            c = context["candidates"][0]
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(c["id"], c["evidence"], description=c["description"])
+                ],
+            }
+
+        result = self.make_agent(
+            handler,
+            task_type="language_consistency_check",
+            documents=[
+                {
+                    "filename": "source.txt",
+                    "role": "document_a",
+                    "text": "Do not connect while powered on.",
+                    "text_complete": True,
+                },
+                {
+                    "filename": "译文.txt",
+                    "role": "document_b",
+                    "text": "设备通电时连接电缆。",
+                    "text_complete": True,
+                },
+            ],
+        ).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(result["report"]["items"][0]["severity"], "critical")
+        self.assertEqual(
+            {r["role"] for r in result["report"]["items"][0]["evidence_refs"]},
+            {"document_a", "document_b"},
+        )
+
+    def test_shared_facts_are_reused_without_skipping_business_coverage(self):
+        pool = SharedFacts()
+        reused = []
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            if title == "Discovery":
+                reused.append(len(context["shared_facts"]))
+                facts = (
+                    []
+                    if context["shared_facts"]
+                    else [
+                        {
+                            "subject": "设备A",
+                            "attribute": "电压",
+                            "value": source["text"],
+                            "unit": "V",
+                            "conditions": "运行",
+                            "version": "1",
+                            "reference": {
+                                "source_id": source["id"],
+                                "quote": source["text"],
+                            },
+                        }
+                        for source in context["sources"]
+                    ]
+                )
+                return discovery(context, facts=facts)
+            if title == "Alignment":
+                return {
+                    "keys": [
+                        {"fact_id": f["fact_id"], "attribute_key": "电压"}
+                        for f in context["facts"]
+                    ]
+                }
+            return {"candidates": []}
+
+        first = self.make_agent(handler, shared_facts=pool).run()
+        second = self.make_agent(
+            handler,
+            shared_facts=pool,
+            code="custom",
+            options=AgentOptions(protocol="structured", strategy="consistency"),
+        ).run()
+        self.assertEqual(reused, [0, 2])
+        self.assertEqual(
+            first["metadata"]["model_calls"], second["metadata"]["model_calls"]
+        )
+        self.assertTrue(second["metadata"]["coverage"]["all_checked"])
+
+    def test_structure_repair_is_bounded_and_repeated_invalid_output_stays_incomplete(
+        self,
+    ):
+        for repaired in (True, False):
+            with self.subTest(repaired=repaired):
+                calls = []
+
+                def handler(messages, title, tools, force):
+                    calls.append(title)
+                    if title == "CheckPlan":
+                        if len(calls) == 1 or not repaired:
+                            return AgentTurn("{broken", finish_reason="stop")
+                        return empty_plan()
+                    return discovery(input_context(messages))
+
+                result = self.make_agent(handler).run()
+                self.assertEqual(calls.count("CheckPlan"), 2)
+                self.assertEqual(bool(result["error"]), not repaired)
+                if not repaired:
+                    self.assertTrue(
+                        result["report"]["summary"].startswith("检查未完成")
+                    )
+                    self.assertFalse(result["metadata"]["coverage"]["all_checked"])
+
+    def test_last_review_round_does_not_confirm_decisions_with_unread_actions(self):
+        for native_response in (False, True):
+            with self.subTest(native_response=native_response):
+
+                def handler(messages, title, tools, force):
+                    context = input_context(messages)
+                    if title == "CheckPlan":
+                        return empty_plan()
+                    if title == "Discovery":
+                        s = context["sources"][0]
+                        return discovery(
+                            context,
+                            candidates=[
+                                candidate([{"source_id": s["id"], "quote": s["text"]}])
+                            ],
+                        )
+                    self.assertIsNone(tools)
+                    if native_response:
+                        return AgentTurn(
+                            tool_calls=[
+                                {
+                                    "id": "extra",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "coverage_status",
+                                        "arguments": '{"requirement_id":""}',
+                                    },
+                                }
+                            ],
+                            finish_reason="tool_calls",
+                        )
+                    c = context["candidates"][0]
+                    return {
+                        "actions": [
+                            {
+                                "name": "coverage_status",
+                                "arguments": '{"requirement_id":""}',
+                            }
+                        ],
+                        "decisions": [decision(c["id"], c["evidence"])],
+                    }
+
+                result = self.make_agent(
+                    handler, options=AgentOptions(protocol="auto", max_review_rounds=1)
+                ).run()
+                self.assertEqual(result["error"], "")
+                self.assertEqual(result["report"]["items"], [])
+                self.assertEqual(len(result["report"]["pending_items"]), 1)
+                self.assertEqual(result["metadata"]["model_calls"], 3)
+
+    def test_tool_message_rejection_falls_back_after_successful_native_read(self):
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            if title == "Discovery":
+                s = context["sources"][0]
+                return discovery(
+                    context,
+                    candidates=[
+                        candidate([{"source_id": s["id"], "quote": s["text"]}])
+                    ],
+                )
+            c = context["candidates"][0]
+            if force:
+                return AgentTurn(
+                    tool_calls=[
+                        {
+                            "id": "read",
+                            "type": "function",
+                            "function": {
+                                "name": "read_context",
+                                "arguments": json.dumps(
+                                    {
+                                        "source_id": c["evidence"][0]["source_id"],
+                                        "radius": 1,
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+            if any(m["role"] == "tool" for m in messages):
+                return ToolsUnsupported("role tool 不支持")
+            self.assertIsNone(tools)
+            return {"actions": [], "decisions": [decision(c["id"], c["evidence"])]}
+
+        result = self.make_agent(handler, options=AgentOptions(protocol="auto")).run()
+        self.assertEqual(result["error"], "")
+        self.assertFalse(result["metadata"]["capabilities"]["native_tools"])
+        self.assertEqual(len(result["report"]["items"]), 1)
 
 
 if __name__ == "__main__":

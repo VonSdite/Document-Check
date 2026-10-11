@@ -3,15 +3,21 @@
 import hashlib
 import json
 import re
+import threading
 import time
 from collections import defaultdict
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from langsmith import tracing_context
 from pydantic import ValidationError
 
 from app.checks.agent_policy import strategy_for
-from app.checks.evidence_tools import execute_tool, tool_definitions
+from app.checks.evidence_tools import (
+    execute_tool,
+    observation_summary,
+    tool_definitions,
+)
 from app.checks.guardrails import (
     build_pdf_table_evidence_index,
     is_unsupported_pdf_table_data_missing_item,
@@ -25,6 +31,7 @@ from app.contracts.agent import (
     CheckPlan,
     Comparison,
     Discovery,
+    Fact,
     ReportItem,
     Review,
     strict_schema,
@@ -40,6 +47,29 @@ class BudgetExceeded(LLMError):
 
 class GraphState(TypedDict):
     data: dict
+
+
+class SharedFacts:
+    """同一任务的检查项共享经来源验证的事实，业务覆盖分别计算。"""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.entries = {}
+
+    def get(self, key, ids):
+        with self.lock:
+            return [
+                dict(fact)
+                for fact in self.entries.get(key, [])
+                if fact["reference"]["source_id"] in ids
+            ]
+
+    def put(self, key, facts):
+        with self.lock:
+            entries = self.entries.setdefault(key, [])
+            for fact in facts:
+                if fact not in entries:
+                    entries.append(fact)
 
 
 SYSTEM_INSTRUCTIONS = """你是文档审查系统。业务标准由检查提示词给出。
@@ -93,6 +123,7 @@ class EvidenceAgent:
         on_activity=None,
         model_factory=AgentModel,
         capabilities=None,
+        shared_facts=None,
     ):
         self.index = index
         self.item = item
@@ -101,6 +132,22 @@ class EvidenceAgent:
         self.external_ensure_active = ensure_active
         self.on_activity = on_activity
         self.strategy = strategy_for(item["code"], task_type, options.strategy)
+        self.shared_facts = shared_facts or SharedFacts()
+        self.fact_key = hashlib.sha256(
+            _json(
+                [
+                    WORKFLOW_VERSION,
+                    index.signature,
+                    connection.get("api_base"),
+                    connection.get("model_name"),
+                    connection.get("reasoning_effort"),
+                    connection.get("force_disable_thinking"),
+                    hashlib.sha256(
+                        str(connection.get("api_key") or "").encode()
+                    ).hexdigest(),
+                ]
+            ).encode()
+        ).hexdigest()
         self.connection = {**connection, "max_seconds": options.max_seconds}
         self.started = time.monotonic()
         self.max_input = int(connection.get("max_input_chars", 80000))
@@ -133,6 +180,8 @@ class EvidenceAgent:
             "elapsed_seconds": 0.0,
         }
         self.base_elapsed = self.state.get("elapsed_seconds", 0.0)
+        self.state["fact_cache_key"] = self.fact_key
+        self.shared_facts.put(self.fact_key, self.state["facts"])
         self.model = model_factory(
             self.connection,
             before_request=self.before_request,
@@ -362,9 +411,12 @@ class EvidenceAgent:
         )
 
     def _discovery_jobs(self):
-        chunks = self.index.chunks(
-            min(self.options.chunk_chars, max(1000, self.max_input // 3))
-        )
+        try:
+            chunks = self.index.chunks(
+                min(self.options.chunk_chars, max(1000, self.max_input // 3))
+            )
+        except RuntimeError as exc:
+            raise BudgetExceeded(str(exc)) from exc
         requirement_batches = self._pack(self.state["requirements"]) or [[]]
         return [
             (chunk, requirements)
@@ -409,6 +461,16 @@ class EvidenceAgent:
             return
         chunk, requirements = jobs[cursor]
         ids = {b.id for b in chunk}
+        reusable = (
+            self.shared_facts.get(self.fact_key, ids)
+            if self.strategy in {"consistency", "cross_document", "cross_language"}
+            else []
+        )
+        reusable = [
+            fact
+            for fact in reusable
+            if self.index.verify(fact["reference"], allowed=ids)
+        ]
         discovery = self._ask(
             Discovery,
             "逐一检查本批来源，covered_source_ids 必须恰好覆盖本批所有 id。仅产生具体且有引用依据的候选，保持严格证据门槛。提取后续全局对照所需事实；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。局部策略可不提取事实。原文中的换行、HTML 和位置标记属于解析表示。",
@@ -417,6 +479,8 @@ class EvidenceAgent:
                 "profile": self.state["plans"],
                 "requirements": requirements,
                 "sources": [b.as_dict() for b in chunk],
+                "shared_facts": reusable,
+                "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
             },
         )
         data = discovery.model_dump(mode="json")
@@ -430,12 +494,14 @@ class EvidenceAgent:
             set(observed) != requested or len(observed) != len(requested)
         ):
             raise LLMError("候选生成未逐项返回本批业务要求的覆盖观察")
-        for fact in data["facts"]:
+        for fact in reusable + data["facts"]:
+            Fact.model_validate(fact)
             if self.index.verify(fact["reference"], allowed=ids):
                 if fact not in self.state["facts"]:
                     self.state["facts"].append(fact)
             else:
                 self.state["diagnostics"].append("已排除无法核实原文的事实")
+        self.shared_facts.put(self.fact_key, self.state["facts"])
         for observation in data["observations"]:
             if observation["requirement_id"] not in requested:
                 raise LLMError("覆盖观察引用了本批未提供的要求")
@@ -539,22 +605,34 @@ class EvidenceAgent:
             "cross_language",
         }:
             for requirement in self.state["requirements"]:
-                observations = [
-                    o
-                    for o in self.state["observations"]
-                    if o["requirement_id"] == requirement["id"]
-                ]
-                jobs.append(
-                    {
-                        "requirement": requirement,
-                        "observations": observations,
-                        "coverage": self.index.coverage(
-                            self.state["requirement_coverage"].get(
-                                requirement["id"], []
-                            )
-                        ),
+                observations, seen = [], set()
+                for observation in self.state["observations"]:
+                    if observation["requirement_id"] != requirement["id"]:
+                        continue
+                    compact = {
+                        k: observation[k] for k in ("status", "rationale", "evidence")
                     }
-                )
+                    identity = _json(compact)
+                    if identity not in seen:
+                        observations.append(compact)
+                        seen.add(identity)
+                for batch in self._pack(
+                    observations, min(20000, self.max_input // 3)
+                ) or [[]]:
+                    jobs.append(
+                        {
+                            "requirement": requirement,
+                            "observations": batch,
+                            "observation_summary": observation_summary(
+                                self.state, requirement["id"]
+                            ),
+                            "coverage": self.index.coverage(
+                                self.state["requirement_coverage"].get(
+                                    requirement["id"], []
+                                )
+                            ),
+                        }
+                    )
         return jobs
 
     def _compare(self):
@@ -607,6 +685,9 @@ class EvidenceAgent:
                 "candidates": batch,
                 "sources": selected,
                 "requirements": requirements,
+                "requirement_observations": [
+                    observation_summary(self.state, r["id"]) for r in requirements
+                ],
                 "coverage": self.index.coverage(self.state["checked_ids"]),
                 "tools": tool_definitions(),
             },
@@ -645,6 +726,12 @@ class EvidenceAgent:
         except ToolsUnsupported:
             if self.options.protocol == "native":
                 raise
+            self.state["messages"] = [
+                {"role": "user", "content": "工具交互记录：" + _json(message)}
+                if message.get("role") == "tool" or message.get("tool_calls")
+                else message
+                for message in self.state["messages"]
+            ]
             self.state["messages"].append(
                 {
                     "role": "user",
@@ -661,6 +748,9 @@ class EvidenceAgent:
             return
         self.state["review_round"] += 1
         if turn.tool_calls:
+            if last_round:
+                self._abandon_batch("补充取证已达到轮次上限，仍有待读取的证据")
+                return
             self.state["messages"].append(
                 {
                     "role": "assistant",
@@ -688,7 +778,10 @@ class EvidenceAgent:
                 allow_repair=False,
             )
         data = review.model_dump(mode="json")
-        if data["actions"] and not last_round:
+        if data["actions"]:
+            if last_round:
+                self._abandon_batch("补充取证已达到轮次上限，仍有待读取的证据")
+                return
             self.state["messages"].append(
                 {"role": "assistant", "content": turn.content}
             )
@@ -704,6 +797,24 @@ class EvidenceAgent:
             raise LLMError("审查结果未完整覆盖本批候选或包含未知候选")
         for decision in data["decisions"]:
             self._accept_decision(decision)
+        self._finish_batch()
+
+    def _abandon_batch(self, rationale):
+        for candidate in self.state["candidates"]:
+            if candidate["id"] in self.state["review_batch"]:
+                self._accept_decision(
+                    {
+                        "candidate_id": candidate["id"],
+                        "outcome": "insufficient",
+                        "applicable": "unknown",
+                        "rationale": rationale,
+                        "description": candidate["description"],
+                        "impact": candidate["impact"],
+                        "suggestion": candidate["suggestion"],
+                        "evidence": [],
+                        "counterevidence": [],
+                    }
+                )
         self._finish_batch()
 
     def _tools(self):
@@ -757,11 +868,11 @@ class EvidenceAgent:
         self.state["pending_actions"] = []
         self.state["next"] = "review"
 
-    def _eligible_absence(self, candidate):
+    def _eligible_absence(self, candidate, decision):
         if any(
             self.index.verify(ref)
             and re.search(r"\bTODO\b|\bTBD\b|待补充|待插入|待填写", ref["quote"], re.I)
-            for ref in candidate["evidence"]
+            for ref in decision["evidence"]
         ):
             return True
         if not candidate["requirement_ids"]:
@@ -769,6 +880,13 @@ class EvidenceAgent:
         available = {r["id"] for r in self.state["requirements"]}
         return all(
             rid in available
+            and (summary := observation_summary(self.state, rid))["counts"].get(
+                "not_found", 0
+            )
+            > 0
+            and not any(
+                summary["counts"].get(status, 0) for status in ("covered", "uncertain")
+            )
             and all(
                 self.index.coverage(self.state["requirement_coverage"].get(rid, []))[
                     key
@@ -798,10 +916,12 @@ class EvidenceAgent:
                 decision.update(
                     outcome="insufficient", rationale="候选缺少直接证据或适用性尚未建立"
                 )
-            if candidate["absence_claim"] and not self._eligible_absence(candidate):
+            if candidate["absence_claim"] and not self._eligible_absence(
+                candidate, decision
+            ):
                 decision.update(
                     outcome="insufficient",
-                    rationale="缺失判断缺少适用要求或完整的解析与检查覆盖",
+                    rationale="缺失判断缺少适用要求或完整的解析与检查覆盖，或其他章节已覆盖该要求、存在不确定观察",
                 )
         if (
             decision["outcome"] == "explained"
@@ -1005,10 +1125,14 @@ class EvidenceAgent:
             )
         error = ""
         try:
-            graph.compile().invoke(
-                {"data": self.state},
-                {"recursion_limit": self.options.max_calls * 4 + 50},
-            )
+            with tracing_context(enabled=False):
+                graph.compile().invoke(
+                    {"data": self.state},
+                    {
+                        "recursion_limit": self.options.max_calls * 4 + 50,
+                        "callbacks": [],
+                    },
+                )
         except LLMError as exc:
             self.external_ensure_active()
             error = str(exc)
@@ -1047,8 +1171,13 @@ class EvidenceAgent:
             "diagnostics": self.state["diagnostics"],
             "tool_trace": self.state.get("tool_trace", []),
         }
+        report = dict(self.state.get("report") or self.build_report())
+        if error:
+            report["summary"] = (
+                "检查未完成，以下为已完成审查的结果。" + report["summary"]
+            )
         return {
-            "report": self.state.get("report") or self.build_report(),
+            "report": report,
             "metadata": metadata,
             "error": error,
         }
