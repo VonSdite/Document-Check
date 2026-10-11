@@ -89,7 +89,10 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
         if not code or not name or not prompt or code in seen_codes:
             continue
         seen_codes.add(code)
-        items.append({"code": code, "name": name, "prompt": prompt})
+        parsed = {"code": code, "name": name, "prompt": prompt}
+        if "agent_options" in item:
+            parsed["agent_options"] = item["agent_options"]
+        items.append(parsed)
     return items
 
 

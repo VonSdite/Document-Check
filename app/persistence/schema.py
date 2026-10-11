@@ -208,6 +208,16 @@ def init_db():
             FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS task_checkpoints (
+            task_id INTEGER NOT NULL,
+            check_code TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(task_id, check_code),
+            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
         CREATE TRIGGER IF NOT EXISTS trg_tasks_report_stats_invalidate
         AFTER UPDATE OF result_json ON tasks
         BEGIN

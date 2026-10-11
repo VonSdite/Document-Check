@@ -35,6 +35,7 @@ from app.checks.sensitive_terms import (
     load_sensitive_terms,
     sensitive_terms_file_candidates,
 )
+from app.contracts.agent import AgentOptions
 from app.contracts.task_types import (
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
@@ -42,9 +43,11 @@ from app.contracts.task_types import (
 )
 from app.documents.extraction.common import DocumentReadError
 from app.documents.images import image_items_from_meta
+from app.documents.index import DocumentIndex
 from app.documents.text_semantics import strip_script_markers
 from app.infrastructure.network import outbound_network_config
 from app.models.client import LLMError, run_check
+from app.persistence.checkpoints import CheckpointStore
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
 from app.tasks.activity import (
@@ -70,6 +73,7 @@ from app.tasks.runtime.common import (
     _ordered_results,
     _task_value,
 )
+from app.tasks.runtime.evidence_agent import EvidenceAgent, workflow_signature
 from app.tasks.runtime.image_checks import _run_image_check_items_concurrently
 from app.tasks.runtime.preprocessing import _prepare_task_inputs
 from app.tasks.runtime.state import (
@@ -511,6 +515,9 @@ def _run_check_items_concurrently(
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
     local_rule_document_text = _local_rule_document_text(document_text, document_meta)
+    source_index = DocumentIndex.from_task(
+        document_text, document_meta or {}, task["original_filename"]
+    )
 
     def save_failed_result(item, execution, error, *, canceled):
         progress = mark_unit_completed()
@@ -610,6 +617,8 @@ def _run_check_items_concurrently(
                     item_cancel_event.set()
                 ensure_active()
                 structured_report = None
+                agent_metadata = None
+                agent_error = ""
                 if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                     structured_report = _run_sensitive_terms_check(
                         app, local_rule_document_text, issue_output_limit
@@ -627,7 +636,49 @@ def _run_check_items_concurrently(
                         network=outbound_network_config(),
                     )
                     content = format_hyperlink_report(structured_report)
+                elif isinstance(item.get("agent_options"), dict) and item[
+                    "agent_options"
+                ].get("enabled", True):
+                    options = AgentOptions.model_validate(item["agent_options"])
+                    index = source_index.with_standards(
+                        [s.model_dump(mode="json") for s in options.standards]
+                    )
+                    connection = {
+                        **dict(task),
+                        **outbound_network_config(),
+                        "cancel_event": item_cancel_event,
+                    }
+                    signature = workflow_signature(
+                        index, item, connection, options, task_type
+                    )
+                    agent_result = EvidenceAgent(
+                        index=index,
+                        item=item,
+                        task_type=task_type,
+                        connection=connection,
+                        options=options,
+                        store=CheckpointStore(
+                            task_id, item["code"], signature, claim_token
+                        ),
+                        ensure_active=ensure_active,
+                        on_output=output_recorder.for_checks(
+                            [item["code"]],
+                            label="证据审查",
+                            executions={item["code"]: execution},
+                        ),
+                        on_activity=lambda phase, attempt: update_check_activity(
+                            task_id, claim_token, [item["code"]], phase, attempt
+                        ),
+                    ).run()
+                    structured_report = agent_result["report"]
+                    agent_metadata = agent_result["metadata"]
+                    agent_error = agent_result["error"]
+                    content = json.dumps(structured_report, ensure_ascii=False)
                 else:
+                    if len(document_text) > task["max_input_chars"]:
+                        raise RuntimeError(
+                            "当前检查项采用整文调用，文档超过模型输入上限；请选择分段证据审查策略"
+                        )
                     network = outbound_network_config()
                     run_check_kwargs = {
                         "api_base": task["api_base"],
@@ -676,7 +727,9 @@ def _run_check_items_concurrently(
                             filtered_unsupported_count,
                         )
                 ensure_active()
-                if finish_check_activity(task_id, claim_token, item["code"]):
+                if finish_check_activity(
+                    task_id, claim_token, item["code"], failed=bool(agent_error)
+                ):
                     raise RuntimeError("本检查项已由用户取消。")
             except (LLMError, RuntimeError) as exc:
                 if cancel_event.is_set():
@@ -704,6 +757,10 @@ def _run_check_items_concurrently(
             }
             if structured_report is not None:
                 result["structured_report"] = structured_report
+            if agent_metadata is not None:
+                result["agent"] = agent_metadata
+            if agent_error:
+                result["error"] = agent_error
             with result_lock:
                 completed_by_code[item["code"]] = result
                 partial_by_code.pop(item["code"], None)

@@ -92,6 +92,11 @@ class DocumentIndex:
         return cls(documents)
 
     def with_standards(self, standards: list[dict]):
+        index = object.__new__(DocumentIndex)
+        index.blocks = list(self.blocks)
+        index.by_id = dict(self.by_id)
+        index.documents = self.documents
+        index.signature = self.signature
         documents = [
             {
                 "filename": s["name"],
@@ -112,11 +117,11 @@ class DocumentIndex:
         extra = DocumentIndex(documents)
         for b in extra.blocks:
             block = SourceBlock(
-                **{**b.as_dict(), "id": "std-" + b.id, "ordinal": len(self.blocks)}
+                **{**b.as_dict(), "id": "std-" + b.id, "ordinal": len(index.blocks)}
             )
-            self.blocks.append(block)
-            self.by_id[block.id] = block
-        return self
+            index.blocks.append(block)
+            index.by_id[block.id] = block
+        return index
 
     def verify(self, reference: dict, *, allowed: set[str] | None = None) -> bool:
         source_id = reference.get("source_id")
@@ -144,6 +149,9 @@ class DocumentIndex:
 
     def search(self, query: str, limit: int = 8):
         terms = [t for t in re.findall(r"[\w.-]+", query.lower()) if t]
+        for word in re.findall(r"[\u4e00-\u9fff]{3,}", query):
+            terms.extend(word[i : i + 2] for i in range(len(word) - 1))
+        terms = list(dict.fromkeys(terms))
         if not terms:
             return []
         ranked = []

@@ -3,10 +3,13 @@ import json
 import re
 from difflib import SequenceMatcher
 
+from pydantic import ValidationError
+
 from app.checks.guardrails import (
     guarded_report_summary,
     is_unsupported_visual_missing_item,
 )
+from app.contracts.agent import CheckedReport
 from app.contracts.limits import normalize_issue_output_limit
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -219,6 +222,13 @@ def _prepare_task_results(
         )
     for result in results:
         item = dict(result)
+        if item.get("agent"):
+            try:
+                checked = CheckedReport.model_validate(item.get("structured_report"))
+                item["pending_items"] = checked.pending_items
+                item["withdrawn_items"] = checked.withdrawn_items
+            except ValidationError:
+                item["error"] = "审查报告结构校验失败，检查结果未完成"
         result_code = str(item.get("code") or "")
         structured_report = _result_structured_report(item)
         report_items = _result_report_items(item, structured_report)
@@ -319,6 +329,7 @@ def _enabled_report_suppression_rules(task_type: str | None) -> dict[str, list[d
                 "id": row["id"],
                 "reason": row["reason"] or "",
                 "description": description,
+                "evidence_fingerprint": snapshot.get("evidence_fingerprint", ""),
             }
         )
     return rules
@@ -372,6 +383,9 @@ def _matching_report_suppression_rule(
     best_rule = None
     best_similarity = 0.0
     for rule in rules:
+        context = item.get("evidence_fingerprint")
+        if context and context != rule.get("evidence_fingerprint"):
+            continue
         similarity = _report_description_similarity(
             description, rule.get("description")
         )
@@ -524,6 +538,11 @@ def _report_item_suppression_fingerprint(
         "task_type": str(task_type or ""),
         "check_code": str(result_code or ""),
         "description": _report_suppression_description(item),
+        **(
+            {"evidence_fingerprint": item["evidence_fingerprint"]}
+            if item.get("evidence_fingerprint")
+            else {}
+        ),
     }
     raw = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -539,6 +558,11 @@ def _report_suppression_item_snapshot(item: dict) -> dict:
         **fields,
         "text": _normalize_suppression_text(item.get("text")),
         "type": _normalize_report_item_type(item.get("type")) or "issue",
+        **(
+            {"evidence_fingerprint": item["evidence_fingerprint"]}
+            if item.get("evidence_fingerprint")
+            else {}
+        ),
     }
 
 
@@ -585,6 +609,13 @@ def _result_report_items(
 
 
 def _result_structured_report(result: dict) -> dict | None:
+    if result.get("agent"):
+        try:
+            return CheckedReport.model_validate(
+                result.get("structured_report")
+            ).model_dump(mode="json")
+        except ValidationError:
+            return {"summary": "审查报告结构校验失败，检查结果未完成", "items": []}
     for key in ("structured_report", "report_json"):
         structured = _normalize_structured_report_payload(result.get(key))
         if structured is not None:
@@ -859,6 +890,8 @@ def _normalize_structured_report_item(raw_item) -> dict:
     fields["evidence_refs"] = _normalize_report_evidence_refs(
         raw_item.get("evidence_refs")
     )
+    if raw_item.get("evidence_fingerprint"):
+        fields["evidence_fingerprint"] = str(raw_item["evidence_fingerprint"])
     if _looks_like_status_only(fields["category"]):
         status = status or _normalize_report_item_status(fields["category"])
         fields["category"] = ""
@@ -929,6 +962,11 @@ def _normalize_report_evidence_refs(value) -> list[dict]:
                 "relative_path": str(raw_ref.get("relative_path") or "").strip(),
                 "mime_type": str(raw_ref.get("mime_type") or "").strip(),
                 "kind": str(raw_ref.get("kind") or "").strip(),
+                **{
+                    key: str(raw_ref[key] or "")
+                    for key in ("quote", "section", "role")
+                    if key in raw_ref
+                },
             }
         )
     refs.sort(

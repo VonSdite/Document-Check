@@ -13,6 +13,11 @@ from flask import (
     url_for,
 )
 
+from app.checks.agent_policy import (
+    POLICY_KEY,
+    agent_options_from_form,
+    check_agent_options,
+)
 from app.checks.catalog import (
     _check_item_code_prefix,
     _check_item_task_type,
@@ -329,7 +334,10 @@ def register_settings_routes(app):
                         "message": "扩展检查项已创建，可继续添加。",
                         "item_id": int(cursor.lastrowid),
                         "html": render_template(
-                            "_check_item_rows.html", item=item, is_builtin=False
+                            "_check_item_rows.html",
+                            item=item,
+                            is_builtin=False,
+                            check_agent_options=check_agent_options,
                         ),
                     }
                 flash("扩展检查项已创建。", "success")
@@ -374,6 +382,9 @@ def register_settings_routes(app):
                         return {"ok": False, "error": "内置检查项不能删除。"}, 400
                     flash("内置检查项不能删除。", "error")
                     return redirect(url_for(_settings_endpoint()))
+                db.execute(
+                    "DELETE FROM settings WHERE key = ?", (POLICY_KEY + item["code"],)
+                )
                 db.execute("DELETE FROM check_items WHERE id = ?", (item_id,))
                 db.commit()
                 if _wants_json_response():
@@ -408,14 +419,33 @@ def register_settings_routes(app):
             if not item_id or not item_id.isdigit() or not name or not prompt:
                 flash("检查项名称和提示词不能为空。", "error")
                 return redirect(url_for(_settings_endpoint()))
-            if (
-                db.execute(
-                    "SELECT 1 FROM check_items WHERE id = ?", (item_id,)
-                ).fetchone()
-                is None
-            ):
+            check_item = db.execute(
+                "SELECT code, task_type FROM check_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if check_item is None:
                 flash("检查项不存在，无法保存。", "error")
                 return redirect(url_for(_settings_endpoint()))
+            if request.form.get("agent_config") == "1":
+                policy = check_agent_options(
+                    check_item["code"], check_item["task_type"]
+                )
+                if policy is not None:
+                    try:
+                        policy = agent_options_from_form(request.form, policy)
+                    except ValueError:
+                        flash(
+                            "证据审查配置无效，请检查预算范围和参考标准的名称、版本、原文。",
+                            "error",
+                        )
+                        return redirect(url_for(_settings_endpoint()))
+                    db.execute(
+                        "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                        (
+                            POLICY_KEY + check_item["code"],
+                            json.dumps(policy, ensure_ascii=False),
+                            now_text(),
+                        ),
+                    )
             db.execute(
                 """
                 UPDATE check_items
@@ -509,6 +539,7 @@ def register_settings_routes(app):
                     "default_check_codes": default_check_item_codes(VIDEO_TASK_TYPE),
                 },
             ],
+            check_agent_options=check_agent_options,
             global_concurrency=min(
                 _max_task_processes(),
                 max(1, _int_setting("global_concurrency", 3)),

@@ -55,6 +55,80 @@ def build_report_workbook(task):
 
     _fill_report_items_sheet(report_sheet, task, results, document_groups)
     _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
+    if any(result.get("agent") for result in results):
+        audit_sheet = workbook.create_sheet("证据审查")
+        audit_sheet.append(
+            ["检查项", "处理结果", "候选描述", "依据", "位置", "原文引用"]
+        )
+        usage_sheet = workbook.create_sheet("执行用量")
+        usage_sheet.append(
+            [
+                "检查项",
+                "模型请求",
+                "已知输入token",
+                "已知输出token",
+                "用量完整",
+                "用时秒",
+                "估算成本",
+                "币种",
+                "已检查片段",
+                "总片段",
+            ]
+        )
+        for result in results:
+            meta = result.get("agent")
+            if not meta:
+                continue
+            usage_sheet.append(
+                [
+                    result["name"],
+                    meta["model_calls"],
+                    meta["known_input_tokens"],
+                    meta["known_output_tokens"],
+                    "是" if meta["usage_complete"] else "否",
+                    meta["elapsed_seconds"],
+                    meta["cost"],
+                    meta["currency"],
+                    meta["coverage"]["checked_blocks"],
+                    meta["coverage"]["total_blocks"],
+                ]
+            )
+            for kind, entries in (
+                ("待核实", result.get("pending_items", [])),
+                ("已撤回", result.get("withdrawn_items", [])),
+            ):
+                for candidate in entries:
+                    audit_sheet.append(
+                        [
+                            _excel_cell_text(v)
+                            for v in (
+                                result["name"],
+                                kind,
+                                candidate["description"],
+                                candidate["rationale"],
+                                "",
+                                "",
+                            )
+                        ]
+                    )
+            for item in result.get("report_items", []):
+                for ref in item.get("evidence_refs", []):
+                    if ref.get("kind") in {"document_text", "requirement"}:
+                        audit_sheet.append(
+                            [
+                                _excel_cell_text(v)
+                                for v in (
+                                    result["name"],
+                                    "已确认",
+                                    item["description"],
+                                    "原文引用已核实",
+                                    ref["filename"] + " / " + ref["position"],
+                                    ref.get("quote", ""),
+                                )
+                            ]
+                        )
+        _style_excel_sheet(audit_sheet)
+        _style_excel_sheet(usage_sheet)
 
     output = io.BytesIO()
     workbook.save(output)

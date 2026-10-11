@@ -123,12 +123,19 @@ def _enabled_check_item_snapshots(
         """,
         tuple(unique_ids + [task_type]),
     ).fetchall()
+    from app.checks.agent_policy import check_agent_options
+
     return [
         {
             "id": row["id"],
             "code": row["code"],
             "name": row["name"],
             "prompt": row["prompt"],
+            **(
+                {"agent_options": options}
+                if (options := check_agent_options(row["code"], task_type)) is not None
+                else {}
+            ),
         }
         for row in rows
     ]

@@ -157,6 +157,12 @@
   ],
   [
     "table",
+    "task_checkpoints",
+    "task_checkpoints",
+    "CREATE TABLE task_checkpoints (\n            task_id INTEGER NOT NULL,\n            check_code TEXT NOT NULL,\n            signature TEXT NOT NULL,\n            state_json TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            PRIMARY KEY(task_id, check_code),\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE\n        )"
+  ],
+  [
+    "table",
     "task_live_results",
     "task_live_results",
     "CREATE TABLE task_live_results (\n            task_id INTEGER PRIMARY KEY,\n            result_json TEXT,\n            summary TEXT,\n            progress INTEGER NOT NULL DEFAULT 0,\n            updated_at TEXT NOT NULL,\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE\n        )"

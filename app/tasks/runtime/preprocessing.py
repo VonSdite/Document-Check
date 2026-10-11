@@ -28,6 +28,7 @@ from app.documents.images import (
     image_items_from_meta,
     render_pdf_page_images,
 )
+from app.documents.index import text_blocks
 from app.documents.text_semantics import strip_script_markers
 from app.documents.videos import extract_video_frames, format_video_document_text
 from app.infrastructure.files import remove_directory_tree
@@ -86,16 +87,26 @@ def _prepare_task_inputs(
     document_meta_raw = _task_value(task, "document_meta_json")
     if not document_text:
         upload_path = _task_upload_path(app, task)
+        source_blocks = []
         extracted_text, hyperlinks = extract_document(
             upload_path,
             task["file_type"],
             cancel_event=cancel_event,
+            blocks=source_blocks,
         )
         extracted_text = extracted_text.strip()
         if not extracted_text:
             raise RuntimeError("未能从文档中提取到可检查文本")
         document_text = format_document_text(task["original_filename"], extracted_text)
         document_meta = _document_meta(document_meta_raw)
+        document_meta["source_documents"] = [
+            _source_document(
+                task["original_filename"],
+                task["file_type"],
+                extracted_text,
+                source_blocks,
+            )
+        ]
         if task["file_type"] == "pdf":
             plain_document_text = strip_script_markers(document_text)
             if plain_document_text != document_text:
@@ -112,7 +123,7 @@ def _prepare_task_inputs(
             document_meta,
             claim_token,
         )
-    _validate_model_input(document_text, task["max_input_chars"])
+    _validate_task_text(task, document_text)
     return document_text, document_meta_raw
 
 
@@ -326,7 +337,7 @@ def _prepare_consistency_task_inputs(
             document_meta,
             claim_token,
         )
-    _validate_model_input(document_text, task["max_input_chars"])
+    _validate_task_text(task, document_text)
     return document_text, document_meta_raw
 
 
@@ -335,6 +346,17 @@ def _build_consistency_task_inputs(
 ) -> tuple[str, dict]:
     groups = _extract_consistency_groups(app, task, cancel_event=cancel_event)
     document_meta = _document_meta(task["document_meta_json"])
+    document_meta["source_documents"] = [
+        _source_document(
+            file["original_filename"],
+            file["file_type"],
+            file["text"],
+            file.get("source_blocks", []),
+            group["role"],
+        )
+        for group in groups
+        for file in group["files"]
+    ]
     if task_type == LANGUAGE_CONSISTENCY_TASK_TYPE:
         groups_by_role = {group["role"]: group for group in groups}
         group_a = groups_by_role.get("document_a")
@@ -381,15 +403,25 @@ def _extract_consistency_groups(app, task, *, cancel_event=None) -> list[dict]:
             if not upload_path.is_file():
                 raise RuntimeError(f"{label}“{original_filename}”已删除，无法检查")
             try:
-                text = extract_text(
-                    upload_path, file_type, cancel_event=cancel_event
-                ).strip()
+                source_blocks = []
+                text, _ = extract_document(
+                    upload_path,
+                    file_type,
+                    cancel_event=cancel_event,
+                    blocks=source_blocks,
+                )
+                text = text.strip()
             except DocumentReadError as exc:
                 raise DocumentReadError(f"{label}“{original_filename}”：{exc}") from exc
             if not text:
                 raise RuntimeError(f"{label}“{original_filename}”未能提取到可检查文本")
             extracted_files.append(
-                {**file_info, "original_filename": original_filename, "text": text}
+                {
+                    **file_info,
+                    "original_filename": original_filename,
+                    "text": text,
+                    "source_blocks": source_blocks,
+                }
             )
         extracted_groups.append({**group, "files": extracted_files})
     return extracted_groups
@@ -461,7 +493,7 @@ def _persist_preprocessed_inputs(
     document_meta: dict,
     claim_token: str | None,
 ) -> tuple[str, str]:
-    _validate_model_input(document_text, task["max_input_chars"])
+    _validate_task_text(task, document_text)
     completed_at = now_text()
     document_meta["preprocessing"] = {
         "status": "completed",
@@ -504,3 +536,45 @@ def _validate_model_input(
         raise RuntimeError(
             f"{label} {len(document_text)} 字，超过当前模型文本上限 {max_input_chars} 字"
         )
+
+
+def _validate_task_text(task, text):
+    raw = _task_value(task, "checks_snapshot_json")
+    try:
+        checks = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        checks = []
+    chunked = any(
+        isinstance(check, dict)
+        and isinstance(check.get("agent_options"), dict)
+        and check["agent_options"].get("enabled", True)
+        for check in checks
+    )
+    if not text:
+        raise RuntimeError("未能从文档中提取到可检查文本")
+    if not chunked:
+        _validate_model_input(text, task["max_input_chars"])
+
+
+def _source_document(filename, file_type, text, blocks, role="document"):
+    unresolved = [b["location"] for b in blocks if b.get("kind") == "unresolved"]
+    if file_type == "pdf":
+        blocks = [
+            piece
+            for block in blocks
+            if block.get("text")
+            for piece in text_blocks(f"[{block['location']}]\n{block['text']}")
+        ]
+    return {
+        "filename": filename,
+        "role": role,
+        "text": text,
+        "blocks": blocks or text_blocks(text),
+        "text_complete": not unresolved,
+        "limitations": [f"未可靠提取：{location}" for location in unresolved]
+        + (
+            ["文本检查未读取图片、绘图和版式证据"]
+            if file_type in {"pdf", "docx", "xlsx", "xlsm", "xls"}
+            else []
+        ),
+    }

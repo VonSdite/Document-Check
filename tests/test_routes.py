@@ -16,6 +16,7 @@ from flask import Flask
 from openpyxl import Workbook, load_workbook
 from werkzeug.datastructures import FileStorage
 
+from app.contracts.agent import AgentOptions
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -3822,6 +3823,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             task = get_db().execute("SELECT * FROM tasks").fetchone()
         snapshots = json.loads(task["checks_snapshot_json"])
+        self.assertEqual(
+            snapshots[0].pop("agent_options"), AgentOptions().model_dump(mode="json")
+        )
         meta = json.loads(task["document_meta_json"])
         self._assert_task_uses_provider_reference(task, model_id, "high")
         self.assertIsNone(task["document_text"])
@@ -8160,7 +8164,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         meta = json.loads(task["document_meta_json"])
         self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertEqual(
-            json.loads(task["checks_snapshot_json"]),
+            [
+                {
+                    key: value
+                    for key, value in snapshot.items()
+                    if key != "agent_options"
+                }
+                for snapshot in json.loads(task["checks_snapshot_json"])
+            ],
             [
                 {
                     "id": item["id"],
@@ -8331,7 +8342,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertNotIn("static_precheck", meta)
         self.assertEqual(
-            json.loads(task["checks_snapshot_json"]),
+            [
+                {
+                    key: value
+                    for key, value in snapshot.items()
+                    if key != "agent_options"
+                }
+                for snapshot in json.loads(task["checks_snapshot_json"])
+            ],
             [
                 {
                     "id": item["id"],

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import threading
@@ -83,7 +84,13 @@ def cleanup_expired_task_files(app) -> int:
     for task in tasks:
         try:
             _remove_task_artifacts(app, task)
-            updates.append((now_text(), task["id"]))
+            updates.append(
+                (
+                    _cleared_source_meta(task["document_meta_json"]),
+                    now_text(),
+                    task["id"],
+                )
+            )
         except TaskArtifactCleanupError as exc:
             logger.warning("定期清理任务文件跳过 task_id=%s error=%s", task["id"], exc)
         except Exception:
@@ -91,8 +98,12 @@ def cleanup_expired_task_files(app) -> int:
     cleaned = len(updates)
     if updates:
         db.executemany(
-            "UPDATE tasks SET document_text = NULL, source_files_cleaned_at = ? WHERE id = ?",
+            "UPDATE tasks SET document_text = NULL, document_meta_json = ?, source_files_cleaned_at = ? WHERE id = ?",
             updates,
+        )
+        db.executemany(
+            "DELETE FROM task_checkpoints WHERE task_id = ?",
+            [(task_id,) for _, _, task_id in updates],
         )
         db.commit()
         _invalidate_task_file_cache_snapshot(app)
@@ -341,8 +352,19 @@ def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
 
     if result["cleaned_ids"]:
         db.executemany(
-            "UPDATE tasks SET document_text = NULL, source_files_cleaned_at = ? WHERE id = ?",
-            [(now_text(), task_id) for task_id in result["cleaned_ids"]],
+            "UPDATE tasks SET document_text = NULL, document_meta_json = ?, source_files_cleaned_at = ? WHERE id = ?",
+            [
+                (
+                    _cleared_source_meta(tasks[task_id]["document_meta_json"]),
+                    now_text(),
+                    task_id,
+                )
+                for task_id in result["cleaned_ids"]
+            ],
+        )
+        db.executemany(
+            "DELETE FROM task_checkpoints WHERE task_id = ?",
+            [(task_id,) for task_id in result["cleaned_ids"]],
         )
         db.commit()
         _invalidate_task_file_cache_snapshot(app)
@@ -352,6 +374,18 @@ def cleanup_task_file_cache(app, task_ids: list[int]) -> dict:
             result["freed_size_bytes"],
         )
     return result
+
+
+def _cleared_source_meta(raw):
+    if not raw:
+        return raw
+    try:
+        metadata = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+    if isinstance(metadata, dict):
+        metadata.pop("source_documents", None)
+    return json.dumps(metadata, ensure_ascii=False)
 
 
 def _task_file_retention_days() -> int:

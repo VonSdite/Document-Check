@@ -11,6 +11,11 @@ PHASE_LABELS = {
     "preparing": "解析",
     "pending": "待执行",
     "checking": "检查",
+    "planning": "确定检查范围",
+    "discovering": "检查章节",
+    "comparing": "全局对照",
+    "reviewing": "审查证据",
+    "tools": "读取补充证据",
     "waiting": "等待",
     "thinking": "思考",
     "output": "输出",
@@ -19,7 +24,20 @@ PHASE_LABELS = {
     "canceling": "取消中",
 }
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
-CANCELABLE_PHASES = {"pending", "checking", "waiting", "thinking", "output", "retrying"}
+CANCELABLE_PHASES = {
+    "pending",
+    "checking",
+    "planning",
+    "discovering",
+    "comparing",
+    "reviewing",
+    "tools",
+    "finalizing",
+    "waiting",
+    "thinking",
+    "output",
+    "retrying",
+}
 RETRYABLE_PHASES = {"failed", "canceled", "canceling"}
 CHECK_CANCELED_MESSAGE = "本检查项已由用户取消，已接收的内容仅供参考。"
 

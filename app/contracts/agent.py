@@ -106,6 +106,15 @@ class Comparison(Contract):
     candidates: list[Candidate] = Field(max_length=100)
 
 
+class FactKey(Contract):
+    fact_id: NonEmpty
+    attribute_key: NonEmpty
+
+
+class Alignment(Contract):
+    keys: list[FactKey] = Field(max_length=500)
+
+
 class Decision(Contract):
     candidate_id: NonEmpty
     outcome: Literal["confirmed", "explained", "insufficient"]
@@ -146,6 +155,7 @@ class ReportItem(Contract):
     impact: str
     suggestion: str
     evidence_refs: list[dict]
+    evidence_fingerprint: str = ""
 
 
 class CheckedReport(Contract):
