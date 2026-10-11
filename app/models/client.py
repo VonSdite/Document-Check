@@ -368,6 +368,7 @@ def run_check(
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
     on_output: Optional[Callable[[dict], None]] = None,
+    on_usage: Optional[Callable[[dict, str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     request_id = uuid.uuid4().hex[:12]
@@ -446,6 +447,7 @@ def run_check(
         check_canceled=check_canceled,
         on_activity=on_activity,
         on_output=on_output,
+        on_usage=on_usage,
     )
 
 
@@ -757,6 +759,7 @@ def _run_payload_with_retries(
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
     on_output: Optional[Callable[[dict], None]] = None,
+    on_usage: Optional[Callable[[dict, str, int | None], None]] = None,
 ) -> str:
     last_error = None
     active_payload = dict(payload)
@@ -815,6 +818,7 @@ def _run_payload_with_retries(
                 check_canceled=check_canceled,
                 on_activity=on_activity,
                 on_output=emit_output if on_output else None,
+                on_usage=on_usage,
             )
             if on_content and not attempt_parts and content:
                 on_content(content)
@@ -982,6 +986,7 @@ def _run_check_attempt(
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
     on_output: Optional[Callable[[dict], None]] = None,
+    on_usage: Optional[Callable[[dict, str, int | None], None]] = None,
 ) -> str:
     try:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
@@ -1049,6 +1054,7 @@ def _run_check_attempt(
                     check_canceled=check_canceled,
                     on_activity=on_activity,
                     on_output=on_output,
+                    on_usage=on_usage,
                 )
                 logger.info(
                     "LLM 请求完成 request_id=%s task_id=%s attempt=%s mode=stream output_chars=%s",
@@ -1424,6 +1430,7 @@ def _read_stream_response(
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
     on_output: Optional[Callable[[dict], None]] = None,
+    on_usage: Optional[Callable[[dict, str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
     _force_utf8_response(response)
@@ -1448,6 +1455,7 @@ def _read_stream_response(
         check_canceled=check_canceled,
         on_activity=on_activity,
         on_output=on_output,
+        on_usage=on_usage,
     )
 
 
@@ -1464,6 +1472,7 @@ def _read_stream_lines(
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
     on_output: Optional[Callable[[dict], None]] = None,
+    on_usage: Optional[Callable[[dict, str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled)
     parts = []
@@ -1534,6 +1543,8 @@ def _read_stream_lines(
                 on_output({"kind": "content", "text": content_delta})
 
         diagnostics.observe(data, raw=line)
+        if on_usage and isinstance(data, dict) and isinstance(data.get("usage"), dict):
+            on_usage(dict(data["usage"]), request_id, attempt)
         phase = (
             "output"
             if diagnostics.content_chunks

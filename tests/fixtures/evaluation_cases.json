@@ -1,0 +1,64 @@
+[
+  {
+    "id": "same-condition-conflict",
+    "documents": [{"filename":"参数说明.txt","text":"# A 型号运行参数\n在版本1、额定负载条件下，A型号的工作电压为220 V。\n# 操作说明\n在版本1、额定负载条件下，A型号的工作电压为110 V。"}],
+    "check": {"code":"consistency","name":"全文一致性","prompt":"检查同一对象、版本、用途和条件下的参数是否一致。不同型号或条件的差异允许存在。"},
+    "expected_issues": [{"id":"voltage-conflict","description":"同一型号和条件下的工作电压220 V与110 V冲突","severity":"high"}]
+  },
+  {
+    "id": "different-models",
+    "documents": [{"filename":"型号说明.txt","text":"A型号工作电压为220 V。\nB型号工作电压为110 V。"}],
+    "check": {"code":"consistency","name":"全文一致性","prompt":"只检查同一型号、版本和条件的参数冲突。"},
+    "expected_issues": []
+  },
+  {
+    "id": "different-versions",
+    "documents": [{"filename":"版本说明.txt","text":"产品A版本1的最大连接数为100。\n产品A版本2的最大连接数为200。"}],
+    "check": {"code":"consistency","name":"全文一致性","prompt":"检查同一对象、同一版本的参数冲突。"},
+    "expected_issues": []
+  },
+  {
+    "id": "equivalent-units",
+    "documents": [{"filename":"单位说明.txt","text":"A型号额定电压为230 V。\nA型号额定电压为0.23 kV。"}],
+    "check": {"code":"consistency","name":"全文一致性","prompt":"核实同一参数是否冲突，单位换算后的等价值视为一致。"},
+    "expected_issues": []
+  },
+  {
+    "id": "normal-paraphrase",
+    "documents": [{"filename":"用户指南.txt","text":"用户可以单击保存按钮保存配置。\n使用者点击保存后，配置将被保存。"}],
+    "check": {"code":"understandability","name":"易理解性","prompt":"只报告导致读者无法理解或会误操作的明确表达问题。允许正常同义表达和不同措辞。"},
+    "expected_issues": []
+  },
+  {
+    "id": "visual-reference-without-visual-evidence",
+    "documents": [{"filename":"安装说明.txt","text":"请按照图1完成设备安装。\n安装完成后检查固定螺钉。","limitations":["文本检查未读取图片、绘图和版式证据"]}],
+    "check": {"code":"completeness","name":"内容完整性","prompt":"检查安装说明中能够依据原文确认的缺失。仅有图示引用不能证明图示缺失。"},
+    "expected_issues": []
+  },
+  {
+    "id": "explicit-completeness-requirement",
+    "documents": [{"filename":"安装指南.txt","text":"# 安装指南\n第一步：连接电源线。\n第二步：启动设备。"}],
+    "check": {"code":"completeness","name":"内容完整性","prompt":"安装指南必须说明接线前断电。请检查该要求是否已覆盖。"},
+    "expected_issues": [{"id":"power-off-missing","description":"安装指南没有说明接线前断电","severity":"critical"}]
+  },
+  {
+    "id": "cross-document-conflict",
+    "task_type":"consistency_check",
+    "documents": [{"filename":"素材.txt","role":"master","text":"A型号版本1额定电压为220 V。"},{"filename":"资料.txt","role":"related","text":"A型号版本1额定电压为110 V。"}],
+    "check": {"code":"consistency-cross-document","name":"多文档对照","prompt":"检查素材与资料中同一型号、同一版本的参数差异，引用两边的原文。"},
+    "expected_issues": [{"id":"cross-voltage","description":"资料与素材的额定电压冲突","severity":"high"}]
+  },
+  {
+    "id": "cross-language-prohibition",
+    "task_type":"language_consistency_check",
+    "documents": [{"filename":"source.txt","role":"document_a","text":"Do not connect the cable while the device is powered on."},{"filename":"译文.txt","role":"document_b","text":"设备通电时连接电缆。"}],
+    "check": {"code":"language-consistency-cross-lingual","name":"跨语种对照","prompt":"检查禁止、允许和操作条件的含义是否一致，允许正常翻译措辞差异。"},
+    "expected_issues": [{"id":"negation-reversed","description":"禁止通电接线被翻译为通电时接线","severity":"critical"}]
+  },
+  {
+    "id": "versioned-standard",
+    "documents": [{"filename":"交付说明.txt","text":"# 安装步骤\n紧固螺钉，紧固扭矩为3 N·m。"}],
+    "check": {"code":"compliance","name":"规范对照","prompt":"按照已提供的交付规范核对安装步骤的参数。只使用给定版本的标准。","agent_options":{"standards":[{"name":"交付规范","version":"2026.1","text":"安装步骤中的紧固扭矩必须为2 N·m。"}]}},
+    "expected_issues": [{"id":"torque-standard","description":"紧固扭矩3 N·m不符合指定标准的2 N·m","severity":"high"}]
+  }
+]
