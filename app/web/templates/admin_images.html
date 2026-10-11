@@ -6,7 +6,6 @@
 
 {% block content %}
 {% if not list_partial %}
-{% set submit_disabled = not models or not check_items %}
 <section class="page-title">
   <div>
     <h1>图片检查</h1>
@@ -39,7 +38,7 @@
     </div>
     <label>
       多模态模型
-      <select name="model_id" required {{ "disabled" if submit_disabled else "" }}>
+      <select name="model_id" required>
         {% if not models %}
         <option value="">暂无可用模型</option>
         {% else %}
@@ -50,7 +49,7 @@
       </select>
     </label>
     <div class="submit-slot">
-      <button class="primary-button" type="submit" {{ "disabled" if submit_disabled else "" }}>提交检查</button>
+      <button class="primary-button" type="submit">提交检查</button>
     </div>
   </div>
 

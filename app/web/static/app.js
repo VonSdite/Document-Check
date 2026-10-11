@@ -165,20 +165,43 @@ function showToast(message, category = "success") {
   window.setTimeout(() => hideToast(toast), 4200);
 }
 
+function syncTaskFormValidity(form) {
+  if (!(form instanceof HTMLFormElement) || form.dataset.requireChecks !== "true") {
+    return;
+  }
+  form.querySelectorAll('input[type="file"][required]').forEach((input) => {
+    const label = input.closest(".form-field")?.querySelector(".field-label")?.textContent.trim() || "文件";
+    input.setCustomValidity(input.files?.length ? "" : `请选择${label}。`);
+  });
+  const model = form.querySelector('select[name="model_id"]');
+  if (model instanceof HTMLSelectElement) {
+    model.setCustomValidity(model.value ? "" : "请先在模型管理中添加并启用模型。");
+  }
+  const firstCheck = form.querySelector('input[name="checks"]');
+  const checkInput = firstCheck || form.querySelector("[data-check-validation]");
+  if (checkInput instanceof HTMLInputElement) {
+    const message = firstCheck
+      ? form.dataset.checkRequiredMessage || "请至少选择一个检查项。"
+      : "暂无可用检查项，请联系管理员启用。";
+    checkInput.setCustomValidity(form.querySelector('input[name="checks"]:checked') ? "" : message);
+  }
+}
+
+document.querySelectorAll('form[data-require-checks="true"]').forEach(syncTaskFormValidity);
+
+document.addEventListener("change", (event) => {
+  syncTaskFormValidity(event.target.form);
+});
+
 document.addEventListener("submit", (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement) || form.dataset.requireChecks !== "true") {
     return;
   }
-  if (form.querySelector('input[name="checks"]:checked')) {
-    return;
-  }
-
-  event.preventDefault();
-  showToast(form.dataset.checkRequiredMessage || "请至少选择一个多文档对照项。", "error");
-  const firstCheck = form.querySelector('input[name="checks"]');
-  if (firstCheck instanceof HTMLElement) {
-    firstCheck.focus();
+  syncTaskFormValidity(form);
+  if (!form.checkValidity()) {
+    event.preventDefault();
+    form.reportValidity();
   }
 });
 
@@ -2208,6 +2231,7 @@ function clearFileControl(target) {
   control.classList.remove("has-file");
   if (input instanceof HTMLInputElement) {
     renderSelectedFileList(control, input);
+    syncTaskFormValidity(input.form);
   }
 }
 
@@ -2369,6 +2393,7 @@ function updateFileControl(control, input) {
   name.setAttribute("title", fileNames.join("\n"));
   control.classList.add("has-file");
   renderSelectedFileList(control, input, trimmedCount);
+  syncTaskFormValidity(input.form);
 }
 
 function openFilePicker(control) {

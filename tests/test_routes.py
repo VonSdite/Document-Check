@@ -7954,6 +7954,61 @@ class AdminSettingsRouteTest(unittest.TestCase):
             other_response.get_json()["error"], "选择其他原因时必须填写具体原因。"
         )
 
+    def test_task_submission_controls_stay_enabled_with_missing_configuration(self):
+        routes = (
+            "/",
+            "/consistency",
+            "/language-consistency",
+            "/images",
+            "/videos",
+            "/admin/tasks",
+            "/admin/consistency",
+            "/admin/language-consistency",
+            "/admin/images",
+            "/admin/videos",
+        )
+        for models_available in (False, True):
+            if models_available:
+                self._configure_provider()
+            for checks_available in (False, True):
+                with self.app.app_context():
+                    get_db().execute(
+                        "UPDATE check_items SET enabled = ?", (int(checks_available),)
+                    )
+                    get_db().commit()
+                for route in routes:
+                    with self.subTest(
+                        route=route,
+                        models=models_available,
+                        checks=checks_available,
+                    ):
+                        response = self.client.get(route)
+                        self.assertEqual(response.status_code, 200)
+                        soup = BeautifulSoup(response.text, "html.parser")
+                        form = _required_tag(soup.select_one("form.create-panel"))
+                        button = _required_tag(form.select_one('button[type="submit"]'))
+                        model = _required_tag(
+                            form.select_one('select[name="model_id"]')
+                        )
+                        self.assertFalse(button.has_attr("disabled"))
+                        self.assertFalse(model.has_attr("disabled"))
+                        self.assertTrue(model.has_attr("required"))
+                        self.assertEqual(
+                            any(
+                                option.get("value") for option in model.select("option")
+                            ),
+                            models_available,
+                        )
+                        self.assertEqual(
+                            form.select_one("[data-check-validation]") is None,
+                            checks_available,
+                        )
+                        files = form.select('input[type="file"]')
+                        self.assertTrue(files)
+                        self.assertTrue(
+                            all(file.has_attr("required") for file in files)
+                        )
+
     def test_task_pages_use_expected_default_check_selection(self):
         self._configure_provider()
         response = self.client.post(

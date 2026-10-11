@@ -482,6 +482,9 @@ class UserPermissionTest(unittest.TestCase):
         self.assertEqual(
             soup.select_one('input[name="keyword"]')["placeholder"], "搜索用户"
         )
+        query_button = soup.select_one('.filter-bar button[type="submit"]')
+        self.assertEqual(query_button.get_text(strip=True), "查询")
+        self.assertIn("primary-button", query_button["class"])
         self.assertEqual(
             soup.select_one(
                 '[data-permission-user="cookie_session:stable-b"] strong'
