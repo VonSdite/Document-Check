@@ -83,6 +83,7 @@ def empty_plan():
         "document_type": "技术说明",
         "audience": "技术人员",
         "scope": "设备参数",
+        "global_checks": [],
         "requirements": [],
     }
 
@@ -262,7 +263,7 @@ class EvidenceAgentTest(unittest.TestCase):
 
         result = self.make_agent(handler).run()
         self.assertEqual(len(calls), 2)
-        self.assertIn("每次输出 token 上限", result["error"])
+        self.assertIn("每次回复 token 上限", result["error"])
         self.assertIn("思考", result["error"])
         self.assertEqual(result["report"]["items"], [])
         self.assertFalse(result["metadata"]["coverage"]["all_checked"])
@@ -357,11 +358,15 @@ class EvidenceAgentTest(unittest.TestCase):
         self.assertTrue(planned_sources[0])
 
     def test_global_comparison_finds_problem_absent_from_local_candidates(self):
+        calls = []
+
         def handler(messages, title, tools, force):
+            calls.append(title)
             context = input_context(messages)
             if title == "CheckPlan":
-                return empty_plan()
+                return {**empty_plan(), "global_checks": ["consistency"]}
             if title == "Discovery":
+                self.assertTrue(context["extract_facts"])
                 facts = [
                     {
                         "subject": "设备A",
@@ -394,9 +399,136 @@ class EvidenceAgentTest(unittest.TestCase):
             c = context["candidates"][0]
             return {"actions": [], "decisions": [decision(c["id"], c["evidence"])]}
 
-        result = self.make_agent(handler).run()
-        self.assertEqual(len(result["report"]["items"]), 1)
-        self.assertEqual(len(result["report"]["items"][0]["evidence_refs"]), 2)
+        for code in ("consistency", "custom-parameters", "understandability"):
+            with self.subTest(code=code):
+                calls.clear()
+                result = self.make_agent(handler, code=code).run()
+                self.assertEqual(result["error"], "")
+                self.assertEqual(len(result["report"]["items"]), 1)
+                self.assertEqual(len(result["report"]["items"][0]["evidence_refs"]), 2)
+                self.assertEqual(result["metadata"]["global_checks"], ["consistency"])
+                self.assertIn("Alignment", calls)
+                self.assertIn("Comparison", calls)
+
+    def test_custom_local_prompt_skips_global_work(self):
+        calls = []
+
+        def handler(messages, title, tools, force):
+            calls.append(title)
+            if title == "CheckPlan":
+                return empty_plan()
+            self.assertEqual(title, "Discovery")
+            context = input_context(messages)
+            self.assertFalse(context["extract_facts"])
+            return discovery(context)
+
+        result = self.make_agent(
+            handler,
+            item={
+                "code": "custom-expression",
+                "name": "表达",
+                "prompt": "检查本段语句是否通顺。",
+            },
+        ).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(calls, ["CheckPlan", "Discovery"])
+        self.assertEqual(result["metadata"]["global_checks"], [])
+
+    def test_custom_prompt_combines_fact_comparison_and_requirement_coverage(self):
+        prompt = "核对同一型号电压的一致性。安装指南必须说明接线前断电。"
+        comparisons = []
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return {
+                    **empty_plan(),
+                    "global_checks": ["consistency", "completeness"],
+                    "requirements": [
+                        {
+                            "id": "safety",
+                            "text": "接线前断电",
+                            "applicability": "安装指南",
+                            "origin": "prompt",
+                            "source_id": "",
+                            "quote": "安装指南必须说明接线前断电。",
+                        }
+                    ],
+                }
+            if title == "Discovery":
+                self.assertTrue(context["extract_facts"])
+                return {
+                    **discovery(
+                        context,
+                        facts=[
+                            {
+                                "subject": "设备A",
+                                "attribute": "电压",
+                                "value": value,
+                                "unit": "V",
+                                "conditions": "运行",
+                                "version": "1",
+                                "reference": {
+                                    "source_id": source["id"],
+                                    "quote": source["text"],
+                                },
+                            }
+                            for source, value in zip(context["sources"], ["220", "110"])
+                        ],
+                    ),
+                    "observations": [
+                        {
+                            "requirement_id": context["requirements"][0]["id"],
+                            "status": "not_found",
+                            "rationale": "所有已读来源均未说明断电要求",
+                            "evidence": [],
+                        }
+                    ],
+                }
+            if title == "Alignment":
+                return {
+                    "keys": [
+                        {"fact_id": f["fact_id"], "attribute_key": "电压"}
+                        for f in context["facts"]
+                    ]
+                }
+            if title == "Comparison":
+                comparisons.append("facts" if "facts" in context else "requirement")
+                if "facts" in context:
+                    return {
+                        "candidates": [
+                            candidate([f["reference"] for f in context["facts"]])
+                        ]
+                    }
+                self.assertTrue(context["coverage"]["all_checked"])
+                return {
+                    "candidates": [
+                        candidate(
+                            [],
+                            description="未说明接线前断电",
+                            absence_claim=True,
+                            requirement_ids=[context["requirement"]["id"]],
+                        )
+                    ]
+                }
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(c["id"], c["evidence"], description=c["description"])
+                    for c in context["candidates"]
+                ],
+            }
+
+        result = self.make_agent(
+            handler,
+            item={"code": "custom-safety", "name": "设备安全", "prompt": prompt},
+        ).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(comparisons, ["facts", "requirement"])
+        self.assertEqual(len(result["report"]["items"]), 2)
+        self.assertEqual(
+            result["metadata"]["global_checks"], ["consistency", "completeness"]
+        )
 
     def test_review_withdraws_difference_between_models(self):
         def handler(messages, title, tools, force):

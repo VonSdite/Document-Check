@@ -58,52 +58,7 @@
           </div>
         </div>
         <label>提示词<textarea name="prompt" rows="10" required>{{ item.prompt }}</textarea></label>
-        {% if check_agent_options is defined %}
-        {% set policy = check_agent_options(item.code, item.task_type) %}
-        {% if policy %}
-        <details>
-          <summary>证据审查策略与预算</summary>
-          <input type="hidden" name="agent_config" value="1">
-          <label class="switch-line"><input type="checkbox" name="agent_enabled" {{ 'checked' if policy.enabled else '' }}>启用分段检查与证据审查</label>
-          <p class="muted">提示词定义业务标准。流程核对原文、适用条件和反证，区分确认问题、待核实和撤回。配置在提交任务时保存，重试沿用原快照。</p>
-          <div class="form-grid">
-            <label>检查策略<select name="agent_strategy">
-              {% for key, label in [('auto','按检查项选择'),('local','章节表达检查'),('consistency','全文一致性'),('completeness','内容完整性'),('compliance','规范与标准对照'),('cross_document','多文档对照'),('cross_language','跨语种对照')] %}
-              <option value="{{ key }}" {{ 'selected' if policy.strategy == key else '' }}>{{ label }}</option>
-              {% endfor %}
-            </select></label>
-            <label>工具调用协议<select name="agent_protocol">
-              {% for key, label in [('auto','自动验证并选择'),('native','要求模型原生工具调用'),('structured','结构化动作调用')] %}
-              <option value="{{ key }}" {{ 'selected' if policy.protocol == key else '' }}>{{ label }}</option>
-              {% endfor %}
-            </select></label>
-            {% for key, label, minimum, maximum in [('chunk_chars','每批来源字符数',1000,50000),('max_calls','单项模型请求上限',4,1000),('max_tokens','单项 token 预算',10000,10000000),('max_seconds','单项时间预算（秒）',30,14400),('max_output_tokens','每次输出 token 上限',512,32768),('max_review_rounds','每批审查轮次',1,6),('review_batch_size','每批审查候选数',1,12),('max_candidates','候选数量上限',1,1000)] %}
-            <label>{{ label }}<input type="number" name="agent_{{ key }}" min="{{ minimum }}" max="{{ maximum }}" value="{{ policy[key] }}" required></label>
-            {% endfor %}
-          </div>
-          <details>
-            <summary>版本化参考标准</summary>
-            <p class="muted">提供本次检查可以引用的标准原文与版本。每次保存可增加一条标准，最多 12 条。</p>
-            {% for standard in policy.standards + [{'name':'','version':'','text':''}] %}
-            <div class="form-grid">
-              <label>标准名称<input name="standard_name" value="{{ standard.name }}"></label>
-              <label>标准版本<input name="standard_version" value="{{ standard.version }}"></label>
-            </div>
-            <label>标准原文<textarea name="standard_text" rows="4">{{ standard.text }}</textarea></label>
-            {% endfor %}
-          </details>
-          <details>
-            <summary>成本估算</summary>
-            <p class="muted">仅在单价与任务使用的模型一致时填写，单位为每百万 token。服务未完整返回用量时，成本显示为未知。</p>
-            <div class="form-grid">
-              <label>输入单价<input type="number" min="0" step="any" name="agent_input_price" value="{{ policy.input_price if policy.input_price is not none else '' }}"></label>
-              <label>输出单价<input type="number" min="0" step="any" name="agent_output_price" value="{{ policy.output_price if policy.output_price is not none else '' }}"></label>
-              <label>币种<input name="agent_currency" value="{{ policy.currency }}" maxlength="12"></label>
-            </div>
-          </details>
-        </details>
-        {% endif %}
-        {% endif %}
+        <p class="muted">写明检查关注点、判定条件、参考条款和允许的差异。</p>
         <div class="form-actions">
           <label class="switch-line">
             <input type="checkbox" name="enabled" {{ "checked" if item.enabled else "" }}>

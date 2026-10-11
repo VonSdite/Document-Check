@@ -1,5 +1,10 @@
 from flask import flash, redirect, render_template, request, url_for
 
+from app.contracts.model_limits import (
+    MODEL_OUTPUT_TOKENS_DEFAULT,
+    MODEL_OUTPUT_TOKENS_MAX,
+    MODEL_OUTPUT_TOKENS_MIN,
+)
 from app.identity.service import UserIdentity
 from app.infrastructure.network import outbound_network_config
 from app.models.client import (
@@ -132,10 +137,20 @@ def _model_management_response(identity: UserIdentity, redirect_endpoint: str):
         providers=providers,
         models_by_provider=models_by_provider,
         active_nav="models",
+        model_output_default=MODEL_OUTPUT_TOKENS_DEFAULT,
+        model_output_min=MODEL_OUTPUT_TOKENS_MIN,
+        model_output_max=MODEL_OUTPUT_TOKENS_MAX,
     )
 
 
 def _provider_form_data() -> dict | str:
+    try:
+        models = _parse_model_configs(
+            request.form.get("model_configs", ""),
+            request.form.get("models", ""),
+        )
+    except ValueError as exc:
+        return str(exc)
     return _normalize_provider_input(
         {
             "name": request.form.get("name", ""),
@@ -148,10 +163,7 @@ def _provider_form_data() -> dict | str:
                 "max_input_chars", str(PROVIDER_INPUT_LIMIT_DEFAULT)
             ),
             "is_active": request.form.get("is_active") == "on",
-            "models": _parse_model_configs(
-                request.form.get("model_configs", ""),
-                request.form.get("models", ""),
-            ),
+            "models": models,
         },
         require_models=True,
     )

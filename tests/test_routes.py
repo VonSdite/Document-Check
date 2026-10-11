@@ -1773,7 +1773,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         model_chips = model_group.select("[data-provider-model]")
         self.assertEqual(
             [chip.get_text(" ", strip=True) for chip in model_chips],
-            [f"model-{letter}" for letter in "abcde"],
+            [f"model-{letter} 回复 32768" for letter in "abcde"],
         )
         self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips))
         self.assertIsNone(model_group.select_one("[data-provider-model-summary]"))
@@ -1809,7 +1809,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         model_chips = model_list.select("[data-provider-model]")
         self.assertEqual(
             [chip.get_text(" ", strip=True) for chip in model_chips],
-            [f"model-{letter}" for letter in "abcdefg"],
+            [f"model-{letter} 回复 32768" for letter in "abcdefg"],
         )
         self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips[:5]))
         self.assertTrue(all(chip.has_attr("hidden") for chip in model_chips[5:]))
@@ -3267,6 +3267,110 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 ("model-b", False, None),
             ],
         )
+
+    def test_user_models_save_distinct_output_limits_and_keep_user_ownership(self):
+        self._logout_test_client()
+        response = self.client.post(
+            "/models",
+            data={
+                "name": "我的模型",
+                "api_base": "https://example.test/v1/chat/completions",
+                "is_active": "on",
+                "model_configs": json.dumps(
+                    [
+                        {"model_name": "same-model", "max_output_tokens": 65536},
+                        {
+                            "model_name": "same-model",
+                            "force_disable_thinking": True,
+                            "max_output_tokens": 4096,
+                        },
+                    ]
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            models = get_enabled_models("ip:127.0.0.1")
+            self.assertEqual({m["max_output_tokens"] for m in models}, {65536, 4096})
+            self.assertEqual(get_enabled_models("ip:192.0.2.1"), [])
+            for model in models:
+                selected = _find_enabled_model(model["id"], "ip:127.0.0.1")
+                self.assertEqual(
+                    selected["max_output_tokens"], model["max_output_tokens"]
+                )
+        page = self.client.get("/models").get_data(as_text=True)
+        self.assertIn("回复上限(token)", page)
+        self.assertIn('data-model-output-max="262144"', page)
+
+    def test_invalid_model_output_limit_leaves_existing_configuration_intact(self):
+        model_id = self._configure_provider()
+        for invalid in (511, 262145, "bad", 1.5, True):
+            with self.subTest(limit=invalid):
+                response = self.client.post(
+                    "/models",
+                    data={
+                        "provider_id": model_id.split(":", 1)[0],
+                        "name": "我的模型",
+                        "api_base": "https://example.test/v1/chat/completions",
+                        "is_active": "on",
+                        "model_configs": json.dumps(
+                            [{"model_name": "model-a", "max_output_tokens": invalid}]
+                        ),
+                    },
+                    follow_redirects=True,
+                )
+                self.assertIn("每次回复 token 上限", response.get_data(as_text=True))
+                with self.app.app_context():
+                    self.assertEqual(
+                        _find_enabled_model(model_id, "ip:127.0.0.1")[
+                            "max_output_tokens"
+                        ],
+                        32768,
+                    )
+
+    def test_custom_check_snapshots_selected_model_limit_for_new_tasks(self):
+        model_id = self._configure_provider()
+        prompt = "检查操作条件与参数。"
+        created = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "create_check_item",
+                "task_type": DOCUMENT_TASK_TYPE,
+                "name": "设备参数检查",
+                "prompt": prompt,
+                "enabled": "on",
+            },
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(created.status_code, 200)
+        item_id = created.get_json()["item_id"]
+        with self.app.app_context():
+            db = get_db()
+            db.execute("UPDATE user_model_configs SET max_output_tokens=65536")
+            db.commit()
+        response = self.client.post(
+            "/",
+            data={
+                "document": (io.BytesIO(b"test document"), "doc.txt"),
+                "checks": [str(item_id)],
+                "model_id": model_id,
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            db = get_db()
+            db.execute("UPDATE user_model_configs SET max_output_tokens=4096")
+            db.commit()
+            task = db.execute("SELECT * FROM tasks").fetchone()
+            self.assertEqual(task["max_output_tokens"], 65536)
+            snapshot = json.loads(task["checks_snapshot_json"])[0]
+            self.assertEqual(snapshot["prompt"], prompt)
+            self.assertTrue(snapshot["code"].startswith("custom-"))
+            self.assertEqual(snapshot["agent_options"]["max_output_tokens"], 65536)
+            self.assertEqual(
+                _find_enabled_model(model_id, "ip:127.0.0.1")["max_output_tokens"], 4096
+            )
 
     def test_user_models_accepts_million_char_input_limit(self):
         response = self.client.post(

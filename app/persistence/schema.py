@@ -1,5 +1,6 @@
 from flask import current_app
 
+from app.contracts.model_limits import MODEL_OUTPUT_TOKENS_DEFAULT
 from app.contracts.task_types import DOCUMENT_TASK_TYPE
 from app.persistence.connection import (
     MODEL_THINKING_DEFAULT_MIGRATION_KEY,
@@ -43,7 +44,7 @@ def init_db():
         for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     db.executescript(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
@@ -102,6 +103,7 @@ def init_db():
             api_key TEXT,
             request_timeout INTEGER NOT NULL DEFAULT 3600,
             max_input_chars INTEGER NOT NULL DEFAULT 80000,
+            max_output_tokens INTEGER,
             force_disable_thinking INTEGER NOT NULL DEFAULT 0,
             reasoning_effort TEXT,
             status TEXT NOT NULL DEFAULT 'queued',
@@ -139,6 +141,7 @@ def init_db():
             force_disable_thinking INTEGER NOT NULL DEFAULT 0,
             reasoning_effort TEXT,
             sort_order INTEGER NOT NULL DEFAULT 0,
+            max_output_tokens INTEGER NOT NULL DEFAULT {MODEL_OUTPUT_TOKENS_DEFAULT},
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(provider_id) REFERENCES user_model_providers(id) ON DELETE CASCADE,
@@ -247,7 +250,14 @@ def init_db():
     _ensure_column(db, "tasks", "provider_id", "INTEGER")
     _ensure_column(db, "tasks", "force_disable_thinking", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(db, "tasks", "reasoning_effort", "TEXT")
+    _ensure_column(db, "tasks", "max_output_tokens", "INTEGER")
     _ensure_column(db, "user_model_configs", "reasoning_effort", "TEXT")
+    _ensure_column(
+        db,
+        "user_model_configs",
+        "max_output_tokens",
+        f"INTEGER NOT NULL DEFAULT {MODEL_OUTPUT_TOKENS_DEFAULT}",
+    )
     _ensure_column(db, "tasks", "owner_subject", "TEXT")
     _ensure_column(db, "tasks", "owner_name_snapshot", "TEXT")
     _ensure_column(db, "tasks", "owner_source", "TEXT")

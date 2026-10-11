@@ -9,7 +9,7 @@
       <h2>{{ title }}</h2>
       <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
     </div>
-    <form method="post" class="stack-form provider-modal-form" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}">
+    <form method="post" class="stack-form provider-modal-form" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}" data-model-output-default="{{ model_output_default }}" data-model-output-min="{{ model_output_min }}" data-model-output-max="{{ model_output_max }}">
       {% if provider %}<input type="hidden" name="provider_id" value="{{ provider.id }}">{% endif %}
       <div class="form-grid">
         <label>提供商名称<input name="name" value="{{ provider.name if provider else '' }}" placeholder="例如 OpenAI 兼容服务" required></label>
@@ -29,7 +29,7 @@
           <div>
             <span class="field-with-help">
               <span class="field-label">模型 ID 列表</span>
-              <span class="help-tip" tabindex="0" data-tip="每行填写一个模型 ID，可单独设置思考强度和是否关闭思考。">?</span>
+              <span class="help-tip" tabindex="0" data-tip="每行填写一个模型 ID，配置每次回复的 token 上限、思考强度和是否关闭思考。检查任务使用所选模型的配置。">?</span>
             </span>
           </div>
           <div class="model-editor-actions">
@@ -46,6 +46,12 @@
             <thead>
               <tr>
                 <th>模型 ID</th>
+                <th>
+                  <span class="table-heading-help">
+                    回复上限(token)
+                    <span class="help-tip" tabindex="0" data-tip="每次回复最多生成的 token 数，部分模型的思考也计入额度。默认 {{ model_output_default }}，按模型服务支持的容量填写。保存后对新提交任务生效。">?</span>
+                  </span>
+                </th>
                 <th>
                   <span class="table-heading-help">
                     思考强度
@@ -120,6 +126,7 @@
                 {% for model in provider_models %}
                 <span class="chip" data-provider-model{% if loop.index > 5 %} hidden{% endif %}>
                   {{ model.model_name }}
+                  <span class="model-chip-meta">回复 {{ model.max_output_tokens }}</span>
                   {% if model.reasoning_effort %}<span class="model-chip-meta">思考 {{ model.reasoning_effort }}</span>{% endif %}
                   {% if model.force_disable_thinking %}<span class="model-chip-meta">关闭思考</span>{% endif %}
                 </span>

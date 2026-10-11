@@ -180,6 +180,7 @@ class EvidenceAgent:
             "elapsed_seconds": 0.0,
         }
         self.base_elapsed = self.state.get("elapsed_seconds", 0.0)
+        self.state.setdefault("global_checks", [])
         self.state["fact_cache_key"] = self.fact_key
         self.shared_facts.put(self.fact_key, self.state["facts"])
         self.model = model_factory(
@@ -202,6 +203,12 @@ class EvidenceAgent:
             > self.options.max_seconds
         ):
             raise BudgetExceeded("检查项已达到总执行时间预算")
+
+    def _uses_strategy(self, *strategies):
+        return self.strategy in strategies or (
+            self.options.strategy == "auto"
+            and bool(set(self.state["global_checks"]) & set(strategies))
+        )
 
     def persist(self):
         self.external_ensure_active()
@@ -424,6 +431,9 @@ class EvidenceAgent:
                 "text 简洁描述可检查的要求和必要条件，quote 使用足以支撑该要求的连续原文，避免重复长篇正文。"
                 "不得遗漏本批业务要求，不新增行业常识或未给出的要求。"
                 "文档概要只用于形成待验证的文档类型、读者和范围。"
+                "global_checks 按完整业务提示词选择所需的全文核查：consistency 为跨章节事实一致性，"
+                "completeness 为明确必需内容的缺失，compliance 为给定规范的符合程度。"
+                "可组合多个类型；仅检查局部表达时为空。只选择提示词要求的核查范围。"
             )
             if job.get("compact_retry"):
                 instruction += "本批输出长度受限，请进一步精简描述、适用条件和文档概要，保留全部要求及准确引用。"
@@ -465,7 +475,7 @@ class EvidenceAgent:
                     raise IncompleteResponse(
                         "检查要求规划因长度限制被截断（finish_reason=length），"
                         f"本次输出上限 {self.options.max_output_tokens} token。"
-                        "请在检查项设置中提高“每次输出 token 上限”，或降低模型思考强度，"
+                        "请在“模型管理”中提高所选模型的“每次回复 token 上限”，或调整模型思考强度，"
                         "确认模型上下文容量后重新提交任务。",
                         finish_reason="length",
                     ) from exc
@@ -473,6 +483,9 @@ class EvidenceAgent:
                 self.persist()
                 return
             plan_dict = plan.model_dump(mode="json")
+            for check in plan_dict["global_checks"]:
+                if check not in self.state["global_checks"]:
+                    self.state["global_checks"].append(check)
             profile = {k: plan_dict[k] for k in ("document_type", "audience", "scope")}
             if profile not in self.state["plans"]:
                 self.state["plans"].append(profile)
@@ -569,7 +582,7 @@ class EvidenceAgent:
         ids = {b.id for b in chunk}
         reusable = (
             self.shared_facts.get(self.fact_key, ids)
-            if self.strategy in {"consistency", "cross_document", "cross_language"}
+            if self._uses_strategy("consistency", "cross_document", "cross_language")
             else []
         )
         reusable = [
@@ -579,9 +592,13 @@ class EvidenceAgent:
         ]
         discovery = self._ask(
             Discovery,
-            "逐一检查本批来源，covered_source_ids 必须恰好覆盖本批所有 id。仅产生具体且有引用依据的候选，保持严格证据门槛。提取后续全局对照所需事实；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。局部策略可不提取事实。原文中的换行、HTML 和位置标记属于解析表示。",
+            "逐一检查本批来源，covered_source_ids 必须恰好覆盖本批所有 id。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。",
             {
                 "strategy": self.strategy,
+                "global_checks": self.state["global_checks"],
+                "extract_facts": self._uses_strategy(
+                    "consistency", "cross_document", "cross_language"
+                ),
                 "profile": self.state["plans"],
                 "requirements": requirements,
                 "sources": [b.as_dict() for b in chunk],
@@ -655,7 +672,7 @@ class EvidenceAgent:
         ]
         jobs = (
             self._pack(facts)
-            if self.strategy in {"consistency", "cross_document", "cross_language"}
+            if self._uses_strategy("consistency", "cross_document", "cross_language")
             else []
         )
         cursor = self.state.get("align_cursor", 0)
@@ -685,7 +702,7 @@ class EvidenceAgent:
 
     def _comparison_jobs(self):
         jobs = []
-        if self.strategy in {"consistency", "cross_document", "cross_language"}:
+        if self._uses_strategy("consistency", "cross_document", "cross_language"):
             groups = defaultdict(list)
             for fact in self.state["facts"]:
                 fact_id = hashlib.sha256(_json(fact).encode()).hexdigest()[:20]
@@ -704,12 +721,12 @@ class EvidenceAgent:
                         jobs.append({"facts": batch})
                     for other in batches[i + 1 :]:
                         jobs.append({"facts": batch + other})
-        if self.strategy in {
+        if self._uses_strategy(
             "completeness",
             "compliance",
             "cross_document",
             "cross_language",
-        }:
+        ):
             for requirement in self.state["requirements"]:
                 observations, seen = [], set()
                 for observation in self.state["observations"]:
@@ -1272,6 +1289,7 @@ class EvidenceAgent:
         metadata = {
             "workflow_version": WORKFLOW_VERSION,
             "strategy": self.strategy,
+            "global_checks": list(self.state["global_checks"]),
             "capabilities": self.state["capabilities"],
             "coverage": coverage,
             "model_calls": len(requests),

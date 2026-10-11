@@ -5,9 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from flask import Flask
-from werkzeug.datastructures import MultiDict
 
-from app.checks.agent_policy import POLICY_KEY, agent_options_from_form
+from app.checks.agent_policy import POLICY_KEY, check_agent_options, strategy_for
 from app.contracts.agent import AgentOptions
 from app.models.agent import AgentTurn
 from app.persistence.checkpoints import CheckpointOwnershipLost, CheckpointStore
@@ -47,18 +46,20 @@ class EvidenceIntegrationTest(unittest.TestCase):
         self.context.pop()
         self.root.cleanup()
 
-    def insert_task(self, snapshots, *, token="owner", text=None):
+    def insert_task(
+        self, snapshots, *, token="owner", text=None, max_output_tokens=None
+    ):
         db = get_db()
         cursor = db.execute(
             """INSERT INTO tasks(ip, original_filename, stored_filename, file_type, file_size,
-            checks_json, checks_snapshot_json, model_name, api_base, status, claim_token, document_text, created_at, updated_at)
-            VALUES ('127.0.0.1', 'a.txt', 'a.txt', 'txt', 10, '[]', ?, 'test', 'http://model/v1/chat/completions', 'running', ?, ?, '2026-01-01', '2026-01-01')""",
-            (json.dumps(snapshots, ensure_ascii=False), token, text),
+            checks_json, checks_snapshot_json, model_name, api_base, status, claim_token, document_text, max_output_tokens, created_at, updated_at)
+            VALUES ('127.0.0.1', 'a.txt', 'a.txt', 'txt', 10, '[]', ?, 'test', 'http://model/v1/chat/completions', 'running', ?, ?, ?, '2026-01-01', '2026-01-01')""",
+            (json.dumps(snapshots, ensure_ascii=False), token, text, max_output_tokens),
         )
         db.commit()
         return cursor.lastrowid
 
-    def test_submission_snapshots_strategy_budget_and_standards_for_all_text_tasks(
+    def test_text_task_policies_use_built_in_defaults_and_ignore_public_overrides(
         self,
     ):
         for task_type in (
@@ -76,17 +77,16 @@ class EvidenceIntegrationTest(unittest.TestCase):
             )
             if row is None:
                 self.fail("默认检查项缺失")
-            options = AgentOptions(
+            public_override = AgentOptions(
                 strategy="compliance",
                 max_calls=10,
                 standards=[{"name": "规范", "version": "1", "text": "电压必须明确。"}],
             ).model_dump(mode="json")
-            set_setting(POLICY_KEY + row["code"], options)
+            set_setting(POLICY_KEY + row["code"], public_override)
             snapshot = _enabled_check_item_snapshots(get_db(), [row["id"]], task_type)
-            set_setting(POLICY_KEY + row["code"], {})
             self.assertEqual(
                 _check_items_from_snapshot(json.dumps(snapshot))[0]["agent_options"],
-                options,
+                AgentOptions().model_dump(mode="json"),
             )
 
     def test_checkpoint_write_requires_current_execution_owner(self):
@@ -112,15 +112,22 @@ class EvidenceIntegrationTest(unittest.TestCase):
                 "code": "custom-check",
                 "name": "业务检查",
                 "prompt": "检查设备参数。",
-                "agent_options": AgentOptions(protocol="structured").model_dump(
-                    mode="json"
-                ),
+                "agent_options": AgentOptions(
+                    protocol="structured", max_output_tokens=2048
+                ).model_dump(mode="json"),
             }
         ]
-        task_id = self.insert_task(snapshots)
+        task_id = self.insert_task(snapshots, max_output_tokens=65536)
+        output_limits = []
 
         def turn(model, messages, *, schema, **kwargs):
-            model.before_request({"messages": messages, "max_completion_tokens": 8192})
+            output_limits.append(kwargs["max_output_tokens"])
+            model.before_request(
+                {
+                    "messages": messages,
+                    "max_completion_tokens": kwargs["max_output_tokens"],
+                }
+            )
             answer = (
                 empty_plan()
                 if schema["title"] == "CheckPlan"
@@ -138,6 +145,8 @@ class EvidenceIntegrationTest(unittest.TestCase):
             TaskRunner(self.app).run(task_id, "owner")
         task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         self.assertEqual(task["status"], "completed", task["error"])
+        self.assertTrue(output_limits)
+        self.assertEqual(set(output_limits), {65536})
         result = json.loads(task["result_json"])[0]
         self.assertEqual(result["structured_report"]["items"], [])
         self.assertEqual(result["agent"]["coverage"]["checked_blocks"], 28)
@@ -176,20 +185,21 @@ class EvidenceIntegrationTest(unittest.TestCase):
         rule.pop("evidence_fingerprint")
         self.assertIsNone(_matching_report_suppression_rule(item, [rule])[0])
 
-    def test_form_requires_reference_version_and_preserves_business_prompt_input(self):
-        form = MultiDict(
-            {
-                "agent_enabled": "on",
-                "standard_name": "规范",
-                "standard_version": "",
-                "standard_text": "条款",
-            }
+    def test_custom_checks_plan_scope_with_built_in_policies(self):
+        options = check_agent_options("custom-business-check", "document_check")
+        self.assertEqual(options, AgentOptions().model_dump(mode="json"))
+        self.assertEqual(
+            strategy_for("custom-business-check", "document_check", "auto"), "auto"
         )
-        with self.assertRaises(ValueError):
-            agent_options_from_form(form, AgentOptions().model_dump(mode="json"))
-        form["standard_version"] = "2026"
-        options = agent_options_from_form(form, AgentOptions().model_dump(mode="json"))
-        self.assertEqual(options["standards"][0]["version"], "2026")
+        self.assertEqual(strategy_for("typo", "document_check", "auto"), "local")
+        self.assertEqual(
+            strategy_for("custom", "consistency_check", "auto"), "cross_document"
+        )
+        self.assertEqual(
+            strategy_for("custom", "language_consistency_check", "auto"),
+            "cross_language",
+        )
+        self.assertIsNone(check_agent_options("common-terms", "document_check"))
 
 
 if __name__ == "__main__":

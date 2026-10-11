@@ -3681,7 +3681,7 @@ body.table-column-resize-active * {
 
 .model-editor-table-wrap {
   max-height: min(42vh, 420px);
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -3690,7 +3690,7 @@ body.table-column-resize-active * {
 
 .model-editor-table {
   width: 100%;
-  min-width: 0;
+  min-width: 680px;
   table-layout: fixed;
   border-collapse: collapse;
 }
@@ -3715,20 +3715,31 @@ body.table-column-resize-active * {
 
 .model-editor-table th:nth-child(2),
 .model-editor-table td:nth-child(2) {
-  width: 132px;
+  width: 120px;
   text-align: center;
 }
 
 .model-editor-table th:nth-child(3),
 .model-editor-table td:nth-child(3) {
-  width: 150px;
+  width: 132px;
   text-align: center;
 }
 
 .model-editor-table th:nth-child(4),
 .model-editor-table td:nth-child(4) {
+  width: 130px;
+  text-align: center;
+}
+
+.model-editor-table th:nth-child(5),
+.model-editor-table td:nth-child(5) {
   width: 74px;
   padding-left: 6px;
+}
+
+.model-output-input {
+  width: 100%;
+  min-width: 80px;
 }
 
 .model-editor-table tbody tr:last-child td {

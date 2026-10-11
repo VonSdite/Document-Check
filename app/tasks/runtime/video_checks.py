@@ -288,6 +288,11 @@ def _run_video_check_items_concurrently(
                             "proxy": network["proxy"],
                             "ssl_verify": network["ssl_verify"],
                             "request_timeout": task["request_timeout"],
+                            **(
+                                {"max_completion_tokens": task["max_output_tokens"]}
+                                if _task_value(task, "max_output_tokens") is not None
+                                else {}
+                            ),
                             "model_name": task["model_name"],
                             "reasoning_effort": _task_value(task, "reasoning_effort"),
                             "force_disable_thinking": _task_flag(

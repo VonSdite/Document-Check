@@ -69,8 +69,6 @@ def build_report_workbook(task):
                 "已知输出token",
                 "用量完整",
                 "用时秒",
-                "估算成本",
-                "币种",
                 "已检查片段",
                 "总片段",
             ]
@@ -87,8 +85,6 @@ def build_report_workbook(task):
                     meta["known_output_tokens"],
                     "是" if meta["usage_complete"] else "否",
                     meta["elapsed_seconds"],
-                    meta["cost"],
-                    meta["currency"],
                     meta["coverage"]["checked_blocks"],
                     meta["coverage"]["total_blocks"],
                 ]

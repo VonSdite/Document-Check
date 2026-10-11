@@ -289,6 +289,50 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertNotIn("max_completion_tokens", payload)
         self.assertNotIn("max_tokens", payload)
 
+    def test_configured_output_limit_reaches_text_and_visual_requests(self):
+        for model_call, inputs in (
+            (llm.run_check, {"document_text": "正文"}),
+            (
+                llm.run_image_check,
+                {
+                    "image_name": "图1",
+                    "image_position": "第1页",
+                    "image_data_url": "data:image/png;base64,YQ==",
+                },
+            ),
+            (
+                llm.run_multimodal_document_check,
+                {
+                    "document_text": "正文",
+                    "image_items": [{"data_url": "data:image/png;base64,YQ=="}],
+                },
+            ),
+        ):
+            with self.subTest(call=model_call.__name__):
+                session = FakeSession(
+                    [
+                        FakeResponse(
+                            lines=[
+                                'data: {"choices":[{"delta":{"content":"完成"}}]}',
+                                "data: [DONE]",
+                            ]
+                        )
+                    ]
+                )
+                with patch.object(llm, "_pooled_http_session", return_value=session):
+                    model_call(
+                        api_base="http://example.test/v1/chat/completions",
+                        api_key="key",
+                        model_name="custom-model",
+                        check_name="检查",
+                        prompt="业务要求",
+                        max_completion_tokens=65536,
+                        **inputs,
+                    )
+                self.assertEqual(
+                    session.calls[0][1]["json"]["max_completion_tokens"], 65536
+                )
+
     def test_document_check_prompt_clamps_issue_output_limit_to_hard_max(self):
         fake_session = FakeSession(
             [

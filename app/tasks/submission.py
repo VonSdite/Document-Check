@@ -141,6 +141,19 @@ def _enabled_check_item_snapshots(
     ]
 
 
+def _model_check_snapshots(snapshots: list[dict], model: dict) -> list[dict]:
+    result = []
+    for item in snapshots:
+        snapshot = dict(item)
+        if isinstance(item.get("agent_options"), dict):
+            snapshot["agent_options"] = {
+                **item["agent_options"],
+                "max_output_tokens": model["max_output_tokens"],
+            }
+        result.append(snapshot)
+    return result
+
+
 def submit_document_task(
     identity: UserIdentity, submission: TaskSubmission
 ) -> SubmissionResult:
@@ -196,10 +209,10 @@ def submit_document_task(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
-                api_base, api_key, request_timeout, max_input_chars, force_disable_thinking, reasoning_effort,
+                api_base, api_key, request_timeout, max_input_chars, max_output_tokens, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             rows,
         )
@@ -247,7 +260,7 @@ def _prepare_document_task_row(
         None,
         json.dumps({"preprocessing": {"status": "pending"}}, ensure_ascii=False),
         json.dumps(check_ids, ensure_ascii=False),
-        json.dumps(check_snapshots, ensure_ascii=False),
+        json.dumps(_model_check_snapshots(check_snapshots, model), ensure_ascii=False),
         model["provider_id"],
         model["provider_name"],
         model["model_name"],
@@ -255,6 +268,7 @@ def _prepare_document_task_row(
         model["api_key"],
         model["request_timeout"],
         model["max_input_chars"],
+        model["max_output_tokens"],
         1 if model["force_disable_thinking"] else 0,
         model["reasoning_effort"] or None,
         created_at,
@@ -338,10 +352,10 @@ def submit_image_task(
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
+                max_input_chars, max_output_tokens, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 IMAGE_TASK_TYPE,
@@ -357,7 +371,9 @@ def submit_image_task(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                json.dumps(
+                    _model_check_snapshots(check_snapshots, model), ensure_ascii=False
+                ),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
@@ -365,6 +381,7 @@ def submit_image_task(
                 model["api_key"],
                 model["request_timeout"],
                 model["max_input_chars"],
+                model["max_output_tokens"],
                 1 if model["force_disable_thinking"] else 0,
                 model["reasoning_effort"] or None,
                 created_at,
@@ -480,10 +497,10 @@ def _create_video_task_from_upload(
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
+                max_input_chars, max_output_tokens, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 VIDEO_TASK_TYPE,
@@ -499,7 +516,9 @@ def _create_video_task_from_upload(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                json.dumps(
+                    _model_check_snapshots(check_snapshots, model), ensure_ascii=False
+                ),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
@@ -507,6 +526,7 @@ def _create_video_task_from_upload(
                 model["api_key"],
                 model["request_timeout"],
                 model["max_input_chars"],
+                model["max_output_tokens"],
                 1 if model["force_disable_thinking"] else 0,
                 model["reasoning_effort"] or None,
                 created_at,
@@ -615,10 +635,10 @@ def submit_consistency_task(
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
+                max_input_chars, max_output_tokens, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 CONSISTENCY_TASK_TYPE,
@@ -634,7 +654,9 @@ def submit_consistency_task(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                json.dumps(
+                    _model_check_snapshots(check_snapshots, model), ensure_ascii=False
+                ),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
@@ -642,6 +664,7 @@ def submit_consistency_task(
                 model["api_key"],
                 model["request_timeout"],
                 model["max_input_chars"],
+                model["max_output_tokens"],
                 1 if model["force_disable_thinking"] else 0,
                 model["reasoning_effort"] or None,
                 created_at,
@@ -736,10 +759,10 @@ def submit_language_consistency_task(
                 original_filename, stored_filename, file_type, file_size,
                 document_text, document_meta_json, checks_json, checks_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-                max_input_chars, force_disable_thinking, reasoning_effort,
+                max_input_chars, max_output_tokens, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 LANGUAGE_CONSISTENCY_TASK_TYPE,
@@ -756,7 +779,9 @@ def submit_language_consistency_task(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                json.dumps(
+                    _model_check_snapshots(check_snapshots, model), ensure_ascii=False
+                ),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
@@ -764,6 +789,7 @@ def submit_language_consistency_task(
                 model["api_key"],
                 model["request_timeout"],
                 model["max_input_chars"],
+                model["max_output_tokens"],
                 1 if model["force_disable_thinking"] else 0,
                 model["reasoning_effort"] or None,
                 created_at,

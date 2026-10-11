@@ -468,6 +468,7 @@ def run_image_check(
     image_position: str,
     image_data_url: str,
     issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
+    max_completion_tokens: int = _MAX_COMPLETION_TOKENS,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -520,7 +521,7 @@ def run_image_check(
             },
         ],
         "temperature": 0,
-        "max_completion_tokens": _MAX_COMPLETION_TOKENS,
+        "max_completion_tokens": max(1, int(max_completion_tokens)),
     }
     _apply_reasoning_effort(payload, reasoning_effort)
     _apply_json_object_response_format(
@@ -542,7 +543,7 @@ def run_image_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
-        _MAX_COMPLETION_TOKENS,
+        payload["max_completion_tokens"],
         _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(image_data_url),
@@ -586,6 +587,7 @@ def run_multimodal_document_check(
     batch_index: int = 1,
     batch_count: int = 1,
     issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
+    max_completion_tokens: int = _MAX_COMPLETION_TOKENS,
     output_contract: str = MULTIMODAL_OUTPUT_CONTRACT_STRUCTURED_REPORT,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
@@ -661,7 +663,7 @@ def run_multimodal_document_check(
             },
         ],
         "temperature": 0,
-        "max_completion_tokens": _MAX_COMPLETION_TOKENS,
+        "max_completion_tokens": max(1, int(max_completion_tokens)),
     }
     _apply_reasoning_effort(payload, reasoning_effort)
     _apply_json_object_response_format(
@@ -685,7 +687,7 @@ def run_multimodal_document_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
-        _MAX_COMPLETION_TOKENS,
+        payload["max_completion_tokens"],
         _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(document_text),

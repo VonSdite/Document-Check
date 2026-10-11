@@ -213,6 +213,23 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("reasoning_effort", task_columns)
         self.assertIn("reasoning_effort", model_columns)
 
+    def test_init_db_adds_output_capacity_to_models_and_task_snapshots(self):
+        db = get_db()
+        db.execute("ALTER TABLE tasks DROP COLUMN max_output_tokens")
+        db.execute("ALTER TABLE user_model_configs DROP COLUMN max_output_tokens")
+        db.commit()
+        init_db()
+        task_columns = {
+            row["name"]: row for row in db.execute("PRAGMA table_info(tasks)")
+        }
+        model_columns = {
+            row["name"]: row
+            for row in db.execute("PRAGMA table_info(user_model_configs)")
+        }
+        self.assertIn("max_output_tokens", task_columns)
+        self.assertIsNone(task_columns["max_output_tokens"]["dflt_value"])
+        self.assertEqual(model_columns["max_output_tokens"]["dflt_value"], "32768")
+
     def test_task_live_results_table_exists(self):
         db = get_db()
         columns = {

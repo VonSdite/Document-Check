@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 import requests
 
+from app.contracts.model_limits import MODEL_OUTPUT_TOKENS_DEFAULT
 from app.models.client import (
     LLMError,
     _apply_reasoning_effort,
@@ -69,7 +70,13 @@ class AgentModel:
         self.capabilities.setdefault("schema", "json_schema")
 
     def turn(
-        self, messages, *, schema, tools=None, force_tool=None, max_output_tokens=8192
+        self,
+        messages,
+        *,
+        schema,
+        tools=None,
+        force_tool=None,
+        max_output_tokens=MODEL_OUTPUT_TOKENS_DEFAULT,
     ):
         connection = self.connection
         payload = {
@@ -128,7 +135,7 @@ class AgentModel:
                     raise IncompleteResponse(
                         "模型响应因长度限制被截断"
                         f"（finish_reason=length，本次输出上限 {max_output_tokens} token）。"
-                        "请检查每次输出 token 上限、模型思考强度和上下文容量。",
+                        "请在“模型管理”中检查所选模型的回复上限、思考强度和上下文容量，调整后重新提交任务。",
                         finish_reason="length",
                     )
                 if turn.finish_reason == "content_filter":

@@ -35,7 +35,7 @@ class CoverageArguments(Contract):
 TOOLS = {
     "search_document": (
         SearchArguments,
-        "检索当前任务文档及已配置的版本化标准；无命中不能证明内容缺失。",
+        "检索当前任务来源；无命中不能证明内容缺失。",
     ),
     "read_context": (
         ContextArguments,
