@@ -22,6 +22,8 @@ class AgentHTTPTest(unittest.TestCase):
     def setUp(self):
         self.payloads = []
         payloads = self.payloads
+        self.behavior = {"truncate_plan": False}
+        behavior = self.behavior
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -62,6 +64,9 @@ class AgentHTTPTest(unittest.TestCase):
                 else:
                     if title == "CheckPlan":
                         data = empty_plan()
+                        if behavior["truncate_plan"]:
+                            behavior["truncate_plan"] = False
+                            reason = "length"
                     elif title == "Discovery":
                         data = discovery(
                             context,
@@ -83,6 +88,8 @@ class AgentHTTPTest(unittest.TestCase):
                     else:
                         data = {"summary": "未发现问题", "items": []}
                     message = {"content": json.dumps(data, ensure_ascii=False)}
+                    if reason == "length":
+                        message["content"] = '{"requirements":['
                 frames = [
                     {"choices": [{"index": 0, "delta": message}]},
                     {"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]},
@@ -165,6 +172,39 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertTrue(result["metadata"]["usage_complete"])
         self.assertEqual(result["metadata"]["known_input_tokens"], 100)
         self.assertEqual(result["metadata"]["known_output_tokens"], 20)
+
+    def test_plan_length_retry_over_http_preserves_usage_and_output_cap(self):
+        self.behavior["truncate_plan"] = True
+        options = AgentOptions(protocol="structured", max_output_tokens=2048)
+        agent = EvidenceAgent(
+            index=DocumentIndex(
+                [
+                    {
+                        "filename": "a.txt",
+                        "text": "设备A 电压220 V\n设备A 电压110 V",
+                        "text_complete": True,
+                    }
+                ]
+            ),
+            item={
+                "code": "custom",
+                "name": "参数检查",
+                "prompt": "核对同一设备的电压。",
+            },
+            task_type="document_check",
+            connection=self.connection,
+            options=options,
+            store=MemoryCheckpointStore(),
+            ensure_active=lambda: None,
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["report"]["items"]), 1)
+        self.assertEqual(result["metadata"]["model_calls"], 4)
+        self.assertTrue(result["metadata"]["usage_complete"])
+        self.assertEqual(result["metadata"]["known_output_tokens"], 80)
+        self.assertIn("length", result["metadata"]["requests"][0]["error"])
+        self.assertTrue(all(p["max_completion_tokens"] == 2048 for p in self.payloads))
 
 
 if __name__ == "__main__":

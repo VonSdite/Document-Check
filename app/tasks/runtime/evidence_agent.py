@@ -37,7 +37,7 @@ from app.contracts.agent import (
     strict_schema,
 )
 from app.documents.index import DocumentIndex
-from app.models.agent import AgentModel, AgentTurn, ToolsUnsupported
+from app.models.agent import AgentModel, AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError
 
 
@@ -347,43 +347,149 @@ class EvidenceAgent:
             groups.append(group)
         return groups
 
-    def _plan(self):
+    @staticmethod
+    def _plan_text_batches(text, limit):
+        groups, group, size = [], [], 0
+        for line in text.splitlines(keepends=True) or [text]:
+            if group and (size + len(line) > limit or len(group) >= 20):
+                groups.append("".join(group))
+                group, size = [], 0
+            group.append(line)
+            size += len(line)
+        if group:
+            groups.append("".join(group))
+        return groups
+
+    def _planning_jobs(self):
+        if "plan_jobs" in self.state:
+            return self.state["plan_jobs"]
         standard_sources = [
             b.as_dict() for b in self.index.blocks if b.role == "standard"
         ]
-        jobs = [[]] + self._pack(standard_sources)
+        fragments = (
+            [self.item["prompt"]]
+            if self.state["plan_cursor"]
+            else self._plan_text_batches(
+                self.item["prompt"], max(128, self.options.max_output_tokens // 4)
+            )
+        )
+        self.state["plan_jobs"] = [
+            {"origin": "prompt", "prompt_fragment": fragment, "sources": []}
+            for fragment in fragments
+        ] + [
+            {"origin": "standard", "prompt_fragment": "", "sources": sources}
+            for sources in self._pack(standard_sources)
+        ]
+        return self.state["plan_jobs"]
+
+    def _split_planning_job(self, job):
+        if job["origin"] == "prompt":
+            fragments = self._plan_text_batches(
+                job["prompt_fragment"], max(1, len(job["prompt_fragment"]) // 2)
+            )
+            return (
+                [{**job, "prompt_fragment": fragment} for fragment in fragments]
+                if len(fragments) > 1
+                else []
+            )
+        sources = job["sources"]
+        if len(sources) > 1:
+            middle = len(sources) // 2
+            return [
+                {**job, "sources": sources[:middle]},
+                {**job, "sources": sources[middle:]},
+            ]
+        source = sources[0]
+        fragments = self._plan_text_batches(
+            source["text"], max(1, len(source["text"]) // 2)
+        )
+        return (
+            [
+                {**job, "sources": [{**source, "text": fragment}]}
+                for fragment in fragments
+            ]
+            if len(fragments) > 1
+            else []
+        )
+
+    def _plan(self):
+        jobs = self._planning_jobs()
         cursor = self.state["plan_cursor"]
         if cursor < len(jobs):
-            plan = self._ask(
-                CheckPlan,
-                "根据业务提示词和本批参考标准列出适用要求。prompt 要求的 quote 必须逐字来自业务提示词且 source_id 为空；standard 要求必须逐字引用本批来源并提供 source_id。不能新增行业常识或未给出的要求。文档概要只用于形成待验证的文档类型、读者和范围。",
-                {
-                    "strategy": self.strategy,
-                    "sources": jobs[cursor],
-                    "overview": [
-                        {"filename": d["filename"], "role": d["role"]}
-                        for d in self.index.documents
-                    ],
-                    "headings": [
-                        {"filename": b.filename, "heading": b.section}
-                        for b in self.index.blocks
-                        if b.kind == "heading"
-                    ][:80],
-                },
+            job = jobs[cursor]
+            instruction = (
+                "完整业务提示词提供全局适用条件，本批仅提取 requirement_origin 指定来源的文档检查要求。"
+                "prompt 要求的 quote 必须逐字来自本批 prompt_fragment 且 source_id 为空；"
+                "standard 要求必须逐字引用本批 sources 的原文并提供 source_id，不重复抽取 prompt 要求。"
+                "text 简洁描述可检查的要求和必要条件，quote 使用足以支撑该要求的连续原文，避免重复长篇正文。"
+                "不得遗漏本批业务要求，不新增行业常识或未给出的要求。"
+                "文档概要只用于形成待验证的文档类型、读者和范围。"
             )
+            if job.get("compact_retry"):
+                instruction += "本批输出长度受限，请进一步精简描述、适用条件和文档概要，保留全部要求及准确引用。"
+            try:
+                plan = self._ask(
+                    CheckPlan,
+                    instruction,
+                    {
+                        "strategy": self.strategy,
+                        "requirement_origin": job["origin"],
+                        "prompt_fragment": job["prompt_fragment"],
+                        "sources": job["sources"],
+                        "overview": [
+                            {"filename": d["filename"], "role": d["role"]}
+                            for d in self.index.documents
+                        ],
+                        "headings": [
+                            {"filename": b.filename, "heading": b.section}
+                            for b in self.index.blocks
+                            if b.kind == "heading"
+                        ][:80],
+                    },
+                )
+            except IncompleteResponse as exc:
+                if exc.finish_reason != "length":
+                    raise
+                smaller = self._split_planning_job(job)
+                if smaller:
+                    jobs[cursor : cursor + 1] = smaller
+                    self.state["diagnostics"].append(
+                        "检查要求输出被截断，已缩小规划批次继续提取"
+                    )
+                elif not job.get("compact_retry"):
+                    job["compact_retry"] = True
+                    self.state["diagnostics"].append(
+                        "检查要求输出被截断，正在执行一次精简输出重试"
+                    )
+                else:
+                    raise IncompleteResponse(
+                        "检查要求规划因长度限制被截断（finish_reason=length），"
+                        f"本次输出上限 {self.options.max_output_tokens} token。"
+                        "请在检查项设置中提高“每次输出 token 上限”，或降低模型思考强度，"
+                        "确认模型上下文容量后重新提交任务。",
+                        finish_reason="length",
+                    ) from exc
+                self.state["next"] = "plan"
+                self.persist()
+                return
             plan_dict = plan.model_dump(mode="json")
-            self.state["plans"].append(
-                {k: plan_dict[k] for k in ("document_type", "audience", "scope")}
-            )
-            allowed = {b["id"] for b in jobs[cursor]}
+            profile = {k: plan_dict[k] for k in ("document_type", "audience", "scope")}
+            if profile not in self.state["plans"]:
+                self.state["plans"].append(profile)
+            allowed = {b["id"] for b in job["sources"]}
             for requirement in plan_dict["requirements"]:
                 valid = (
-                    requirement["origin"] == "prompt"
-                    and requirement["quote"] in self.item["prompt"]
+                    job["origin"] == requirement["origin"] == "prompt"
+                    and requirement["quote"] in job["prompt_fragment"]
                     and not requirement["source_id"]
                 ) or (
-                    requirement["origin"] == "standard"
+                    job["origin"] == requirement["origin"] == "standard"
                     and self.index.verify(requirement, allowed=allowed)
+                    and any(
+                        source["id"] == requirement["source_id"]
+                        and requirement["quote"] in source["text"]
+                        for source in job["sources"]
+                    )
                 )
                 if not valid:
                     self.state["diagnostics"].append("已排除无法核实来源的检查要求")

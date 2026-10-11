@@ -34,7 +34,9 @@ class ToolsUnsupported(LLMError):
 
 
 class IncompleteResponse(LLMError):
-    pass
+    def __init__(self, message, *, finish_reason=""):
+        super().__init__(message)
+        self.finish_reason = finish_reason
 
 
 @dataclass
@@ -122,9 +124,17 @@ class AgentModel:
             turn = None
             try:
                 turn = self._request(payload, request_id)
-                if turn.finish_reason in {"length", "content_filter"}:
+                if turn.finish_reason == "length":
                     raise IncompleteResponse(
-                        f"模型响应未完整完成：{turn.finish_reason}"
+                        "模型响应因长度限制被截断"
+                        f"（finish_reason=length，本次输出上限 {max_output_tokens} token）。"
+                        "请检查每次输出 token 上限、模型思考强度和上下文容量。",
+                        finish_reason="length",
+                    )
+                if turn.finish_reason == "content_filter":
+                    raise IncompleteResponse(
+                        "模型响应被内容过滤中断（finish_reason=content_filter）",
+                        finish_reason="content_filter",
                     )
                 if not turn.content and not turn.tool_calls:
                     raise IncompleteResponse("模型未返回可校验的正文或工具调用")

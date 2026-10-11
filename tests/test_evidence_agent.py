@@ -3,7 +3,7 @@ import unittest
 
 from app.contracts.agent import AgentOptions
 from app.documents.index import DocumentIndex
-from app.models.agent import AgentTurn, ToolsUnsupported
+from app.models.agent import AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError
 from app.persistence.checkpoints import MemoryCheckpointStore
 from app.tasks.runtime.evidence_agent import EvidenceAgent, SharedFacts
@@ -157,6 +157,204 @@ class EvidenceAgentTest(unittest.TestCase):
         self.assertTrue(result["metadata"]["coverage"]["all_checked"])
         self.assertEqual(result["metadata"]["known_input_tokens"], 200)
         self.assertEqual(result["error"], "")
+
+    def planning_handler(self, context):
+        if "prompt_fragment" in context:
+            requirements = [
+                {
+                    "id": str(number),
+                    "text": line,
+                    "applicability": "遵守完整提示词的共用条件",
+                    "origin": "prompt",
+                    "source_id": "",
+                    "quote": line,
+                }
+                for number, line in enumerate(context["prompt_fragment"].splitlines())
+                if line.startswith("要求")
+            ]
+            return {**empty_plan(), "requirements": requirements}
+        return {
+            **discovery(context),
+            "observations": [
+                {
+                    "requirement_id": requirement["id"],
+                    "status": "not_found",
+                    "rationale": "本批没有涉及该要求",
+                    "evidence": [],
+                }
+                for requirement in context["requirements"]
+            ],
+        }
+
+    def test_long_prompt_planning_preserves_all_rules_and_global_conditions(self):
+        lines = [
+            f"要求{number}：" + "核实对象和操作条件。" * 28 for number in range(16)
+        ]
+        prompt = "共用条件：只核对同一型号、同一版本。\n" + "\n".join(lines)
+        fragments = []
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                self.assertIn(prompt, messages[1]["content"])
+                fragments.append(context["prompt_fragment"])
+            return self.planning_handler(context)
+
+        agent = self.make_agent(
+            handler,
+            code="custom",
+            item={"code": "custom", "name": "表达检查", "prompt": prompt},
+            options=AgentOptions(protocol="structured", max_output_tokens=2048),
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertGreater(len(fragments), 1)
+        self.assertEqual("".join(fragments), prompt)
+        self.assertEqual({r["quote"] for r in agent.state["requirements"]}, set(lines))
+        self.assertEqual(len(agent.state["plans"]), 1)
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+        self.assertTrue(
+            all(
+                agent.state["requirement_coverage"][r["id"]]
+                for r in agent.state["requirements"]
+            )
+        )
+
+    def test_truncated_plan_splits_and_resumes_without_repeating_finished_rules(self):
+        prompt = "\n".join(f"要求{n}：核实同一型号和条件下的参数。" for n in range(6))
+        store = MemoryCheckpointStore()
+        fragments = []
+        failed = False
+
+        def handler(messages, title, tools, force):
+            nonlocal failed
+            context = input_context(messages)
+            if title == "CheckPlan":
+                fragment = context["prompt_fragment"]
+                fragments.append(fragment)
+                if fragment == prompt:
+                    return IncompleteResponse("输出被截断", finish_reason="length")
+                if len(fragments) == 3 and not failed:
+                    failed = True
+                    return LLMError("503 服务暂时失败")
+            return self.planning_handler(context)
+
+        item = {"code": "custom", "name": "表达检查", "prompt": prompt}
+        first = self.make_agent(handler, code="custom", item=item, store=store).run()
+        self.assertIn("503", first["error"])
+        agent = self.make_agent(handler, code="custom", item=item, store=store)
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(fragments.count(prompt), 1)
+        self.assertEqual(fragments.count(fragments[1]), 1)
+        self.assertEqual(
+            {r["quote"] for r in agent.state["requirements"]}, set(prompt.splitlines())
+        )
+        self.assertEqual(result["metadata"]["model_calls"], len(fragments) + 1)
+        self.assertTrue(any("缩小" in d for d in result["metadata"]["diagnostics"]))
+
+    def test_unsplittable_plan_length_recovery_has_only_one_compact_retry(self):
+        calls = []
+
+        def handler(messages, title, tools, force):
+            calls.append(messages)
+            return IncompleteResponse("输出被截断", finish_reason="length")
+
+        result = self.make_agent(handler).run()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("每次输出 token 上限", result["error"])
+        self.assertIn("思考", result["error"])
+        self.assertEqual(result["report"]["items"], [])
+        self.assertFalse(result["metadata"]["coverage"]["all_checked"])
+
+    def test_filtered_plan_is_not_retried_as_length_truncation(self):
+        calls = []
+
+        def handler(messages, title, tools, force):
+            calls.append(title)
+            return IncompleteResponse("内容过滤", finish_reason="content_filter")
+
+        result = self.make_agent(handler).run()
+        self.assertEqual(calls, ["CheckPlan"])
+        self.assertIn("内容过滤", result["error"])
+
+    def test_length_recovery_obeys_accumulated_call_budget(self):
+        prompt = "\n".join(f"要求{n}：核实同一型号和条件下的参数。" for n in range(16))
+        result = self.make_agent(
+            lambda *args: IncompleteResponse("输出被截断", finish_reason="length"),
+            item={"code": "custom", "name": "表达检查", "prompt": prompt},
+            options=AgentOptions(protocol="structured", max_calls=4),
+        ).run()
+        self.assertEqual(result["metadata"]["model_calls"], 4)
+        self.assertIn("调用次数预算", result["error"])
+        self.assertEqual(result["report"]["items"], [])
+
+    def test_standard_plan_splitting_preserves_source_ids_and_exact_quotes(self):
+        lines = ["紧固扭矩必须为2 N·m。", "安装前必须断开电源。"]
+        options = AgentOptions(
+            protocol="structured",
+            standards=[
+                {"name": "交付规范", "version": "2026.1", "text": "\n".join(lines)}
+            ],
+        )
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title != "CheckPlan":
+                return self.planning_handler(context)
+            if not context["sources"]:
+                return empty_plan()
+            source = context["sources"][0]
+            if source["text"] == "\n".join(lines):
+                return IncompleteResponse("输出被截断", finish_reason="length")
+            quote = source["text"].strip()
+            return {
+                **empty_plan(),
+                "requirements": [
+                    {
+                        "id": "rule",
+                        "text": quote,
+                        "applicability": "交付说明",
+                        "origin": "standard",
+                        "source_id": source["id"],
+                        "quote": quote,
+                    }
+                ],
+            }
+
+        agent = self.make_agent(handler, code="custom", options=options)
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual({r["quote"] for r in agent.state["requirements"]}, set(lines))
+        self.assertTrue(all(agent.index.verify(r) for r in agent.state["requirements"]))
+
+    def test_existing_plan_cursor_keeps_completed_prompt_and_standard_batches(self):
+        options = AgentOptions(
+            protocol="structured",
+            standards=[{"name": "规范", "version": "1", "text": "电压必须明确。"}],
+        )
+        store = MemoryCheckpointStore()
+        original = self.make_agent(
+            lambda *args: empty_plan(), options=options, store=store
+        )
+        original.state["plan_cursor"] = 1
+        original.state["plans"] = [
+            {k: v for k, v in empty_plan().items() if k != "requirements"}
+        ]
+        original.persist()
+        planned_sources = []
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                planned_sources.append(context["sources"])
+                return empty_plan()
+            return discovery(context)
+
+        result = self.make_agent(handler, options=options, store=store).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(planned_sources), 1)
+        self.assertTrue(planned_sources[0])
 
     def test_global_comparison_finds_problem_absent_from_local_candidates(self):
         def handler(messages, title, tools, force):

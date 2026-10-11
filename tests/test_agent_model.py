@@ -183,12 +183,15 @@ class AgentModelTest(unittest.TestCase):
         )
         with (
             patch("app.models.agent._pooled_http_session", return_value=session),
-            self.assertRaises(IncompleteResponse),
+            self.assertRaises(IncompleteResponse) as raised,
         ):
-            model.turn([], schema=None)
+            model.turn([], schema=None, max_output_tokens=512)
         self.assertEqual(len(self.completed), 1)
         self.assertEqual(self.completed[0][1].usage["completion_tokens"], 20)
         self.assertIn("length", self.completed[0][3])
+        self.assertEqual(raised.exception.finish_reason, "length")
+        self.assertIn("512", str(raised.exception))
+        self.assertIn("截断", str(raised.exception))
 
     def test_refusal_truncation_and_unfinished_stream_do_not_become_empty_success(self):
         for frames in (
