@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 
 import requests
 
-from app.contracts.model_limits import MODEL_OUTPUT_TOKENS_DEFAULT
 from app.models.client import (
     LLMError,
     _apply_reasoning_effort,
@@ -19,7 +18,6 @@ from app.models.client import (
     _extract_reasoning,
     _extract_service_error,
     _force_utf8_response,
-    _is_output_token_limit_unsupported_error,
     _pooled_http_session,
     _raise_for_http_error,
     _raise_if_request_canceled,
@@ -76,15 +74,11 @@ class AgentModel:
         schema,
         tools=None,
         force_tool=None,
-        max_output_tokens=MODEL_OUTPUT_TOKENS_DEFAULT,
     ):
         connection = self.connection
         payload = {
             "model": connection["model_name"],
             "messages": messages,
-            self.capabilities.get(
-                "output_token_parameter", "max_completion_tokens"
-            ): max_output_tokens,
         }
         if self.capabilities.get("temperature") is not False:
             payload["temperature"] = 0
@@ -133,9 +127,8 @@ class AgentModel:
                 turn = self._request(payload, request_id)
                 if turn.finish_reason == "length":
                     raise IncompleteResponse(
-                        "模型响应因长度限制被截断"
-                        f"（finish_reason=length，本次输出上限 {max_output_tokens} token）。"
-                        "请在“模型管理”中检查所选模型的回复上限、思考强度和上下文容量，调整后重新提交任务。",
+                        "模型服务返回截断响应（finish_reason=length），检查未完成。"
+                        "本次请求使用上游默认输出容量。",
                         finish_reason="length",
                     )
                 if turn.finish_reason == "content_filter":
@@ -218,13 +211,6 @@ class AgentModel:
                     and self.capabilities.get("stream_usage") is not False
                 ):
                     self.capabilities["stream_usage"] = False
-                    continue
-                if (
-                    "max_completion_tokens" in payload
-                    and _is_output_token_limit_unsupported_error(exc)
-                ):
-                    payload["max_tokens"] = payload.pop("max_completion_tokens")
-                    self.capabilities["output_token_parameter"] = "max_tokens"
                     continue
                 if retries >= 2 or not any(
                     word in lower

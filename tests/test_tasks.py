@@ -1754,7 +1754,7 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(calls[0]["document_text"], document_text)
         self.assertEqual(calls[0]["issue_output_limit"], 30)
         self.assertEqual(calls[0]["reasoning_effort"], "high")
-        self.assertIsNone(calls[0]["max_completion_tokens"])
+        self.assertNotIn("max_completion_tokens", calls[0])
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["result"], "最终结果")
         self.assertEqual(results[0]["issue_output_limit"], 30)

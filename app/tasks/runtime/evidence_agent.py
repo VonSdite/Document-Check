@@ -233,25 +233,13 @@ class EvidenceAgent:
             raise BudgetExceeded(
                 f"本次上下文 {chars} 字，超过模型输入上限 {self.max_input} 字"
             )
-        input_estimate = len(_json(payload).encode("utf-8"))
-        output_limit = payload.get(
-            "max_completion_tokens",
-            payload.get("max_tokens", self.options.max_output_tokens),
-        )
-        charged = sum(r["charged_tokens"] for r in self.state["requests"])
         if len(self.state["requests"]) >= self.options.max_calls:
             raise BudgetExceeded("检查项已达到模型调用次数预算")
-        if charged + input_estimate + output_limit > self.options.max_tokens:
-            raise BudgetExceeded(
-                "检查项已达到 token 预算；未返回用量的请求按保守估算计入"
-            )
         self.state["requests"].append(
             {
                 "stage": self.state["next"],
                 "input_tokens": None,
                 "output_tokens": None,
-                "charged_tokens": input_estimate + output_limit,
-                "input_estimate": input_estimate,
                 "duration_seconds": None,
                 "error": "请求未完成",
                 "usage_available": False,
@@ -273,7 +261,6 @@ class EvidenceAgent:
             request.update(
                 input_tokens=usage["prompt_tokens"],
                 output_tokens=usage["completion_tokens"],
-                charged_tokens=usage["prompt_tokens"] + usage["completion_tokens"],
                 usage_available=True,
             )
             request["usage"] = usage
@@ -304,7 +291,6 @@ class EvidenceAgent:
         turn = self.model.turn(
             messages,
             schema=strict_schema(contract),
-            max_output_tokens=self.options.max_output_tokens,
         )
         try:
             return self._parse(contract, turn.content)
@@ -322,7 +308,6 @@ class EvidenceAgent:
             repair = self.model.turn(
                 messages,
                 schema=strict_schema(contract),
-                max_output_tokens=self.options.max_output_tokens,
             )
             try:
                 return self._parse(contract, repair.content)
@@ -377,7 +362,8 @@ class EvidenceAgent:
             [self.item["prompt"]]
             if self.state["plan_cursor"]
             else self._plan_text_batches(
-                self.item["prompt"], max(128, self.options.max_output_tokens // 4)
+                self.item["prompt"],
+                min(self.options.chunk_chars, max(128, self.max_input // 3)),
             )
         )
         self.state["plan_jobs"] = [
@@ -473,10 +459,8 @@ class EvidenceAgent:
                     )
                 else:
                     raise IncompleteResponse(
-                        "检查要求规划因长度限制被截断（finish_reason=length），"
-                        f"本次输出上限 {self.options.max_output_tokens} token。"
-                        "请在“模型管理”中提高所选模型的“每次回复 token 上限”，或调整模型思考强度，"
-                        "确认模型上下文容量后重新提交任务。",
+                        "检查要求规划持续被模型服务截断（finish_reason=length），"
+                        "本批已执行精简输出重试，检查未完成。",
                         finish_reason="length",
                     ) from exc
                 self.state["next"] = "plan"
@@ -844,7 +828,6 @@ class EvidenceAgent:
                 schema=strict_schema(Review),
                 tools=tool_definitions() if native else None,
                 force_tool=force,
-                max_output_tokens=self.options.max_output_tokens,
             )
         except ToolsUnsupported:
             if self.options.protocol == "native":
@@ -1296,7 +1279,6 @@ class EvidenceAgent:
             "known_input_tokens": known_input,
             "known_output_tokens": known_output,
             "usage_complete": all(r["usage_available"] for r in requests),
-            "budget_tokens": sum(r["charged_tokens"] for r in requests),
             "cost": cost,
             "currency": self.options.currency,
             "elapsed_seconds": self.state["elapsed_seconds"],

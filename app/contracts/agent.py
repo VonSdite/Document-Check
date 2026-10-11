@@ -2,15 +2,9 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.contracts.model_limits import (
-    MODEL_OUTPUT_TOKENS_DEFAULT,
-    MODEL_OUTPUT_TOKENS_MAX,
-    MODEL_OUTPUT_TOKENS_MIN,
-)
-
-WORKFLOW_VERSION = "evidence-review-v2"
+WORKFLOW_VERSION = "evidence-review-v3"
 NonEmpty = Annotated[str, Field(min_length=1, max_length=12000)]
 
 
@@ -38,13 +32,7 @@ class AgentOptions(Contract):
     protocol: Literal["auto", "native", "structured"] = "auto"
     chunk_chars: int = Field(default=10000, ge=1000, le=50000)
     max_calls: int = Field(default=96, ge=4, le=1000)
-    max_tokens: int = Field(default=500000, ge=10000, le=10000000)
     max_seconds: int = Field(default=3600, ge=30, le=14400)
-    max_output_tokens: int = Field(
-        default=MODEL_OUTPUT_TOKENS_DEFAULT,
-        ge=MODEL_OUTPUT_TOKENS_MIN,
-        le=MODEL_OUTPUT_TOKENS_MAX,
-    )
     max_review_rounds: int = Field(default=3, ge=1, le=6)
     review_batch_size: int = Field(default=4, ge=1, le=12)
     max_candidates: int = Field(default=200, ge=1, le=1000)
@@ -52,6 +40,17 @@ class AgentOptions(Contract):
     input_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     output_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     currency: str = Field(default="CNY", min_length=1, max_length=12)
+
+    @model_validator(mode="before")
+    @classmethod
+    def use_upstream_output_defaults(cls, value):
+        if isinstance(value, dict):
+            return {
+                key: item
+                for key, item in value.items()
+                if key not in {"max_output_tokens", "max_tokens"}
+            }
+        return value
 
 
 class EvidenceRef(Contract):

@@ -3728,31 +3728,20 @@ body.table-column-resize-active * {
 
 .model-editor-table th:nth-child(2),
 .model-editor-table td:nth-child(2) {
-  width: 120px;
+  width: 132px;
   text-align: center;
 }
 
 .model-editor-table th:nth-child(3),
 .model-editor-table td:nth-child(3) {
-  width: 132px;
+  width: 130px;
   text-align: center;
 }
 
 .model-editor-table th:nth-child(4),
 .model-editor-table td:nth-child(4) {
-  width: 130px;
-  text-align: center;
-}
-
-.model-editor-table th:nth-child(5),
-.model-editor-table td:nth-child(5) {
   width: 74px;
   padding-left: 6px;
-}
-
-.model-output-input {
-  width: 100%;
-  min-width: 80px;
 }
 
 .model-editor-table tbody tr:last-child td {

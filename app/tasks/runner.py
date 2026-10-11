@@ -650,10 +650,7 @@ def _run_check_items_concurrently(
                 elif isinstance(item.get("agent_options"), dict) and item[
                     "agent_options"
                 ].get("enabled", True):
-                    agent_options = dict(item["agent_options"])
-                    if _task_value(task, "max_output_tokens") is not None:
-                        agent_options["max_output_tokens"] = task["max_output_tokens"]
-                    options = AgentOptions.model_validate(agent_options)
+                    options = AgentOptions.model_validate(item["agent_options"])
                     index = source_index.with_standards(
                         [s.model_dump(mode="json") for s in options.standards]
                     )
@@ -727,12 +724,6 @@ def _run_check_items_concurrently(
                         "cancel_event": item_cancel_event,
                         "check_canceled": ensure_active,
                     }
-                    if task_type == DOCUMENT_TASK_TYPE:
-                        run_check_kwargs["max_completion_tokens"] = None
-                    if _task_value(task, "max_output_tokens") is not None:
-                        run_check_kwargs["max_completion_tokens"] = task[
-                            "max_output_tokens"
-                        ]
                     content = run_check(**run_check_kwargs)
                     content, filtered_unsupported_count = sanitize_text_check_result(
                         content,

@@ -1,6 +1,5 @@
 import json
 
-from app.contracts.model_limits import model_output_tokens
 from app.models.client import normalize_reasoning_effort
 from app.persistence.connection import get_db, now_text
 
@@ -91,7 +90,7 @@ def _load_user_model_providers(owner_subject: str) -> list[dict]:
     configs_by_provider = {}
     for config in get_db().execute(
         """
-        SELECT c.provider_id, c.model_name, c.force_disable_thinking, c.reasoning_effort, c.max_output_tokens
+        SELECT c.provider_id, c.model_name, c.force_disable_thinking, c.reasoning_effort
         FROM user_model_providers p
         JOIN user_model_configs c ON c.provider_id = p.id
         WHERE p.owner_subject = ?
@@ -112,7 +111,7 @@ def _load_user_model_configs(provider_id: int) -> list[dict]:
         get_db()
         .execute(
             """
-        SELECT model_name, force_disable_thinking, reasoning_effort, max_output_tokens
+        SELECT model_name, force_disable_thinking, reasoning_effort
         FROM user_model_configs
         WHERE provider_id = ?
         ORDER BY sort_order ASC, id ASC
@@ -129,7 +128,6 @@ def _model_config_from_row(row) -> dict:
         "model_name": row["model_name"],
         "force_disable_thinking": bool(row["force_disable_thinking"]),
         "reasoning_effort": normalize_reasoning_effort(row["reasoning_effort"]) or "",
-        "max_output_tokens": model_output_tokens(row["max_output_tokens"]),
     }
 
 
@@ -222,17 +220,16 @@ def _replace_user_model_configs(
         db.execute(
             """
             INSERT INTO user_model_configs(
-                provider_id, model_name, force_disable_thinking, reasoning_effort, max_output_tokens,
+                provider_id, model_name, force_disable_thinking, reasoning_effort,
                 sort_order, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 provider_id,
                 model_config["model_name"],
                 1 if model_config["force_disable_thinking"] else 0,
                 normalize_reasoning_effort(model_config.get("reasoning_effort")),
-                model_output_tokens(model_config.get("max_output_tokens")),
                 index * 10,
                 updated_at,
                 updated_at,
@@ -274,11 +271,6 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
                     "model_name": model_name,
                     "force_disable_thinking": force_disable_thinking,
                     "reasoning_effort": reasoning_effort,
-                    "max_output_tokens": model_output_tokens(
-                        item.get("max_output_tokens")
-                        if isinstance(item, dict)
-                        else None
-                    ),
                 }
             )
 
@@ -288,7 +280,6 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
                 "model_name": line.strip(),
                 "force_disable_thinking": False,
                 "reasoning_effort": "",
-                "max_output_tokens": model_output_tokens(),
             }
             for line in str(models_text or "").splitlines()
             if line.strip()
@@ -311,9 +302,6 @@ def _parse_model_configs(model_configs_json: str, models_text: str = "") -> list
                     config.get("reasoning_effort")
                 )
                 or "",
-                "max_output_tokens": model_output_tokens(
-                    config.get("max_output_tokens")
-                ),
             }
         )
     return result
@@ -327,11 +315,6 @@ def _provider_model_options(provider: dict) -> list[dict]:
                 model_config
             ),
             "reasoning_effort": _model_config_reasoning_effort(model_config),
-            "max_output_tokens": model_output_tokens(
-                model_config.get("max_output_tokens")
-                if isinstance(model_config, dict)
-                else None
-            ),
             "enabled": True,
         }
         for model_config in provider["models"]
@@ -384,12 +367,10 @@ def _model_option(provider: dict, model_name) -> dict:
         ).strip()
         force_disable_thinking = bool(model_config.get("force_disable_thinking"))
         reasoning_effort = _model_config_reasoning_effort(model_config)
-        output_limit = model_output_tokens(model_config.get("max_output_tokens"))
     else:
         model_name = str(model_name or "").strip()
         force_disable_thinking = False
         reasoning_effort = ""
-        output_limit = model_output_tokens()
     return {
         "id": f"{provider['id']}:{1 if force_disable_thinking else 0}:{model_name}",
         "provider_id": provider["id"],
@@ -401,7 +382,6 @@ def _model_option(provider: dict, model_name) -> dict:
         "api_key": provider["api_key"],
         "request_timeout": provider["request_timeout"],
         "max_input_chars": provider["max_input_chars"],
-        "max_output_tokens": output_limit,
     }
 
 

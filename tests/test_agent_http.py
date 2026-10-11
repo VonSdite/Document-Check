@@ -175,7 +175,9 @@ class AgentHTTPTest(unittest.TestCase):
 
     def test_plan_length_retry_over_http_preserves_usage_and_output_cap(self):
         self.behavior["truncate_plan"] = True
-        options = AgentOptions(protocol="structured", max_output_tokens=2048)
+        options = AgentOptions.model_validate(
+            {"protocol": "structured", "max_output_tokens": 2048, "max_tokens": 10000}
+        )
         agent = EvidenceAgent(
             index=DocumentIndex(
                 [
@@ -204,7 +206,9 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertTrue(result["metadata"]["usage_complete"])
         self.assertEqual(result["metadata"]["known_output_tokens"], 80)
         self.assertIn("length", result["metadata"]["requests"][0]["error"])
-        self.assertTrue(all(p["max_completion_tokens"] == 2048 for p in self.payloads))
+        for payload in self.payloads:
+            self.assertNotIn("max_completion_tokens", payload)
+            self.assertNotIn("max_tokens", payload)
 
 
 if __name__ == "__main__":

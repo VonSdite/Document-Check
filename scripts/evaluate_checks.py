@@ -194,11 +194,6 @@ def run_case(case, variant, connection, case_folder):
             document_text=document_text,
             on_output=record,
             on_usage=record_usage,
-            **(
-                {"max_completion_tokens": None}
-                if case.get("task_type", "document_check") == "document_check"
-                else {}
-            ),
         )
         content, _ = sanitize_text_check_result(
             content, pdf_table_evidence=build_pdf_table_evidence_index(document_text)
@@ -379,7 +374,6 @@ def export_feedback(database, *, task_ids=None, limit=100):
                                     "usage_complete",
                                     "known_input_tokens",
                                     "known_output_tokens",
-                                    "budget_tokens",
                                     "cost",
                                     "currency",
                                 )

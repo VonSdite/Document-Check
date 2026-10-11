@@ -1563,7 +1563,6 @@ function normalizeModelConfigs(value) {
       model_name: modelName,
       force_disable_thinking: forceDisableThinking,
       reasoning_effort: reasoningEffort,
-      max_output_tokens: item?.max_output_tokens ?? 32768,
     });
   });
   return models;
@@ -1587,12 +1586,10 @@ function collectModelConfigs(form) {
       const input = row.querySelector("[data-model-name]");
       const checkbox = row.querySelector("[data-model-thinking]");
       const reasoningSelect = row.querySelector("[data-model-reasoning-effort]");
-      const outputInput = row.querySelector("[data-model-output-tokens]");
       return {
         model_name: input instanceof HTMLInputElement ? input.value : "",
         force_disable_thinking: checkbox instanceof HTMLInputElement && checkbox.checked,
         reasoning_effort: reasoningSelect instanceof HTMLSelectElement ? reasoningSelect.value : "",
-        max_output_tokens: outputInput instanceof HTMLInputElement ? Number(outputInput.value) : 32768,
       };
     }),
   );
@@ -1623,7 +1620,7 @@ function appendModelAddRow(body, { empty = false } = {}) {
   const row = document.createElement("tr");
   row.className = `model-editor-add-row${empty ? " is-empty" : ""}`;
   const cell = document.createElement("td");
-  cell.colSpan = 5;
+  cell.colSpan = 4;
   const button = document.createElement("button");
   button.className = "model-editor-add-button";
   button.type = "button";
@@ -1653,7 +1650,6 @@ function renderModelRows(form, configs) {
     model_name: modelConfigName(item),
     force_disable_thinking: Boolean(item?.force_disable_thinking),
     reasoning_effort: normalizeReasoningEffort(item?.reasoning_effort),
-    max_output_tokens: item?.max_output_tokens ?? Number(form.dataset.modelOutputDefault || 32768),
   }));
 
   if (!rows.length) {
@@ -1686,19 +1682,6 @@ function renderModelRows(form, configs) {
     testStatus.dataset.modelTestStatus = "1";
     testStatus.setAttribute("aria-live", "polite");
     nameCell.append(nameLine, testStatus);
-
-    const outputCell = document.createElement("td");
-    const outputInput = document.createElement("input");
-    outputInput.type = "number";
-    outputInput.className = "model-output-input";
-    outputInput.dataset.modelOutputTokens = "1";
-    outputInput.min = form.dataset.modelOutputMin || "512";
-    outputInput.max = form.dataset.modelOutputMax || "262144";
-    outputInput.step = "1";
-    outputInput.required = true;
-    outputInput.value = model.max_output_tokens;
-    outputInput.setAttribute("aria-label", "每次回复 token 上限");
-    outputCell.appendChild(outputInput);
 
     const reasoningCell = document.createElement("td");
     const reasoningSelect = document.createElement("select");
@@ -1741,7 +1724,7 @@ function renderModelRows(form, configs) {
     deleteButton.textContent = "删除";
     actionCell.appendChild(deleteButton);
 
-    row.append(nameCell, outputCell, reasoningCell, thinkingCell, actionCell);
+    row.append(nameCell, reasoningCell, thinkingCell, actionCell);
     body.appendChild(row);
   });
   appendModelAddRow(body);
@@ -2081,7 +2064,7 @@ document.addEventListener("click", (event) => {
 document.addEventListener("input", (event) => {
   const input = event.target;
   const form = input.closest?.(".provider-modal-form");
-  if (form && input.matches?.("[data-model-name], [data-model-output-tokens]")) {
+  if (form && input.matches?.("[data-model-name]")) {
     const row = input.closest("[data-model-row]");
     if (row) {
       setModelTestStatus(row, "", "");

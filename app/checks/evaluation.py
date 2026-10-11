@@ -1,7 +1,6 @@
 """人工标注驱动的检查质量评估。"""
 
 from collections import Counter
-from statistics import mean
 
 
 def _ratio(numerator, denominator):
@@ -73,7 +72,7 @@ def score_runs(cases: list[dict], runs: list[dict], annotations: list[dict]) -> 
             [],
             Counter(),
         )
-        durations, tokens = [], []
+        durations = []
         cost_documents = 0
         costs = Counter()
         model_calls = 0
@@ -96,8 +95,6 @@ def score_runs(cases: list[dict], runs: list[dict], annotations: list[dict]) -> 
             if meta.get("cost") is not None:
                 costs[meta.get("currency") or "unknown"] += meta["cost"]
                 cost_documents += 1
-            if meta.get("budget_tokens") is not None:
-                tokens.append(meta["budget_tokens"])
             document_reviewed = True
             for item in run["report"].get("items", []):
                 annotation = annotation_map.get((case_id, variant, item["id"]), {})
@@ -209,7 +206,6 @@ def score_runs(cases: list[dict], runs: list[dict], annotations: list[dict]) -> 
             "known_output_tokens": known_output,
             "usage_complete": usage_complete,
             "model_calls": model_calls,
-            "mean_budget_tokens": mean(tokens) if tokens else None,
             "known_cost_total": sum(costs.values()) if len(costs) == 1 else None,
             "known_cost_by_currency": dict(costs),
             "cost_complete": cost_documents == len(cases),

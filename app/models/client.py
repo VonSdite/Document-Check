@@ -34,7 +34,6 @@ _REASONING_ONLY_CHUNK_LIMIT = 64_000
 _REASONING_ONLY_CHAR_LIMIT = 128_000
 _DISABLED_THINKING_REASONING_ONLY_CHUNK_LIMIT = 64
 _DISABLED_THINKING_REASONING_ONLY_CHAR_LIMIT = 256
-_MAX_COMPLETION_TOKENS = 12_288
 _MAX_STREAM_CONTENT_CHARS = 1_048_576
 _REPEAT_WINDOW_SIZES = (16, 32, 64, 128, 256)
 _REPEAT_WINDOW_COUNT = 3
@@ -359,7 +358,6 @@ def run_check(
     prompt: str,
     document_text: str,
     issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
-    max_completion_tokens: int | None = _MAX_COMPLETION_TOKENS,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -379,9 +377,6 @@ def run_check(
         headers["Authorization"] = f"Bearer {api_key}"
 
     issue_limit = _normalized_issue_output_limit(issue_output_limit)
-    output_token_limit = (
-        None if max_completion_tokens is None else max(1, int(max_completion_tokens))
-    )
     payload = {
         "model": model_name,
         "messages": [
@@ -405,8 +400,6 @@ def run_check(
         "temperature": 0,
     }
     _apply_reasoning_effort(payload, reasoning_effort)
-    if output_token_limit is not None:
-        payload["max_completion_tokens"] = output_token_limit
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
     )
@@ -414,7 +407,7 @@ def run_check(
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
-        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s",
+        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s stream_char_limit=%s prompt_chars=%s document_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -424,7 +417,6 @@ def run_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
-        output_token_limit if output_token_limit is not None else "-",
         _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(document_text),
@@ -468,7 +460,6 @@ def run_image_check(
     image_position: str,
     image_data_url: str,
     issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
-    max_completion_tokens: int = _MAX_COMPLETION_TOKENS,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -521,7 +512,6 @@ def run_image_check(
             },
         ],
         "temperature": 0,
-        "max_completion_tokens": max(1, int(max_completion_tokens)),
     }
     _apply_reasoning_effort(payload, reasoning_effort)
     _apply_json_object_response_format(
@@ -531,7 +521,7 @@ def run_image_check(
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
-        "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s data_url_chars=%s",
+        "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s stream_char_limit=%s prompt_chars=%s data_url_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -543,7 +533,6 @@ def run_image_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
-        payload["max_completion_tokens"],
         _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(image_data_url),
@@ -587,7 +576,6 @@ def run_multimodal_document_check(
     batch_index: int = 1,
     batch_count: int = 1,
     issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
-    max_completion_tokens: int = _MAX_COMPLETION_TOKENS,
     output_contract: str = MULTIMODAL_OUTPUT_CONTRACT_STRUCTURED_REPORT,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
@@ -663,7 +651,6 @@ def run_multimodal_document_check(
             },
         ],
         "temperature": 0,
-        "max_completion_tokens": max(1, int(max_completion_tokens)),
     }
     _apply_reasoning_effort(payload, reasoning_effort)
     _apply_json_object_response_format(
@@ -674,7 +661,7 @@ def run_multimodal_document_check(
 
     data_url_chars = sum(len(image["data_url"]) for image in normalized_images)
     logger.info(
-        "LLM 图文联合请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s batch=%s/%s images=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s data_url_chars=%s",
+        "LLM 图文联合请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s batch=%s/%s images=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s stream_char_limit=%s prompt_chars=%s document_chars=%s data_url_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -687,7 +674,6 @@ def run_multimodal_document_check(
         ssl_verify,
         request_timeout,
         force_disable_thinking,
-        payload["max_completion_tokens"],
         _MAX_STREAM_CONTENT_CHARS,
         len(prompt),
         len(document_text),
@@ -766,7 +752,6 @@ def _run_payload_with_retries(
     last_error = None
     active_payload = dict(payload)
     response_format_fallback_used = False
-    output_token_fallback_used = False
     attempt = 1
     while attempt <= _MAX_RETRIES + 1:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
@@ -853,23 +838,6 @@ def _run_payload_with_retries(
                     exc,
                 )
                 continue
-            if (
-                not output_token_fallback_used
-                and "max_completion_tokens" in active_payload
-                and _is_output_token_limit_unsupported_error(exc)
-            ):
-                active_payload = dict(active_payload)
-                fallback_token_limit = active_payload.pop("max_completion_tokens")
-                active_payload["max_tokens"] = fallback_token_limit
-                output_token_fallback_used = True
-                logger.warning(
-                    "LLM 服务不支持 max_completion_tokens，已降级为 max_tokens request_id=%s task_id=%s attempt=%s error=%s",
-                    request_id,
-                    task_id or "-",
-                    attempt,
-                    exc,
-                )
-                continue
             if attempt > _MAX_RETRIES:
                 raise
             if (
@@ -932,7 +900,6 @@ def test_model_connection(
         "model": model_name,
         "messages": [{"role": "user", "content": "请只回复 OK。"}],
         "temperature": 0,
-        "max_tokens": 16,
     }
     _apply_reasoning_effort(payload, reasoning_effort)
     if force_disable_thinking:
@@ -1220,38 +1187,6 @@ def _is_json_response_format_unsupported_error(error: Exception) -> bool:
     if not any(
         marker in text
         for marker in ("response_format", "response format", "json_object", "json mode")
-    ):
-        return False
-    unsupported_markers = (
-        "not support",
-        "not supported",
-        "unsupported",
-        "invalid",
-        "unrecognized",
-        "unknown",
-        "not permitted",
-        "not allowed",
-        "extra inputs are not permitted",
-        "不支持",
-        "无效",
-        "非法",
-        "不允许",
-        "未识别",
-        "未知",
-    )
-    return any(marker in text for marker in unsupported_markers)
-
-
-def _is_output_token_limit_unsupported_error(error: Exception) -> bool:
-    text = str(error or "").lower()
-    if not any(
-        marker in text
-        for marker in (
-            "max_completion_tokens",
-            "max completion tokens",
-            "max_tokens",
-            "max tokens",
-        )
     ):
         return False
     unsupported_markers = (

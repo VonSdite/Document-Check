@@ -155,7 +155,10 @@ class LLMResponseParsingTest(unittest.TestCase):
             )
 
         self.assertEqual(result, "模型连通性测试通过。")
-        self.assertNotIn("reasoning_effort", fake_session.calls[0][1]["json"])
+        payload = fake_session.calls[0][1]["json"]
+        self.assertNotIn("reasoning_effort", payload)
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertNotIn("max_tokens", payload)
 
     def test_model_connection_sends_configured_reasoning_effort(self):
         fake_session = FakeSession(
@@ -256,13 +259,10 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("data-original-range 记录原始合并范围", user_content)
         self.assertIn("data-inherited-from 表示该位置的值继承自", user_content)
         self.assertIn("置信度为 medium 或 low 时不得报告数据缺失", user_content)
-        self.assertEqual(
-            fake_session.calls[0][1]["json"]["max_completion_tokens"],
-            llm._MAX_COMPLETION_TOKENS,
-        )
+        self.assertNotIn("max_completion_tokens", fake_session.calls[0][1]["json"])
         self.assertEqual(fake_session.calls[0][1]["json"]["reasoning_effort"], "high")
 
-    def test_document_check_can_omit_output_token_limit(self):
+    def test_document_check_uses_upstream_output_defaults(self):
         fake_session = FakeSession(
             [
                 FakeResponse(
@@ -282,14 +282,13 @@ class LLMResponseParsingTest(unittest.TestCase):
                 check_name="规范性",
                 prompt="检查",
                 document_text="文档",
-                max_completion_tokens=None,
             )
 
         payload = fake_session.calls[0][1]["json"]
         self.assertNotIn("max_completion_tokens", payload)
         self.assertNotIn("max_tokens", payload)
 
-    def test_configured_output_limit_reaches_text_and_visual_requests(self):
+    def test_text_and_visual_requests_use_upstream_output_defaults(self):
         for model_call, inputs in (
             (llm.run_check, {"document_text": "正文"}),
             (
@@ -326,12 +325,11 @@ class LLMResponseParsingTest(unittest.TestCase):
                         model_name="custom-model",
                         check_name="检查",
                         prompt="业务要求",
-                        max_completion_tokens=65536,
                         **inputs,
                     )
-                self.assertEqual(
-                    session.calls[0][1]["json"]["max_completion_tokens"], 65536
-                )
+                payload = session.calls[0][1]["json"]
+                self.assertNotIn("max_completion_tokens", payload)
+                self.assertNotIn("max_tokens", payload)
 
     def test_document_check_prompt_clamps_issue_output_limit_to_hard_max(self):
         fake_session = FakeSession(
@@ -515,12 +513,12 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertNotIn("response_format", fake_session.calls[1][1]["json"])
         sleep.assert_not_called()
 
-    def test_output_token_limit_falls_back_to_max_tokens_when_unsupported(self):
+    def test_retried_requests_use_upstream_output_defaults(self):
         fake_session = FakeSession(
             [
                 FakeResponse(
-                    status_code=400,
-                    text='{"error":{"message":"max_completion_tokens is not supported"}}',
+                    status_code=429,
+                    text='{"error":{"message":"rate limit exceeded"}}',
                 ),
                 FakeResponse(
                     lines=[
@@ -531,7 +529,10 @@ class LLMResponseParsingTest(unittest.TestCase):
             ]
         )
 
-        with patch.object(llm.requests, "Session", return_value=fake_session):
+        with (
+            patch.object(llm.requests, "Session", return_value=fake_session),
+            patch.object(llm.time, "sleep"),
+        ):
             result = llm.run_check(
                 api_base="http://example.test/v1/chat/completions",
                 api_key="key",
@@ -542,13 +543,10 @@ class LLMResponseParsingTest(unittest.TestCase):
             )
 
         self.assertEqual(result, "完成")
-        first_payload = fake_session.calls[0][1]["json"]
-        second_payload = fake_session.calls[1][1]["json"]
-        self.assertEqual(
-            first_payload["max_completion_tokens"], llm._MAX_COMPLETION_TOKENS
-        )
-        self.assertNotIn("max_completion_tokens", second_payload)
-        self.assertEqual(second_payload["max_tokens"], llm._MAX_COMPLETION_TOKENS)
+        self.assertEqual(len(fake_session.calls), 2)
+        for _, kwargs in fake_session.calls:
+            self.assertNotIn("max_completion_tokens", kwargs["json"])
+            self.assertNotIn("max_tokens", kwargs["json"])
 
     def test_reads_stream_chat_completion_content(self):
         response = FakeResponse(

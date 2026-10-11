@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from flask import Flask
+from openpyxl import load_workbook
 
 from app.checks.agent_policy import POLICY_KEY, check_agent_options, strategy_for
 from app.contracts.agent import AgentOptions
@@ -46,15 +47,13 @@ class EvidenceIntegrationTest(unittest.TestCase):
         self.context.pop()
         self.root.cleanup()
 
-    def insert_task(
-        self, snapshots, *, token="owner", text=None, max_output_tokens=None
-    ):
+    def insert_task(self, snapshots, *, token="owner", text=None):
         db = get_db()
         cursor = db.execute(
             """INSERT INTO tasks(ip, original_filename, stored_filename, file_type, file_size,
-            checks_json, checks_snapshot_json, model_name, api_base, status, claim_token, document_text, max_output_tokens, created_at, updated_at)
-            VALUES ('127.0.0.1', 'a.txt', 'a.txt', 'txt', 10, '[]', ?, 'test', 'http://model/v1/chat/completions', 'running', ?, ?, ?, '2026-01-01', '2026-01-01')""",
-            (json.dumps(snapshots, ensure_ascii=False), token, text, max_output_tokens),
+            checks_json, checks_snapshot_json, model_name, api_base, status, claim_token, document_text, created_at, updated_at)
+            VALUES ('127.0.0.1', 'a.txt', 'a.txt', 'txt', 10, '[]', ?, 'test', 'http://model/v1/chat/completions', 'running', ?, ?, '2026-01-01', '2026-01-01')""",
+            (json.dumps(snapshots, ensure_ascii=False), token, text),
         )
         db.commit()
         return cursor.lastrowid
@@ -112,22 +111,24 @@ class EvidenceIntegrationTest(unittest.TestCase):
                 "code": "custom-check",
                 "name": "业务检查",
                 "prompt": "检查设备参数。",
-                "agent_options": AgentOptions(
-                    protocol="structured", max_output_tokens=2048
-                ).model_dump(mode="json"),
+                "agent_options": {
+                    **AgentOptions(protocol="structured").model_dump(mode="json"),
+                    "max_output_tokens": 2048,
+                    "max_tokens": 500000,
+                },
             }
         ]
-        task_id = self.insert_task(snapshots, max_output_tokens=65536)
-        output_limits = []
+        get_db().execute("ALTER TABLE tasks ADD COLUMN max_output_tokens INTEGER")
+        task_id = self.insert_task(snapshots)
+        get_db().execute(
+            "UPDATE tasks SET max_output_tokens=65536 WHERE id=?", (task_id,)
+        )
+        get_db().commit()
+        calls = []
 
         def turn(model, messages, *, schema, **kwargs):
-            output_limits.append(kwargs["max_output_tokens"])
-            model.before_request(
-                {
-                    "messages": messages,
-                    "max_completion_tokens": kwargs["max_output_tokens"],
-                }
-            )
+            calls.append(kwargs)
+            model.before_request({"messages": messages})
             answer = (
                 empty_plan()
                 if schema["title"] == "CheckPlan"
@@ -135,7 +136,7 @@ class EvidenceIntegrationTest(unittest.TestCase):
             )
             response = AgentTurn(
                 json.dumps(answer, ensure_ascii=False),
-                usage={"prompt_tokens": 100, "completion_tokens": 30},
+                usage={"prompt_tokens": 350000, "completion_tokens": 300000},
                 finish_reason="stop",
             )
             model.after_request({}, response, 0.01, None)
@@ -145,11 +146,13 @@ class EvidenceIntegrationTest(unittest.TestCase):
             TaskRunner(self.app).run(task_id, "owner")
         task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         self.assertEqual(task["status"], "completed", task["error"])
-        self.assertTrue(output_limits)
-        self.assertEqual(set(output_limits), {65536})
+        self.assertTrue(calls)
+        self.assertTrue(all("max_output_tokens" not in call for call in calls))
         result = json.loads(task["result_json"])[0]
         self.assertEqual(result["structured_report"]["items"], [])
         self.assertEqual(result["agent"]["coverage"]["checked_blocks"], 28)
+        self.assertEqual(result["agent"]["known_input_tokens"], len(calls) * 350000)
+        self.assertEqual(result["agent"]["known_output_tokens"], len(calls) * 300000)
         self.assertIsNotNone(
             get_db()
             .execute("SELECT 1 FROM task_checkpoints WHERE task_id=?", (task_id,))
@@ -159,6 +162,9 @@ class EvidenceIntegrationTest(unittest.TestCase):
         self.assertTrue(meta["source_documents"][0]["text_complete"])
         output = build_report_workbook(task)
         self.assertGreater(len(output.getvalue()), 1000)
+        workbook = load_workbook(output)
+        self.assertEqual(workbook["执行用量"].cell(2, 3).value, len(calls) * 350000)
+        self.assertEqual(workbook["执行用量"].cell(2, 4).value, len(calls) * 300000)
 
     def test_invalid_report_is_not_recovered_as_unvalidated_text(self):
         result = {

@@ -47,10 +47,8 @@ class ScriptedModel:
         self.after = kwargs["after_request"]
         self.capabilities = kwargs["capabilities"]
 
-    def turn(
-        self, messages, *, schema, tools=None, force_tool=None, max_output_tokens=8192
-    ):
-        payload = {"messages": messages, "max_completion_tokens": max_output_tokens}
+    def turn(self, messages, *, schema, tools=None, force_tool=None):
+        payload = {"messages": messages}
         self.before(payload)
         answer = self.handler(messages, schema.get("title"), tools, force_tool)
         if isinstance(answer, Exception):
@@ -159,6 +157,28 @@ class EvidenceAgentTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["known_input_tokens"], 200)
         self.assertEqual(result["error"], "")
 
+    def test_missing_usage_remains_unknown_and_does_not_interrupt_checks(self):
+        def handler(messages, title, tools, force):
+            answer = (
+                empty_plan()
+                if title == "CheckPlan"
+                else discovery(input_context(messages))
+            )
+            return AgentTurn(
+                json.dumps(answer, ensure_ascii=False), finish_reason="stop"
+            )
+
+        result = self.make_agent(handler).run()
+        self.assertEqual(result["error"], "")
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+        self.assertEqual(result["metadata"]["model_calls"], 2)
+        self.assertEqual(result["metadata"]["known_input_tokens"], 0)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 0)
+        self.assertFalse(result["metadata"]["usage_complete"])
+        for request in result["metadata"]["requests"]:
+            self.assertIsNone(request["input_tokens"])
+            self.assertIsNone(request["output_tokens"])
+
     def planning_handler(self, context):
         if "prompt_fragment" in context:
             requirements = [
@@ -205,7 +225,7 @@ class EvidenceAgentTest(unittest.TestCase):
             handler,
             code="custom",
             item={"code": "custom", "name": "表达检查", "prompt": prompt},
-            options=AgentOptions(protocol="structured", max_output_tokens=2048),
+            options=AgentOptions(protocol="structured", chunk_chars=1000),
         )
         result = agent.run()
         self.assertEqual(result["error"], "")
@@ -263,8 +283,8 @@ class EvidenceAgentTest(unittest.TestCase):
 
         result = self.make_agent(handler).run()
         self.assertEqual(len(calls), 2)
-        self.assertIn("每次回复 token 上限", result["error"])
-        self.assertIn("思考", result["error"])
+        self.assertIn("规划持续被模型服务截断", result["error"])
+        self.assertIn("精简输出重试", result["error"])
         self.assertEqual(result["report"]["items"], [])
         self.assertFalse(result["metadata"]["coverage"]["all_checked"])
 

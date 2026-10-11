@@ -22,6 +22,8 @@ class AgentModelTest(unittest.TestCase):
 
     def test_stream_accumulates_fragmented_tool_arguments_and_usage(self):
         model = self.make_model()
+        model.connection["max_output_tokens"] = 512
+        model.capabilities["output_token_parameter"] = "max_tokens"
         frames = [
             {
                 "choices": [
@@ -73,6 +75,9 @@ class AgentModelTest(unittest.TestCase):
         )
         self.assertEqual(turn.usage["prompt_tokens"], 15)
         self.assertEqual(len(self.reservations), 1)
+        payload = session.calls[0][1]["json"]
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertNotIn("max_tokens", payload)
         self.assertTrue(session.responses == [])
 
     def test_schema_unsupported_falls_back_without_losing_validation_contract(self):
@@ -135,10 +140,6 @@ class AgentModelTest(unittest.TestCase):
                 "temperature",
                 "temperature does not support 0; only default is supported",
             ),
-            (
-                "max_completion_tokens",
-                "max_completion_tokens unsupported; use max_tokens",
-            ),
             ("stream_options", "stream_options not supported"),
         ):
             with self.subTest(parameter=parameter):
@@ -162,6 +163,9 @@ class AgentModelTest(unittest.TestCase):
                 self.assertEqual(len(self.reservations), 3)
                 self.assertIn(parameter, session.calls[0][1]["json"])
                 self.assertNotIn(parameter, session.calls[-1][1]["json"])
+                for _, kwargs in session.calls:
+                    self.assertNotIn("max_completion_tokens", kwargs["json"])
+                    self.assertNotIn("max_tokens", kwargs["json"])
 
     def test_truncated_response_preserves_actual_usage_and_error(self):
         model = self.make_model()
@@ -185,12 +189,12 @@ class AgentModelTest(unittest.TestCase):
             patch("app.models.agent._pooled_http_session", return_value=session),
             self.assertRaises(IncompleteResponse) as raised,
         ):
-            model.turn([], schema=None, max_output_tokens=512)
+            model.turn([], schema=None)
         self.assertEqual(len(self.completed), 1)
         self.assertEqual(self.completed[0][1].usage["completion_tokens"], 20)
         self.assertIn("length", self.completed[0][3])
         self.assertEqual(raised.exception.finish_reason, "length")
-        self.assertIn("512", str(raised.exception))
+        self.assertIn("上游默认", str(raised.exception))
         self.assertIn("截断", str(raised.exception))
 
     def test_refusal_truncation_and_unfinished_stream_do_not_become_empty_success(self):

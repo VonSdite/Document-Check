@@ -73,7 +73,6 @@ function createEditor(configs) {
   runInNewContext(script, context);
   const form = new Form();
   form.className = "provider-modal-form";
-  form.dataset = { modelOutputDefault: "32768", modelOutputMin: "512", modelOutputMax: "262144" };
   const body = new Element();
   body.dataset.modelRows = "1";
   const hidden = new Input();
@@ -87,31 +86,30 @@ function createEditor(configs) {
   return { context, form, hidden, emit, read: () => JSON.parse(hidden.value) };
 }
 
-test("editing a custom model output limit saves it independently for each thinking variant", () => {
+test("editing thinking settings saves variants without output token configuration", () => {
   const ui = createEditor([
     { model_name: "custom-model", reasoning_effort: "high", max_output_tokens: 65536 },
     { model_name: "custom-model", force_disable_thinking: true, max_output_tokens: 4096 },
   ]);
-  const limits = ui.form.querySelectorAll("[data-model-output-tokens]");
-  assert.equal(limits.length, 2);
-  assert.equal(limits[0].min, "512");
-  assert.equal(limits[0].max, "262144");
-  limits[0].value = "131072";
-  ui.emit("input", limits[0]);
-  assert.deepEqual(ui.read().map((model) => model.max_output_tokens), [131072, 4096]);
-  assert.equal(ui.read()[0].reasoning_effort, "high");
+  assert.equal(ui.form.querySelectorAll("[data-model-output-tokens]").length, 0);
+  const reasoning = ui.form.querySelector("[data-model-reasoning-effort]");
+  reasoning.value = "medium";
+  ui.emit("change", reasoning);
+  assert.equal(ui.read()[0].reasoning_effort, "medium");
+  assert.deepEqual(ui.read().map((model) => model.force_disable_thinking), [false, true]);
   ui.emit("submit", ui.form);
-  assert.deepEqual(ui.read().map((model) => model.max_output_tokens), [131072, 4096]);
+  assert.equal(ui.read()[0].reasoning_effort, "medium");
+  assert.ok(ui.read().every((model) => !("max_output_tokens" in model)));
 });
 
-test("tidying models and applying fetched selections preserve existing output limits", () => {
+test("tidying models and applying fetched selections preserve thinking variants", () => {
   const ui = createEditor([
     { model_name: "z-custom", max_output_tokens: 65536 },
     { model_name: "a-custom", force_disable_thinking: true, max_output_tokens: 4096 },
   ]);
   ui.context.tidyModelRows(ui.form);
-  assert.deepEqual(ui.read().map((model) => [model.model_name, model.max_output_tokens]), [
-    ["a-custom", 4096], ["z-custom", 65536],
+  assert.deepEqual(ui.read().map((model) => [model.model_name, model.force_disable_thinking]), [
+    ["a-custom", true], ["z-custom", false],
   ]);
   ui.context.editorForm = ui.form;
   runInNewContext(`
@@ -120,15 +118,19 @@ test("tidying models and applying fetched selections preserve existing output li
     fetchedModelSelection = new Set(fetchedModelCandidates);
     applyFetchedModelsSelection();
   `, ui.context);
-  assert.deepEqual(ui.read().map((model) => [model.model_name, model.max_output_tokens]), [
-    ["a-custom", 4096], ["z-custom", 65536], ["new-model", 32768],
+  assert.deepEqual(ui.read().map((model) => [model.model_name, model.force_disable_thinking]), [
+    ["a-custom", true], ["z-custom", false], ["new-model", false],
   ]);
+  assert.ok(ui.read().every((model) => !("max_output_tokens" in model)));
 });
 
-test("invalid model limits remain in submitted data for backend validation", () => {
+test("editing a model name synchronizes the submitted configuration", () => {
   const ui = createEditor([{ model_name: "custom-model", max_output_tokens: 65536 }]);
-  const limit = ui.form.querySelector("[data-model-output-tokens]");
-  limit.value = "511";
-  ui.emit("input", limit);
-  assert.equal(ui.read()[0].max_output_tokens, 511);
+  const name = ui.form.querySelector("[data-model-name]");
+  name.value = "renamed-model";
+  ui.emit("input", name);
+  assert.equal(ui.read()[0].model_name, "renamed-model");
+  assert.deepEqual(Object.keys(ui.read()[0]).sort(), [
+    "force_disable_thinking", "model_name", "reasoning_effort",
+  ]);
 });
