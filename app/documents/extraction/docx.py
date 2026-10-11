@@ -3,11 +3,14 @@ from pathlib import Path
 
 from docx import Document
 from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 from app.documents.extraction.common import (
     _clean_hyperlink_target,
     _format_hyperlink_text,
     _record_hyperlink,
+    check_extraction_canceled,
 )
 
 _HYPERLINK_FIELD_PATTERN = re.compile(
@@ -16,7 +19,9 @@ _HYPERLINK_FIELD_PATTERN = re.compile(
 )
 
 
-def _extract_docx(path: Path, hyperlinks: list[dict] | None = None) -> str:
+def _extract_docx(
+    path: Path, hyperlinks: list[dict] | None = None, *, blocks=None, cancel_event=None
+) -> str:
     document = Document(str(path))
     internal_targets = {
         str(node.get(qn("w:name")) or "").strip()
@@ -24,36 +29,103 @@ def _extract_docx(path: Path, hyperlinks: list[dict] | None = None) -> str:
         if str(node.get(qn("w:name")) or "").strip()
     }
     parts = []
-    for paragraph_index, paragraph in enumerate(document.paragraphs, start=1):
-        text = _docx_paragraph_text(
-            paragraph,
-            hyperlinks,
-            location=f"第{paragraph_index}段",
-            internal_targets=internal_targets,
-        )
+    paragraph_index, table_index, section = 0, 0, ""
+
+    def append(text, kind, location):
         if text:
             parts.append(text)
-    for table_index, table in enumerate(document.tables, start=1):
-        for row_index, row in enumerate(table.rows, start=1):
-            cells = []
-            for column_index, cell in enumerate(row.cells, start=1):
-                location = f"表格{table_index} > 第{row_index}行 > 第{column_index}列"
-                cell_text = "\n".join(
-                    text
-                    for paragraph in cell.paragraphs
-                    if (
-                        text := _docx_paragraph_text(
-                            paragraph,
-                            hyperlinks,
-                            location=location,
-                            internal_targets=internal_targets,
-                        )
+            if blocks is not None:
+                blocks.append(
+                    {
+                        "text": text,
+                        "kind": kind,
+                        "section": section,
+                        "location": location,
+                    }
+                )
+
+    def cell_text(cell, location):
+        values = []
+        for content in cell.iter_inner_content():
+            check_extraction_canceled(cancel_event)
+            if isinstance(content, Paragraph):
+                values.append(
+                    _docx_paragraph_text(
+                        content,
+                        hyperlinks,
+                        location=location,
+                        internal_targets=internal_targets,
                     )
-                ).strip()
-                if cell_text:
-                    cells.append(cell_text)
-            if cells:
-                parts.append(" | ".join(cells))
+                )
+            else:
+                for nested_row in content.rows:
+                    values.append(
+                        " | ".join(cell_text(c, location) for c in nested_row.cells)
+                    )
+        return "\n".join(value for value in values if value).strip()
+
+    for content in document.iter_inner_content():
+        check_extraction_canceled(cancel_event)
+        if isinstance(content, Paragraph):
+            paragraph_index += 1
+            location = f"第{paragraph_index}段"
+            text = _docx_paragraph_text(
+                content,
+                hyperlinks,
+                location=location,
+                internal_targets=internal_targets,
+            )
+            heading = (
+                str(content.style.name or "").lower().startswith(("heading", "标题"))
+            )
+            if heading and text:
+                section = text
+            append(text, "heading" if heading else "paragraph", location)
+        elif isinstance(content, Table):
+            table_index += 1
+            for row_index, row in enumerate(content.rows, start=1):
+                check_extraction_canceled(cancel_event)
+                cells = [
+                    cell_text(
+                        cell,
+                        f"表格{table_index} > 第{row_index}行 > 第{column_index}列",
+                    )
+                    for column_index, cell in enumerate(row.cells, start=1)
+                ]
+                if any(cells):
+                    append(
+                        " | ".join(cells),
+                        "table",
+                        f"表格{table_index} > 第{row_index}行",
+                    )
+    if blocks is not None:
+        for section_number, document_section in enumerate(document.sections, start=1):
+            for label, container in (
+                ("页眉", document_section.header),
+                ("页脚", document_section.footer),
+            ):
+                if section_number > 1 and container.is_linked_to_previous:
+                    continue
+                for paragraph in container.paragraphs:
+                    check_extraction_canceled(cancel_event)
+                    text = _docx_paragraph_text(
+                        paragraph,
+                        hyperlinks,
+                        location=label,
+                        internal_targets=internal_targets,
+                    )
+                    append(text, "paragraph", f"第{section_number}节 / {label}")
+        if any(document.element.iter(qn("w:txbxContent"))) or any(
+            document.element.iter(qn("w:sdt"))
+        ):
+            blocks.append(
+                {
+                    "text": "",
+                    "kind": "unresolved",
+                    "location": "文本框或内容控件",
+                    "section": "",
+                }
+            )
     return "\n".join(parts)
 
 

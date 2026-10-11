@@ -34,6 +34,7 @@ def _extract_pdf(
     *,
     include_tables: bool = True,
     cancel_event=None,
+    blocks: list[dict] | None = None,
 ) -> str:
     reader = None
     try:
@@ -98,6 +99,15 @@ def _extract_pdf(
                     )
             if text.strip():
                 pages.append(f"[第{index}页]\n{text.strip()}")
+            if blocks is not None:
+                blocks.append(
+                    {
+                        "text": text.strip(),
+                        "kind": "page" if text.strip() else "unresolved",
+                        "location": f"第{index}页",
+                        "section": "",
+                    }
+                )
         return "\n\n".join(pages)
     finally:
         if layout_document is not None:

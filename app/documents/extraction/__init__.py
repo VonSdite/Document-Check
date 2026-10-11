@@ -39,12 +39,15 @@ def extract_document(
     *,
     include_tables: bool = True,
     cancel_event=None,
+    blocks: list[dict] | None = None,
 ) -> tuple[str, list[dict]]:
     check_extraction_canceled(cancel_event)
     hyperlinks = []
     try:
         if file_type == "docx":
-            return _extract_docx(path, hyperlinks), hyperlinks
+            return _extract_docx(
+                path, hyperlinks, blocks=blocks, cancel_event=cancel_event
+            ), hyperlinks
         if file_type == "pdf":
             return (
                 _extract_pdf(
@@ -52,6 +55,7 @@ def extract_document(
                     hyperlinks,
                     include_tables=include_tables,
                     cancel_event=cancel_event,
+                    blocks=blocks,
                 ),
                 hyperlinks,
             )
