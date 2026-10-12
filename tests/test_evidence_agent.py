@@ -1,5 +1,6 @@
 import json
 import unittest
+from itertools import combinations, product
 
 from app.contracts.agent import AgentOptions
 from app.documents.index import DocumentIndex
@@ -37,6 +38,18 @@ def decision(candidate_id, evidence, **changes):
         "evidence": evidence,
         "counterevidence": [],
         **changes,
+    }
+
+
+def fact(source, value="220"):
+    return {
+        "subject": "设备A",
+        "attribute": "电压",
+        "value": value,
+        "unit": "V",
+        "conditions": "运行",
+        "version": "1",
+        "reference": {"source_id": source["id"], "quote": source["text"]},
     }
 
 
@@ -376,6 +389,517 @@ class EvidenceAgentTest(unittest.TestCase):
         self.assertEqual(result["error"], "")
         self.assertEqual(len(planned_sources), 1)
         self.assertTrue(planned_sources[0])
+
+    def test_discovery_truncation_resumes_children_without_overstating_coverage(self):
+        store = MemoryCheckpointStore()
+        attempted, completed = [], []
+        failed = False
+
+        def handler(messages, title, tools, force):
+            nonlocal failed
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            if title == "Discovery":
+                ids = tuple(source["id"] for source in context["sources"])
+                attempted.append(ids)
+                if len(ids) > 2:
+                    return IncompleteResponse("截断", finish_reason="length")
+                if completed and not failed:
+                    failed = True
+                    return LLMError("503 服务暂时失败")
+                completed.append(ids)
+                return discovery(
+                    context,
+                    candidates=[
+                        candidate(
+                            [{"source_id": source["id"], "quote": source["text"]}],
+                            description=source["text"] + "存在问题",
+                        )
+                        for source in context["sources"]
+                    ],
+                )
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(c["id"], c["evidence"]) for c in context["candidates"]
+                ],
+            }
+
+        documents = [
+            {
+                "filename": "a.txt",
+                "text": "段落一\n段落二\n段落三\n段落四",
+                "text_complete": True,
+            }
+        ]
+        first = self.make_agent(handler, documents=documents, store=store).run()
+        self.assertIn("503", first["error"])
+        self.assertEqual(first["metadata"]["coverage"]["checked_blocks"], 0)
+        self.assertEqual(len(first["report"]["pending_items"]), 2)
+        result = self.make_agent(handler, documents=documents, store=store).run()
+        self.assertEqual(result["error"], "")
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+        self.assertEqual(len(result["report"]["items"]), 4)
+        self.assertEqual(attempted.count(attempted[0]), 1)
+        self.assertEqual(attempted.count(completed[0]), 1)
+        self.assertEqual(attempted.count(completed[1]), 2)
+
+    def test_discovery_repair_truncation_restarts_with_smaller_sources(self):
+        calls = []
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            calls.append(len(context["sources"]))
+            if "校验信息" in messages[-1]["content"]:
+                return IncompleteResponse("结构修复被截断", finish_reason="length")
+            if len(context["sources"]) > 1:
+                return AgentTurn("{broken", finish_reason="stop")
+            return discovery(context)
+
+        result = self.make_agent(handler, code="custom").run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(calls, [2, 2, 1, 1])
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+
+    def test_discovery_splits_requirements_and_covers_every_source_requirement(self):
+        prompt = "\n".join(f"要求{i}：核实用语。" for i in range(4))
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return self.planning_handler(context)
+            if len(context["requirements"]) > 1:
+                return IncompleteResponse("观察输出被截断", finish_reason="length")
+            return self.planning_handler(context)
+
+        agent = self.make_agent(
+            handler,
+            item={"code": "custom", "name": "用语检查", "prompt": prompt},
+            documents=[{"filename": "a.txt", "text": "短正文", "text_complete": True}],
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(agent.state["observations"]), 4)
+        self.assertEqual(len(agent.state["requirement_coverage"]), 4)
+        for checked in agent.state["requirement_coverage"].values():
+            self.assertEqual(checked, [agent.index.blocks[0].id])
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+
+    def test_large_source_views_keep_source_ids_and_verify_quotes_in_current_view(self):
+        text = "".join(f"设备参数{i:04d}需要核实。" for i in range(120))
+        seen = []
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            source = context["sources"][0]
+            if len(source["text"]) > 600:
+                return IncompleteResponse("截断", finish_reason="length")
+            seen.append(source)
+            wrong = fact(source)
+            wrong["reference"]["quote"] = text[-20:]
+            return discovery(context, facts=[wrong])
+
+        agent = self.make_agent(
+            handler,
+            code="custom",
+            documents=[{"filename": "a.txt", "text": text, "text_complete": True}],
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertGreater(len(seen), 1)
+        self.assertEqual({source["id"] for source in seen}, {agent.index.blocks[0].id})
+        self.assertTrue(seen[0]["text"].startswith(text[:100]))
+        self.assertTrue(seen[-1]["text"].endswith(text[-100:]))
+        self.assertEqual(result["metadata"]["coverage"]["checked_blocks"], 1)
+        self.assertEqual(len(agent.state["facts"]), 1)
+        self.assertTrue(
+            any("无法核实原文的事实" in d for d in agent.state["diagnostics"])
+        )
+
+    def test_alignment_and_comparison_recovery_preserve_all_pairs_and_resume(self):
+        store = MemoryCheckpointStore()
+        compared = []
+        aligned = []
+        failed = False
+        calls = []
+
+        def handler(messages, title, tools, force):
+            nonlocal failed
+            calls.append(title)
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return {**empty_plan(), "global_checks": ["consistency"]}
+            if title == "Discovery":
+                return discovery(
+                    context,
+                    facts=[fact(s, s["text"]) for s in context["sources"]],
+                )
+            if title == "Alignment":
+                if len(context["facts"]) > 1:
+                    return IncompleteResponse("截断", finish_reason="length")
+                aligned.extend(f["fact_id"] for f in context["facts"])
+                return {
+                    "keys": [
+                        {"fact_id": f["fact_id"], "attribute_key": "电压"}
+                        for f in context["facts"]
+                    ]
+                }
+            if title == "Comparison":
+                facts = context.get("facts")
+                pairs = (
+                    list(combinations(facts, 2))
+                    if facts is not None
+                    else list(product(context["left_facts"], context["right_facts"]))
+                )
+                if len(pairs) > 1:
+                    return IncompleteResponse("截断", finish_reason="length")
+                if compared and not failed:
+                    failed = True
+                    return LLMError("503 服务暂时失败")
+                a, b = pairs[0]
+                compared.append(tuple(sorted((a["value"], b["value"]))))
+                return {
+                    "candidates": [
+                        candidate(
+                            [a["reference"], b["reference"]],
+                            description=f"电压{a['value']}与{b['value']}不一致",
+                        )
+                    ]
+                }
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(c["id"], c["evidence"]) for c in context["candidates"]
+                ],
+            }
+
+        documents = [
+            {
+                "filename": "a.txt",
+                "text": "220V\n110V\n48V\n12V",
+                "text_complete": True,
+            }
+        ]
+        first = self.make_agent(handler, documents=documents, store=store).run()
+        self.assertIn("503", first["error"])
+        self.assertTrue(first["metadata"]["coverage"]["all_checked"])
+        result = self.make_agent(handler, documents=documents, store=store).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(set(aligned)), 4)
+        self.assertEqual(len(aligned), 4)
+        expected = {
+            tuple(sorted(pair))
+            for pair in combinations(("220V", "110V", "48V", "12V"), 2)
+        }
+        self.assertEqual(set(compared), expected)
+        self.assertEqual(len(compared), len(expected))
+        self.assertEqual(len(result["report"]["items"]), 6)
+        self.assertEqual(calls.count("CheckPlan"), 1)
+        self.assertEqual(calls.count("Discovery"), 1)
+
+    def test_review_truncation_splits_native_structured_and_repair_batches(self):
+        for mode in ("structured", "native", "repair"):
+            with self.subTest(mode=mode):
+                sizes = []
+
+                def handler(messages, title, tools, force):
+                    context = input_context(messages)
+                    if title == "CheckPlan":
+                        return empty_plan()
+                    if title == "Discovery":
+                        return discovery(
+                            context,
+                            candidates=[
+                                candidate(
+                                    [{"source_id": s["id"], "quote": s["text"]}],
+                                    description=s["text"] + "存在问题",
+                                )
+                                for s in context["sources"]
+                            ],
+                        )
+                    if "output" in context:
+                        return IncompleteResponse("修复截断", finish_reason="length")
+                    if force:
+                        return AgentTurn(
+                            tool_calls=[
+                                {
+                                    "id": "read-1",
+                                    "function": {
+                                        "name": "read_context",
+                                        "arguments": json.dumps(
+                                            {
+                                                "source_id": context["sources"][0][
+                                                    "id"
+                                                ],
+                                                "radius": 1,
+                                            }
+                                        ),
+                                    },
+                                }
+                            ],
+                            finish_reason="tool_calls",
+                        )
+                    batch = context["candidates"]
+                    sizes.append(len(batch))
+                    if len(batch) > 1:
+                        return (
+                            AgentTurn("{broken", finish_reason="stop")
+                            if mode == "repair"
+                            else IncompleteResponse("截断", finish_reason="length")
+                        )
+                    return {
+                        "actions": [],
+                        "decisions": [decision(c["id"], c["evidence"]) for c in batch],
+                    }
+
+                result = self.make_agent(
+                    handler,
+                    documents=[
+                        {
+                            "filename": "a.txt",
+                            "text": "段落一\n段落二\n段落三\n段落四",
+                            "text_complete": True,
+                        }
+                    ],
+                    options=AgentOptions(
+                        protocol="native" if mode == "native" else "structured"
+                    ),
+                ).run()
+                self.assertEqual(result["error"], "")
+                self.assertEqual(sizes, [4, 2, 1, 1, 1, 1])
+                self.assertEqual(len(result["report"]["items"]), 4)
+                if mode == "native":
+                    self.assertEqual(len(result["metadata"]["tool_trace"]), 1)
+                    self.assertTrue(result["metadata"]["capabilities"]["native_tools"])
+
+    def test_discovery_atomic_retry_is_bounded_and_obeys_call_budget(self):
+        calls = []
+
+        def handler(messages, title, tools, force):
+            calls.append(title)
+            return (
+                empty_plan()
+                if title == "CheckPlan"
+                else IncompleteResponse("截断", finish_reason="length")
+            )
+
+        result = self.make_agent(
+            handler, documents=[{"filename": "a.txt", "text": "短正文"}]
+        ).run()
+        self.assertEqual(calls, ["CheckPlan", "Discovery", "Discovery"])
+        self.assertIn("最小批次在精简重试后", result["error"])
+        self.assertFalse(result["metadata"]["coverage"]["all_checked"])
+        calls.clear()
+        result = self.make_agent(
+            handler,
+            documents=[{"filename": "a.txt", "text": "一\n二\n三\n四"}],
+            options=AgentOptions(protocol="structured", max_calls=4),
+        ).run()
+        self.assertEqual(result["metadata"]["model_calls"], 4)
+        self.assertIn("调用次数预算", result["error"])
+
+    def test_review_recovery_retains_tool_evidence_for_all_children_and_resume(self):
+        store = MemoryCheckpointStore()
+        documents = [
+            {
+                "filename": "a.txt",
+                "text": "段落一\n段落二\n段落三\n段落四",
+                "text_complete": True,
+            },
+            {"filename": "b.txt", "text": "补充说明解释差异。", "text_complete": True},
+        ]
+        evidence = []
+        reviewed = []
+        requested = failed = False
+
+        def handler(messages, title, tools, force):
+            nonlocal requested, failed
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            if title == "Discovery":
+                if context["sources"][0]["filename"] == "b.txt":
+                    evidence.append(fact(context["sources"][0])["reference"])
+                    return discovery(context)
+                return discovery(
+                    context,
+                    candidates=[
+                        candidate(
+                            [fact(source)["reference"]],
+                            description=source["text"] + "存在问题",
+                        )
+                        for source in context["sources"]
+                    ],
+                )
+            batch = context["candidates"]
+            if not requested:
+                requested = True
+                self.assertNotIn(
+                    evidence[0]["source_id"], [s["id"] for s in context["sources"]]
+                )
+                return {
+                    "actions": [
+                        {
+                            "name": "search_document",
+                            "arguments": json.dumps({"query": "补充说明"}),
+                        }
+                    ],
+                    "decisions": [],
+                }
+            if len(batch) == 4:
+                return IncompleteResponse("截断", finish_reason="length")
+            self.assertIn(
+                evidence[0]["source_id"], [s["id"] for s in context["sources"]]
+            )
+            if len(batch) > 1:
+                return IncompleteResponse("截断", finish_reason="length")
+            if reviewed and not failed:
+                failed = True
+                return LLMError("503 服务暂时失败")
+            reviewed.append(batch[0]["id"])
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(
+                        batch[0]["id"],
+                        batch[0]["evidence"],
+                        outcome="explained",
+                        counterevidence=evidence,
+                    )
+                ],
+            }
+
+        agent = self.make_agent(
+            handler, documents=documents, store=store, code="custom"
+        )
+        first = agent.run()
+        self.assertIn("503", first["error"])
+        self.assertEqual(len(first["report"]["withdrawn_items"]), 1)
+        agent = self.make_agent(
+            handler, documents=documents, store=store, code="custom"
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["report"]["withdrawn_items"]), 4)
+        self.assertEqual(len(reviewed), len(set(reviewed)))
+        self.assertEqual(len(result["metadata"]["tool_trace"]), 1)
+        self.assertNotIn("review_recovery_sources", agent.state)
+        self.assertNotIn("review_recovery_end", agent.state)
+
+    def test_requirement_comparison_splitting_keeps_full_observations_and_coverage(
+        self,
+    ):
+        compared = []
+        prompt = "文档必须说明断电要求。"
+
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return {
+                    **empty_plan(),
+                    "global_checks": ["completeness"],
+                    "requirements": [
+                        {
+                            "id": "safety",
+                            "text": prompt,
+                            "applicability": "安装说明",
+                            "origin": "prompt",
+                            "source_id": "",
+                            "quote": prompt,
+                        }
+                    ],
+                }
+            if title == "Discovery":
+                return {
+                    **discovery(context),
+                    "observations": [
+                        {
+                            "requirement_id": context["requirements"][0]["id"],
+                            "status": "not_found",
+                            "rationale": "本批未找到："
+                            + context["sources"][0]["filename"],
+                            "evidence": [],
+                        }
+                    ],
+                }
+            self.assertEqual(title, "Comparison")
+            self.assertTrue(context["coverage"]["all_checked"])
+            self.assertEqual(context["observation_summary"]["counts"], {"not_found": 4})
+            if len(context["observations"]) > 1:
+                return IncompleteResponse("截断", finish_reason="length")
+            compared.extend(o["rationale"] for o in context["observations"])
+            return {"candidates": []}
+
+        result = self.make_agent(
+            handler,
+            item={"code": "custom", "name": "安全说明", "prompt": prompt},
+            documents=[
+                {"filename": f"{i}.txt", "text": "设备说明", "text_complete": True}
+                for i in range(4)
+            ],
+        ).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(set(compared), {f"本批未找到：{i}.txt" for i in range(4)})
+
+    def test_atomic_stage_truncation_and_content_filter_have_bounded_recovery(self):
+        for stage in ("Discovery", "Alignment", "Comparison", "Review"):
+            for reason in ("length", "content_filter"):
+                with self.subTest(stage=stage, reason=reason):
+                    attempts = []
+
+                    def handler(messages, title, tools, force):
+                        context = input_context(messages)
+                        if title == stage:
+                            attempts.append(messages)
+                            return IncompleteResponse("响应中断", finish_reason=reason)
+                        if title == "CheckPlan":
+                            return {**empty_plan(), "global_checks": ["consistency"]}
+                        if title == "Discovery":
+                            source = context["sources"][0]
+                            return discovery(
+                                context,
+                                facts=[fact(source)]
+                                if stage == "Alignment"
+                                else [fact(source), fact(source, "110")],
+                                candidates=[candidate([fact(source)["reference"]])],
+                            )
+                        if title == "Alignment":
+                            return {
+                                "keys": [
+                                    {"fact_id": f["fact_id"], "attribute_key": "电压"}
+                                    for f in context["facts"]
+                                ]
+                            }
+                        if title == "Comparison":
+                            return {"candidates": []}
+                        return {
+                            "actions": [],
+                            "decisions": [
+                                decision(c["id"], c["evidence"])
+                                for c in context["candidates"]
+                            ],
+                        }
+
+                    result = self.make_agent(
+                        handler,
+                        documents=[
+                            {
+                                "filename": "a.txt",
+                                "text": "短正文",
+                                "text_complete": True,
+                            }
+                        ],
+                    ).run()
+                    self.assertEqual(len(attempts), 2 if reason == "length" else 1)
+                    self.assertTrue(result["error"])
+                    self.assertTrue(
+                        result["report"]["summary"].startswith("检查未完成")
+                    )
 
     def test_global_comparison_finds_problem_absent_from_local_candidates(self):
         calls = []

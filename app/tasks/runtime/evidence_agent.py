@@ -339,6 +339,118 @@ class EvidenceAgent:
             groups.append(group)
         return groups
 
+    def _stage_job(self, stage, original):
+        pending = self.state.get(f"{stage}_pending_jobs")
+        return pending[0] if pending else original
+
+    def _finish_stage_job(self, stage):
+        pending = self.state.get(f"{stage}_pending_jobs")
+        if pending:
+            pending.pop(0)
+        if pending:
+            return False
+        self.state.pop(f"{stage}_pending_jobs", None)
+        cursor = f"{stage}_cursor"
+        self.state[cursor] = self.state.get(cursor, 0) + 1
+        return True
+
+    def _recover_stage_job(self, stage, job, split, error):
+        if error.finish_reason != "length":
+            raise error
+        label = {"discover": "候选生成", "align": "属性对齐", "compare": "全局对照"}[
+            stage
+        ]
+        pending = self.state.setdefault(f"{stage}_pending_jobs", [job])
+        smaller = split(job)
+        if smaller:
+            pending[:1] = smaller
+            diagnostic = f"{label}输出被截断，已拆分当前批次继续处理"
+        elif not job.get("compact_retry"):
+            job["compact_retry"] = True
+            pending[0] = job
+            diagnostic = f"{label}输出被截断，正在执行一次精简输出重试"
+        else:
+            raise IncompleteResponse(
+                f"{label}最小批次在精简重试后仍被模型服务截断（finish_reason=length），"
+                "检查未完成，已保留完成的处理结果。",
+                finish_reason="length",
+            ) from error
+        self.state["diagnostics"].append(diagnostic)
+        self.state["next"] = stage
+        self.persist()
+
+    @staticmethod
+    def _compact_instruction(job):
+        if job.get("compact_retry"):
+            return (
+                "本批输出长度受限，请使用紧凑 JSON，精简说明并避免重复原文。"
+                "保留全部检查目标、事实、候选和必要的准确引用。"
+            )
+        return ""
+
+    def _split_discovery_job(self, job):
+        for field in ("sources", "requirements"):
+            values = job[field]
+            if len(values) > 1:
+                middle = len(values) // 2
+                return [
+                    {**job, field: values[:middle]},
+                    {**job, field: values[middle:]},
+                ]
+        source = job["sources"][0]
+        text = source["text"]
+        if len(text) <= 256:
+            return []
+        middle = len(text) // 2
+        overlap = min(128, middle // 4)
+        return [
+            {**job, "sources": [{**source, "text": fragment}]}
+            for fragment in (text[: middle + overlap], text[middle - overlap :])
+        ]
+
+    def _verify_batch_reference(self, reference, sources):
+        return self.index.verify(reference) and any(
+            reference["source_id"] == source["id"]
+            and reference["quote"] in source["text"]
+            for source in sources
+        )
+
+    @staticmethod
+    def _split_alignment_job(job):
+        facts = job["facts"]
+        if len(facts) < 2:
+            return []
+        middle = len(facts) // 2
+        return [{**job, "facts": facts[:middle]}, {**job, "facts": facts[middle:]}]
+
+    @staticmethod
+    def _split_comparison_job(job):
+        if "left_facts" in job:
+            field = max(("left_facts", "right_facts"), key=lambda key: len(job[key]))
+            values = job[field]
+            if len(values) < 2:
+                return []
+            middle = len(values) // 2
+            return [{**job, field: values[:middle]}, {**job, field: values[middle:]}]
+        if "facts" in job:
+            facts = job["facts"]
+            if len(facts) < 3:
+                return []
+            middle = len(facts) // 2
+            left, right = facts[:middle], facts[middle:]
+            return [
+                *[{"facts": group} for group in (left, right) if len(group) > 1],
+                {"left_facts": left, "right_facts": right},
+            ]
+        observations = job["observations"]
+        if len(observations) < 2:
+            return []
+        middle = len(observations) // 2
+        return [
+            {**job, "observations": observations[:middle]},
+            {**job, "observations": observations[middle:]},
+        ]
+
     @staticmethod
     def _plan_text_batches(text, limit):
         groups, group, size = [], [], 0
@@ -563,7 +675,13 @@ class EvidenceAgent:
             self.state["next"] = "align"
             return
         chunk, requirements = jobs[cursor]
-        ids = {b.id for b in chunk}
+        job = self._stage_job(
+            "discover",
+            {"sources": [b.as_dict() for b in chunk], "requirements": requirements},
+        )
+        sources = job["sources"]
+        batch_requirements = job["requirements"]
+        ids = {source["id"] for source in sources}
         reusable = (
             self.shared_facts.get(self.fact_key, ids)
             if self._uses_strategy("consistency", "cross_document", "cross_language")
@@ -572,30 +690,35 @@ class EvidenceAgent:
         reusable = [
             fact
             for fact in reusable
-            if self.index.verify(fact["reference"], allowed=ids)
+            if self._verify_batch_reference(fact["reference"], sources)
         ]
-        discovery = self._ask(
-            Discovery,
-            "逐一检查本批来源，covered_source_ids 必须恰好覆盖本批所有 id。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。",
-            {
-                "strategy": self.strategy,
-                "global_checks": self.state["global_checks"],
-                "extract_facts": self._uses_strategy(
-                    "consistency", "cross_document", "cross_language"
-                ),
-                "profile": self.state["plans"],
-                "requirements": requirements,
-                "sources": [b.as_dict() for b in chunk],
-                "shared_facts": reusable,
-                "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
-            },
-        )
+        try:
+            discovery = self._ask(
+                Discovery,
+                "逐一检查本批来源，covered_source_ids 必须恰好覆盖本批所有 id。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。"
+                + self._compact_instruction(job),
+                {
+                    "strategy": self.strategy,
+                    "global_checks": self.state["global_checks"],
+                    "extract_facts": self._uses_strategy(
+                        "consistency", "cross_document", "cross_language"
+                    ),
+                    "profile": self.state["plans"],
+                    "requirements": batch_requirements,
+                    "sources": sources,
+                    "shared_facts": reusable,
+                    "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
+                },
+            )
+        except IncompleteResponse as exc:
+            self._recover_stage_job("discover", job, self._split_discovery_job, exc)
+            return
         data = discovery.model_dump(mode="json")
         if set(data["covered_source_ids"]) != ids or len(
             data["covered_source_ids"]
         ) != len(ids):
             raise LLMError("候选生成未完整覆盖本批来源，检查项未完成")
-        requested = {r["id"] for r in requirements}
+        requested = {r["id"] for r in batch_requirements}
         observed = [o["requirement_id"] for o in data["observations"]]
         if requested and (
             set(observed) != requested or len(observed) != len(requested)
@@ -603,7 +726,7 @@ class EvidenceAgent:
             raise LLMError("候选生成未逐项返回本批业务要求的覆盖观察")
         for fact in reusable + data["facts"]:
             Fact.model_validate(fact)
-            if self.index.verify(fact["reference"], allowed=ids):
+            if self._verify_batch_reference(fact["reference"], sources):
                 if fact not in self.state["facts"]:
                     self.state["facts"].append(fact)
             else:
@@ -613,7 +736,7 @@ class EvidenceAgent:
             if observation["requirement_id"] not in requested:
                 raise LLMError("覆盖观察引用了本批未提供的要求")
             if any(
-                not self.index.verify(ref, allowed=ids)
+                not self._verify_batch_reference(ref, sources)
                 for ref in observation["evidence"]
             ):
                 observation["status"] = "uncertain"
@@ -623,20 +746,26 @@ class EvidenceAgent:
                 observation["status"] = "uncertain"
             observation["checked_source_ids"] = sorted(ids)
             self.state["observations"].append(observation)
-            covered = self.state["requirement_coverage"].setdefault(
-                observation["requirement_id"], []
-            )
-            covered.extend(source_id for source_id in ids if source_id not in covered)
         for candidate in data["candidates"]:
             if any(r not in requested for r in candidate["requirement_ids"]):
                 raise LLMError("候选引用了本批未提供的业务要求")
             self._add_candidate(candidate)
-        self.state["discover_cursor"] += 1
+        if not self._finish_stage_job("discover"):
+            self.state["next"] = "discover"
+            return
+        original_ids = {block.id for block in chunk}
+        for requirement in requirements:
+            covered = self.state["requirement_coverage"].setdefault(
+                requirement["id"], []
+            )
+            covered.extend(
+                source_id for source_id in original_ids if source_id not in covered
+            )
         batches_per_chunk = len(self._pack(self.state["requirements"]) or [[]])
         if self.state["discover_cursor"] % batches_per_chunk == 0:
             self.state["checked_ids"].extend(
                 source_id
-                for source_id in ids
+                for source_id in original_ids
                 if source_id not in self.state["checked_ids"]
             )
         self.state["next"] = (
@@ -661,25 +790,31 @@ class EvidenceAgent:
         )
         cursor = self.state.get("align_cursor", 0)
         if cursor < len(jobs):
-            result = self._ask(
-                Alignment,
-                "把每项事实的 attribute 归一到中文属性名称。同义属性和不同语种的对应属性使用同一个 attribute_key；含义不同的属性保持不同名称。优先复用已有词汇，仅归一属性，不合并对象、条件或版本。keys 必须恰好覆盖每个 fact_id。",
-                {
-                    "facts": jobs[cursor],
-                    "existing_keys": sorted(
-                        set(self.state.get("fact_keys", {}).values())
-                    ),
-                },
-            )
+            job = self._stage_job("align", {"facts": jobs[cursor]})
+            try:
+                result = self._ask(
+                    Alignment,
+                    "把每项事实的 attribute 归一到中文属性名称。同义属性和不同语种的对应属性使用同一个 attribute_key；含义不同的属性保持不同名称。优先复用已有词汇，仅归一属性，不合并对象、条件或版本。keys 必须恰好覆盖每个 fact_id。"
+                    + self._compact_instruction(job),
+                    {
+                        "facts": job["facts"],
+                        "existing_keys": sorted(
+                            set(self.state.get("fact_keys", {}).values())
+                        ),
+                    },
+                )
+            except IncompleteResponse as exc:
+                self._recover_stage_job("align", job, self._split_alignment_job, exc)
+                return
             keys = result.model_dump(mode="json")["keys"]
             if {key["fact_id"] for key in keys} != {
-                fact["fact_id"] for fact in jobs[cursor]
-            } or len(keys) != len(jobs[cursor]):
+                fact["fact_id"] for fact in job["facts"]
+            } or len(keys) != len(job["facts"]):
                 raise LLMError("全局属性对齐未覆盖全部事实")
             self.state.setdefault("fact_keys", {}).update(
                 {key["fact_id"]: key["attribute_key"] for key in keys}
             )
-            self.state["align_cursor"] = cursor + 1
+            self._finish_stage_job("align")
         self.state["next"] = (
             "align" if self.state.get("align_cursor", 0) < len(jobs) else "compare"
         )
@@ -746,11 +881,24 @@ class EvidenceAgent:
         jobs = self._comparison_jobs()
         cursor = self.state["compare_cursor"]
         if cursor < len(jobs):
-            result = self._ask(
-                Comparison,
-                "进行全局对照，核实对象、用途、版本、条件和单位。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，只生成待审查候选。缺失候选必须对应已提供的业务要求，且观察不能被其他章节已有内容解释。覆盖不完整时保持待核实。",
-                {"strategy": self.strategy, **jobs[cursor]},
-            )
+            job = self._stage_job("compare", jobs[cursor])
+            try:
+                result = self._ask(
+                    Comparison,
+                    "进行全局对照，核实对象、用途、版本、条件和单位。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，只生成待审查候选。left_facts 和 right_facts 同时提供时，仅对照两组之间的事实，各组内部另行检查。缺失候选必须对应已提供的业务要求，且观察不能被其他章节已有内容解释。覆盖不完整时保持待核实。"
+                    + self._compact_instruction(job),
+                    {
+                        "strategy": self.strategy,
+                        **{
+                            key: value
+                            for key, value in job.items()
+                            if key != "compact_retry"
+                        },
+                    },
+                )
+            except IncompleteResponse as exc:
+                self._recover_stage_job("compare", job, self._split_comparison_job, exc)
+                return
             for candidate in result.model_dump(mode="json")["candidates"]:
                 if any(
                     r not in {req["id"] for req in self.state["requirements"]}
@@ -758,20 +906,25 @@ class EvidenceAgent:
                 ):
                     raise LLMError("全局候选引用了未提供的业务要求")
                 self._add_candidate(candidate)
-            self.state["compare_cursor"] += 1
+            self._finish_stage_job("compare")
         self.state["next"] = (
             "compare" if self.state["compare_cursor"] < len(jobs) else "review"
         )
 
     def _review_initial(self):
         remaining = self.state["candidates"][self.state["review_cursor"] :]
-        batch = remaining[: self.options.review_batch_size]
+        batch = remaining[
+            : self.state.get("review_batch_size", self.options.review_batch_size)
+        ]
         sources = {}
         for candidate in batch:
             for ref in candidate["evidence"]:
                 if self.index.verify(ref):
                     for source in self.index.context(ref["source_id"], 1):
                         sources[source["id"]] = source
+        for source_id in self.state.get("review_recovery_sources", []):
+            if source_id in self.index.by_id:
+                sources.setdefault(source_id, self.index.by_id[source_id].as_dict())
         context_limit = max(4000, self.max_input // 3)
         selected = []
         for source in sources.values():
@@ -801,6 +954,51 @@ class EvidenceAgent:
         )
 
     def _review(self):
+        initial_round = self.state["review_round"]
+        try:
+            self._review_step()
+        except IncompleteResponse as exc:
+            if exc.finish_reason != "length":
+                raise
+            self.state["review_round"] = initial_round
+            if len(self.state["review_batch"]) > 1:
+                self.state.setdefault(
+                    "review_recovery_end",
+                    self.state["review_cursor"] + len(self.state["review_batch"]),
+                )
+                self.state["review_batch_size"] = max(
+                    1, len(self.state["review_batch"]) // 2
+                )
+                sources = self.state.setdefault("review_recovery_sources", [])
+                sources.extend(
+                    s for s in self.state["seen_sources"] if s not in sources
+                )
+                self.state.update(
+                    review_batch=[], review_round=0, messages=[], pending_actions=[]
+                )
+                self.state["review_compact_retry"] = False
+                diagnostic = "候选复核输出被截断，已缩小复核批次并保留已读取的证据"
+            elif not self.state.get("review_compact_retry"):
+                self.state["review_compact_retry"] = True
+                self.state["messages"].append(
+                    {
+                        "role": "user",
+                        "content": "本批输出长度受限，请精简推理说明并使用紧凑 JSON；"
+                        "保留当前候选的判断和必要的准确原文引用，每轮最多请求一个补充取证工具。",
+                    }
+                )
+                diagnostic = "候选复核输出被截断，正在执行一次精简输出重试"
+            else:
+                raise IncompleteResponse(
+                    "单个候选复核在精简重试后仍被模型服务截断（finish_reason=length），"
+                    "检查未完成，已保留完成的审查结果。",
+                    finish_reason="length",
+                ) from exc
+            self.state["diagnostics"].append(diagnostic)
+            self.state["next"] = "review"
+            self.persist()
+
+    def _review_step(self):
         if self.state["review_cursor"] >= len(self.state["candidates"]):
             self.state["next"] = "finalize"
             return
@@ -1042,8 +1240,16 @@ class EvidenceAgent:
 
     def _finish_batch(self):
         self.state["review_cursor"] += len(self.state["review_batch"])
+        if self.state["review_cursor"] >= self.state.get("review_recovery_end", 0):
+            self.state.pop("review_recovery_end", None)
+            self.state.pop("review_recovery_sources", None)
         self.state.update(
-            review_batch=[], review_round=0, messages=[], seen_sources=[], next="review"
+            review_batch=[],
+            review_round=0,
+            messages=[],
+            seen_sources=[],
+            review_compact_retry=False,
+            next="review",
         )
 
     def _finalize(self):

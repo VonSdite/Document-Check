@@ -22,7 +22,13 @@ class AgentHTTPTest(unittest.TestCase):
     def setUp(self):
         self.payloads = []
         payloads = self.payloads
-        self.behavior = {"truncate_plan": False}
+        self.behavior = {
+            "truncate_plan": False,
+            "truncate_discovery": False,
+            "truncate_review": False,
+            "long_thinking": False,
+            "per_source_candidates": False,
+        }
         behavior = self.behavior
 
         class Handler(BaseHTTPRequestHandler):
@@ -68,23 +74,39 @@ class AgentHTTPTest(unittest.TestCase):
                             behavior["truncate_plan"] = False
                             reason = "length"
                     elif title == "Discovery":
+                        sources = context["sources"]
+                        groups = (
+                            [[source] for source in sources]
+                            if behavior["per_source_candidates"]
+                            else [sources]
+                        )
                         data = discovery(
                             context,
                             candidates=[
                                 candidate(
                                     [
                                         {"source_id": s["id"], "quote": s["text"]}
-                                        for s in context["sources"]
+                                        for s in group
                                     ]
                                 )
+                                for group in groups
                             ],
                         )
+                        if behavior["truncate_discovery"] and len(sources) > 1:
+                            reason = "length"
                     elif context.get("candidates"):
-                        c = context["candidates"][0]
                         data = {
                             "actions": [],
-                            "decisions": [decision(c["id"], c["evidence"])],
+                            "decisions": [
+                                decision(c["id"], c["evidence"])
+                                for c in context["candidates"]
+                            ],
                         }
+                        if (
+                            behavior["truncate_review"]
+                            and len(context["candidates"]) > 1
+                        ):
+                            reason = "length"
                     else:
                         data = {"summary": "未发现问题", "items": []}
                     message = {"content": json.dumps(data, ensure_ascii=False)}
@@ -98,6 +120,19 @@ class AgentHTTPTest(unittest.TestCase):
                         "usage": {"prompt_tokens": 100, "completion_tokens": 20},
                     },
                 ]
+                if behavior["long_thinking"]:
+                    behavior["long_thinking"] = False
+                    frames.insert(
+                        0,
+                        {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"reasoning_content": "思考" * 70000},
+                                }
+                            ]
+                        },
+                    )
                 raw = (
                     "\n".join(
                         "data: " + json.dumps(frame, ensure_ascii=False)
@@ -209,6 +244,67 @@ class AgentHTTPTest(unittest.TestCase):
         for payload in self.payloads:
             self.assertNotIn("max_completion_tokens", payload)
             self.assertNotIn("max_tokens", payload)
+
+    def test_long_thinking_over_http_completes_and_records_actual_usage(self):
+        self.behavior["long_thinking"] = True
+        agent = EvidenceAgent(
+            index=DocumentIndex(
+                [{"filename": "a.txt", "text": "设备A电压220V", "text_complete": True}]
+            ),
+            item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+            task_type="document_check",
+            connection=self.connection,
+            options=AgentOptions(protocol="structured"),
+            store=MemoryCheckpointStore(),
+            ensure_active=lambda: None,
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["report"]["items"]), 1)
+        self.assertTrue(result["metadata"]["usage_complete"])
+        self.assertEqual(result["metadata"]["model_calls"], 3)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 60)
+
+    def test_discovery_and_review_length_recovery_over_http_preserves_usage(self):
+        for stage in ("discovery", "review"):
+            with self.subTest(stage=stage):
+                self.behavior["truncate_discovery"] = stage == "discovery"
+                self.behavior["truncate_review"] = stage == "review"
+                self.behavior["per_source_candidates"] = stage == "review"
+                agent = EvidenceAgent(
+                    index=DocumentIndex(
+                        [
+                            {
+                                "filename": "a.txt",
+                                "text": "电压220V\n电压110V",
+                                "text_complete": True,
+                            }
+                        ]
+                    ),
+                    item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+                    task_type="document_check",
+                    connection=self.connection,
+                    options=AgentOptions(protocol="structured"),
+                    store=MemoryCheckpointStore(),
+                    ensure_active=lambda: None,
+                )
+                result = agent.run()
+                self.assertEqual(result["error"], "")
+                self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+                self.assertEqual(len(result["report"]["items"]), 2)
+                self.assertEqual(result["metadata"]["model_calls"], 5)
+                self.assertEqual(result["metadata"]["known_output_tokens"], 100)
+                self.assertTrue(result["metadata"]["usage_complete"])
+                self.assertEqual(
+                    sum(
+                        "length" in request["error"]
+                        for request in result["metadata"]["requests"]
+                    ),
+                    1,
+                )
+                for payload in self.payloads:
+                    self.assertNotIn("max_completion_tokens", payload)
+                    self.assertNotIn("max_tokens", payload)
 
 
 if __name__ == "__main__":

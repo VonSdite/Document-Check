@@ -136,6 +136,10 @@ class AgentModel:
                         "模型响应被内容过滤中断（finish_reason=content_filter）",
                         finish_reason="content_filter",
                     )
+                if any(
+                    not c["id"] or not c["function"]["name"] for c in turn.tool_calls
+                ):
+                    raise LLMError("工具调用缺少标识或函数名")
                 if not turn.content and not turn.tool_calls:
                     raise IncompleteResponse("模型未返回可校验的正文或工具调用")
                 self.after_request(payload, turn, time.monotonic() - started, None)
@@ -329,7 +333,7 @@ class AgentModel:
 
     def _collect(self, frames, request_id):
         turn, calls = AgentTurn(), {}
-        output_chars, reasoning_chars = 0, 0
+        content_parts = []
         finished = False
         for frame in frames:
             self.ensure_active()
@@ -348,14 +352,12 @@ class AgentModel:
                     raise IncompleteResponse("模型拒绝了当前检查请求")
                 text = _extract_chat_content({"choices": [{"message": message}]})
                 if text:
-                    turn.content += text
-                    output_chars += len(text)
+                    content_parts.append(text)
                     if self.on_output:
                         self.on_output(
                             {"kind": "content", "text": text, "stream": request_id}
                         )
                 _, reasoning = _extract_reasoning(message)
-                reasoning_chars += len(reasoning)
                 if reasoning and self.on_output:
                     self.on_output(
                         {"kind": "thinking", "text": reasoning, "stream": request_id}
@@ -377,15 +379,11 @@ class AgentModel:
                     for key in ("name", "arguments"):
                         value = str(function.get(key) or "")
                         call["function"][key] += value
-                        output_chars += len(value)
                 if choice.get("finish_reason"):
                     turn.finish_reason = str(choice["finish_reason"])
                     finished = True
-            if output_chars > 1048576 or reasoning_chars > 128000:
-                raise IncompleteResponse("模型输出超过单次响应限制")
         if not finished:
             raise IncompleteResponse("模型流未返回完成标识")
+        turn.content = "".join(content_parts)
         turn.tool_calls = [calls[key] for key in sorted(calls)]
-        if any(not c["id"] or not c["function"]["name"] for c in turn.tool_calls):
-            raise LLMError("工具调用缺少标识或函数名")
         return turn
