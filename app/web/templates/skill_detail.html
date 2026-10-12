@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ skill.name }} - 专项 skill{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div><h1>{{ skill.name }}</h1><p>专项 skill · v{{ skill.version }} · {{ '已启用' if skill.enabled else '草稿 / 已停用' }}</p></div>
+  <a class="secondary-button" href="{{ url_for(rules_endpoint, _anchor='specialist-skills') }}">返回公共规则</a>
+</section>
+<section class="panel">
+  <h2>判断规则</h2>
+  <p class="muted">填写可复用的判断方法。现有检查项继续执行；启用专项前至少录入一条已人工确认的真实问题案例。</p>
+  <form method="post" class="stack-form">
+    <input type="hidden" name="action" value="save_skill">
+    <input type="hidden" name="version" value="{{ skill.version }}">
+    <div class="form-grid">
+      <label>专项名称<input name="name" value="{{ skill.name }}" maxlength="120" required></label>
+      <label>适用范围说明<input name="description" value="{{ skill.description or '' }}"></label>
+    </div>
+    {% for key, label in skill_fields %}
+    <label>{{ label }}<textarea name="{{ key }}" rows="3" maxlength="4000" required>{{ definition[key] or '' }}</textarea></label>
+    {% endfor %}
+    <div class="form-actions">
+      <label class="switch-line"><input type="checkbox" name="enabled"{% if skill.enabled %} checked{% endif %}>启用专项检查</label>
+      <button class="primary-button" type="submit">保存规则</button>
+    </div>
+  </form>
+  <details class="result-raw-details"><summary>查看实际执行提示词</summary><pre class="model-output-text">{{ preview }}</pre></details>
+</section>
+<section class="panel" id="new-case">
+  <h2>新增问题案例或正确反例</h2>
+  <p class="muted">保留原文和必要上下文。一致性问题提供两处证据；缺失问题提供完整验证文本并核对全文。期望结果说明应报告的具体问题，或说明反例应当放行。</p>
+  {% if source %}<p class="report-limit-notice">已带入来源任务 #{{ source.source_task_id }} 的报告证据。请补充确认理由、文档版本和适用条件。</p>{% endif %}
+  <form method="post" class="stack-form">
+    <input type="hidden" name="action" value="add_case">
+    <input type="hidden" name="version" value="{{ skill.version }}">
+    {% for key, value in source.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+    {% set case_data = case_form %}{% include "_skill_case_fields.html" %}
+    <div class="form-actions"><button class="primary-button" type="submit">保存案例</button></div>
+  </form>
+</section>
+<section class="panel">
+  <h2>案例库与验证</h2>
+  <p class="muted">执行验证会使用所选模型创建独立任务，读取完整验证文本，并排除当前案例的提示词示例。打开报告后对照期望结果人工复核。每次正式检查最多引用两条真实问题和两条正确反例。</p>
+  {% for case in cases %}
+  <details class="result-raw-details" id="case-{{ case.id }}">
+    <summary>{{ case.data.title }} · {{ '真实问题' if case.data.kind == 'positive' else '正确反例' }} · {{ '已确认' if case.data.reviewed else '待确认' }}</summary>
+    <form method="post" class="stack-form">
+      <input type="hidden" name="action" value="save_case">
+      <input type="hidden" name="case_id" value="{{ case.id }}">
+      <input type="hidden" name="version" value="{{ skill.version }}">
+      {% set case_data = case.data %}{% include "_skill_case_fields.html" %}
+      <div class="form-actions"><button class="primary-button" type="submit">保存案例修改</button></div>
+    </form>
+    {% if case.validation_task_id %}
+    <p>上次验证：任务 #{{ case.validation_task_id }} · v{{ case.validation_version }}{% if case.validation_version != skill.version %} · 请使用当前版本重新验证{% endif %}
+    {% if case.validation_url %}<a href="{{ case.validation_url }}">查看验证报告</a>{% endif %}</p>
+    {% endif %}
+    <form method="post" class="stack-form" data-prevent-double-submit="true">
+      <input type="hidden" name="action" value="validate_case">
+      <input type="hidden" name="case_id" value="{{ case.id }}">
+      <input type="hidden" name="version" value="{{ skill.version }}">
+      <label>验证模型<select name="model_id" required>
+        {% for model in models %}<option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}</option>{% else %}<option value="">请先配置可用模型</option>{% endfor %}
+      </select></label>
+      <div class="form-actions"><button class="secondary-button" type="submit"{% if not models %} disabled{% endif %}>执行案例验证</button></div>
+    </form>
+    <form method="post">
+      <input type="hidden" name="action" value="delete_case"><input type="hidden" name="case_id" value="{{ case.id }}"><input type="hidden" name="version" value="{{ skill.version }}">
+      <button class="small-button danger" type="submit" data-confirm-click="确认删除该案例？">删除案例</button>
+    </form>
+  </details>
+  {% else %}<p class="muted">录入真实问题和正确反例后，可以执行案例验证。</p>{% endfor %}
+</section>
+<section class="panel">
+  <form method="post"><input type="hidden" name="action" value="delete_skill"><input type="hidden" name="version" value="{{ skill.version }}"><button class="small-button danger" type="submit" data-confirm-click="确认删除此专项 skill 及案例？已提交任务继续使用其规则快照。">删除专项 skill</button></form>
+</section>
+{% endblock %}

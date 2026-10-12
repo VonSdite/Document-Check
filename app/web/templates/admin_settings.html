@@ -93,6 +93,13 @@
       每次模型回复最多问题条数（系统硬上限 {{ max_issue_output_limit }}）
       <input name="issue_output_limit" type="number" min="1" max="{{ max_issue_output_limit }}" step="1" value="{{ issue_output_limit }}" required>
     </label>
+    <div class="form-field settings-task-report-limit-field">
+      <span class="field-with-help">
+        <span class="field-label">含专项 skill 的单任务报告条数上限</span>
+        <button class="help-tip" type="button" aria-label="专项任务报告上限说明" data-tip="0 表示展示全部条目。填写正整数时，含专项 skill 的任务会在跨检查项合并后，按判定类型、证据可信度和严重程度限制整个任务的展示条数；原始结果和人工反馈继续保留。">?</button>
+      </span>
+      <input name="task_report_limit" type="number" min="0" max="{{ max_task_report_limit }}" step="1" value="{{ task_report_limit }}" required>
+    </div>
     <div class="form-field settings-task-retention-field">
       <span class="field-with-help">
         <span class="field-label">任务数据保留天数</span>
@@ -276,6 +283,41 @@
   <div class="empty-state compact">
     <h3>暂无误报忽略规则</h3>
     <p>在报告页选择“不认可”，原因为模型误报、模型幻觉或不适用时，系统会生成候选规则。分类不准确和证据不足仅保存为反馈。</p>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel settings-section" id="specialist-skills">
+  <div class="settings-section-head">
+    <div>
+      <h2>专项 skill</h2>
+      <p>现有检查项负责宽泛检查，专项 skill 固化已确认的问题模式。录入规则、真实问题和正确反例后启用。</p>
+    </div>
+  </div>
+  {% if skill_case_source %}<p class="report-limit-notice">请选择要接收报告案例的专项 skill，打开后补充确认理由和适用条件。</p>{% endif %}
+  <form method="post" class="stack-form">
+    <input type="hidden" name="action" value="create_skill">
+    <div class="form-grid">
+      <label>专项名称<input name="name" maxlength="120" placeholder="例如：参数默认值冲突" required></label>
+      <label>适用范围说明<input name="description" placeholder="显示在创建任务页面"></label>
+    </div>
+    <div class="form-actions"><button class="primary-button" type="submit">新增专项 skill 草稿</button></div>
+  </form>
+  {% if specialist_skills %}
+  <div class="table-wrap">
+    <table class="settings-ip-table">
+      <thead><tr><th>专项 skill</th><th>状态</th><th>版本</th><th>案例</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for skill in specialist_skills %}
+      <tr>
+        <td>{{ skill.name }}<div class="subline">{{ skill.description or '' }}</div></td>
+        <td>{{ '已启用' if skill.enabled else '草稿 / 已停用' }}</td>
+        <td>v{{ skill.version }}</td><td>{{ skill.case_count }}</td>
+        <td><a class="small-button" href="{{ url_for('admin_skill' if is_superadmin else 'user_skill', skill_id=skill.id, **skill_case_source) }}">{{ '录入报告案例' if skill_case_source else '规则与案例' }}</a></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% endif %}
 </section>

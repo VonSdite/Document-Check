@@ -20,7 +20,12 @@ from app.checks.catalog import (
     _next_check_item_sort_order,
     _reorder_check_items,
 )
-from app.contracts.limits import MAX_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
+from app.checks.skills import create_skill, list_skills
+from app.contracts.limits import (
+    MAX_ISSUE_OUTPUT_LIMIT,
+    MAX_TASK_REPORT_LIMIT,
+    normalize_issue_output_limit,
+)
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -53,6 +58,7 @@ from app.tasks.submission import _consistency_task_title
 from app.web.auth import (
     _ip_username_management_enabled,
     admin_required,
+    is_superadmin,
     permission_required,
 )
 from app.web.common import _max_task_processes, _wants_json_response
@@ -141,8 +147,37 @@ def register_settings_routes(app):
                 "reorder_check_items",
                 "delete_check_item",
                 "prompt",
+                "create_skill",
             }:
                 abort(403, description="运行设置仅限超级管理员修改。")
+            if action == "create_skill":
+                try:
+                    skill_id = create_skill(
+                        db,
+                        request.form.get("name"),
+                        request.form.get("description", ""),
+                    )
+                    db.commit()
+                except ValueError as error:
+                    flash(str(error), "error")
+                    return redirect(
+                        url_for(_settings_endpoint(), _anchor="specialist-skills")
+                    )
+                return redirect(
+                    url_for(
+                        "admin_skill" if is_superadmin() else "user_skill",
+                        skill_id=skill_id,
+                        **{
+                            key: request.args[key]
+                            for key in (
+                                "source_task_id",
+                                "source_result_code",
+                                "source_item_id",
+                            )
+                            if request.args.get(key)
+                        },
+                    )
+                )
             if action == "concurrency":
                 try:
                     global_concurrency = int(
@@ -176,6 +211,13 @@ def register_settings_routes(app):
                             )
                         )
                     )
+                    task_report_limit = int(
+                        request.form.get(
+                            "task_report_limit", get_setting("task_report_limit", 0)
+                        )
+                    )
+                    if not 0 <= task_report_limit <= MAX_TASK_REPORT_LIMIT:
+                        raise ValueError("专项任务报告上限无效")
                     task_file_retention_days = max(
                         0,
                         int(
@@ -187,7 +229,7 @@ def register_settings_routes(app):
                     )
                 except ValueError:
                     flash(
-                        "任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。",
+                        f"任务设置必须是整数；专项任务报告上限为 0-{MAX_TASK_REPORT_LIMIT}，保留天数可为 0。",
                         "error",
                     )
                     return redirect(url_for(_settings_endpoint()))
@@ -203,6 +245,7 @@ def register_settings_routes(app):
                 set_setting("check_item_concurrency", check_item_concurrency)
                 set_setting("image_page_check_max_pages", image_page_check_max_pages)
                 set_setting("issue_output_limit", issue_output_limit)
+                set_setting("task_report_limit", task_report_limit)
                 set_setting("task_file_retention_days", task_file_retention_days)
                 flash("任务设置已保存。", "success")
                 return redirect(url_for(_settings_endpoint()))
@@ -416,6 +459,13 @@ def register_settings_routes(app):
             ):
                 flash("检查项不存在，无法保存。", "error")
                 return redirect(url_for(_settings_endpoint()))
+            if (
+                db.execute(
+                    "SELECT kind FROM check_items WHERE id=?", (item_id,)
+                ).fetchone()["kind"]
+                == "specialist"
+            ):
+                abort(400, description="请在专项 skill 页面编辑结构化规则。")
             db.execute(
                 """
                 UPDATE check_items
@@ -428,7 +478,11 @@ def register_settings_routes(app):
             flash("检查项提示词已保存。", "success")
             return redirect(url_for(_settings_endpoint()))
 
-        document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
+        document_check_items = [
+            item
+            for item in _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
+            if item["kind"] != "specialist"
+        ]
         consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
         language_consistency_check_items = _check_items_for_task_type(
             db, LANGUAGE_CONSISTENCY_TASK_TYPE
@@ -443,6 +497,12 @@ def register_settings_routes(app):
             "admin_settings.html",
             rules_only=rules_only,
             active_nav="rules" if rules_only else "settings",
+            specialist_skills=list_skills(db),
+            skill_case_source={
+                key: request.args[key]
+                for key in ("source_task_id", "source_result_code", "source_item_id")
+                if request.args.get(key)
+            },
             check_item_groups=[
                 {
                     "task_type": DOCUMENT_TASK_TYPE,
@@ -525,6 +585,8 @@ def register_settings_routes(app):
                 "issue_output_limit", ISSUE_OUTPUT_LIMIT_DEFAULT
             ),
             max_issue_output_limit=MAX_ISSUE_OUTPUT_LIMIT,
+            task_report_limit=get_setting("task_report_limit", 0),
+            max_task_report_limit=MAX_TASK_REPORT_LIMIT,
             task_file_retention_days=get_setting(
                 "task_file_retention_days", TASK_FILE_RETENTION_DAYS_DEFAULT
             ),

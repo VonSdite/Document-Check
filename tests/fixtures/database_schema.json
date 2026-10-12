@@ -25,6 +25,12 @@
   ],
   [
     "index",
+    "idx_skill_cases_check",
+    "skill_cases",
+    "CREATE INDEX idx_skill_cases_check ON skill_cases(check_item_id, id)"
+  ],
+  [
+    "index",
     "idx_tasks_ip_created",
     "tasks",
     "CREATE INDEX idx_tasks_ip_created ON tasks(ip, created_at DESC)"
@@ -123,7 +129,7 @@
     "table",
     "check_items",
     "check_items",
-    "CREATE TABLE check_items (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL DEFAULT 'document_check',\n            code TEXT NOT NULL UNIQUE,\n            name TEXT NOT NULL,\n            description TEXT,\n            prompt TEXT NOT NULL,\n            enabled INTEGER NOT NULL DEFAULT 1,\n            sort_order INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+    "CREATE TABLE check_items (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL DEFAULT 'document_check',\n            code TEXT NOT NULL UNIQUE,\n            name TEXT NOT NULL,\n            description TEXT,\n            prompt TEXT NOT NULL,\n            kind TEXT NOT NULL DEFAULT 'general',\n            definition_json TEXT,\n            version INTEGER NOT NULL DEFAULT 1,\n            enabled INTEGER NOT NULL DEFAULT 1,\n            sort_order INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
   ],
   [
     "table",
@@ -148,6 +154,12 @@
     "settings",
     "settings",
     "CREATE TABLE settings (\n            key TEXT PRIMARY KEY,\n            value TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
+    "skill_cases",
+    "skill_cases",
+    "CREATE TABLE skill_cases (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            check_item_id INTEGER NOT NULL REFERENCES check_items(id) ON DELETE CASCADE,\n            case_json TEXT NOT NULL,\n            validation_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,\n            validation_version INTEGER,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
   ],
   [
     "table",

@@ -104,6 +104,10 @@ Uvicorn 使用 `log_config=None` 保留应用日志配置，每个 Web worker �
 
 ## 回归验证
 
+`checks/skills.py` 管理单文档专项规则、案例和提示词编译，`web/skills.py` 提供规则编辑、报告案例导入及独立验证入口。任务提交保存规则版本和实际提示词，任务执行与重试读取快照。`reporting/skill_duplicates.py` 按相同证据与描述合并专项重复条目，报告与导出共用处理结果。
+
+专项回归覆盖已有数据库初始化、草稿准入、正反例边界、示例数量限制、任务快照与规则删除、完整案例文本执行、规则权限、来源任务归属、跨检查项合并及人工反馈保留。操作方法见 [专项 skill 与问题案例](skills.md)。
+
 ```bash
 uv run ruff format .
 uv run ruff check .

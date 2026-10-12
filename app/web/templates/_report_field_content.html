@@ -3,6 +3,9 @@
 {% if field_value %}
 <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
 {% endif %}
+{% if field == 'description' and item.sources %}
+<div class="subline">共同发现：{% for source in item.sources %}{{ source.name }}{% if source.version %} v{{ source.version }}{% endif %}{{ '、' if not loop.last else '' }}{% endfor %}</div>
+{% endif %}
 {% if has_video_evidence and field == "location" %}
 <div class="video-evidence-times" aria-label="视频证据时间点">
   {% for ref in evidence_refs %}

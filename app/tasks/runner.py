@@ -522,6 +522,12 @@ def _run_check_items_concurrently(
                 error=CHECK_CANCELED_MESSAGE if canceled else error,
                 issue_output_limit=issue_output_limit,
             )
+            if item.get("kind") == "specialist":
+                result.update(
+                    kind="specialist",
+                    version=item["version"],
+                    task_report_limit=item.get("task_report_limit", 0),
+                )
             if execution:
                 result["execution"] = execution
             if canceled:
@@ -556,6 +562,12 @@ def _run_check_items_concurrently(
             item_cancel_event = check_events[item["code"]]
             execution = item_cancel_event.execution
             execution_meta = {"execution": execution} if execution else {}
+            if item.get("kind") == "specialist":
+                execution_meta.update(
+                    kind="specialist",
+                    version=item["version"],
+                    task_report_limit=item.get("task_report_limit", 0),
+                )
 
             def ensure_active():
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):

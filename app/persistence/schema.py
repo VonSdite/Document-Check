@@ -71,6 +71,9 @@ def init_db():
             name TEXT NOT NULL,
             description TEXT,
             prompt TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'general',
+            definition_json TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 1,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -118,6 +121,17 @@ def init_db():
             finished_at TEXT,
             source_files_cleaned_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS skill_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            check_item_id INTEGER NOT NULL REFERENCES check_items(id) ON DELETE CASCADE,
+            case_json TEXT NOT NULL,
+            validation_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+            validation_version INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_cases_check ON skill_cases(check_item_id, id);
 
         CREATE TABLE IF NOT EXISTS user_model_providers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,6 +241,9 @@ def init_db():
     _ensure_column(
         db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
+    _ensure_column(db, "check_items", "kind", "TEXT NOT NULL DEFAULT 'general'")
+    _ensure_column(db, "check_items", "definition_json", "TEXT")
+    _ensure_column(db, "check_items", "version", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(
         db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )

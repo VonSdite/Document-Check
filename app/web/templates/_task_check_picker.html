@@ -8,6 +8,7 @@
     <label class="check-chip">
       <input type="checkbox" name="checks" value="{{ item.id }}"{% if not check_first_only|default(false) or loop.first %} checked{% endif %} autocomplete="off">
       <span>{{ item.name }}</span>
+      {% if item.kind == 'specialist' %}<small class="status-pill">专项 v{{ item.version }}</small>{% endif %}
       <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
     </label>
     {% else %}

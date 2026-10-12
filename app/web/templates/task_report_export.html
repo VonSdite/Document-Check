@@ -113,11 +113,14 @@
         <div class="panel-head">
           <div>
             <h2>{{ result.name }}</h2>
+            {% if result.kind == 'specialist' %}<small>专项 v{{ result.version }}</small>{% endif %}
           </div>
         </div>
         {% if result.error %}
         <div class="error-box report-error">本检查项执行失败：{{ result.error }}</div>
         {% endif %}
+        {% if result.merged_report_items %}<p class="report-limit-notice">已合并 {{ result.merged_report_items|length }} 条跨检查项重复问题，来源保留在共同发现的问题中。</p>{% endif %}
+        {% if result.task_omitted_report_items %}<p class="report-limit-notice">任务报告上限为 {{ result.task_report_limit }} 条，本检查项省略 {{ result.task_omitted_report_items|length }} 条。</p>{% endif %}
         {% if result.report_items %}
         {% if result.result_summary %}
         <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>

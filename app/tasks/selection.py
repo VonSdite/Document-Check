@@ -2,6 +2,8 @@
 
 import json
 
+from app.checks.skills import check_snapshot
+from app.contracts.limits import normalize_task_report_limit
 from app.contracts.task_types import DOCUMENT_TASK_TYPE
 
 
@@ -55,7 +57,7 @@ def _task_check_items(db, task, task_type: str) -> list[dict]:
         return []
     params.append(task_type)
     return [
-        dict(row)
+        check_snapshot(db, row)
         for row in db.execute(
             f"""
             SELECT *
@@ -89,7 +91,23 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
         if not code or not name or not prompt or code in seen_codes:
             continue
         seen_codes.add(code)
-        items.append({"code": code, "name": name, "prompt": prompt})
+        snapshot = {"code": code, "name": name, "prompt": prompt}
+        if item.get("kind") == "specialist":
+            version = item.get("version")
+            if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+                continue
+            snapshot.update(
+                kind="specialist",
+                version=version,
+                definition=item.get("definition", {}),
+                example_case_ids=item.get("example_case_ids", []),
+                task_report_limit=normalize_task_report_limit(
+                    item.get("task_report_limit")
+                ),
+            )
+            if isinstance(item.get("validation_case_id"), int):
+                snapshot["validation_case_id"] = item["validation_case_id"]
+        items.append(snapshot)
     return items
 
 

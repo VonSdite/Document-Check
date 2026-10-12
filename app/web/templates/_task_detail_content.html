@@ -169,6 +169,7 @@
     <div class="panel-head">
       <div class="check-heading">
         <h2 class="check-title">{{ result.name }}</h2>
+        {% if result.kind == 'specialist' %}<span class="status-pill">专项 v{{ result.version }}</span>{% endif %}
         {% if task_editable %}
         <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消执行</button>
         <button type="button" class="small-button" data-retry-check="{{ result.code }}"{% if not result.can_retry %} hidden{% endif %}>重试</button>
@@ -193,6 +194,12 @@
     {% if result.error %}
     <div class="error-box report-error">{{ "本检查项已取消：" if result.canceled else "本检查项执行失败：" }}{{ result.error }}</div>
     {% endif %}
+    {% if result.merged_report_items %}
+    <div class="report-limit-notice">已合并 {{ result.merged_report_items|length }} 条跨检查项重复问题。
+      {% for merged in result.merged_report_items %}<span>见“{{ merged.merged_into.name }}”。</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if result.task_omitted_report_items %}<p class="report-limit-notice">任务报告上限为 {{ result.task_report_limit }} 条，本检查项省略 {{ result.task_omitted_report_items|length }} 条；原始模型结果继续保留。</p>{% endif %}
     {% if result.report_items %}
     {% if result.result_summary %}
     <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
@@ -228,6 +235,9 @@
             {% set field_value = item[field] %}
             <td class="report-field report-field-{{ field }}">
               {% include "_report_field_content.html" %}
+              {% if field == 'description' and task.task_type == 'document_check' and has_permission('rules.manage') %}
+              <a class="small-button" href="{{ url_for('admin_rules' if is_superadmin else 'user_rules', source_task_id=task.id, source_result_code=result.code, source_item_id=item.id, _anchor='specialist-skills') }}">固化为案例</a>
+              {% endif %}
             </td>
             {% endfor %}
             <td class="report-status-cell">
@@ -292,6 +302,9 @@
               {% set field_value = item[field] %}
               <td class="report-field report-field-{{ field }}">
                 {% include "_report_field_content.html" %}
+                {% if field == 'description' and task.task_type == 'document_check' and has_permission('rules.manage') %}
+                <a class="small-button" href="{{ url_for('admin_rules' if is_superadmin else 'user_rules', source_task_id=task.id, source_result_code=result.code, source_item_id=item.id, _anchor='specialist-skills') }}">固化为案例</a>
+                {% endif %}
               </td>
               {% endfor %}
               <td class="report-status-cell">

@@ -925,6 +925,11 @@ body.table-column-resize-active * {
   grid-row: 2;
 }
 
+.settings-task-report-limit-field {
+  grid-column: 1 / 4;
+  grid-row: 3;
+}
+
 .settings-task-cache {
   margin-top: 18px;
   padding-top: 5px;

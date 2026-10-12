@@ -126,6 +126,16 @@
     ]
   ],
   [
+    "/console/rules/skills/<int:skill_id>",
+    "admin_skill",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
     "/console/settings",
     "admin_settings",
     [
@@ -394,6 +404,16 @@
   [
     "/rules",
     "user_rules",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
+    "/rules/skills/<int:skill_id>",
+    "user_skill",
     [
       "GET",
       "HEAD",
