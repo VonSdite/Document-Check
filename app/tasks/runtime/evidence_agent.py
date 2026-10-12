@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -40,9 +41,27 @@ from app.documents.index import DocumentIndex
 from app.models.agent import AgentModel, AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError
 
+logger = logging.getLogger(__name__)
+
 
 class BudgetExceeded(LLMError):
     pass
+
+
+class CoverageMismatch(LLMError):
+    pass
+
+
+def _coverage_error(label, expected, returned):
+    expected, actual = set(expected), set(returned)
+    missing, unknown = expected - actual, actual - expected
+    duplicates = len(returned) - len(actual)
+    if missing or unknown or duplicates:
+        return CoverageMismatch(
+            f"{label}覆盖不匹配：应返回 {len(expected)} 个标识，实际 {len(returned)} 个；"
+            f"缺少 {len(missing)} 个、未知 {len(unknown)} 个、重复 {duplicates} 个"
+        )
+    return None
 
 
 class GraphState(TypedDict):
@@ -355,36 +374,55 @@ class EvidenceAgent:
         return True
 
     def _recover_stage_job(self, stage, job, split, error):
-        if error.finish_reason != "length":
+        truncated = (
+            isinstance(error, IncompleteResponse) and error.finish_reason == "length"
+        )
+        if not truncated and not isinstance(error, CoverageMismatch):
             raise error
         label = {"discover": "候选生成", "align": "属性对齐", "compare": "全局对照"}[
             stage
         ]
         pending = self.state.setdefault(f"{stage}_pending_jobs", [job])
         smaller = split(job)
+        reason = "输出被截断" if truncated else str(error)
         if smaller:
             pending[:1] = smaller
-            diagnostic = f"{label}输出被截断，已拆分当前批次继续处理"
+            diagnostic = f"{label}{reason}，已拆分当前批次继续处理"
         elif not job.get("compact_retry"):
             job["compact_retry"] = True
             pending[0] = job
-            diagnostic = f"{label}输出被截断，正在执行一次精简输出重试"
+            diagnostic = f"{label}{reason}，正在执行一次校正与精简输出重试"
         else:
+            if not truncated:
+                raise CoverageMismatch(
+                    f"{label}最小批次校正重试后仍然{error}，检查未完成，已保留完成的处理结果。"
+                ) from error
             raise IncompleteResponse(
                 f"{label}最小批次在精简重试后仍被模型服务截断（finish_reason=length），"
                 "检查未完成，已保留完成的处理结果。",
                 finish_reason="length",
             ) from error
-        self.state["diagnostics"].append(diagnostic)
+        self._record_recovery(diagnostic)
         self.state["next"] = stage
         self.persist()
+
+    def _record_recovery(self, diagnostic):
+        self.state["diagnostics"].append(diagnostic)
+        logger.warning(
+            "证据审查恢复 task_id=%s item=%s stage=%s detail=%s",
+            self.connection.get("task_id"),
+            self.item["code"],
+            self.state["next"],
+            diagnostic,
+        )
 
     @staticmethod
     def _compact_instruction(job):
         if job.get("compact_retry"):
             return (
-                "本批输出长度受限，请使用紧凑 JSON，精简说明并避免重复原文。"
+                "本批正在校正与精简重试，请使用紧凑 JSON，精简说明并避免重复原文。"
                 "保留全部检查目标、事实、候选和必要的准确引用。"
+                "完整返回本批输入要求的标识，每个标识恰好一次，包括最后一个；不得新增标识。"
             )
         return ""
 
@@ -695,7 +733,7 @@ class EvidenceAgent:
         try:
             discovery = self._ask(
                 Discovery,
-                "逐一检查本批来源，covered_source_ids 必须恰好覆盖本批所有 id。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。"
+                "逐一检查本批来源，covered_source_ids 必须完整返回 expected_source_ids，每个恰好一次，包括最后一个。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。"
                 + self._compact_instruction(job),
                 {
                     "strategy": self.strategy,
@@ -705,6 +743,7 @@ class EvidenceAgent:
                     ),
                     "profile": self.state["plans"],
                     "requirements": batch_requirements,
+                    "expected_source_ids": [source["id"] for source in sources],
                     "sources": sources,
                     "shared_facts": reusable,
                     "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
@@ -714,16 +753,28 @@ class EvidenceAgent:
             self._recover_stage_job("discover", job, self._split_discovery_job, exc)
             return
         data = discovery.model_dump(mode="json")
-        if set(data["covered_source_ids"]) != ids or len(
-            data["covered_source_ids"]
-        ) != len(ids):
-            raise LLMError("候选生成未完整覆盖本批来源，检查项未完成")
         requested = {r["id"] for r in batch_requirements}
         observed = [o["requirement_id"] for o in data["observations"]]
-        if requested and (
-            set(observed) != requested or len(observed) != len(requested)
+        source_error = _coverage_error("来源", ids, data["covered_source_ids"])
+        error = _coverage_error("业务要求", requested, observed)
+        if any(
+            r not in requested for c in data["candidates"] for r in c["requirement_ids"]
         ):
-            raise LLMError("候选生成未逐项返回本批业务要求的覆盖观察")
+            error = CoverageMismatch("候选引用了本批未提供的业务要求")
+        covered = set(data["covered_source_ids"])
+        partial = bool(
+            source_error
+            and covered
+            and covered < ids
+            and len(covered) == len(data["covered_source_ids"])
+        )
+        error = error or (source_error if not partial else None)
+        if error:
+            self._recover_stage_job("discover", job, self._split_discovery_job, error)
+            return
+        if partial:
+            sources = [source for source in sources if source["id"] in covered]
+            ids = covered
         for fact in reusable + data["facts"]:
             Fact.model_validate(fact)
             if self._verify_batch_reference(fact["reference"], sources):
@@ -750,6 +801,19 @@ class EvidenceAgent:
             if any(r not in requested for r in candidate["requirement_ids"]):
                 raise LLMError("候选引用了本批未提供的业务要求")
             self._add_candidate(candidate)
+        if partial:
+            pending = self.state.setdefault("discover_pending_jobs", [job])
+            pending[0] = {
+                **job,
+                "sources": [
+                    source for source in job["sources"] if source["id"] not in covered
+                ],
+            }
+            self._record_recovery(
+                f"{source_error}，已保留 {len(covered)} 个来源的处理结果，单独补查遗漏来源"
+            )
+            self.state["next"] = "discover"
+            return
         if not self._finish_stage_job("discover"):
             self.state["next"] = "discover"
             return
@@ -798,19 +862,23 @@ class EvidenceAgent:
                     + self._compact_instruction(job),
                     {
                         "facts": job["facts"],
+                        "expected_fact_ids": [fact["fact_id"] for fact in job["facts"]],
                         "existing_keys": sorted(
                             set(self.state.get("fact_keys", {}).values())
                         ),
                     },
                 )
-            except IncompleteResponse as exc:
+                keys = result.model_dump(mode="json")["keys"]
+                error = _coverage_error(
+                    "事实",
+                    [fact["fact_id"] for fact in job["facts"]],
+                    [key["fact_id"] for key in keys],
+                )
+                if error:
+                    raise error
+            except (IncompleteResponse, CoverageMismatch) as exc:
                 self._recover_stage_job("align", job, self._split_alignment_job, exc)
                 return
-            keys = result.model_dump(mode="json")["keys"]
-            if {key["fact_id"] for key in keys} != {
-                fact["fact_id"] for fact in job["facts"]
-            } or len(keys) != len(job["facts"]):
-                raise LLMError("全局属性对齐未覆盖全部事实")
             self.state.setdefault("fact_keys", {}).update(
                 {key["fact_id"]: key["attribute_key"] for key in keys}
             )
@@ -943,6 +1011,7 @@ class EvidenceAgent:
             "先独立阅读原文，核实候选的适用性并查找反证。confirmed 必须有直接证据且 applicable=yes；explained 表示原文或适用条件能够解释候选；insufficient 表示证据或覆盖不足。明确问题与表达建议沿用候选 kind，不把个人偏好作为错误。可通过 actions 请求工具，arguments 为工具参数的 JSON 字符串；使用原生工具时调用提供的函数。最终 decisions 必须恰好覆盖本批每个 candidate_id，actions 为空。",
             {
                 "candidates": batch,
+                "expected_candidate_ids": [candidate["id"] for candidate in batch],
                 "sources": selected,
                 "requirements": requirements,
                 "requirement_observations": [
@@ -957,9 +1026,13 @@ class EvidenceAgent:
         initial_round = self.state["review_round"]
         try:
             self._review_step()
-        except IncompleteResponse as exc:
-            if exc.finish_reason != "length":
+        except (IncompleteResponse, CoverageMismatch) as exc:
+            truncated = (
+                isinstance(exc, IncompleteResponse) and exc.finish_reason == "length"
+            )
+            if not truncated and not isinstance(exc, CoverageMismatch):
                 raise
+            reason = "输出被截断" if truncated else str(exc)
             self.state["review_round"] = initial_round
             if len(self.state["review_batch"]) > 1:
                 self.state.setdefault(
@@ -977,24 +1050,31 @@ class EvidenceAgent:
                     review_batch=[], review_round=0, messages=[], pending_actions=[]
                 )
                 self.state["review_compact_retry"] = False
-                diagnostic = "候选复核输出被截断，已缩小复核批次并保留已读取的证据"
+                diagnostic = f"候选复核{reason}，已缩小复核批次并保留已读取的证据"
             elif not self.state.get("review_compact_retry"):
                 self.state["review_compact_retry"] = True
                 self.state["messages"].append(
                     {
                         "role": "user",
-                        "content": "本批输出长度受限，请精简推理说明并使用紧凑 JSON；"
+                        "content": "本批正在校正与精简重试，请精简说明并使用紧凑 JSON；"
                         "保留当前候选的判断和必要的准确原文引用，每轮最多请求一个补充取证工具。",
                     }
                 )
-                diagnostic = "候选复核输出被截断，正在执行一次精简输出重试"
+                self.state["messages"][-1]["content"] += (
+                    "最终 decisions 必须完整覆盖 expected_candidate_ids，每个标识恰好一次。"
+                )
+                diagnostic = f"候选复核{reason}，正在执行一次校正与精简输出重试"
             else:
+                if not truncated:
+                    raise CoverageMismatch(
+                        f"单个候选复核校正重试后仍然{exc}，检查未完成，已保留完成的审查结果。"
+                    ) from exc
                 raise IncompleteResponse(
                     "单个候选复核在精简重试后仍被模型服务截断（finish_reason=length），"
                     "检查未完成，已保留完成的审查结果。",
                     finish_reason="length",
                 ) from exc
-            self.state["diagnostics"].append(diagnostic)
+            self._record_recovery(diagnostic)
             self.state["next"] = "review"
             self.persist()
 
@@ -1095,10 +1175,9 @@ class EvidenceAgent:
             self.state["next"] = "tools"
             return
         ids = [d["candidate_id"] for d in data["decisions"]]
-        if set(ids) != set(self.state["review_batch"]) or len(ids) != len(
-            self.state["review_batch"]
-        ):
-            raise LLMError("审查结果未完整覆盖本批候选或包含未知候选")
+        error = _coverage_error("复核候选", self.state["review_batch"], ids)
+        if error:
+            raise error
         for decision in data["decisions"]:
             self._accept_decision(decision)
         self._finish_batch()
@@ -1458,6 +1537,13 @@ class EvidenceAgent:
         except LLMError as exc:
             self.external_ensure_active()
             error = str(exc)
+            logger.warning(
+                "证据审查未完成 task_id=%s item=%s stage=%s error=%s",
+                self.connection.get("task_id"),
+                self.item["code"],
+                self.state["next"],
+                error,
+            )
             self.persist()
         coverage = self.index.coverage(self.state["checked_ids"])
         if not coverage["text_complete"] and not error:

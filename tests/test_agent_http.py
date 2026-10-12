@@ -28,6 +28,7 @@ class AgentHTTPTest(unittest.TestCase):
             "truncate_review": False,
             "long_thinking": False,
             "per_source_candidates": False,
+            "omit_last_source": False,
         }
         behavior = self.behavior
 
@@ -94,6 +95,8 @@ class AgentHTTPTest(unittest.TestCase):
                         )
                         if behavior["truncate_discovery"] and len(sources) > 1:
                             reason = "length"
+                        if behavior["omit_last_source"] and len(sources) > 1:
+                            data["covered_source_ids"].pop()
                     elif context.get("candidates"):
                         data = {
                             "actions": [],
@@ -264,6 +267,45 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertTrue(result["metadata"]["usage_complete"])
         self.assertEqual(result["metadata"]["model_calls"], 3)
         self.assertEqual(result["metadata"]["known_output_tokens"], 60)
+
+    def test_missing_last_source_recovers_over_http_and_preserves_usage(self):
+        self.behavior["omit_last_source"] = True
+        self.behavior["per_source_candidates"] = True
+        agent = EvidenceAgent(
+            index=DocumentIndex(
+                [
+                    {
+                        "filename": "a.txt",
+                        "text": "电压220V\n电压110V",
+                        "text_complete": True,
+                    }
+                ]
+            ),
+            item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+            task_type="document_check",
+            connection=self.connection,
+            options=AgentOptions(protocol="structured"),
+            store=MemoryCheckpointStore(),
+            ensure_active=lambda: None,
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["report"]["items"]), 2)
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+        self.assertEqual(result["metadata"]["model_calls"], 4)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 80)
+        self.assertTrue(result["metadata"]["usage_complete"])
+        batches = [
+            input_context(p["messages"])["sources"]
+            for p in self.payloads
+            if p.get("response_format", {})
+            .get("json_schema", {})
+            .get("schema", {})
+            .get("title")
+            == "Discovery"
+        ]
+        self.assertEqual([len(batch) for batch in batches], [2, 1])
+        self.assertEqual(batches[1][0]["id"], batches[0][-1]["id"])
 
     def test_discovery_and_review_length_recovery_over_http_preserves_usage(self):
         for stage in ("discovery", "review"):

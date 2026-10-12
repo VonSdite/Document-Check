@@ -445,6 +445,258 @@ class EvidenceAgentTest(unittest.TestCase):
         self.assertEqual(attempted.count(completed[0]), 1)
         self.assertEqual(attempted.count(completed[1]), 2)
 
+    def test_discovery_missing_source_only_rechecks_missing_and_resumes(self):
+        store = MemoryCheckpointStore()
+        attempted = []
+        failed = False
+
+        def handler(messages, title, tools, force):
+            nonlocal failed
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            if title == "Discovery":
+                sources = context["sources"]
+                ids = [s["id"] for s in sources]
+                self.assertEqual(context["expected_source_ids"], ids)
+                attempted.append(ids)
+                if len(sources) == 1 and not failed:
+                    failed = True
+                    return LLMError("503 服务暂时失败")
+                completed = sources[:-1] if len(sources) > 1 else sources
+                return {
+                    **discovery(context, facts=[fact(s) for s in sources]),
+                    "covered_source_ids": [s["id"] for s in completed],
+                    "candidates": [
+                        candidate(
+                            [fact(s)["reference"]], description=s["text"] + "问题"
+                        )
+                        for s in completed
+                    ],
+                }
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(c["id"], c["evidence"]) for c in context["candidates"]
+                ],
+            }
+
+        documents = [
+            {"filename": "a.txt", "text": "甲\n乙\n丙\n丁", "text_complete": True}
+        ]
+        first = self.make_agent(
+            handler, documents=documents, store=store, code="custom"
+        ).run()
+        self.assertIn("503", first["error"])
+        self.assertEqual(first["metadata"]["coverage"]["checked_blocks"], 0)
+        self.assertEqual(len(first["report"]["pending_items"]), 3)
+        self.assertEqual(len(store.state["facts"]), 3)
+        agent = self.make_agent(
+            handler, documents=documents, store=store, code="custom"
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual([len(ids) for ids in attempted], [4, 1, 1])
+        self.assertEqual(attempted[1], [attempted[0][-1]])
+        self.assertEqual(attempted[1], attempted[2])
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+        self.assertEqual(len(result["report"]["items"]), 4)
+        self.assertEqual(len(agent.state["facts"]), 4)
+
+    def test_discovery_invalid_identifiers_and_requirement_coverage_are_recovered(self):
+        for problem in (
+            "unknown_source",
+            "duplicate_source",
+            "missing_requirement",
+            "unknown_requirement",
+            "duplicate_requirement",
+            "unknown_candidate_requirement",
+        ):
+            with self.subTest(problem=problem):
+                sizes = []
+
+                def handler(messages, title, tools, force):
+                    context = input_context(messages)
+                    if title == "CheckPlan":
+                        return self.planning_handler(context)
+                    sizes.append(len(context["sources"]))
+                    data = self.planning_handler(context)
+                    if len(sizes) == 1:
+                        if problem == "unknown_source":
+                            data["covered_source_ids"].append("unknown")
+                        elif problem == "duplicate_source":
+                            data["covered_source_ids"].append(
+                                data["covered_source_ids"][0]
+                            )
+                        elif problem == "missing_requirement":
+                            data["observations"].pop()
+                        elif problem == "unknown_requirement":
+                            data["observations"][0]["requirement_id"] = "unknown"
+                        elif problem == "duplicate_requirement":
+                            data["observations"].append(dict(data["observations"][0]))
+                        else:
+                            data["candidates"] = [
+                                candidate([], requirement_ids=["unknown"])
+                            ]
+                    return data
+
+                agent = self.make_agent(
+                    handler,
+                    item={
+                        "code": "custom",
+                        "name": "检查",
+                        "prompt": "要求1：核实用语。\n要求2：核实符号。",
+                    },
+                )
+                result = agent.run()
+                self.assertEqual(result["error"], "")
+                self.assertEqual(sizes, [2, 1, 1])
+                self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+                self.assertEqual(len(agent.state["observations"]), 4)
+                self.assertEqual(len(agent.state["candidates"]), 0)
+                for covered in agent.state["requirement_coverage"].values():
+                    self.assertEqual(set(covered), set(agent.state["checked_ids"]))
+
+    def test_partial_discovery_observations_cannot_claim_unacknowledged_source(self):
+        def handler(messages, title, tools, force):
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return self.planning_handler(context)
+            data = self.planning_handler(context)
+            if len(context["sources"]) > 1:
+                data["covered_source_ids"].pop()
+                data["observations"][0].update(
+                    status="covered",
+                    evidence=[fact(context["sources"][-1])["reference"]],
+                )
+            return data
+
+        agent = self.make_agent(
+            handler,
+            item={"code": "custom", "name": "检查", "prompt": "要求1：核实用语。"},
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(agent.state["observations"]), 2)
+        first, second = agent.state["observations"]
+        self.assertEqual(first["status"], "uncertain")
+        self.assertEqual(first["evidence"], [])
+        self.assertNotEqual(first["checked_source_ids"], second["checked_source_ids"])
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+
+    def test_alignment_and_review_coverage_mismatches_split_and_recover(self):
+        for stage in ("Alignment", "Review"):
+            for problem in ("missing", "unknown", "duplicate"):
+                with self.subTest(stage=stage, problem=problem):
+                    attempts = []
+
+                    def handler(messages, title, tools, force):
+                        context = input_context(messages)
+                        if title == "CheckPlan":
+                            return {**empty_plan(), "global_checks": ["consistency"]}
+                        if title == "Discovery":
+                            return discovery(
+                                context,
+                                facts=[fact(s) for s in context["sources"]],
+                                candidates=[
+                                    candidate([fact(s)["reference"]])
+                                    for s in context["sources"]
+                                ],
+                            )
+                        if title == "Comparison":
+                            return {"candidates": []}
+                        if title == "Alignment":
+                            self.assertEqual(
+                                context["expected_fact_ids"],
+                                [f["fact_id"] for f in context["facts"]],
+                            )
+                            data = {
+                                "keys": [
+                                    {"fact_id": f["fact_id"], "attribute_key": "电压"}
+                                    for f in context["facts"]
+                                ]
+                            }
+                            field, identifier = "keys", "fact_id"
+                        else:
+                            self.assertEqual(
+                                context["expected_candidate_ids"],
+                                [c["id"] for c in context["candidates"]],
+                            )
+                            data = {
+                                "actions": [],
+                                "decisions": [
+                                    decision(c["id"], c["evidence"])
+                                    for c in context["candidates"]
+                                ],
+                            }
+                            field, identifier = "decisions", "candidate_id"
+                        if title == stage:
+                            attempts.append(len(data[field]))
+                            if len(attempts) == 1:
+                                if problem == "missing":
+                                    data[field].pop()
+                                elif problem == "unknown":
+                                    data[field][0][identifier] = "unknown"
+                                else:
+                                    data[field].append(dict(data[field][0]))
+                        return data
+
+                    result = self.make_agent(handler).run()
+                    self.assertEqual(result["error"], "")
+                    self.assertEqual(attempts, [2, 1, 1])
+                    self.assertEqual(len(result["report"]["items"]), 2)
+
+    def test_atomic_coverage_mismatch_stops_after_one_correction(self):
+        for stage in ("Discovery", "Alignment", "Review"):
+            with self.subTest(stage=stage):
+                attempts = []
+
+                def handler(messages, title, tools, force):
+                    context = input_context(messages)
+                    if title == "CheckPlan":
+                        return {**empty_plan(), "global_checks": ["consistency"]}
+                    if title == "Discovery":
+                        data = discovery(
+                            context,
+                            facts=[fact(context["sources"][0])],
+                            candidates=[
+                                candidate([fact(context["sources"][0])["reference"]])
+                            ],
+                        )
+                        field = "covered_source_ids"
+                    elif title == "Alignment":
+                        data = {
+                            "keys": [
+                                {"fact_id": f["fact_id"], "attribute_key": "电压"}
+                                for f in context["facts"]
+                            ]
+                        }
+                        field = "keys"
+                    else:
+                        data = {
+                            "actions": [],
+                            "decisions": [
+                                decision(c["id"], c["evidence"])
+                                for c in context["candidates"]
+                            ],
+                        }
+                        field = "decisions"
+                    if title == stage:
+                        attempts.append(messages)
+                        data[field] = []
+                    return data
+
+                result = self.make_agent(
+                    handler,
+                    documents=[
+                        {"filename": "a.txt", "text": "短正文", "text_complete": True}
+                    ],
+                ).run()
+                self.assertEqual(len(attempts), 2)
+                self.assertIn("校正重试后", result["error"])
+                self.assertTrue(result["report"]["summary"].startswith("检查未完成"))
+                self.assertEqual(result["report"]["items"], [])
+
     def test_discovery_repair_truncation_restarts_with_smaller_sources(self):
         calls = []
 
