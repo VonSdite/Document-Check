@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -104,14 +105,19 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def workflow_signature(index, item, connection, options, task_type):
+def workflow_signature(
+    index, item, connection, options, task_type, *, include_execution_limits=False
+):
     values = [
         WORKFLOW_VERSION,
         index.signature,
         item["code"],
         item["prompt"],
         task_type,
-        options.model_dump(mode="json"),
+        options.model_dump(
+            mode="json",
+            exclude=set() if include_execution_limits else {"max_calls", "max_seconds"},
+        ),
         {
             key: connection.get(key)
             for key in (
@@ -167,7 +173,12 @@ class EvidenceAgent:
                 ]
             ).encode()
         ).hexdigest()
-        self.connection = {**connection, "max_seconds": options.max_seconds}
+        self.connection = {
+            **connection,
+            "max_seconds": options.max_seconds
+            if options.max_seconds is not None
+            else connection.get("request_timeout", 3600),
+        }
         self.started = time.monotonic()
         self.max_input = int(connection.get("max_input_chars", 80000))
         self.state = store.load() or {
@@ -218,7 +229,8 @@ class EvidenceAgent:
     def ensure_active(self):
         self.external_ensure_active()
         if (
-            self.base_elapsed + time.monotonic() - self.started
+            self.options.max_seconds is not None
+            and self.base_elapsed + time.monotonic() - self.started
             > self.options.max_seconds
         ):
             raise BudgetExceeded("检查项已达到总执行时间预算")
@@ -241,7 +253,9 @@ class EvidenceAgent:
         self.connection["remaining_seconds"] = max(
             1,
             self.options.max_seconds
-            - (self.base_elapsed + time.monotonic() - self.started),
+            - (self.base_elapsed + time.monotonic() - self.started)
+            if self.options.max_seconds is not None
+            else self.connection.get("request_timeout", 3600),
         )
         chars = len(
             _json(
@@ -252,7 +266,10 @@ class EvidenceAgent:
             raise BudgetExceeded(
                 f"本次上下文 {chars} 字，超过模型输入上限 {self.max_input} 字"
             )
-        if len(self.state["requests"]) >= self.options.max_calls:
+        if (
+            self.options.max_calls is not None
+            and len(self.state["requests"]) >= self.options.max_calls
+        ):
             raise BudgetExceeded("检查项已达到模型调用次数预算")
         self.state["requests"].append(
             {
@@ -1530,7 +1547,9 @@ class EvidenceAgent:
                 graph.compile().invoke(
                     {"data": self.state},
                     {
-                        "recursion_limit": self.options.max_calls * 4 + 50,
+                        "recursion_limit": self.options.max_calls * 4 + 50
+                        if self.options.max_calls is not None
+                        else sys.maxsize,
                         "callbacks": [],
                     },
                 )

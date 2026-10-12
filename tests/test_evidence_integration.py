@@ -9,8 +9,14 @@ from openpyxl import load_workbook
 
 from app.checks.agent_policy import POLICY_KEY, check_agent_options, strategy_for
 from app.contracts.agent import AgentOptions
+from app.documents.index import DocumentIndex
 from app.models.agent import AgentTurn
-from app.persistence.checkpoints import CheckpointOwnershipLost, CheckpointStore
+from app.models.client import LLMError
+from app.persistence.checkpoints import (
+    CheckpointOwnershipLost,
+    CheckpointStore,
+    MemoryCheckpointStore,
+)
 from app.persistence.connection import get_db
 from app.persistence.defaults import seed_defaults
 from app.persistence.schema import init_db
@@ -21,9 +27,15 @@ from app.reporting.service import (
     _prepare_task_results,
 )
 from app.tasks.runner import TaskRunner
+from app.tasks.runtime.evidence_agent import EvidenceAgent, workflow_signature
 from app.tasks.selection import _check_items_from_snapshot
 from app.tasks.submission import _enabled_check_item_snapshots
-from tests.test_evidence_agent import discovery, empty_plan, input_context
+from tests.test_evidence_agent import (
+    ScriptedModel,
+    discovery,
+    empty_plan,
+    input_context,
+)
 
 
 class EvidenceIntegrationTest(unittest.TestCase):
@@ -100,6 +112,190 @@ class EvidenceIntegrationTest(unittest.TestCase):
         with self.assertRaises(CheckpointOwnershipLost):
             store.save({"next": "done"})
         self.assertEqual(store.load()["next"], "discover")
+
+    def test_checkpoint_compatibility_keeps_task_item_and_execution_owner_boundaries(
+        self,
+    ):
+        task_id = self.insert_task([])
+        old_store = CheckpointStore(task_id, "check", "previous", "owner")
+        old_store.save({"next": "discover"})
+        store = CheckpointStore(
+            task_id, "check", "current", "owner", compatible_signatures=("previous",)
+        )
+        self.assertEqual(store.load(), {"next": "discover"})
+        self.assertIsNone(
+            CheckpointStore(task_id, "check", "different", "owner").load()
+        )
+        self.assertIsNone(
+            CheckpointStore(
+                task_id,
+                "other-check",
+                "current",
+                "owner",
+                compatible_signatures=("previous",),
+            ).load()
+        )
+        other_task = self.insert_task([])
+        self.assertIsNone(
+            CheckpointStore(
+                other_task,
+                "check",
+                "current",
+                "owner",
+                compatible_signatures=("previous",),
+            ).load()
+        )
+        store.save({"next": "review"})
+        self.assertIsNone(old_store.load())
+        self.assertEqual(store.load(), {"next": "review"})
+        for assignment in (
+            "cancel_requested=1",
+            "cancel_requested=0, claim_token='other-owner'",
+        ):
+            get_db().execute(f"UPDATE tasks SET {assignment} WHERE id=?", (task_id,))
+            get_db().commit()
+            with self.assertRaises(CheckpointOwnershipLost):
+                store.save({"next": "done"})
+            self.assertEqual(store.load(), {"next": "review"})
+
+    def test_worker_resumes_legacy_checkpoint_beyond_elapsed_and_call_limits(self):
+        text = "\n".join(f"来源{n}：" + "设备参数。" * 120 for n in range(3))
+        meta = {
+            "source_documents": [
+                {"filename": "a.txt", "text": text, "text_complete": True}
+            ]
+        }
+        index = DocumentIndex.from_task(text, meta, "a.txt")
+        old_options = AgentOptions(
+            protocol="structured", chunk_chars=1000, max_calls=96, max_seconds=3600
+        )
+        for missing_limits in (False, True):
+            with self.subTest(missing_limits=missing_limits):
+                snapshot_options = old_options.model_dump(mode="json")
+                if missing_limits:
+                    snapshot_options.pop("max_calls")
+                    snapshot_options.pop("max_seconds")
+                item = {
+                    "code": "custom-check",
+                    "name": "业务检查",
+                    "prompt": "检查设备参数。",
+                    "agent_options": snapshot_options,
+                }
+                task_id = self.insert_task([item], text=text)
+                get_db().execute(
+                    "UPDATE tasks SET document_meta_json=? WHERE id=?",
+                    (json.dumps(meta, ensure_ascii=False), task_id),
+                )
+                get_db().commit()
+                connection = dict(
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                    .fetchone()
+                )
+                legacy_signature = workflow_signature(
+                    index,
+                    item,
+                    connection,
+                    old_options,
+                    "document_check",
+                    include_execution_limits=True,
+                )
+                memory = MemoryCheckpointStore()
+                discoveries = 0
+
+                def handler(messages, title, tools, force):
+                    nonlocal discoveries
+                    if title == "CheckPlan":
+                        return empty_plan()
+                    discoveries += 1
+                    return (
+                        discovery(input_context(messages))
+                        if discoveries == 1
+                        else LLMError("503 服务暂时失败")
+                    )
+
+                first = EvidenceAgent(
+                    index=index,
+                    item=item,
+                    task_type="document_check",
+                    connection=connection,
+                    options=old_options,
+                    store=memory,
+                    ensure_active=lambda: None,
+                    model_factory=lambda connection, **kwargs: ScriptedModel(
+                        handler, connection, **kwargs
+                    ),
+                ).run()
+                self.assertIn("503", first["error"])
+                state = memory.load()
+                self.assertEqual(len(state["checked_ids"]), 1)
+                state["elapsed_seconds"] = 3601.0
+                state["requests"].extend(dict(state["requests"][0]) for _ in range(93))
+                CheckpointStore(task_id, item["code"], legacy_signature, "owner").save(
+                    state
+                )
+                known_input = sum(r["input_tokens"] or 0 for r in state["requests"])
+                calls = []
+                checked = []
+
+                def turn(model, messages, *, schema, **kwargs):
+                    self.assertEqual(model.connection["task_id"], task_id)
+                    self.assertEqual(schema["title"], "Discovery")
+                    calls.append(schema["title"])
+                    model.before_request({"messages": messages})
+                    self.assertEqual(
+                        model.connection["remaining_seconds"],
+                        connection["request_timeout"],
+                    )
+                    context = input_context(messages)
+                    checked.extend(s["id"] for s in context["sources"])
+                    response = AgentTurn(
+                        json.dumps(discovery(context), ensure_ascii=False),
+                        usage={"prompt_tokens": 100, "completion_tokens": 50},
+                        finish_reason="stop",
+                    )
+                    model.after_request({}, response, 0.01, None)
+                    return response
+
+                with patch("app.models.agent.AgentModel.turn", new=turn):
+                    TaskRunner(self.app).run(task_id, "owner")
+                task = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                    .fetchone()
+                )
+                self.assertEqual(task["status"], "completed", task["error"])
+                result = json.loads(task["result_json"])[0]
+                self.assertTrue(result["agent"]["coverage"]["all_checked"])
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(set(checked)), 2)
+                self.assertFalse(set(checked) & set(state["checked_ids"]))
+                self.assertEqual(result["agent"]["model_calls"], 98)
+                self.assertEqual(
+                    result["agent"]["known_input_tokens"], known_input + 200
+                )
+                self.assertGreaterEqual(result["agent"]["elapsed_seconds"], 3601.0)
+                current_signature = workflow_signature(
+                    index,
+                    item,
+                    connection,
+                    old_options.model_copy(
+                        update={"max_calls": None, "max_seconds": None}
+                    ),
+                    "document_check",
+                )
+                self.assertNotEqual(legacy_signature, current_signature)
+                self.assertEqual(
+                    CheckpointStore(
+                        task_id, item["code"], current_signature, "owner"
+                    ).load()["next"],
+                    "done",
+                )
+                self.assertIsNone(
+                    CheckpointStore(
+                        task_id, item["code"], legacy_signature, "owner"
+                    ).load()
+                )
 
     def test_end_to_end_worker_indexes_long_document_and_saves_valid_report(self):
         text = "\n".join("设备参数正常。" * 500 for _ in range(28))

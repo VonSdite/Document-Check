@@ -31,8 +31,8 @@ class AgentOptions(Contract):
     ] = "auto"
     protocol: Literal["auto", "native", "structured"] = "auto"
     chunk_chars: int = Field(default=10000, ge=1000, le=50000)
-    max_calls: int = Field(default=96, ge=4, le=1000)
-    max_seconds: int = Field(default=3600, ge=30, le=14400)
+    max_calls: int | None = Field(default=None, ge=4, le=1000)
+    max_seconds: int | None = Field(default=None, ge=30, le=14400)
     max_review_rounds: int = Field(default=3, ge=1, le=6)
     review_batch_size: int = Field(default=4, ge=1, le=12)
     max_candidates: int = Field(default=200, ge=1, le=1000)

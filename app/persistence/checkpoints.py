@@ -11,19 +11,28 @@ class CheckpointOwnershipLost(RuntimeError):
 
 class CheckpointStore:
     def __init__(
-        self, task_id: int, code: str, signature: str, claim_token: str | None
+        self,
+        task_id: int,
+        code: str,
+        signature: str,
+        claim_token: str | None,
+        *,
+        compatible_signatures: tuple[str, ...] = (),
     ):
         self.task_id = task_id
         self.code = code
         self.signature = signature
+        self.signatures = tuple(dict.fromkeys((signature, *compatible_signatures)))
         self.claim_token = claim_token
 
     def load(self) -> dict | None:
+        placeholders = ",".join("?" for _ in self.signatures)
         row = (
             get_db()
             .execute(
-                "SELECT state_json FROM task_checkpoints WHERE task_id = ? AND check_code = ? AND signature = ?",
-                (self.task_id, self.code, self.signature),
+                "SELECT state_json FROM task_checkpoints WHERE task_id = ? AND check_code = ? "
+                f"AND signature IN ({placeholders})",
+                (self.task_id, self.code, *self.signatures),
             )
             .fetchone()
         )

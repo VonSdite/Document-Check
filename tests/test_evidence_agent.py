@@ -1,13 +1,18 @@
 import json
 import unittest
 from itertools import combinations, product
+from unittest.mock import patch
 
 from app.contracts.agent import AgentOptions
 from app.documents.index import DocumentIndex
 from app.models.agent import AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError
 from app.persistence.checkpoints import MemoryCheckpointStore
-from app.tasks.runtime.evidence_agent import EvidenceAgent, SharedFacts
+from app.tasks.runtime.evidence_agent import (
+    EvidenceAgent,
+    SharedFacts,
+    workflow_signature,
+)
 
 
 def candidate(refs, **changes):
@@ -121,6 +126,7 @@ class EvidenceAgentTest(unittest.TestCase):
         item=None,
         task_type="document_check",
         shared_facts=None,
+        connection=None,
     ):
         options = options or AgentOptions(protocol="structured")
         index = DocumentIndex(
@@ -142,6 +148,7 @@ class EvidenceAgentTest(unittest.TestCase):
                 "api_base": "http://model/v1/chat/completions",
                 "model_name": "test",
                 "max_input_chars": 80000,
+                **(connection or {}),
             },
             options=options,
             store=store or MemoryCheckpointStore(),
@@ -1524,6 +1531,186 @@ class EvidenceAgentTest(unittest.TestCase):
         self.assertEqual(result["error"], "")
         self.assertEqual(result["metadata"]["coverage"]["checked_blocks"], 30)
         self.assertLess(max(sizes), 80000)
+
+    def test_default_execution_covers_long_document_beyond_elapsed_and_call_thresholds(
+        self,
+    ):
+        clock = [0.0]
+        checked = []
+
+        def handler(messages, title, tools, force):
+            self.assertEqual(agent.connection["remaining_seconds"], 37)
+            clock[0] += 60
+            if title == "CheckPlan":
+                return empty_plan()
+            context = input_context(messages)
+            checked.extend(s["id"] for s in context["sources"])
+            return discovery(context)
+
+        with patch(
+            "app.tasks.runtime.evidence_agent.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            agent = self.make_agent(
+                handler,
+                documents=[
+                    {
+                        "filename": "long.txt",
+                        "text": "\n".join(
+                            f"来源{n}：" + "正常内容。" * 120 for n in range(440)
+                        ),
+                        "text_complete": True,
+                    }
+                ],
+                options=AgentOptions(protocol="structured", chunk_chars=1000),
+                connection={"request_timeout": 37},
+            )
+            result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+        self.assertEqual(result["metadata"]["coverage"]["checked_blocks"], 440)
+        self.assertEqual(len(set(checked)), len(checked))
+        self.assertEqual(result["metadata"]["model_calls"], 441)
+        self.assertEqual(result["metadata"]["elapsed_seconds"], 441 * 60)
+        self.assertEqual(result["metadata"]["known_input_tokens"], 441 * 100)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 441 * 50)
+        self.assertEqual(agent.store.load()["next"], "done")
+
+    def test_explicit_time_budget_retains_progress_and_unlimited_resume_reuses_it(self):
+        clock = [0.0]
+        store = MemoryCheckpointStore()
+        checked = []
+        calls = []
+
+        def handler(messages, title, tools, force):
+            calls.append(title)
+            context = input_context(messages)
+            if title == "CheckPlan":
+                return empty_plan()
+            if title == "Discovery":
+                sources = context["sources"]
+                checked.extend(s["id"] for s in sources)
+                if len(checked) == 1:
+                    clock[0] += 3601
+                    source = sources[0]
+                    return discovery(
+                        context,
+                        candidates=[
+                            candidate(
+                                [{"source_id": source["id"], "quote": source["text"]}]
+                            )
+                        ],
+                    )
+                return discovery(context)
+            return {
+                "actions": [],
+                "decisions": [
+                    decision(c["id"], c["evidence"]) for c in context["candidates"]
+                ],
+            }
+
+        documents = [
+            {
+                "filename": "long.txt",
+                "text": "\n".join(f"来源{n}：" + "设备参数。" * 120 for n in range(3)),
+                "text_complete": True,
+            }
+        ]
+        limited_options = AgentOptions(
+            protocol="structured", chunk_chars=1000, max_seconds=3600
+        )
+        with patch(
+            "app.tasks.runtime.evidence_agent.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            first = self.make_agent(
+                handler, documents=documents, options=limited_options, store=store
+            ).run()
+            self.assertIn("执行时间预算", first["error"])
+            self.assertEqual(first["metadata"]["coverage"]["checked_blocks"], 1)
+            self.assertEqual(len(first["report"]["pending_items"]), 1)
+            self.assertEqual(first["report"]["items"], [])
+            repeated = self.make_agent(
+                handler, documents=documents, options=limited_options, store=store
+            ).run()
+            self.assertIn("执行时间预算", repeated["error"])
+            self.assertEqual(calls, ["CheckPlan", "Discovery"])
+
+            state = store.load()
+            state["requests"].extend(dict(state["requests"][0]) for _ in range(94))
+            store.save(state)
+            clock[0] += 5000
+            agent = self.make_agent(
+                handler,
+                documents=documents,
+                options=AgentOptions(protocol="structured", chunk_chars=1000),
+                store=store,
+            )
+            resumed = agent.run()
+
+        self.assertEqual(resumed["error"], "")
+        self.assertTrue(resumed["metadata"]["coverage"]["all_checked"])
+        self.assertEqual(calls.count("CheckPlan"), 1)
+        self.assertEqual(len(set(checked)), 3)
+        self.assertEqual(len(checked), 3)
+        self.assertEqual(len(resumed["report"]["items"]), 1)
+        self.assertEqual(resumed["report"]["pending_items"], [])
+        self.assertEqual(resumed["metadata"]["model_calls"], 99)
+        self.assertEqual(resumed["metadata"]["elapsed_seconds"], 3601)
+        self.assertEqual(resumed["metadata"]["known_input_tokens"], 9900)
+        self.assertEqual(resumed["metadata"]["known_output_tokens"], 4950)
+
+    def test_checkpoint_signature_covers_review_inputs_and_ignores_execution_limits(
+        self,
+    ):
+        agent = self.make_agent(lambda *args: None)
+
+        def signature(**changes):
+            return workflow_signature(
+                changes.get("index", agent.index),
+                changes.get("item", agent.item),
+                changes.get("connection", agent.connection),
+                changes.get("options", agent.options),
+                changes.get("task_type", "document_check"),
+            )
+
+        original = signature()
+        self.assertEqual(
+            original,
+            signature(
+                options=agent.options.model_copy(
+                    update={"max_calls": 96, "max_seconds": 3600}
+                )
+            ),
+        )
+        self.assertEqual(
+            workflow_signature(
+                agent.index,
+                agent.item,
+                agent.connection,
+                agent.options.model_copy(update={"max_calls": 96, "max_seconds": 3600}),
+                "document_check",
+                include_execution_limits=True,
+            ),
+            "3c9e61bbbef801f6e9e58b37474424d40f7314acf81bfe98ef5c6ffc371b3e31",
+        )
+        for changes in (
+            {"index": DocumentIndex([{"filename": "a.txt", "text": "不同原文"}])},
+            {"item": {**agent.item, "prompt": "不同要求"}},
+            {"connection": {**agent.connection, "model_name": "different"}},
+            {"connection": {**agent.connection, "api_key": "test-key"}},
+            {"connection": {**agent.connection, "reasoning_effort": "high"}},
+            {"connection": {**agent.connection, "max_input_chars": 160000}},
+            {"options": agent.options.model_copy(update={"strategy": "local"})},
+            {
+                "options": AgentOptions(
+                    standards=[{"name": "规范", "version": "1", "text": "明确电压"}]
+                )
+            },
+            {"task_type": "consistency_check"},
+        ):
+            with self.subTest(changes=changes):
+                self.assertNotEqual(original, signature(**changes))
 
     def test_budget_failure_retains_candidates_without_confirming_them(self):
         def handler(messages, title, tools, force):

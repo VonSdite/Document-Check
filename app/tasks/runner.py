@@ -650,17 +650,38 @@ def _run_check_items_concurrently(
                 elif isinstance(item.get("agent_options"), dict) and item[
                     "agent_options"
                 ].get("enabled", True):
-                    options = AgentOptions.model_validate(item["agent_options"])
+                    snapshot_options = AgentOptions.model_validate(
+                        item["agent_options"]
+                    )
+                    options = snapshot_options.model_copy(
+                        update={"max_calls": None, "max_seconds": None}
+                    )
                     index = source_index.with_standards(
                         [s.model_dump(mode="json") for s in options.standards]
                     )
                     connection = {
                         **dict(task),
                         **outbound_network_config(),
+                        "task_id": task_id,
                         "cancel_event": item_cancel_event,
                     }
                     signature = workflow_signature(
                         index, item, connection, options, task_type
+                    )
+                    compatible_signature = workflow_signature(
+                        index,
+                        item,
+                        connection,
+                        snapshot_options.model_copy(
+                            update={
+                                "max_calls": item["agent_options"].get("max_calls", 96),
+                                "max_seconds": item["agent_options"].get(
+                                    "max_seconds", 3600
+                                ),
+                            }
+                        ),
+                        task_type,
+                        include_execution_limits=True,
                     )
                     agent_result = EvidenceAgent(
                         index=index,
@@ -670,7 +691,11 @@ def _run_check_items_concurrently(
                         options=options,
                         shared_facts=shared_facts,
                         store=CheckpointStore(
-                            task_id, item["code"], signature, claim_token
+                            task_id,
+                            item["code"],
+                            signature,
+                            claim_token,
+                            compatible_signatures=(compatible_signature,),
                         ),
                         ensure_active=ensure_active,
                         on_output=output_recorder.for_checks(
