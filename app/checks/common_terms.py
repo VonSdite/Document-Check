@@ -234,44 +234,26 @@ def build_common_terms_report(
 def build_common_terms_missing_report(*, candidates: list[Path]) -> dict:
     candidate_text = "\n".join(f"- {path}" for path in candidates[:8])
     return {
-        "summary": "常用词检查结论：未配置常用词检查表，未执行规则匹配。",
-        "items": [
-            {
-                "category": "常用词检查表配置",
-                "location": "本地词表文件",
-                "excerpt": "",
-                "description": (
-                    "未找到可读取的常用词检查表。系统需要读取“常用词”和"
-                    "“常见错误/不推荐用法”两列后才能执行检查。"
-                ),
-                "impact": "本次任务无法判断常用词写法和大小写是否符合词表要求。",
-                "suggestion": (
-                    "请将检查表放到以下任一路径，推荐使用 instance/common_terms.xlsx：\n"
-                    f"{candidate_text}"
-                ),
-                "type": "suggestion",
-            }
-        ],
+        "summary": (
+            "常用词检查未执行：未配置常用词检查表。\n"
+            "请配置包含“常用词”和“常见错误/不推荐用法”两列的本地 Excel/CSV 检查表，"
+            "推荐使用 instance/common_terms.xlsx。\n"
+            f"检查表候选路径：\n{candidate_text}"
+        ),
+        "items": [],
     }
 
 
 def build_common_terms_invalid_report(*, source_path: Path, error: str) -> dict:
     return {
-        "summary": f"常用词检查结论：常用词检查表读取失败。\n词表文件：{source_path}",
-        "items": [
-            {
-                "category": "常用词检查表读取失败",
-                "location": str(source_path),
-                "excerpt": "",
-                "description": str(error or "常用词检查表无法读取。"),
-                "impact": "本次任务无法完成常用词规则匹配。",
-                "suggestion": (
-                    "请确认检查表格式为 xlsx、xlsm、xls 或 csv，并包含"
-                    "“常用词”和“常见错误/不推荐用法”两列。"
-                ),
-                "type": "suggestion",
-            }
-        ],
+        "summary": (
+            "常用词检查未执行：常用词检查表读取失败。\n"
+            f"词表文件：{source_path}\n"
+            f"原因：{error or '常用词检查表无法读取。'}\n"
+            "请确认检查表格式为 xlsx、xlsm、xls 或 csv，"
+            "并包含“常用词”和“常见错误/不推荐用法”两列。"
+        ),
+        "items": [],
     }
 
 

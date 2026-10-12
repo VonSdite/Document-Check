@@ -165,41 +165,26 @@ def build_sensitive_terms_missing_report(
 ) -> dict:
     candidate_text = "\n".join(f"- {path}" for path in candidates[:6])
     return {
-        "summary": "敏感词检查结论：未配置敏感词表，未执行敏感词匹配。",
-        "items": [
-            {
-                "category": "敏感词表配置",
-                "location": "本地词表文件",
-                "excerpt": "",
-                "description": (
-                    "未找到可读取的敏感词表。系统需要从本地 Excel/CSV 词表中读取"
-                    "“不规范用语”和“规范用语”两列后才能执行检查。"
-                ),
-                "impact": "本次任务无法判断文档是否包含公司内部维护的不规范用语。",
-                "suggestion": (
-                    "请将词表放到以下任一路径，推荐使用 instance/sensitive_terms.xlsx：\n"
-                    f"{candidate_text}"
-                ),
-                "type": "suggestion",
-            }
-        ],
+        "summary": (
+            "敏感词检查未执行：未配置敏感词表。\n"
+            "请配置包含“不规范用语”和“规范用语”两列的本地 Excel/CSV 词表，"
+            "推荐使用 instance/sensitive_terms.xlsx。\n"
+            f"词表候选路径：\n{candidate_text}"
+        ),
+        "items": [],
     }
 
 
 def build_sensitive_terms_invalid_report(*, source_path: Path, error: str) -> dict:
     return {
-        "summary": f"敏感词检查结论：敏感词表读取失败。\n词表文件：{source_path}",
-        "items": [
-            {
-                "category": "敏感词表读取失败",
-                "location": str(source_path),
-                "excerpt": "",
-                "description": str(error or "敏感词表无法读取。"),
-                "impact": "本次任务无法完成敏感词匹配。",
-                "suggestion": "请确认词表格式为 xlsx、xlsm、xls 或 csv，并包含“不规范用语”和“规范用语”两列。",
-                "type": "suggestion",
-            }
-        ],
+        "summary": (
+            "敏感词检查未执行：敏感词表读取失败。\n"
+            f"词表文件：{source_path}\n"
+            f"原因：{error or '敏感词表无法读取。'}\n"
+            "请确认词表格式为 xlsx、xlsm、xls 或 csv，"
+            "并包含“不规范用语”和“规范用语”两列。"
+        ),
+        "items": [],
     }
 
 

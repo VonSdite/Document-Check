@@ -27,6 +27,7 @@ from app.reporting.constants import (
     REPORT_CONFIDENCE_LABELS,
     REPORT_CONFIDENCE_ORDER,
     REPORT_COUNT_KEYS,
+    REPORT_DICTIONARY_STATUS_CATEGORIES,
     REPORT_FIELD_ALIASES,
     REPORT_ITEM_FIELDS,
     REPORT_ITEM_PREFIX_RE,
@@ -231,7 +232,20 @@ def _prepare_task_results(
                 item["error"] = "审查报告结构校验失败，检查结果未完成"
         result_code = str(item.get("code") or "")
         structured_report = _result_structured_report(item)
+        dictionary_status_items = (
+            [
+                report_item
+                for report_item in _structured_report_items(
+                    result_code, structured_report
+                )
+                if _is_dictionary_status_item(result_code, report_item)
+            ]
+            if structured_report is not None
+            and result_code in REPORT_DICTIONARY_STATUS_CATEGORIES
+            else []
+        )
         report_items = _result_report_items(item, structured_report)
+        dictionary_status_ids = {entry["id"] for entry in dictionary_status_items}
         filtered_visual_missing_count = 0
         if task_type in {
             DOCUMENT_TASK_TYPE,
@@ -283,7 +297,9 @@ def _prepare_task_results(
         item["result_summary"] = (
             guarded_report_summary(report_items)
             if filtered_visual_missing_count
-            else _result_report_summary(item, structured_report)
+            else _result_report_summary(
+                item, structured_report, dictionary_status_items
+            )
         )
         item["report_items"] = report_items
         item["report_limit"] = report_limit
@@ -293,7 +309,9 @@ def _prepare_task_results(
         )
         # 结论反馈按已保存的条目标识统计，报告过滤和折叠保留已提交的反馈。
         feedback_counts = {"accepted": 0, "rejected": 0}
-        for saved_acceptance in acceptances.values():
+        for item_id, saved_acceptance in acceptances.items():
+            if item_id in dictionary_status_ids:
+                continue
             status = _normalize_report_acceptance(saved_acceptance)["acceptance_status"]
             if status in feedback_counts:
                 feedback_counts[status] += 1
@@ -584,7 +602,11 @@ def _result_report_items(
     if structured_report is None:
         structured_report = _result_structured_report(result)
     if structured_report is not None:
-        return _structured_report_items(code, structured_report)
+        return [
+            item
+            for item in _structured_report_items(code, structured_report)
+            if not _is_dictionary_status_item(code, item)
+        ]
 
     text = str(result.get("result") or "").strip()
     if not text:
@@ -629,10 +651,30 @@ def _result_structured_report(result: dict) -> dict | None:
     return _normalize_structured_report_payload(result.get("result"))
 
 
-def _result_report_summary(result: dict, structured_report: dict | None) -> str:
-    if structured_report is not None:
-        return str(structured_report.get("summary") or "").strip()
-    return ""
+def _is_dictionary_status_item(result_code: str, item: dict) -> bool:
+    return item.get("category") in REPORT_DICTIONARY_STATUS_CATEGORIES.get(
+        result_code, set()
+    ) and not item.get("excerpt")
+
+
+def _result_report_summary(
+    result: dict,
+    structured_report: dict | None,
+    dictionary_status_items: list[dict] | None = None,
+) -> str:
+    if structured_report is None:
+        return ""
+    summary = str(structured_report.get("summary") or "").strip()
+    if dictionary_status_items:
+        if len(dictionary_status_items) == len(structured_report.get("items") or []):
+            summary = summary.replace("检查结论：", "检查未执行：", 1)
+        status_details = [
+            str(item.get(field) or "").strip()
+            for item in dictionary_status_items
+            for field in ("description", "suggestion")
+        ]
+        summary = "\n".join(part for part in [summary, *status_details] if part)
+    return summary
 
 
 def _normalize_structured_report_payload(value) -> dict | None:

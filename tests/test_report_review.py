@@ -9,7 +9,13 @@ from flask import Flask
 from app.contracts.task_types import DOCUMENT_TASK_TYPE
 from app.persistence.connection import get_db
 from app.persistence.schema import init_db
-from app.reporting.service import _count_report_items, _prepare_task_results
+from app.reporting.constants import REPORT_STATS_PREPARATION_VERSION
+from app.reporting.service import (
+    _count_report_items,
+    _prepare_task_results,
+    _result_report_items,
+    _structured_report_items,
+)
 from app.reporting.statistics import _task_report_stat_rows_for_where
 
 
@@ -113,6 +119,130 @@ class ReportFeedbackTest(unittest.TestCase):
         self.assertEqual(counts["review_coverage_rate"], "0.0%")
 
 
+class DictionaryStatusReportTest(unittest.TestCase):
+    def test_dictionary_status_is_not_a_finding_or_saved_conclusion(self):
+        for code, name, categories in (
+            ("sensitive-terms", "敏感词", ("敏感词表配置", "敏感词表读取失败")),
+            (
+                "common-terms",
+                "常用词",
+                ("常用词检查表配置", "常用词检查表读取失败"),
+            ),
+        ):
+            for category in categories:
+                report = {
+                    "summary": f"{name}检查结论：词表无法使用。",
+                    "items": [
+                        {
+                            "category": category,
+                            "location": "本地词表文件",
+                            "excerpt": "",
+                            "description": "未找到有效词表规则。",
+                            "impact": "本次任务无法完成词表匹配。",
+                            "suggestion": "请配置包含所需列的本地词表。",
+                            "type": "suggestion",
+                        }
+                    ],
+                }
+                old_item_id = _structured_report_items(code, report)[0]["id"]
+                for storage in ("structured_report", "report_json", "result"):
+                    with self.subTest(code=code, category=category, storage=storage):
+                        source = {
+                            "code": code,
+                            storage: (
+                                json.dumps(report, ensure_ascii=False)
+                                if storage == "result"
+                                else report
+                            ),
+                            "item_acceptances": {old_item_id: {"status": "accepted"}},
+                        }
+                        original = copy.deepcopy(source)
+                        prepared = _prepare_task_results([source])[0]
+                        self.assertEqual(source, original)
+                        self.assertEqual(_result_report_items(source), [])
+                        self.assertEqual(prepared["report_items"], [])
+                        self.assertEqual(prepared["suppressed_report_items"], [])
+                        self.assertIn("检查未执行", prepared["result_summary"])
+                        self.assertIn("未找到有效词表规则", prepared["result_summary"])
+                        self.assertIn("请配置包含所需列", prepared["result_summary"])
+                        for key in (
+                            "issue",
+                            "suggestion",
+                            "total",
+                            "accepted",
+                            "rejected",
+                            "reviewed",
+                            "pending_review",
+                        ):
+                            self.assertEqual(prepared["report_counts"][key], 0)
+
+    def test_real_dictionary_finding_keeps_its_id_and_feedback(self):
+        code = "sensitive-terms"
+        report = {
+            "summary": "敏感词检查结论：发现不规范用语。",
+            "items": [
+                {
+                    "type": "suggestion",
+                    "category": "敏感词表配置",
+                    "description": "词表配置提示",
+                },
+                {
+                    "type": "issue",
+                    "category": "敏感词/不规范用语",
+                    "excerpt": "旧称",
+                    "description": "文档中出现不规范用语“旧称”。",
+                    "suggestion": "统一替换为新称。",
+                },
+            ],
+        }
+        old_items = _structured_report_items(code, report)
+        source = {
+            "code": code,
+            "structured_report": report,
+            "item_acceptances": {
+                old_items[0]["id"]: {
+                    "status": "rejected",
+                    "rejection_reason": "false_positive",
+                },
+                old_items[1]["id"]: {"status": "accepted"},
+            },
+        }
+        prepared = _prepare_task_results([source])[0]
+        self.assertEqual(len(prepared["report_items"]), 1)
+        self.assertEqual(prepared["report_items"][0]["id"], old_items[1]["id"])
+        self.assertEqual(prepared["report_items"][0]["acceptance_status"], "accepted")
+        self.assertEqual(prepared["report_counts"]["issue"], 1)
+        self.assertEqual(prepared["report_counts"]["accepted"], 1)
+        self.assertEqual(prepared["report_counts"]["rejected"], 0)
+        self.assertTrue(prepared["result_summary"].startswith(report["summary"]))
+
+    def test_configuration_findings_with_document_evidence_or_custom_code_are_kept(
+        self,
+    ):
+        for code, excerpt in (
+            ("sensitive-terms", "文档中的词表配置说明"),
+            ("custom-dictionary-review", ""),
+        ):
+            with self.subTest(code=code):
+                source = {
+                    "code": code,
+                    "structured_report": {
+                        "items": [
+                            {
+                                "type": "issue",
+                                "category": "敏感词表配置",
+                                "excerpt": excerpt,
+                                "description": "词表配置说明存在问题。",
+                                "suggestion": "完善配置说明。",
+                            }
+                        ]
+                    },
+                }
+                prepared = _prepare_task_results([source])[0]
+                self.assertEqual(len(prepared["report_items"]), 1)
+                self.assertEqual(prepared["report_counts"]["issue"], 1)
+
+
 class ReportStatsMigrationTest(unittest.TestCase):
     def test_existing_database_adds_overall_counts_and_rebuilds_stale_cache(self):
         with tempfile.TemporaryDirectory() as root:
@@ -152,7 +282,11 @@ class ReportStatsMigrationTest(unittest.TestCase):
                 rows = _task_report_stat_rows_for_where("t.id = ?", (1,))
                 self.assertEqual(rows[0]["accepted"], 1)
                 self.assertEqual(rows[0]["rejected"], 1)
-                self.assertTrue(rows[0]["suppression_version"].startswith("4|"))
+                self.assertTrue(
+                    rows[0]["suppression_version"].startswith(
+                        f"{REPORT_STATS_PREPARATION_VERSION}|"
+                    )
+                )
                 init_db()
                 cached = db.execute(
                     "SELECT * FROM task_report_stats WHERE task_id = 1"

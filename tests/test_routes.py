@@ -31,7 +31,12 @@ from app.persistence.connection import get_db
 from app.persistence.defaults import seed_defaults
 from app.persistence.schema import init_db
 from app.persistence.settings import get_ip_username, get_setting, set_setting
-from app.reporting.service import _parse_result_json, _prepare_task_results
+from app.reporting.constants import REPORT_STATS_PREPARATION_VERSION
+from app.reporting.service import (
+    _parse_result_json,
+    _prepare_task_results,
+    _structured_report_items,
+)
 from app.tasks.files import UPLOAD_PATH_SAFE_CHARS, _upload_destination
 from app.tasks.submission import _consistency_task_title
 from app.web import register_routes
@@ -2742,7 +2747,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()
             )
         self.assertEqual(cached["non_issue_count"], 0)
-        self.assertTrue(cached["suppression_version"].startswith("4|"))
+        self.assertTrue(
+            cached["suppression_version"].startswith(
+                f"{REPORT_STATS_PREPARATION_VERSION}|"
+            )
+        )
 
     def test_suppression_rule_change_refreshes_cached_report_totals(self):
         task_id = self._insert_task()
@@ -4739,6 +4748,127 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(detail.status_code, 200)
         self.assertIn("这是后台实时检查结果", detail.get_data(as_text=True))
+
+    def test_dictionary_configuration_status_has_no_ai_conclusion_or_review(self):
+        for code, name, category in (
+            ("sensitive-terms", "敏感词检查", "敏感词表配置"),
+            ("sensitive-terms", "敏感词检查", "敏感词表读取失败"),
+            ("common-terms", "常用词检查", "常用词检查表配置"),
+            ("common-terms", "常用词检查", "常用词检查表读取失败"),
+        ):
+            with self.subTest(category=category):
+                report = {
+                    "summary": f"{name}结论：未配置词表或词表读取失败。",
+                    "items": [
+                        {
+                            "category": category,
+                            "location": "本地词表文件",
+                            "excerpt": "",
+                            "description": "未读取到有效词表规则。",
+                            "impact": "本次任务无法完成词表匹配。",
+                            "suggestion": "请确认词表格式和所需列。",
+                            "type": "suggestion",
+                        }
+                    ],
+                }
+                old_item_id = _structured_report_items(code, report)[0]["id"]
+                result = {
+                    "code": code,
+                    "name": name,
+                    "result": json.dumps(report, ensure_ascii=False),
+                    "structured_report": report,
+                    "item_acceptances": {old_item_id: {"status": "accepted"}},
+                }
+                original_json = json.dumps([result], ensure_ascii=False)
+                task_id = self._insert_task()
+                with self.app.app_context():
+                    db = get_db()
+                    db.execute(
+                        "UPDATE tasks SET result_json = ? WHERE id = ?",
+                        (original_json, task_id),
+                    )
+                    db.execute(
+                        """
+                        INSERT INTO task_report_stats(
+                            task_id, source_updated_at, suppression_version,
+                            suggestion_count, accepted_count, reviewed_item_count,
+                            updated_at
+                        )
+                        SELECT id, updated_at, '4|0:0:', 1, 1, 1, updated_at
+                        FROM tasks WHERE id = ?
+                        """,
+                        (task_id,),
+                    )
+                    db.commit()
+
+                listing = self.client.get("/admin/tasks")
+                self.assertEqual(listing.status_code, 200)
+                with self.app.app_context():
+                    cache = (
+                        get_db()
+                        .execute(
+                            "SELECT * FROM task_report_stats WHERE task_id = ?",
+                            (task_id,),
+                        )
+                        .fetchone()
+                    )
+                    self.assertEqual(cache["suggestion_count"], 0)
+                    self.assertEqual(cache["accepted_count"], 0)
+                    self.assertEqual(cache["reviewed_item_count"], 0)
+                    self.assertTrue(
+                        cache["suppression_version"].startswith(
+                            f"{REPORT_STATS_PREPARATION_VERSION}|"
+                        )
+                    )
+
+                for url in (
+                    f"/tasks/{task_id}",
+                    f"/admin/tasks/{task_id}",
+                    f"/admin/tasks/{task_id}/export",
+                ):
+                    response = self.client.get(url)
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    self.assertIsNone(soup.select_one(".report-table"))
+                    self.assertIsNone(soup.select_one("[data-report-item]"))
+                    self.assertNotIn("是否认可 AI 结论", soup.get_text())
+                    self.assertIn("检查未执行", soup.get_text())
+                    self.assertIn("未读取到有效词表规则", soup.get_text())
+
+                response = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+                self.assertEqual(response.status_code, 200)
+                workbook = load_workbook(io.BytesIO(response.data), read_only=True)
+                try:
+                    rows = list(workbook["报告条目"].iter_rows(values_only=True))
+                    columns = {label: index for index, label in enumerate(rows[0])}
+                    self.assertEqual(len(rows), 2)
+                    self.assertIsNone(rows[1][columns["是否认可 AI 结论"]])
+                    self.assertNotIn(rows[1][columns["AI判定"]], ("问题", "建议"))
+                    totals = dict(
+                        workbook["统计"].iter_rows(min_row=2, values_only=True)
+                    )
+                    self.assertEqual(totals["建议"], 0)
+                finally:
+                    workbook.close()
+
+                review = self.client.post(
+                    f"/admin/tasks/{task_id}/report-items",
+                    json={
+                        "result_code": code,
+                        "item_id": old_item_id,
+                        "acceptance_status": "accepted",
+                    },
+                )
+                self.assertEqual(review.status_code, 404)
+                with self.app.app_context():
+                    stored_json = (
+                        get_db()
+                        .execute(
+                            "SELECT result_json FROM tasks WHERE id = ?", (task_id,)
+                        )
+                        .fetchone()[0]
+                    )
+                self.assertEqual(stored_json, original_json)
 
     def test_task_detail_renders_report_items_and_counts(self):
         with self.app.app_context():

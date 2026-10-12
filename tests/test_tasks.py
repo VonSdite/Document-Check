@@ -1897,6 +1897,60 @@ class TaskExecutionTest(unittest.TestCase):
                 self.assertNotIn("max_completion_tokens", calls[0])
                 self.assertEqual(results[0]["result"], "完整对照结果")
 
+    def test_unavailable_dictionaries_only_return_check_status_without_llm(self):
+        root_dir = Path(self.temp_dir.name)
+        self.app.config["ROOT_DIR"] = root_dir
+        self.app.instance_path = str(root_dir / "instance")
+        terms = (
+            (SENSITIVE_TERMS_CHECK_CODE, "敏感词检查", ["不规范用语", "规范用语"]),
+            (COMMON_TERMS_CHECK_CODE, "常用词检查", ["常用词", "常见错误/不推荐用法"]),
+        )
+        paths = [root_dir / "sensitive_terms.xlsx", root_dir / "common_terms.xlsx"]
+        self.app.config["SENSITIVE_TERMS_PATH"] = str(paths[0])
+        self.app.config["COMMON_TERMS_PATH"] = str(paths[1])
+        check_items = [
+            {"id": index, "code": code, "name": name, "prompt": "本地检查"}
+            for index, (code, name, _) in enumerate(terms, start=1)
+        ]
+
+        for state in ("missing", "empty", "invalid"):
+            with self.subTest(state=state):
+                for path, (_, _, headers) in zip(paths, terms, strict=True):
+                    if state == "empty":
+                        workbook = Workbook()
+                        workbook.active.append(headers)
+                        workbook.save(path)
+                        workbook.close()
+                    elif state == "invalid":
+                        path.write_bytes(b"invalid workbook")
+                task_id = self._insert_running_document_task(check_items)
+                task = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                    .fetchone()
+                )
+                with patch("app.tasks.runner.run_check") as llm:
+                    results = _run_check_items_concurrently(
+                        self.app,
+                        task,
+                        check_items,
+                        "file: doc.txt\n\n测试正文。",
+                        max_workers=1,
+                        stream_trace_enabled=False,
+                    )
+                llm.assert_not_called()
+                self.assertEqual(len(results), 2)
+                for result in results:
+                    self.assertFalse(result.get("error"))
+                    report = result["structured_report"]
+                    self.assertEqual(report["items"], [])
+                    self.assertIn("检查未执行", report["summary"])
+                    self.assertIn(
+                        "未配置" if state == "missing" else "读取失败",
+                        report["summary"],
+                    )
+                    self.assertEqual(json.loads(result["result"]), report)
+
     def test_sensitive_terms_check_uses_local_dictionary_without_llm(self):
         terms_path = Path(self.temp_dir.name) / "sensitive_terms.xlsx"
         workbook = Workbook()
