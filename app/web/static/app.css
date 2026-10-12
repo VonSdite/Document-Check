@@ -2815,26 +2815,34 @@ body.table-column-resize-active * {
 }
 
 .report-classification-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 16px;
+  container: report-summary / inline-size;
 }
 
 .report-classification-summary h2 {
   margin: 0;
 }
 
+.report-classification-summary p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .report-counts {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
-  justify-content: flex-end;
 }
 
 .report-counts span {
-  min-width: 82px;
-  padding: 8px 10px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 80px;
+  padding: 12px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #f8fbff;
@@ -2847,7 +2855,20 @@ body.table-column-resize-active * {
   display: block;
   color: var(--text);
   font-size: 20px;
-  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+@container report-summary (min-width: 1200px) {
+  .report-counts {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+  }
+}
+
+@container report-summary (max-width: 599px) {
+  .report-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .result-summary {
@@ -4285,19 +4306,6 @@ body.table-column-resize-active * {
   .report-meta-list > .report-file-meta,
   .report-meta-list > .report-meta-half {
     grid-column: 1 / -1;
-  }
-
-  .report-classification-summary {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .report-counts {
-    justify-content: stretch;
-  }
-
-  .report-counts span {
-    flex: 1 1 120px;
   }
 }
 
