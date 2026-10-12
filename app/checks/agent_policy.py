@@ -8,6 +8,7 @@ from app.contracts.task_types import (
 )
 
 POLICY_KEY = "check_agent:"
+DEFAULT_AGENT_PARALLELISM = 3
 LOCAL_CODES = {"common-terms", "sensitive-terms", "hyperlink-validity"}
 TEXT_TASKS = {DOCUMENT_TASK_TYPE, CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE}
 

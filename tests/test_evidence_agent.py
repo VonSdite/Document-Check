@@ -127,6 +127,8 @@ class EvidenceAgentTest(unittest.TestCase):
         task_type="document_check",
         shared_facts=None,
         connection=None,
+        parallelism=1,
+        request_gate=None,
     ):
         options = options or AgentOptions(protocol="structured")
         index = DocumentIndex(
@@ -151,6 +153,8 @@ class EvidenceAgentTest(unittest.TestCase):
                 **(connection or {}),
             },
             options=options,
+            parallelism=parallelism,
+            request_gate=request_gate,
             store=store or MemoryCheckpointStore(),
             shared_facts=shared_facts,
             ensure_active=ensure or (lambda: None),

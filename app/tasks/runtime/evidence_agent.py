@@ -8,13 +8,14 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from contextlib import nullcontext
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langsmith import tracing_context
 from pydantic import ValidationError
 
-from app.checks.agent_policy import strategy_for
+from app.checks.agent_policy import DEFAULT_AGENT_PARALLELISM, strategy_for
 from app.checks.evidence_tools import (
     execute_tool,
     observation_summary,
@@ -41,6 +42,7 @@ from app.contracts.agent import (
 from app.documents.index import DocumentIndex
 from app.models.agent import AgentModel, AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError
+from app.tasks.runtime.agent_batches import LimitedModel, run_batch_requests
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +151,9 @@ class EvidenceAgent:
         model_factory=AgentModel,
         capabilities=None,
         shared_facts=None,
+        parallelism=DEFAULT_AGENT_PARALLELISM,
+        request_gate=None,
+        request_context=nullcontext,
     ):
         self.index = index
         self.item = item
@@ -156,6 +161,13 @@ class EvidenceAgent:
         self.store = store
         self.external_ensure_active = ensure_active
         self.on_activity = on_activity
+        self.on_output = on_output
+        self.model_factory = model_factory
+        self.parallelism = parallelism
+        self.request_gate = request_gate or threading.BoundedSemaphore(parallelism)
+        self.request_context = request_context
+        self._cached_jobs = {}
+        self._batch_failures = {}
         self.strategy = strategy_for(item["code"], task_type, options.strategy)
         self.shared_facts = shared_facts or SharedFacts()
         self.fact_key = hashlib.sha256(
@@ -213,7 +225,7 @@ class EvidenceAgent:
         self.state.setdefault("global_checks", [])
         self.state["fact_cache_key"] = self.fact_key
         self.shared_facts.put(self.fact_key, self.state["facts"])
-        self.model = model_factory(
+        model = model_factory(
             self.connection,
             before_request=self.before_request,
             after_request=self.after_request,
@@ -222,6 +234,7 @@ class EvidenceAgent:
             on_activity=on_activity,
             capabilities=self.state["capabilities"],
         )
+        self.model = LimitedModel(model, self.request_gate, self.ensure_active)
         self.pdf_evidence = build_pdf_table_evidence_index(
             "\n".join(b.text for b in index.blocks)
         )
@@ -283,8 +296,10 @@ class EvidenceAgent:
         )
         self.persist()
 
-    def after_request(self, payload, turn: AgentTurn | None, duration, error):
-        request = self.state["requests"][-1]
+    def after_request(
+        self, payload, turn: AgentTurn | None, duration, error, *, request_index=None
+    ):
+        request = self.state["requests"][-1 if request_index is None else request_index]
         request["duration_seconds"] = round(duration, 3)
         request["error"] = error or ""
         usage = turn.usage if turn else None
@@ -681,6 +696,8 @@ class EvidenceAgent:
         )
 
     def _discovery_jobs(self):
+        if "discover" in self._cached_jobs:
+            return self._cached_jobs["discover"]
         try:
             chunks = self.index.chunks(
                 min(self.options.chunk_chars, max(1000, self.max_input // 3))
@@ -688,11 +705,70 @@ class EvidenceAgent:
         except RuntimeError as exc:
             raise BudgetExceeded(str(exc)) from exc
         requirement_batches = self._pack(self.state["requirements"]) or [[]]
-        return [
+        jobs = [
             (chunk, requirements)
             for chunk in chunks
             for requirements in requirement_batches
         ]
+        self._cached_jobs["discover"] = jobs
+        return jobs
+
+    def _stage_answer(self, stage, job, contract, instruction, context):
+        cursor = self.state[f"{stage}_cursor"]
+        key = str(cursor)
+        failure_key = (stage, key)
+        if failure_key in self._batch_failures:
+            raise self._batch_failures.pop(failure_key)
+        digest = hashlib.sha256(_json(job).encode()).hexdigest()
+        outputs = self.state.get("batch_outputs", {}).get(stage, {})
+        response = outputs.pop(key, None)
+        if response is not None and response["digest"] == digest:
+            return contract.model_validate(response["output"])
+        if self.parallelism <= 1 or self.state.get(f"{stage}_pending_jobs"):
+            return self._ask(contract, instruction, context)
+        outputs = self.state.setdefault("batch_outputs", {}).setdefault(stage, {})
+        if key not in outputs:
+            jobs = (
+                self._discovery_jobs()
+                if stage == "discover"
+                else self._comparison_jobs()
+            )
+            requests, digests = {}, {}
+            for number in range(cursor, min(len(jobs), cursor + self.parallelism)):
+                batch_key = str(number)
+                if batch_key in outputs or (stage, batch_key) in self._batch_failures:
+                    continue
+                if stage == "discover":
+                    chunk, requirements = jobs[number]
+                    batch = {
+                        "sources": [block.as_dict() for block in chunk],
+                        "requirements": requirements,
+                    }
+                    batch_instruction, batch_context = self._discovery_request(batch)
+                else:
+                    batch = jobs[number]
+                    batch_instruction, batch_context = self._comparison_request(batch)
+                digests[batch_key] = hashlib.sha256(_json(batch).encode()).hexdigest()
+                requests[batch_key] = (contract, batch_instruction, batch_context)
+
+            def save_output(batch_key, result, capabilities):
+                outputs[batch_key] = {
+                    "digest": digests[batch_key],
+                    "output": result.model_dump(mode="json"),
+                }
+                self.state["capabilities"].update(capabilities)
+                self.persist()
+
+            failures = run_batch_requests(self, requests, save_output)
+            self._batch_failures.update(
+                {(stage, batch_key): error for batch_key, error in failures.items()}
+            )
+        if failure_key in self._batch_failures:
+            raise self._batch_failures.pop(failure_key)
+        response = outputs.pop(key, None)
+        if response is not None and response["digest"] == digest:
+            return contract.model_validate(response["output"])
+        return self._ask(contract, instruction, context)
 
     def _add_candidate(self, candidate):
         candidate = dict(candidate)
@@ -723,6 +799,38 @@ class EvidenceAgent:
             raise BudgetExceeded("候选数量达到检查预算，已保留可验证的中间结果")
         self.state["candidates"].append(candidate)
 
+    def _discovery_request(self, job):
+        sources = job["sources"]
+        batch_requirements = job["requirements"]
+        ids = {source["id"] for source in sources}
+        reusable = (
+            self.shared_facts.get(self.fact_key, ids)
+            if self._uses_strategy("consistency", "cross_document", "cross_language")
+            else []
+        )
+        reusable = [
+            fact
+            for fact in reusable
+            if self._verify_batch_reference(fact["reference"], sources)
+        ]
+        return (
+            "逐一检查本批来源，covered_source_ids 必须完整返回 expected_source_ids，每个恰好一次，包括最后一个。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。"
+            + self._compact_instruction(job),
+            {
+                "strategy": self.strategy,
+                "global_checks": self.state["global_checks"],
+                "extract_facts": self._uses_strategy(
+                    "consistency", "cross_document", "cross_language"
+                ),
+                "profile": self.state["plans"],
+                "requirements": batch_requirements,
+                "expected_source_ids": [source["id"] for source in sources],
+                "sources": sources,
+                "shared_facts": reusable,
+                "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
+            },
+        )
+
     def _discover(self):
         jobs = self._discovery_jobs()
         cursor = self.state["discover_cursor"]
@@ -737,34 +845,11 @@ class EvidenceAgent:
         sources = job["sources"]
         batch_requirements = job["requirements"]
         ids = {source["id"] for source in sources}
-        reusable = (
-            self.shared_facts.get(self.fact_key, ids)
-            if self._uses_strategy("consistency", "cross_document", "cross_language")
-            else []
-        )
-        reusable = [
-            fact
-            for fact in reusable
-            if self._verify_batch_reference(fact["reference"], sources)
-        ]
+        instruction, context = self._discovery_request(job)
+        reusable = context["shared_facts"]
         try:
-            discovery = self._ask(
-                Discovery,
-                "逐一检查本批来源，covered_source_ids 必须完整返回 expected_source_ids，每个恰好一次，包括最后一个。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。"
-                + self._compact_instruction(job),
-                {
-                    "strategy": self.strategy,
-                    "global_checks": self.state["global_checks"],
-                    "extract_facts": self._uses_strategy(
-                        "consistency", "cross_document", "cross_language"
-                    ),
-                    "profile": self.state["plans"],
-                    "requirements": batch_requirements,
-                    "expected_source_ids": [source["id"] for source in sources],
-                    "sources": sources,
-                    "shared_facts": reusable,
-                    "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
-                },
+            discovery = self._stage_answer(
+                "discover", job, Discovery, instruction, context
             )
         except IncompleteResponse as exc:
             self._recover_stage_job("discover", job, self._split_discovery_job, exc)
@@ -905,6 +990,8 @@ class EvidenceAgent:
         )
 
     def _comparison_jobs(self):
+        if "compare" in self._cached_jobs:
+            return self._cached_jobs["compare"]
         jobs = []
         if self._uses_strategy("consistency", "cross_document", "cross_language"):
             groups = defaultdict(list)
@@ -960,26 +1047,28 @@ class EvidenceAgent:
                             ),
                         }
                     )
+        self._cached_jobs["compare"] = jobs
         return jobs
+
+    def _comparison_request(self, job):
+        return (
+            "进行全局对照，核实对象、用途、版本、条件和单位。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，只生成待审查候选。left_facts 和 right_facts 同时提供时，仅对照两组之间的事实，各组内部另行检查。缺失候选必须对应已提供的业务要求，且观察不能被其他章节已有内容解释。覆盖不完整时保持待核实。"
+            + self._compact_instruction(job),
+            {
+                "strategy": self.strategy,
+                **{key: value for key, value in job.items() if key != "compact_retry"},
+            },
+        )
 
     def _compare(self):
         jobs = self._comparison_jobs()
         cursor = self.state["compare_cursor"]
         if cursor < len(jobs):
             job = self._stage_job("compare", jobs[cursor])
+            instruction, context = self._comparison_request(job)
             try:
-                result = self._ask(
-                    Comparison,
-                    "进行全局对照，核实对象、用途、版本、条件和单位。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，只生成待审查候选。left_facts 和 right_facts 同时提供时，仅对照两组之间的事实，各组内部另行检查。缺失候选必须对应已提供的业务要求，且观察不能被其他章节已有内容解释。覆盖不完整时保持待核实。"
-                    + self._compact_instruction(job),
-                    {
-                        "strategy": self.strategy,
-                        **{
-                            key: value
-                            for key, value in job.items()
-                            if key != "compact_retry"
-                        },
-                    },
+                result = self._stage_answer(
+                    "compare", job, Comparison, instruction, context
                 )
             except IncompleteResponse as exc:
                 self._recover_stage_job("compare", job, self._split_comparison_job, exc)

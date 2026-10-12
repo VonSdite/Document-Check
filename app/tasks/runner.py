@@ -5,6 +5,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
+from app.checks.agent_policy import DEFAULT_AGENT_PARALLELISM
 from app.checks.common_terms import (
     COMMON_TERMS_CHECK_CODE,
     build_common_terms_invalid_report,
@@ -523,6 +524,7 @@ def _run_check_items_concurrently(
         document_text, document_meta or {}, task["original_filename"]
     )
     shared_facts = SharedFacts()
+    agent_request_gate = threading.BoundedSemaphore(DEFAULT_AGENT_PARALLELISM)
     for checkpoint in get_db().execute(
         "SELECT state_json FROM task_checkpoints WHERE task_id = ?", (task_id,)
     ):
@@ -690,6 +692,8 @@ def _run_check_items_concurrently(
                         connection=connection,
                         options=options,
                         shared_facts=shared_facts,
+                        request_gate=agent_request_gate,
+                        request_context=app.app_context,
                         store=CheckpointStore(
                             task_id,
                             item["code"],

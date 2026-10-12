@@ -48,6 +48,8 @@ class AgentHTTPTest(unittest.TestCase):
                     .get("schema", {})
                 )
                 title = schema.get("title")
+                if title == "Discovery" and behavior.get("discovery_barrier"):
+                    behavior["discovery_barrier"].wait(timeout=5)
                 reason = "stop"
                 if payload.get("tools") and isinstance(
                     payload.get("tool_choice"), dict
@@ -210,6 +212,37 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertTrue(result["metadata"]["usage_complete"])
         self.assertEqual(result["metadata"]["known_input_tokens"], 100)
         self.assertEqual(result["metadata"]["known_output_tokens"], 20)
+
+    def test_parallel_discovery_over_http_keeps_coverage_report_and_usage(self):
+        self.behavior["discovery_barrier"] = threading.Barrier(3)
+        self.behavior["per_source_candidates"] = True
+        agent = EvidenceAgent(
+            index=DocumentIndex(
+                [
+                    {
+                        "filename": "a.txt",
+                        "text": "\n".join(
+                            f"设备{n}：" + "参数正常。" * 120 for n in range(3)
+                        ),
+                        "text_complete": True,
+                    }
+                ]
+            ),
+            item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+            task_type="document_check",
+            connection=self.connection,
+            options=AgentOptions(protocol="structured", chunk_chars=1000),
+            store=MemoryCheckpointStore(),
+            ensure_active=lambda: None,
+        )
+        result = agent.run()
+        self.assertEqual(result["error"], "")
+        self.assertTrue(result["metadata"]["coverage"]["all_checked"])
+        self.assertEqual(len(result["report"]["items"]), 3)
+        self.assertEqual(result["metadata"]["model_calls"], 5)
+        self.assertEqual(result["metadata"]["known_input_tokens"], 500)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 100)
+        self.assertTrue(result["metadata"]["usage_complete"])
 
     def test_plan_length_retry_over_http_preserves_usage_and_output_cap(self):
         self.behavior["truncate_plan"] = True

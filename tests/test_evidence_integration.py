@@ -220,6 +220,7 @@ class EvidenceIntegrationTest(unittest.TestCase):
                     task_type="document_check",
                     connection=connection,
                     options=old_options,
+                    parallelism=1,
                     store=memory,
                     ensure_active=lambda: None,
                     model_factory=lambda connection, **kwargs: ScriptedModel(
