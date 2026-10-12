@@ -15,6 +15,7 @@ from bs4.element import Tag
 from flask import Flask
 from openpyxl import Workbook, load_workbook
 from werkzeug.datastructures import FileStorage
+from werkzeug.http import parse_options_header
 
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -4758,6 +4759,89 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "1",
         )
 
+    def test_report_download_names_identify_document_and_task(self):
+        cases = [
+            (DOCUMENT_TASK_TYPE, "产品 说明.v2.docx", "产品 说明.v2"),
+            (DOCUMENT_TASK_TYPE, "release.notes.txt", "release.notes"),
+            (IMAGE_TASK_TYPE, "图纸.pdf", "图纸"),
+            (VIDEO_TASK_TYPE, "演示视频.mp4", "演示视频"),
+            (
+                CONSISTENCY_TASK_TYPE,
+                "素材文档：master.xlsx / 资料：related.txt",
+                "素材文档：master.xlsx _ 资料：related.txt",
+            ),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "跨语种检查：zh.txt / en.txt",
+                "跨语种检查：zh.txt _ en.txt",
+            ),
+        ]
+        for task_type, original_filename, name in cases:
+            task_id = self._insert_task(
+                task_type=task_type, original_filename=original_filename
+            )
+            for prefix in ("", "/admin"):
+                for route, extension in (("export", "html"), ("export.xlsx", "xlsx")):
+                    with self.subTest(task_type=task_type, prefix=prefix, route=route):
+                        response = self.client.get(f"{prefix}/tasks/{task_id}/{route}")
+                        self.assertEqual(response.status_code, 200)
+                        header = response.headers["Content-Disposition"]
+                        disposition, options = parse_options_header(header)
+                        self.assertEqual(disposition, "attachment")
+                        self.assertEqual(
+                            options["filename"], f"{name}_报告_{task_id}.{extension}"
+                        )
+                        self.assertIn("filename*=UTF-8''", header)
+                        self.assertTrue(header.isascii())
+                        response.close()
+
+    def test_report_download_names_are_stable_and_distinguish_same_named_tasks(self):
+        task_ids = [
+            self._insert_task(original_filename="产品说明.pdf") for _ in range(2)
+        ]
+        for task_id in task_ids:
+            for route, extension in (("export", "html"), ("export.xlsx", "xlsx")):
+                for _ in range(2):
+                    with self.subTest(task_id=task_id, route=route):
+                        response = self.client.get(f"/tasks/{task_id}/{route}")
+                        self.assertEqual(response.status_code, 200)
+                        _, options = parse_options_header(
+                            response.headers["Content-Disposition"]
+                        )
+                        self.assertEqual(
+                            options["filename"],
+                            f"产品说明_报告_{task_id}.{extension}",
+                        )
+                        response.close()
+
+    def test_report_download_names_handle_special_empty_and_long_names(self):
+        cases = [
+            ('产品:说明?"<>|*\r\n.txt', "产品_说明"),
+            (" ... .txt", "文档"),
+            ("说明😀" * 100 + ".txt", None),
+        ]
+        for original_filename, name in cases:
+            task_id = self._insert_task(original_filename=original_filename)
+            for route, extension in (("export", "html"), ("export.xlsx", "xlsx")):
+                with self.subTest(original_filename=original_filename, route=route):
+                    response = self.client.get(f"/tasks/{task_id}/{route}")
+                    self.assertEqual(response.status_code, 200)
+                    _, options = parse_options_header(
+                        response.headers["Content-Disposition"]
+                    )
+                    filename = options["filename"]
+                    if name is not None:
+                        self.assertEqual(filename, f"{name}_报告_{task_id}.{extension}")
+                    else:
+                        self.assertTrue(filename.startswith("说明😀"))
+                        self.assertTrue(
+                            filename.endswith(f"_报告_{task_id}.{extension}")
+                        )
+                    self.assertLessEqual(len(filename.encode("utf-8")), 255)
+                    self.assertNotRegex(filename, r'[<>:"/\\|?*\x00-\x1f\x7f]')
+                    self.assertNotIn("\ufffd", filename)
+                    response.close()
+
     def test_task_report_exports_excel_for_statistics(self):
         with self.app.app_context():
             now = "2026-05-23 12:10:00"
@@ -4846,9 +4930,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
             response.mimetype,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        self.assertIn(
-            f"document-check-report-{task_id}.xlsx",
-            response.headers["Content-Disposition"],
+        self.assertEqual(
+            parse_options_header(response.headers["Content-Disposition"])[1][
+                "filename"
+            ],
+            f"report_报告_{task_id}.xlsx",
         )
         workbook = load_workbook(
             io.BytesIO(response.data), read_only=True, data_only=True

@@ -1,7 +1,8 @@
+import re
+from io import BytesIO
 from pathlib import Path
 
 from flask import (
-    Response,
     current_app,
     flash,
     redirect,
@@ -11,7 +12,12 @@ from flask import (
     url_for,
 )
 
-from app.contracts.task_types import DOCUMENT_TASK_TYPE, VIDEO_TASK_TYPE
+from app.contracts.task_types import (
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+    VIDEO_TASK_TYPE,
+)
 from app.reporting.constants import (
     REPORT_EXPORT_MIMETYPE,
     REPORT_IMPORT_MAX_BYTES,
@@ -26,6 +32,20 @@ from app.reporting.service import (
     _uses_compact_media_report,
     update_report_item_review,
 )
+from app.tasks.submission import _consistency_task_title
+
+
+def _report_download_name(task, extension: str) -> str:
+    task_type = task["task_type"] or DOCUMENT_TASK_TYPE
+    if task_type == CONSISTENCY_TASK_TYPE:
+        name = _consistency_task_title(task)
+    else:
+        name = str(task["original_filename"] or "")
+        if task_type != LANGUAGE_CONSISTENCY_TASK_TYPE:
+            name = Path(name.replace("\\", "/")).stem
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]+', "_", name).strip(" ._")
+    name = name.encode("utf-8")[:180].decode("utf-8", errors="ignore").rstrip(" ._")
+    return f"{name or '文档'}_报告_{task['id']}.{extension}"
 
 
 def _import_task_report_excel(task, detail_endpoint: str):
@@ -80,11 +100,11 @@ def _export_task_report(task):
         app_css=app_css,
         table_resize_js=table_resize_js,
     )
-    filename = f"document-check-report-{task['id']}.html"
-    return Response(
-        html,
+    return send_file(
+        BytesIO(html.encode("utf-8")),
+        as_attachment=True,
+        download_name=_report_download_name(task, "html"),
         mimetype="text/html",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -99,6 +119,6 @@ def _export_task_report_excel(task):
     return send_file(
         build_report_workbook(task),
         as_attachment=True,
-        download_name=f"document-check-report-{task['id']}.xlsx",
+        download_name=_report_download_name(task, "xlsx"),
         mimetype=REPORT_EXPORT_MIMETYPE,
     )
