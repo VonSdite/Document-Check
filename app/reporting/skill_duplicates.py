@@ -12,7 +12,7 @@ def _evidence_key(item):
     values = []
     for key in ("excerpt", "description"):
         value = unicodedata.normalize("NFKC", str(item.get(key) or ""))
-        value = re.sub(r"\s+", "", value).strip("。.;；")
+        value = re.sub(r"\s+", " ", value).strip().strip("。.;；")
         if not value:
             return None
         values.append(value)
@@ -34,9 +34,14 @@ def merge_skill_duplicates(results, priority_key):
         codes = {result.get("code") for result, _ in group}
         if len(codes) < 2 or not any(r.get("kind") == "specialist" for r, _ in group):
             continue
-        feedback = {item.get("acceptance_status") for _, item in group} - {
-            "pending",
-            None,
+        feedback = {
+            (
+                item.get("acceptance_status"),
+                item.get("rejection_reason"),
+                item.get("rejection_note"),
+            )
+            for _, item in group
+            if item.get("acceptance_status") not in {"pending", None}
         }
         if len(feedback) > 1:
             continue

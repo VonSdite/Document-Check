@@ -2742,7 +2742,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()
             )
         self.assertEqual(cached["non_issue_count"], 0)
-        self.assertTrue(cached["suppression_version"].startswith("5|"))
+        self.assertTrue(cached["suppression_version"].startswith("6|"))
 
     def test_suppression_rule_change_refreshes_cached_report_totals(self):
         task_id = self._insert_task()

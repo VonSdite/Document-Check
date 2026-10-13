@@ -37,12 +37,31 @@
     <div class="form-actions"><button class="primary-button" type="submit">保存案例</button></div>
   </form>
 </section>
-<section class="panel">
+<section class="panel" id="skill-examples">
+  <h2>代表性示例</h2>
+  <p class="muted">选择正式检查引用的已确认案例，真实问题和正确反例各最多两条。其余案例继续用于验证。</p>
+  <form method="post" class="stack-form">
+    <input type="hidden" name="action" value="select_examples">
+    <input type="hidden" name="version" value="{{ skill.version }}">
+    <div class="check-chip-grid">
+      {% for case in cases if case.data.reviewed %}
+      <label class="check-chip"><input type="checkbox" name="example_case_ids" value="{{ case.id }}"{% if case.is_example %} checked{% endif %}><span>{{ case.data.title }} · {{ '真实问题' if case.data.kind == 'positive' else '正确反例' }}</span></label>
+      {% else %}<p class="muted">确认案例后可选择代表性示例。</p>{% endfor %}
+    </div>
+    <div class="form-actions"><button class="secondary-button" type="submit"{% if not cases %} disabled{% endif %}>保存示例选择</button></div>
+  </form>
+</section>
+<section class="panel" id="skill-cases">
   <h2>案例库与验证</h2>
-  <p class="muted">执行验证会使用所选模型创建独立任务，读取完整验证文本，并排除当前案例的提示词示例。打开报告后对照期望结果人工复核。每次正式检查最多引用两条真实问题和两条正确反例。</p>
+  <p class="muted">执行验证会使用所选模型创建独立任务，读取完整验证文本，并排除当前案例的提示词示例。验证完成后对照期望结果，保存通过或未通过的复核结论。</p>
+  <p class="report-limit-notice">当前 v{{ skill.version }}：{{ validation_counts.passed }} 条验证通过，{{ validation_counts.failed }} 条未通过，{{ validation_counts.pending }} 条待验证或待复核。</p>
   {% for case in cases %}
-  <details class="result-raw-details" id="case-{{ case.id }}">
-    <summary>{{ case.data.title }} · {{ '真实问题' if case.data.kind == 'positive' else '正确反例' }} · {{ '已确认' if case.data.reviewed else '待确认' }}</summary>
+  <details class="result-raw-details" id="case-{{ case.id }}"{% if case.focused %} open{% endif %}>
+    <summary>{{ case.data.title }} · {{ '真实问题' if case.data.kind == 'positive' else '正确反例' }} · {{ '已确认' if case.data.reviewed else '待确认' }}{% if case.is_example %} · 提示词示例{% endif %}</summary>
+    <p class="muted">{{ case.data.reference }} · {{ case.data.location }}</p>
+    <div class="markdown-body">期望结果：{{ case.data.expected_result|markdown }}</div>
+    <details class="result-raw-details"{% if case.edit_open %} open{% endif %}>
+    <summary>编辑案例内容与证据</summary>
     <form method="post" class="stack-form">
       <input type="hidden" name="action" value="save_case">
       <input type="hidden" name="case_id" value="{{ case.id }}">
@@ -50,9 +69,29 @@
       {% set case_data = case.data %}{% include "_skill_case_fields.html" %}
       <div class="form-actions"><button class="primary-button" type="submit">保存案例修改</button></div>
     </form>
+    </details>
     {% if case.validation_task_id %}
-    <p>上次验证：任务 #{{ case.validation_task_id }} · v{{ case.validation_version }}{% if case.validation_version != skill.version %} · 请使用当前版本重新验证{% endif %}
+    <p>上次验证：任务 #{{ case.validation_task_id }} · v{{ case.validation_version }}{% if case.validation_status %} · {{ case.validation_status }}{% endif %}{% if case.validation_version != skill.version %} · 请使用当前版本重新验证{% endif %}
     {% if case.validation_url %}<a href="{{ case.validation_url }}">查看验证报告</a>{% endif %}</p>
+    {% endif %}
+    {% if case.validation_review %}
+    <p>{{ '当前版本复核' if case.validation_current else '历史版本复核' }}：{{ '通过' if case.validation_review.verdict == 'passed' else '未通过' }} · {{ case.validation_review.reviewed_at }} · {{ case.validation_review.reviewer }}</p>
+    {% if case.validation_review.note %}<p class="muted">{{ case.validation_review.note }}</p>{% endif %}
+    {% endif %}
+    {% if case.validation_can_review %}
+    <form method="post" class="stack-form">
+      <input type="hidden" name="action" value="review_validation">
+      <input type="hidden" name="case_id" value="{{ case.id }}">
+      <input type="hidden" name="version" value="{{ skill.version }}">
+      <input type="hidden" name="validation_task_id" value="{{ case.validation_task_id }}">
+      <label>验证复核结论<select name="validation_verdict" required>
+        <option value="">请对照报告和期望结果选择</option>
+        <option value="passed"{% if case.validation_form.verdict == 'passed' %} selected{% endif %}>通过：识别真实问题，或正确放行反例</option>
+        <option value="failed"{% if case.validation_form.verdict == 'failed' %} selected{% endif %}>未通过：漏报、误报或结论不符合期望</option>
+      </select></label>
+      <label>复核说明（未通过时必填）<textarea name="validation_note" rows="3" maxlength="4000">{{ case.validation_form.note or '' }}</textarea></label>
+      <div class="form-actions"><button class="primary-button" type="submit">保存验证复核</button></div>
+    </form>
     {% endif %}
     <form method="post" class="stack-form" data-prevent-double-submit="true">
       <input type="hidden" name="action" value="validate_case">

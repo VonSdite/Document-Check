@@ -116,6 +116,9 @@
             {% if result.kind == 'specialist' %}<small>专项 v{{ result.version }}</small>{% endif %}
           </div>
         </div>
+        {% if result.validation_case %}
+        <div class="report-limit-notice"><strong>案例验证：{{ result.validation_case.title }}</strong><div class="markdown-body">期望结果：{{ result.validation_case.expected_result|markdown }}</div></div>
+        {% endif %}
         {% if result.error %}
         <div class="error-box report-error">本检查项执行失败：{{ result.error }}</div>
         {% endif %}

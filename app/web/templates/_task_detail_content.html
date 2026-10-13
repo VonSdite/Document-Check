@@ -177,6 +177,12 @@
         <small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{% if result.execution_label %}状态：{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}{% endif %}</small>
       </div>
     </div>
+    {% if result.validation_case %}
+    <div class="report-limit-notice">
+      <strong>案例验证：{{ result.validation_case.title }} · {{ '真实问题' if result.validation_case.kind == 'positive' else '正确反例（应放行）' }}</strong>
+      <div class="markdown-body">期望结果：{{ result.validation_case.expected_result|markdown }}</div>
+    </div>
+    {% endif %}
     {% if result.uses_model %}
     <details class="model-output-details" data-model-output="{{ result.code }}">
       <summary>模型输出内容<small data-output-status></small></summary>

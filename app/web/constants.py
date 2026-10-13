@@ -28,4 +28,5 @@ CONSOLE_USER_ENDPOINTS = {
     "admin_images",
     "admin_videos",
     "admin_models",
+    "admin_skill",
 }

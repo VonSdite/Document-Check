@@ -59,7 +59,11 @@ def normalize_case(data):
     kind = data.get("case_kind", "positive")
     if kind not in {"positive", "negative"}:
         raise ValueError("请选择真实问题或正确反例。")
-    result = {"kind": kind, "reviewed": data.get("reviewed") == "on"}
+    result = {
+        "kind": kind,
+        "reviewed": data.get("reviewed") == "on",
+        "use_as_example": False,
+    }
     for key, label in CASE_FIELDS:
         value = str(data.get(key) or "").strip()
         limit = MAX_CASE_TEXT_CHARS if key == "document_text" else 8_000
@@ -96,6 +100,16 @@ def skill_cases(db, skill_id):
     return [{**dict(row), "data": _json_object(row["case_json"])} for row in rows]
 
 
+def get_skill_case(db, skill_id, case_id):
+    row = db.execute(
+        "SELECT * FROM skill_cases WHERE id=? AND check_item_id=?",
+        (case_id, skill_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("案例不存在。")
+    return {**dict(row), "data": _json_object(row["case_json"])}
+
+
 def create_skill(db, name, description=""):
     name = str(name or "").strip()
     if not name or len(name) > 120:
@@ -116,12 +130,96 @@ def selected_examples(cases):
     for case in cases:
         data = case["data"]
         kind = data.get("kind")
-        if not data.get("reviewed") or kind not in counts:
+        if (
+            not data.get("reviewed")
+            or not data.get("use_as_example", True)
+            or kind not in counts
+        ):
             continue
         if counts[kind] < MAX_EXAMPLES_PER_KIND:
             counts[kind] += 1
             selected.append(case)
     return selected
+
+
+def select_skill_examples(db, item, case_ids):
+    cases = skill_cases(db, item["id"])
+    selected_ids = set()
+    counts = {"positive": 0, "negative": 0}
+    by_id = {case["id"]: case for case in cases}
+    for raw_id in case_ids:
+        if not str(raw_id).isdigit():
+            raise ValueError("示例案例编号无效。")
+        case_id = int(raw_id)
+        if case_id in selected_ids:
+            continue
+        case = by_id.get(case_id)
+        if case is None or not case["data"].get("reviewed"):
+            raise ValueError("请选择本专项中已人工确认的案例。")
+        kind = case["data"].get("kind")
+        if kind not in counts:
+            raise ValueError("案例类型无效。")
+        counts[kind] += 1
+        if counts[kind] > MAX_EXAMPLES_PER_KIND:
+            raise ValueError("真实问题和正确反例各最多选择两条代表性示例。")
+        selected_ids.add(case_id)
+    now = now_text()
+    changed = False
+    for case in cases:
+        use_as_example = case["id"] in selected_ids
+        if case["data"].get("use_as_example", True) == use_as_example:
+            continue
+        changed = True
+        case["data"]["use_as_example"] = use_as_example
+        db.execute(
+            "UPDATE skill_cases SET case_json=?, updated_at=? WHERE id=?",
+            (json.dumps(case["data"], ensure_ascii=False), now, case["id"]),
+        )
+    if changed:
+        _refresh_after_case_change(db, item)
+
+
+def record_case_validation(db, item, case_id, task, data, reviewer):
+    case = get_skill_case(db, item["id"], case_id)
+    task = dict(task)
+    if case["validation_task_id"] != task["id"]:
+        raise ValueError("案例的验证任务已更新，请刷新页面后复核。")
+    if case["validation_version"] != item["version"]:
+        raise ValueError("请使用当前规则版本重新验证后复核。")
+    if task["status"] != "completed":
+        raise ValueError("请等待验证任务成功完成后复核。")
+    try:
+        snapshots = json.loads(task.get("checks_snapshot_json") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        snapshots = []
+    if not isinstance(snapshots, list) or not any(
+        isinstance(snapshot, dict)
+        and snapshot.get("code") == item["code"]
+        and snapshot.get("version") == item["version"]
+        and snapshot.get("validation_case_id") == case_id
+        for snapshot in snapshots
+    ):
+        raise ValueError("验证任务与当前专项案例不匹配。")
+    verdict = data.get("validation_verdict")
+    if verdict not in {"passed", "failed"}:
+        raise ValueError("请选择验证通过或未通过。")
+    note = str(data.get("validation_note") or "").strip()
+    if verdict == "failed" and not note:
+        raise ValueError("请说明验证未通过的原因，例如漏报或误报。")
+    if len(note) > 4_000:
+        raise ValueError("验证复核说明最多填写 4000 字。")
+    case["data"]["validation_review"] = {
+        "task_id": task["id"],
+        "version": item["version"],
+        "verdict": verdict,
+        "note": note,
+        "reviewer": reviewer,
+        "reviewed_at": now_text(),
+    }
+    db.execute(
+        "UPDATE skill_cases SET case_json=? WHERE id=?",
+        (json.dumps(case["data"], ensure_ascii=False), case_id),
+    )
 
 
 def compile_skill_prompt(item, cases):
@@ -231,14 +329,10 @@ def save_case(db, item, data, case_id=None, source=None):
         )
         case_id = row.lastrowid
     else:
-        existing = next(
-            (case for case in skill_cases(db, item["id"]) if case["id"] == case_id),
-            None,
-        )
-        if existing is None:
-            raise ValueError("案例不存在。")
+        existing = get_skill_case(db, item["id"], case_id)
         if existing["data"].get("source") and not source:
             value["source"] = existing["data"]["source"]
+        value["use_as_example"] = existing["data"].get("use_as_example", True)
         db.execute(
             "UPDATE skill_cases SET case_json=?, updated_at=?, validation_task_id=NULL, validation_version=NULL WHERE id=?",
             (json.dumps(value, ensure_ascii=False), now, case_id),

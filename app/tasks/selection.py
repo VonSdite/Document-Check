@@ -107,6 +107,11 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
             )
             if isinstance(item.get("validation_case_id"), int):
                 snapshot["validation_case_id"] = item["validation_case_id"]
+                if isinstance(item.get("validation_case"), dict):
+                    snapshot["validation_case"] = {
+                        key: str(item["validation_case"].get(key) or "")
+                        for key in ("title", "kind", "expected_result")
+                    }
         items.append(snapshot)
     return items
 

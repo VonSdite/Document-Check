@@ -204,7 +204,9 @@ def submit_document_task(
     return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
 
 
-def submit_skill_case_validation(identity, model_id, snapshot, case):
+def submit_skill_case_validation(
+    identity, model_id, snapshot, case, *, saved_paths=None
+):
     """以专项规则快照创建独立案例验证任务，使用完整验证文本。"""
     model = _find_enabled_model(model_id, identity.subject)
     if model is None:
@@ -216,7 +218,8 @@ def submit_skill_case_validation(identity, model_id, snapshot, case):
         stream=BytesIO(text.encode("utf-8")),
         filename=f"案例验证_{case['title']}.txt",
     )
-    saved_paths = []
+    if saved_paths is None:
+        saved_paths = []
     try:
         row = _prepare_document_task_row(
             upload, identity, model, [snapshot["id"]], [snapshot], saved_paths

@@ -12,8 +12,11 @@ from app.checks.skills import (
     create_skill,
     delete_case,
     get_skill,
+    get_skill_case,
     save_case,
     save_skill,
+    select_skill_examples,
+    selected_examples,
     skill_cases,
 )
 from app.persistence.connection import get_db
@@ -95,6 +98,7 @@ class SkillManagementTest(unittest.TestCase):
             skill_id = create_skill(db, "默认值冲突")
             save_skill(db, get_skill(db, skill_id), rule_data())
             case_id = save_case(db, get_skill(db, skill_id), case_data())
+            select_skill_examples(db, get_skill(db, skill_id), [case_id])
             if enabled:
                 save_skill(db, get_skill(db, skill_id), rule_data(enabled="on"))
             db.commit()
@@ -174,6 +178,13 @@ class SkillManagementTest(unittest.TestCase):
             save_case(
                 db, get_skill(db, skill_id), case_data(title="未核对案例", reviewed="")
             )
+            cases = skill_cases(db, skill_id)
+            representative_ids = [
+                case["id"]
+                for kind in ("positive", "negative")
+                for case in [c for c in cases if c["data"]["kind"] == kind][:2]
+            ]
+            select_skill_examples(db, get_skill(db, skill_id), representative_ids)
             snapshot = check_snapshot(db, get_skill(db, skill_id))
             self.assertEqual(len(snapshot["example_case_ids"]), 4)
             self.assertNotIn("未核对案例", snapshot["prompt"])
@@ -319,6 +330,9 @@ class SkillManagementTest(unittest.TestCase):
             result = json.loads(task["result_json"])[0]
             self.assertEqual(result["kind"], "specialist")
             self.assertEqual(result["version"], snapshot["version"])
+            self.assertEqual(result["validation_case"], snapshot["validation_case"])
+        page = self.client.get(f"/admin/tasks/{task_id}")
+        self.assertIn(case_data()["expected_result"], page.get_data(as_text=True))
 
     def test_validation_cannot_use_another_users_model(self):
         skill_id, case_id = self.skill()
@@ -387,6 +401,429 @@ class SkillManagementTest(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 404)
+
+    def _start_validation(self, skill_id, case_id):
+        model_id = self.fixture._configure_provider()
+        response = self.client.post(
+            f"/admin/rules/skills/{skill_id}",
+            data={"action": "validate_case", "case_id": case_id, "model_id": model_id},
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            return get_skill_case(get_db(), skill_id, case_id)["validation_task_id"]
+
+    def test_document_picker_keeps_general_defaults_and_requires_specialist_choice(
+        self,
+    ):
+        skill_id, _ = self.skill(enabled=True)
+        for url in ("/", "/admin/tasks"):
+            soup = BeautifulSoup(
+                self.client.get(url).get_data(as_text=True), "html.parser"
+            )
+            general = soup.select('[data-check-group="general"] input[name="checks"]')
+            self.assertTrue(general)
+            self.assertTrue(all(field.has_attr("checked") for field in general))
+            specialized = soup.select_one(
+                f'[data-check-group="specialist"] input[value="{skill_id}"]'
+            )
+            self.assertIsNotNone(specialized)
+            self.assertFalse(specialized.has_attr("checked"))
+
+    def test_new_cases_require_explicit_example_selection_and_later_cases_can_be_used(
+        self,
+    ):
+        skill_id, original_id = self.skill()
+        with self.app.app_context():
+            db = get_db()
+            later_id = save_case(
+                db, get_skill(db, skill_id), case_data(title="新增真实问题")
+            )
+            negative_id = save_case(
+                db,
+                get_skill(db, skill_id),
+                case_data(title="新增正确反例", case_kind="negative"),
+            )
+            self.assertEqual(
+                [c["id"] for c in selected_examples(skill_cases(db, skill_id))],
+                [original_id],
+            )
+            select_skill_examples(db, get_skill(db, skill_id), [later_id, negative_id])
+            snapshot = check_snapshot(db, get_skill(db, skill_id))
+            self.assertEqual(snapshot["example_case_ids"], [later_id, negative_id])
+            self.assertIn("新增正确反例", snapshot["prompt"])
+            self.assertNotIn(case_data()["title"], snapshot["prompt"])
+            version = get_skill(db, skill_id)["version"]
+            select_skill_examples(db, get_skill(db, skill_id), [later_id, negative_id])
+            self.assertEqual(get_skill(db, skill_id)["version"], version)
+            save_case(
+                db, get_skill(db, skill_id), case_data(title="修改已选示例"), later_id
+            )
+            self.assertTrue(
+                get_skill_case(db, skill_id, later_id)["data"]["use_as_example"]
+            )
+
+    def test_editing_legacy_case_preserves_its_example_selection(self):
+        skill_id, case_id = self.skill()
+        with self.app.app_context():
+            db = get_db()
+            legacy_data = get_skill_case(db, skill_id, case_id)["data"]
+            legacy_data.pop("use_as_example")
+            db.execute(
+                "UPDATE skill_cases SET case_json=? WHERE id=?",
+                (json.dumps(legacy_data, ensure_ascii=False), case_id),
+            )
+            save_case(
+                db,
+                get_skill(db, skill_id),
+                case_data(evidence="编辑后的旧版案例证据"),
+                case_id,
+            )
+            snapshot = check_snapshot(db, get_skill(db, skill_id))
+            self.assertEqual(snapshot["example_case_ids"], [case_id])
+            self.assertIn("编辑后的旧版案例证据", snapshot["prompt"])
+
+    def test_example_selection_rejects_over_budget_unconfirmed_and_foreign_cases(self):
+        skill_id, first_id = self.skill()
+        other_skill, foreign_id = self.skill()
+        with self.app.app_context():
+            db = get_db()
+            second_id = save_case(
+                db, get_skill(db, skill_id), case_data(title="正例二")
+            )
+            third_id = save_case(db, get_skill(db, skill_id), case_data(title="正例三"))
+            pending_id = save_case(db, get_skill(db, skill_id), case_data(reviewed=""))
+            db.commit()
+            version = get_skill(db, skill_id)["version"]
+        for ids in (
+            [first_id, second_id, third_id],
+            [pending_id],
+            [foreign_id],
+            ["invalid"],
+        ):
+            response = self.client.post(
+                f"/admin/rules/skills/{skill_id}",
+                data={"action": "select_examples", "example_case_ids": ids},
+            )
+            self.assertEqual(response.status_code, 400)
+            with self.app.app_context():
+                self.assertEqual(get_skill(get_db(), skill_id)["version"], version)
+                self.assertEqual(
+                    check_snapshot(get_db(), get_skill(get_db(), skill_id))[
+                        "example_case_ids"
+                    ],
+                    [first_id],
+                )
+        self.assertNotEqual(other_skill, skill_id)
+
+    def test_report_source_survives_rule_save_before_case_is_added(self):
+        skill_id, _ = self.skill()
+        task_id = self.fixture._insert_task()
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=?, document_text=? WHERE id=?",
+                (
+                    json.dumps([report("consistency")]),
+                    case_data()["document_text"],
+                    task_id,
+                ),
+            )
+            get_db().commit()
+        response = self.client.post(
+            f"/admin/rules/skills/{skill_id}",
+            query_string={
+                "source_task_id": task_id,
+                "source_result_code": "consistency",
+                "source_item_id": "consistency-1",
+            },
+            data={"action": "save_skill", **rule_data(target="更新后的专项目标")},
+        )
+        self.assertEqual(response.status_code, 302)
+        soup = BeautifulSoup(
+            self.client.get(response.location).get_data(as_text=True), "html.parser"
+        )
+        self.assertEqual(
+            soup.select_one('#new-case input[name="source_task_id"]')["value"],
+            str(task_id),
+        )
+        self.assertIn(
+            "默认超时为 30 s",
+            soup.select_one('#new-case textarea[name="evidence"]').text,
+        )
+
+    def test_duplicate_validation_submission_reuses_pending_task(self):
+        skill_id, case_id = self.skill()
+        task_id = self._start_validation(skill_id, case_id)
+        self.assertEqual(self._start_validation(skill_id, case_id), task_id)
+        with self.app.app_context():
+            db = get_db()
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            db.execute("UPDATE tasks SET status='canceled' WHERE id=?", (task_id,))
+            db.commit()
+        self.assertNotEqual(self._start_validation(skill_id, case_id), task_id)
+
+    def test_validation_snapshot_keeps_expectation_out_of_prompt_and_ignores_task_cap(
+        self,
+    ):
+        skill_id, case_id = self.skill()
+        expectation = "仅用于复核的唯一期望结果 ABC123"
+        with self.app.app_context():
+            db = get_db()
+            save_case(
+                db,
+                get_skill(db, skill_id),
+                case_data(expected_result=expectation),
+                case_id,
+            )
+            db.commit()
+            set_setting("task_report_limit", 1)
+        task_id = self._start_validation(skill_id, case_id)
+        with self.app.app_context():
+            task = (
+                get_db()
+                .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                .fetchone()
+            )
+            snapshot = json.loads(task["checks_snapshot_json"])[0]
+            self.assertNotIn(expectation, snapshot["prompt"])
+            self.assertEqual(
+                snapshot["validation_case"]["expected_result"], expectation
+            )
+            self.assertEqual(snapshot["task_report_limit"], 0)
+
+    def test_validation_review_records_current_version_and_marks_old_reviews(self):
+        skill_id, case_id = self.skill()
+        task_id = self._start_validation(skill_id, case_id)
+        with self.app.app_context():
+            db = get_db()
+            version = get_skill(db, skill_id)["version"]
+            db.execute("UPDATE tasks SET status='running' WHERE id=?", (task_id,))
+            db.commit()
+        with patch(
+            "app.tasks.runner.run_check",
+            return_value=json.dumps(report("result")["structured_report"]),
+        ):
+            TaskRunner(self.app).run(task_id)
+        data = {
+            "action": "review_validation",
+            "case_id": case_id,
+            "validation_task_id": task_id,
+            "validation_verdict": "passed",
+        }
+        response = self.client.post(f"/admin/rules/skills/{skill_id}", data=data)
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            db = get_db()
+            review = get_skill_case(db, skill_id, case_id)["data"]["validation_review"]
+            self.assertEqual(review["version"], version)
+            self.assertEqual(review["reviewer"], "ip:127.0.0.1")
+            self.assertEqual(get_skill(db, skill_id)["version"], version)
+            save_skill(db, get_skill(db, skill_id), rule_data(target="新版检查目标"))
+            db.commit()
+        page = self.client.get(f"/admin/rules/skills/{skill_id}").get_data(as_text=True)
+        self.assertIn("历史版本复核", page)
+        self.assertIn("0 条验证通过", page)
+        rejected = self.client.post(f"/admin/rules/skills/{skill_id}", data=data)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("重新验证", rejected.get_data(as_text=True))
+
+    def test_validation_review_requires_completed_matching_task_and_failure_reason(
+        self,
+    ):
+        skill_id, case_id = self.skill()
+        task_id = self._start_validation(skill_id, case_id)
+        data = {
+            "action": "review_validation",
+            "case_id": case_id,
+            "validation_task_id": task_id,
+            "validation_verdict": "passed",
+        }
+        for status in ("queued", "running", "partial", "failed", "canceled"):
+            with self.app.app_context():
+                get_db().execute(
+                    "UPDATE tasks SET status=? WHERE id=?", (status, task_id)
+                )
+                get_db().commit()
+            self.assertEqual(
+                self.client.post(
+                    f"/admin/rules/skills/{skill_id}", data=data
+                ).status_code,
+                400,
+            )
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET status='completed' WHERE id=?", (task_id,)
+            )
+            get_db().commit()
+        self.assertEqual(
+            self.client.post(
+                f"/admin/rules/skills/{skill_id}",
+                data={**data, "validation_verdict": "failed"},
+            ).status_code,
+            400,
+        )
+        response = self.client.post(
+            f"/admin/rules/skills/{skill_id}",
+            data={
+                **data,
+                "validation_verdict": "failed",
+                "validation_note": "未识别两处默认值冲突",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            db = get_db()
+            self.assertEqual(
+                get_skill_case(db, skill_id, case_id)["data"]["validation_review"][
+                    "verdict"
+                ],
+                "failed",
+            )
+            db.execute(
+                "UPDATE tasks SET checks_snapshot_json='[]' WHERE id=?", (task_id,)
+            )
+            db.commit()
+        response = self.client.post(f"/admin/rules/skills/{skill_id}", data=data)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("不匹配", response.get_data(as_text=True))
+
+    def test_negative_case_can_be_reviewed_as_correctly_released(self):
+        skill_id, _ = self.skill()
+        with self.app.app_context():
+            db = get_db()
+            case_id = save_case(
+                db,
+                get_skill(db, skill_id),
+                case_data(
+                    case_kind="negative",
+                    document_text="默认超时为 30 s；其他模式默认超时为 60 s。",
+                    expected_result="不同运行模式应当放行",
+                ),
+            )
+            db.commit()
+        task_id = self._start_validation(skill_id, case_id)
+        with self.app.app_context():
+            get_db().execute("UPDATE tasks SET status='running' WHERE id=?", (task_id,))
+            get_db().commit()
+        with patch("app.tasks.runner.run_check", return_value='{"items":[]}'):
+            TaskRunner(self.app).run(task_id)
+        response = self.client.post(
+            f"/admin/rules/skills/{skill_id}",
+            data={
+                "action": "review_validation",
+                "case_id": case_id,
+                "validation_task_id": task_id,
+                "validation_verdict": "passed",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(
+                get_skill_case(get_db(), skill_id, case_id)["data"][
+                    "validation_review"
+                ]["verdict"],
+                "passed",
+            )
+
+    def test_case_edit_and_revalidation_clear_old_verdicts(self):
+        skill_id, case_id = self.skill()
+        task_id = self._start_validation(skill_id, case_id)
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET status='completed' WHERE id=?", (task_id,)
+            )
+            get_db().commit()
+        self.client.post(
+            f"/admin/rules/skills/{skill_id}",
+            data={
+                "action": "review_validation",
+                "case_id": case_id,
+                "validation_task_id": task_id,
+                "validation_verdict": "passed",
+            },
+        )
+        new_task = self._start_validation(skill_id, case_id)
+        self.assertNotEqual(new_task, task_id)
+        with self.app.app_context():
+            db = get_db()
+            self.assertNotIn(
+                "validation_review", get_skill_case(db, skill_id, case_id)["data"]
+            )
+            save_case(
+                db,
+                get_skill(db, skill_id),
+                case_data(title="补齐证据后的案例"),
+                case_id,
+            )
+            self.assertIsNone(
+                get_skill_case(db, skill_id, case_id)["validation_task_id"]
+            )
+
+    def test_validation_review_checks_task_visibility(self):
+        skill_id, case_id = self.skill()
+        task_id = self._start_validation(skill_id, case_id)
+        with self.app.app_context():
+            db = get_db()
+            register_subject("ip:127.0.0.1")
+            replace_subject_permissions("ip:127.0.0.1", {"rules.manage"})
+            db.execute(
+                "UPDATE tasks SET status='completed', owner_subject='ip:10.0.0.8' WHERE id=?",
+                (task_id,),
+            )
+            db.commit()
+        user = self.app.test_client()
+        page = user.get(f"/rules/skills/{skill_id}").get_data(as_text=True)
+        self.assertNotIn("查看验证报告", page)
+        response = user.post(
+            f"/rules/skills/{skill_id}",
+            data={
+                "action": "review_validation",
+                "case_id": case_id,
+                "validation_task_id": task_id,
+                "validation_verdict": "passed",
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_cookie_session_login_is_required_before_skill_mutation(self):
+        skill_id, _ = self.skill()
+        self.app.config["AUTH"] = {"mode": "cookie_session", "cookie_session": {}}
+        response = self.client.post(
+            f"/admin/rules/skills/{skill_id}", data={"action": "delete_skill"}
+        )
+        self.assertEqual(response.status_code, 401)
+        with self.app.app_context():
+            self.assertIsNotNone(get_skill(get_db(), skill_id))
+
+    def test_validation_transaction_failure_removes_task_and_uploaded_text(self):
+        skill_id, case_id = self.skill()
+        model_id = self.fixture._configure_provider()
+        with self.app.app_context():
+            get_db().execute("""CREATE TRIGGER reject_case_validation
+                BEFORE UPDATE OF validation_task_id ON skill_cases
+                BEGIN SELECT RAISE(FAIL, 'validation link failed'); END""")
+            get_db().commit()
+        with patch.object(self.app.logger, "error"):
+            response = self.client.post(
+                f"/admin/rules/skills/{skill_id}",
+                data={
+                    "action": "validate_case",
+                    "case_id": case_id,
+                    "model_id": model_id,
+                },
+            )
+        self.assertEqual(response.status_code, 500)
+        with self.app.app_context():
+            db = get_db()
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
+            self.assertIsNone(
+                get_skill_case(db, skill_id, case_id)["validation_task_id"]
+            )
+        self.assertFalse(
+            any(
+                path.is_file()
+                for path in Path(self.app.config["UPLOAD_FOLDER"]).rglob("*")
+            )
+        )
 
 
 class SkillDuplicateReportTest(unittest.TestCase):
@@ -485,4 +922,37 @@ class SkillDuplicateReportTest(unittest.TestCase):
             report("skill", kind="specialist", version=1, task_report_limit=0),
         ]
         results[0]["structured_report"]["items"][0]["description"] = "独立问题"
+        self.assertEqual(_report_item_totals(self.prepare(results))["total"], 2)
+
+    def test_spaces_inside_evidence_values_remain_significant(self):
+        results = [report("general"), report("skill", kind="specialist", version=1)]
+        results[0]["structured_report"]["items"][0]["excerpt"] = "分组数值为 1 23"
+        results[1]["structured_report"]["items"][0]["excerpt"] = "分组数值为 12 3"
+        self.assertEqual(_report_item_totals(self.prepare(results))["total"], 2)
+
+    def test_different_rejection_reasons_and_notes_are_kept_separate(self):
+        results = [
+            report(
+                "general",
+                item_acceptances={
+                    "general-1": {
+                        "status": "rejected",
+                        "rejection_reason": "classification_inaccurate",
+                        "rejection_note": "判定类型错误",
+                    }
+                },
+            ),
+            report(
+                "skill",
+                kind="specialist",
+                version=1,
+                item_acceptances={
+                    "skill-1": {
+                        "status": "rejected",
+                        "rejection_reason": "not_applicable",
+                        "rejection_note": "当前模式不适用",
+                    }
+                },
+            ),
+        ]
         self.assertEqual(_report_item_totals(self.prepare(results))["total"], 2)
