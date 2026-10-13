@@ -14,6 +14,8 @@ app = create_app()
 
 工厂接受可选的 `root_dir: Path`，用于指定配置和运行数据所在目录。模板与静态资源定位到代码中的 `app/web/`；运行目录负责保存 `config.yaml` 和 `instance/`。启动器通过 `DOCUMENTCHECK_ROOT_DIR` 将此目录传给 Web worker 和监督器；该环境变量也可用于指定独立的运行目录。
 
+ASGI 适配器在每个 WSGI 请求线程内创建独立 Flask 应用上下文，覆盖响应正文迭代与关闭过程。数据库连接和身份缓存由本次请求持有，数据库连接在创建它的线程内关闭。`tests/test_database_runtime.py` 验证继承上下文时的并发查询、任务列表权限隔离、流式响应与异常收尾。
+
 `app.infrastructure.runtime.create_task_app()` 创建后台进程使用的应用上下文，并在上下文结束时关闭数据库连接。监督器通过 `python -m app.bootstrap.supervisor` 启动，任务通过独立的 `python -m app.bootstrap.task <task_id>` 入口启动，完成应用初始化后调用 `TaskRunner.run()`。监督器向任务进程传递运行根目录，使子进程使用相同的配置和数据库。
 
 `app.infrastructure.subprocesses.python_module_command()` 为监督器和任务进程统一选择解释器、UTF-8 输出与运行根目录。Windows 虚拟环境中直接调用基础解释器，通过 `__PYVENV_LAUNCHER__` 保留虚拟环境路径与依赖。启动进程 PID 对应实际 Python 进程，监督器就绪检查验证该 PID 与新鲜心跳。启动失败信息区分子进程退出与等待超时，并提供退出码、启动 PID 和任务日志路径。
