@@ -16,6 +16,14 @@ def _create_asgi_app():
     def wsgi_app(environ, start_response):
         # ASGI 提供明确的请求体结束信号，Flask 可据此读取分块上传并限制大小。
         environ["wsgi.input_terminated"] = True
-        return app(environ, start_response)
+        # 请求在线程内持有独立上下文，数据库连接覆盖完整响应生命周期。
+        with app.app_context():
+            response = app(environ, start_response)
+            try:
+                yield from response
+            finally:
+                close = getattr(response, "close", None)
+                if close is not None:
+                    close()
 
     return WSGIMiddleware(wsgi_app, workers=app.config["WEB_THREADS"])
