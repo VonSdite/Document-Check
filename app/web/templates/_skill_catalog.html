@@ -1,0 +1,45 @@
+<section class="panel settings-section" id="specialist-skills">
+  <div class="settings-section-head">
+    <div>
+      <h2>专项 skill：记住一个已知问题</h2>
+      <p>贴原文、说明问题，工具整理规则草稿。核对后确认并启用，以后的文档检查就能选择这个专项。</p>
+    </div>
+  </div>
+  {% if skill_case_source %}<p class="report-limit-notice">已带入报告原文和可用的文档内容。填写你确认的问题理由，创建专项；也可以在下面选择已有专项。</p>{% endif %}
+  <form method="post" class="stack-form" id="quick-skill-form" data-prevent-double-submit="true">
+    <input type="hidden" name="action" value="quick_create_skill">
+    {% for key, value in skill_case_source.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+    {% set case_data = skill_quick_form %}{% set quick_creation = true %}
+    {% include "_quick_skill_case_fields.html" %}
+    <div class="form-actions"><button class="primary-button" type="submit">整理成专项草稿</button></div>
+  </form>
+  <details class="result-raw-details skill-more-fields">
+    <summary>高级：手动编写规则</summary>
+    <form method="post" class="stack-form">
+      <input type="hidden" name="action" value="create_skill">
+      <div class="form-grid">
+        <label>专项名称<input name="name" maxlength="120" placeholder="例如：参数默认值冲突" required></label>
+        <label>适用范围说明<input name="description" placeholder="显示在创建任务页面"></label>
+      </div>
+      <div class="form-actions"><button class="secondary-button" type="submit">新增空白规则草稿</button></div>
+    </form>
+  </details>
+  {% if specialist_skills %}
+  <h3>已有专项</h3>
+  <div class="table-wrap">
+    <table class="settings-ip-table">
+      <thead><tr><th>专项 skill</th><th>状态</th><th>版本</th><th>案例</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for skill in specialist_skills %}
+      <tr>
+        <td>{{ skill.name }}<div class="subline">{{ skill.description or '' }}</div></td>
+        <td>{{ '已启用' if skill.enabled else '待确认 / 已停用' }}</td>
+        <td>v{{ skill.version }}</td><td>{{ skill.case_count }}</td>
+        <td><a class="small-button" href="{{ url_for('admin_skill' if is_superadmin else 'user_skill', skill_id=skill.id, **skill_case_source) }}">{{ '录入报告案例' if skill_case_source else '打开专项' }}</a></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>

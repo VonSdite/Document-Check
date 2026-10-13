@@ -1,0 +1,30 @@
+<label>原文（保留相关上下文）
+  <textarea name="evidence" rows="5" maxlength="8000" placeholder="例如：参数表写“默认超时 30 秒”，附录写“默认超时 60 秒”。" required>{{ case_data.evidence or '' }}</textarea>
+</label>
+<label>为什么有问题
+  <textarea name="rationale" rows="3" maxlength="3000" placeholder="用自己的话说明。例如：两处是同一设备、同一版本、同一运行模式，默认值应当一致。" required>{{ case_data.rationale or '' }}</textarea>
+</label>
+<label>正确写法（可选）
+  <textarea name="corrected_text" rows="2" maxlength="3000" placeholder="知道正确内容时填写。例如：产品负责人已确认默认超时为 30 秒。">{{ case_data.corrected_text or '' }}</textarea>
+</label>
+<details class="result-raw-details skill-more-fields">
+  <summary>更多信息（可选）</summary>
+  <div class="stack-form">
+    {% if quick_creation|default(false) %}
+    <label>专项名称<input name="name" maxlength="120" value="{{ case_data.name or case_data.title or '' }}" placeholder="工具会根据问题说明命名"></label>
+    {% else %}
+    <label>案例类型<select name="case_kind">
+      <option value="positive"{% if (case_data.case_kind or 'positive') == 'positive' %} selected{% endif %}>真实问题</option>
+      <option value="negative"{% if case_data.case_kind == 'negative' %} selected{% endif %}>正确反例：上面的说明填写为什么应当放行</option>
+    </select></label>
+    <label>案例名称<input name="title" maxlength="8000" value="{{ case_data.title or '' }}" placeholder="工具会根据问题说明命名"></label>
+    {% endif %}
+    <div class="form-grid">
+      <label>文档、版本或适用场景<input name="reference" maxlength="8000" value="{{ case_data.reference or '' }}" placeholder="例如：设备 A，V1.0，相同运行模式"></label>
+      <label>原文位置<input name="location" maxlength="8000" value="{{ case_data.location or '' }}" placeholder="例如：第 3 页参数表、附录 A"></label>
+    </div>
+    <label>期望检查结果<textarea name="expected_result" rows="2" maxlength="8000" placeholder="工具会按问题说明和正确写法整理">{{ case_data.expected_result or '' }}</textarea></label>
+    <label>补充验证上下文<textarea name="document_text" rows="6" maxlength="250000" placeholder="可以粘贴全文或更多相关段落">{{ case_data.document_text or '' }}</textarea></label>
+    <p class="muted">不补充时使用上面的原文验证。判断全文是否缺失某项内容时，在这里提供完整文本。</p>
+  </div>
+</details>

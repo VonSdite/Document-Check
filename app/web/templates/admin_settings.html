@@ -63,6 +63,8 @@
 </section>
 {% else %}
 
+{% if rules_only %}{% include "_skill_catalog.html" %}{% endif %}
+
 {% if not rules_only %}
 <section class="panel settings-section">
   <div class="settings-section-head">
@@ -287,40 +289,7 @@
   {% endif %}
 </section>
 
-<section class="panel settings-section" id="specialist-skills">
-  <div class="settings-section-head">
-    <div>
-      <h2>专项 skill</h2>
-      <p>现有检查项负责宽泛检查，专项 skill 固化已确认的问题模式。录入规则、真实问题和正确反例后启用。</p>
-    </div>
-  </div>
-  {% if skill_case_source %}<p class="report-limit-notice">请选择要接收报告案例的专项 skill，打开后补充确认理由和适用条件。</p>{% endif %}
-  <form method="post" class="stack-form">
-    <input type="hidden" name="action" value="create_skill">
-    <div class="form-grid">
-      <label>专项名称<input name="name" maxlength="120" placeholder="例如：参数默认值冲突" required></label>
-      <label>适用范围说明<input name="description" placeholder="显示在创建任务页面"></label>
-    </div>
-    <div class="form-actions"><button class="primary-button" type="submit">新增专项 skill 草稿</button></div>
-  </form>
-  {% if specialist_skills %}
-  <div class="table-wrap">
-    <table class="settings-ip-table">
-      <thead><tr><th>专项 skill</th><th>状态</th><th>版本</th><th>案例</th><th>操作</th></tr></thead>
-      <tbody>
-      {% for skill in specialist_skills %}
-      <tr>
-        <td>{{ skill.name }}<div class="subline">{{ skill.description or '' }}</div></td>
-        <td>{{ '已启用' if skill.enabled else '草稿 / 已停用' }}</td>
-        <td>v{{ skill.version }}</td><td>{{ skill.case_count }}</td>
-        <td><a class="small-button" href="{{ url_for('admin_skill' if is_superadmin else 'user_skill', skill_id=skill.id, **skill_case_source) }}">{{ '录入报告案例' if skill_case_source else '规则与案例' }}</a></td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-</section>
+{% if not rules_only %}{% include "_skill_catalog.html" %}{% endif %}
 
 <section class="panel settings-section prompt-settings-section" id="prompt-settings" data-prompt-tabs>
   <div class="settings-section-head prompt-settings-head">

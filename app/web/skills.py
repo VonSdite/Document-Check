@@ -4,6 +4,7 @@ import json
 
 from flask import abort, flash, redirect, render_template, request, url_for
 
+from app.checks.skill_intake import add_quick_case, confirm_intake_case
 from app.checks.skills import (
     CASE_FIELDS,
     SKILL_FIELDS,
@@ -110,6 +111,28 @@ def skill_response(skill_id):
             if action == "save_skill":
                 save_skill(db, item, request.form)
                 flash("专项规则与版本已保存。", "success")
+            elif action == "add_quick_case":
+                case_id = add_quick_case(db, item, request.form, source)
+                flash("问题已保存，请核对后确认使用这个案例。", "success")
+            elif action == "confirm_case":
+                if not expected_version or request.form.get("confirm_evidence") != "on":
+                    raise ValueError("请核对原文和理由，并勾选确认后继续。")
+                raw_id = request.form.get("case_id", "")
+                if not str(raw_id).isdigit():
+                    raise ValueError("案例编号无效。")
+                case_id = int(raw_id)
+                used = confirm_intake_case(
+                    db,
+                    item,
+                    case_id,
+                    enable=request.form.get("enable_after_confirm") == "on",
+                )
+                flash(
+                    "案例已确认并作为检查示例使用。"
+                    if used
+                    else "案例已确认；该类型的示例已满，可在高级设置中调整示例选择。",
+                    "success",
+                )
             elif action == "select_examples":
                 select_skill_examples(
                     db, item, request.form.getlist("example_case_ids")
@@ -207,20 +230,28 @@ def skill_response(skill_id):
             db.commit()
             validation_upload_paths.clear()
             retained_source = (
-                source if action not in {"add_case", "save_case"} else None
+                source
+                if action not in {"add_case", "add_quick_case", "save_case"}
+                else None
             )
             focus = {}
-            if action in {
+            if action in {"add_quick_case", "confirm_case"}:
+                focus = {"case": case_id, "_anchor": "skill-start"}
+            elif action in {
                 "add_case",
                 "save_case",
                 "validate_case",
                 "review_validation",
             }:
-                focus = {"case": case_id, "_anchor": f"case-{case_id}"}
+                focus = {
+                    "case": case_id,
+                    "panel": "cases",
+                    "_anchor": f"case-{case_id}",
+                }
             elif action == "select_examples":
-                focus = {"_anchor": "skill-examples"}
+                focus = {"panel": "examples", "_anchor": "skill-examples"}
             elif action == "delete_case":
-                focus = {"_anchor": "skill-cases"}
+                focus = {"panel": "cases", "_anchor": "skill-cases"}
             return redirect(
                 url_for(endpoint, skill_id=skill_id, **(retained_source or {}), **focus)
             )
@@ -236,7 +267,7 @@ def skill_response(skill_id):
                     "description": request.form.get("description", ""),
                     "enabled": request.form.get("enabled") == "on",
                 }
-            elif action in {"add_case", "save_case"}:
+            elif action in {"add_case", "add_quick_case", "save_case"}:
                 case_form = dict(request.form)
         except Exception:
             db.rollback()
@@ -315,6 +346,18 @@ def skill_response(skill_id):
         )
     except ValueError:
         preview = "填写完整规则后可查看执行提示词。"
+    setup_case = next(
+        (
+            case
+            for case in cases
+            if case["focused"] and not case["data"].get("reviewed")
+        ),
+        None,
+    ) or next((case for case in cases if not case["data"].get("reviewed")), None)
+    if setup_case is None and not item["enabled"]:
+        setup_case = next(
+            (case for case in cases if case["data"].get("kind") == "positive"), None
+        )
     return render_template(
         "skill_detail.html",
         skill=item,
@@ -327,6 +370,17 @@ def skill_response(skill_id):
         preview=preview,
         models=get_enabled_models(identity.subject),
         validation_counts=validation_counts,
+        setup_case=setup_case,
+        skill_endpoint=endpoint,
+        rules_open=status == 400 and request.form.get("action") == "save_skill",
+        new_case_open=status == 400
+        and request.form.get("action") in {"add_case", "add_quick_case"},
+        cases_open=request.args.get("panel") == "cases"
+        or (
+            status == 400
+            and request.form.get("action")
+            in {"save_case", "review_validation", "validate_case"}
+        ),
         rules_endpoint=rules_endpoint,
         active_nav="rules",
     ), status

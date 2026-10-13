@@ -373,7 +373,7 @@ class SkillManagementTest(unittest.TestCase):
         self.assertIn(
             "默认超时为 30 s", form.select_one('textarea[name="evidence"]').text
         )
-        self.assertFalse(form.select_one('input[name="reviewed"]').has_attr("checked"))
+        self.assertIsNone(form.select_one('input[name="reviewed"]'))
         self.assertEqual(
             form.select_one('input[name="source_task_id"]')["value"], str(task_id)
         )
@@ -793,6 +793,326 @@ class SkillManagementTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         with self.app.app_context():
             self.assertIsNotNone(get_skill(get_db(), skill_id))
+
+    def _quick_create(self, **extra):
+        response = self.client.post(
+            "/admin/rules",
+            data={
+                "action": "quick_create_skill",
+                "evidence": "参数表：默认超时 30 秒。\n附录：默认超时 60 秒。",
+                "rationale": "同一设备和运行模式的默认超时应当一致。",
+                **extra,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            item = (
+                get_db()
+                .execute(
+                    "SELECT * FROM check_items WHERE kind='specialist' ORDER BY id DESC"
+                )
+                .fetchone()
+            )
+            case = skill_cases(get_db(), item["id"])[-1]
+            return item["id"], case["id"]
+
+    def _confirm_quick_case(self, skill_id, case_id, **extra):
+        with self.app.app_context():
+            version = get_skill(get_db(), skill_id)["version"]
+        return self.client.post(
+            f"/admin/rules/skills/{skill_id}",
+            data={
+                "action": "confirm_case",
+                "version": version,
+                "case_id": case_id,
+                "confirm_evidence": "on",
+                "enable_after_confirm": "on",
+                **extra,
+            },
+        )
+
+    def test_quick_creation_requires_only_original_and_reason_and_stays_draft(self):
+        skill_id, case_id = self._quick_create()
+        with self.app.app_context():
+            db = get_db()
+            item = get_skill(db, skill_id)
+            case = get_skill_case(db, skill_id, case_id)
+            self.assertFalse(item["enabled"])
+            self.assertFalse(case["data"]["reviewed"])
+            self.assertFalse(case["data"]["use_as_example"])
+            self.assertEqual(case["data"]["document_text"], case["data"]["evidence"])
+            self.assertEqual(case["data"]["context_scope"], "excerpt")
+            self.assertIn("默认超时应当一致", item["prompt"])
+            self.assertIn("核对全文", item["prompt"])
+            self.assertEqual(case["data"]["corrected_text"], "")
+        page = BeautifulSoup(
+            self.client.get(f"/admin/rules/skills/{skill_id}").get_data(as_text=True),
+            "html.parser",
+        )
+        self.assertIn("确认并启用此专项", page.select_one("#skill-start").text)
+        self.assertFalse(page.select_one("#skill-rule-editor").has_attr("open"))
+        self.assertIn("验证这段原文", page.text)
+
+    def test_quick_confirmation_enables_and_preserves_snapshot_and_context_scope(self):
+        skill_id, case_id = self._quick_create(
+            corrected_text="经产品确认，统一为 30 秒。"
+        )
+        self.assertEqual(self._confirm_quick_case(skill_id, case_id).status_code, 302)
+        with self.app.app_context():
+            db = get_db()
+            item = get_skill(db, skill_id)
+            case = get_skill_case(db, skill_id, case_id)
+            self.assertTrue(item["enabled"])
+            self.assertTrue(case["data"]["reviewed"])
+            self.assertEqual(case["data"]["context_scope"], "excerpt")
+            snapshot = _enabled_check_item_snapshots(db, [skill_id], "document_check")[
+                0
+            ]
+            self.assertEqual(snapshot["example_case_ids"], [case_id])
+            self.assertIn("统一为 30 秒", snapshot["prompt"])
+            version = item["version"]
+        self.assertEqual(self._confirm_quick_case(skill_id, case_id).status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(get_skill(get_db(), skill_id)["version"], version)
+        page = self.client.get(f"/admin/rules/skills/{skill_id}").get_data(as_text=True)
+        self.assertIn("去检查文档", page)
+
+    def test_quick_confirmation_requires_acknowledgment_and_current_version(self):
+        skill_id, case_id = self._quick_create()
+        for extra in ({"confirm_evidence": ""}, {"version": ""}, {"version": "0"}):
+            self.assertEqual(
+                self._confirm_quick_case(skill_id, case_id, **extra).status_code,
+                400,
+            )
+        with self.app.app_context():
+            self.assertFalse(get_skill(get_db(), skill_id)["enabled"])
+            self.assertFalse(
+                get_skill_case(get_db(), skill_id, case_id)["data"]["reviewed"]
+            )
+
+    def test_quick_invalid_input_is_retained_without_creating_partial_records(self):
+        for extra in ({"evidence": ""}, {"rationale": ""}, {"evidence": "原文" * 4001}):
+            data = {
+                "action": "quick_create_skill",
+                "evidence": "需要保留的原文",
+                "rationale": "需要保留的问题说明",
+                **extra,
+            }
+            response = self.client.post("/admin/rules", data=data)
+            self.assertEqual(response.status_code, 400)
+            form = BeautifulSoup(
+                response.get_data(as_text=True), "html.parser"
+            ).select_one("#quick-skill-form")
+            self.assertEqual(
+                form.select_one('textarea[name="evidence"]').text, data["evidence"]
+            )
+            self.assertEqual(
+                form.select_one('textarea[name="rationale"]').text, data["rationale"]
+            )
+            with self.app.app_context():
+                self.assertEqual(
+                    get_db()
+                    .execute("SELECT COUNT(*) FROM check_items WHERE kind='specialist'")
+                    .fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    get_db().execute("SELECT COUNT(*) FROM skill_cases").fetchone()[0],
+                    0,
+                )
+
+    def test_quick_addition_keeps_existing_rule_and_existing_example_budget(self):
+        skill_id, first_id = self.skill(enabled=True)
+        with self.app.app_context():
+            db = get_db()
+            second_id = save_case(
+                db, get_skill(db, skill_id), case_data(title="第二个已选案例")
+            )
+            select_skill_examples(db, get_skill(db, skill_id), [first_id, second_id])
+            original_definition = get_skill(db, skill_id)["definition_json"]
+            db.commit()
+        response = self.client.post(
+            f"/admin/rules/skills/{skill_id}",
+            data={
+                "action": "add_quick_case",
+                "evidence": "新案例原文",
+                "rationale": "新案例理由",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            case_id = skill_cases(get_db(), skill_id)[-1]["id"]
+        response = self._confirm_quick_case(skill_id, case_id)
+        self.assertEqual(response.status_code, 302)
+        page = self.client.get(response.location).get_data(as_text=True)
+        self.assertIn("示例已满", page)
+        with self.app.app_context():
+            db = get_db()
+            snapshot = check_snapshot(db, get_skill(db, skill_id))
+            self.assertEqual(snapshot["example_case_ids"], [first_id, second_id])
+            self.assertEqual(
+                get_skill(db, skill_id)["definition_json"], original_definition
+            )
+            self.assertTrue(get_skill_case(db, skill_id, case_id)["data"]["reviewed"])
+
+    def test_quick_case_can_fill_empty_rule_and_keep_correct_negative_expectation(self):
+        with self.app.app_context():
+            skill_id = create_skill(get_db(), "默认值冲突")
+            get_db().commit()
+        url = f"/admin/rules/skills/{skill_id}"
+        response = self.client.post(
+            url,
+            data={"action": "add_quick_case", "evidence": "原文", "rationale": "理由"},
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertTrue(get_skill(get_db(), skill_id)["definition_json"])
+            case_id = skill_cases(get_db(), skill_id)[-1]["id"]
+        self._confirm_quick_case(skill_id, case_id)
+        response = self.client.post(
+            url,
+            data={
+                "action": "add_quick_case",
+                "case_kind": "negative",
+                "evidence": "模式 A 默认 30 秒；模式 B 默认 60 秒。",
+                "rationale": "运行模式不同，应当放行。",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            negative = skill_cases(get_db(), skill_id)[-1]
+            self.assertIn("应放行", negative["data"]["expected_result"])
+        response = self._confirm_quick_case(
+            skill_id, negative["id"], enable_after_confirm=""
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertIn(
+                negative["id"],
+                check_snapshot(get_db(), get_skill(get_db(), skill_id))[
+                    "example_case_ids"
+                ],
+            )
+
+    def test_quick_forms_have_two_required_fields_and_optional_more_information(self):
+        pages = [self.client.get("/admin/rules")]
+        skill_id, _ = self.skill()
+        pages.append(self.client.get(f"/admin/rules/skills/{skill_id}"))
+        for response, selector in zip(pages, ("#quick-skill-form", "#new-case form")):
+            form = BeautifulSoup(
+                response.get_data(as_text=True), "html.parser"
+            ).select_one(selector)
+            self.assertEqual(
+                [field["name"] for field in form.select("[required]")],
+                ["evidence", "rationale"],
+            )
+            self.assertFalse(form.select_one("details").has_attr("open"))
+
+    def test_quick_creation_and_confirmation_require_rules_permission(self):
+        skill_id, case_id = self._quick_create()
+        user = self.app.test_client()
+        self.assertEqual(
+            user.post(
+                "/rules",
+                data={
+                    "action": "quick_create_skill",
+                    "evidence": "原文",
+                    "rationale": "理由",
+                },
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            user.post(
+                f"/rules/skills/{skill_id}",
+                data={"action": "confirm_case", "case_id": case_id},
+            ).status_code,
+            403,
+        )
+        with self.app.app_context():
+            register_subject("ip:127.0.0.1")
+            replace_subject_permissions("ip:127.0.0.1", {"rules.manage"})
+            get_db().commit()
+        response = user.post(
+            "/rules",
+            data={
+                "action": "quick_create_skill",
+                "evidence": "原文",
+                "rationale": "理由",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/rules/skills/", response.location)
+        self.assertNotIn("/admin/", response.location)
+
+    def test_report_can_create_quick_skill_with_verified_source_and_full_context(self):
+        task_id = self.fixture._insert_task()
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=?, document_text=? WHERE id=?",
+                (
+                    json.dumps([report("consistency")]),
+                    case_data()["document_text"],
+                    task_id,
+                ),
+            )
+            get_db().commit()
+        source = {
+            "source_task_id": task_id,
+            "source_result_code": "consistency",
+            "source_item_id": "consistency-1",
+        }
+        page = self.client.get("/admin/rules", query_string=source)
+        form = BeautifulSoup(page.get_data(as_text=True), "html.parser").select_one(
+            "#quick-skill-form"
+        )
+        data = {
+            field["name"]: field.get("value", "")
+            for field in form.select("input[name]")
+        }
+        data.update(
+            {field["name"]: field.text for field in form.select("textarea[name]")}
+        )
+        data["rationale"] = "人工确认两处描述相同对象且条件相同，默认值不一致。"
+        response = self.client.post("/admin/rules", data=data)
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            case = (
+                get_db()
+                .execute("SELECT * FROM skill_cases ORDER BY id DESC")
+                .fetchone()
+            )
+            value = json.loads(case["case_json"])
+            self.assertEqual(value["source"], source)
+            self.assertEqual(value["document_text"], case_data()["document_text"])
+            self.assertEqual(value["context_scope"], "provided_text")
+            self.assertFalse(value["reviewed"])
+
+    def test_quick_source_access_is_checked_before_creating_rule(self):
+        task_id = self.fixture._insert_task(ip="10.0.0.8")
+        with self.app.app_context():
+            register_subject("ip:127.0.0.1")
+            replace_subject_permissions("ip:127.0.0.1", {"rules.manage"})
+            get_db().commit()
+        response = self.app.test_client().post(
+            "/rules",
+            data={
+                "action": "quick_create_skill",
+                "evidence": "原文",
+                "rationale": "理由",
+                "source_task_id": task_id,
+                "source_result_code": "consistency",
+                "source_item_id": "consistency-1",
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+        with self.app.app_context():
+            self.assertEqual(
+                get_db()
+                .execute("SELECT COUNT(*) FROM check_items WHERE kind='specialist'")
+                .fetchone()[0],
+                0,
+            )
 
     def test_validation_transaction_failure_removes_task_and_uploaded_text(self):
         skill_id, case_id = self.skill()

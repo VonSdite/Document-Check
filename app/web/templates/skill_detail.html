@@ -5,9 +5,62 @@
   <div><h1>{{ skill.name }}</h1><p>专项 skill · v{{ skill.version }} · {{ '已启用' if skill.enabled else '草稿 / 已停用' }}</p></div>
   <a class="secondary-button" href="{{ url_for(rules_endpoint, _anchor='specialist-skills') }}">返回公共规则</a>
 </section>
+<section class="panel" id="skill-start">
+  <ol class="skill-steps" aria-label="专项使用步骤">
+    <li class="{{ 'is-complete' if cases else 'is-current' }}"><strong>1. 记录一个问题</strong><span>贴原文，说明为什么有问题</span></li>
+    <li class="{{ 'is-complete' if skill.enabled and not setup_case else 'is-current' if cases else '' }}"><strong>2. 核对并启用</strong><span>确认原文和判断，保存为检查示例</span></li>
+    <li class="{{ 'is-current' if skill.enabled and not setup_case else '' }}"><strong>3. 检查新文档</strong><span>在单文档检查中勾选这个专项</span></li>
+  </ol>
+  {% if setup_case %}
+  <div class="skill-intake-review">
+    <h2>{{ '核对新增案例' if skill.enabled else '第二步：核对这个问题' }}</h2>
+    <p class="muted">核对原文和问题说明；确认后，有空位时将此案例加入检查示例。已有的示例选择继续保留。</p>
+    <h3>原文</h3><blockquote class="skill-evidence">{{ setup_case.data.evidence }}</blockquote>
+    <h3>{{ '为什么有问题' if setup_case.data.kind == 'positive' else '为什么应当放行' }}</h3><p class="skill-note">{{ setup_case.data.rationale }}</p>
+    {% if setup_case.data.corrected_text %}<h3>正确写法</h3><p class="skill-note">{{ setup_case.data.corrected_text }}</p>{% endif %}
+    <details class="result-raw-details"><summary>查看整理后的检查目标与期望结果</summary><p class="skill-note">{{ definition.target or '请在高级设置中完善判断规则。' }}</p><p class="skill-note">期望结果：{{ setup_case.data.expected_result }}</p></details>
+    <form method="post" class="stack-form">
+      <input type="hidden" name="action" value="confirm_case">
+      <input type="hidden" name="version" value="{{ skill.version }}">
+      <input type="hidden" name="case_id" value="{{ setup_case.id }}">
+      {% if not skill.enabled and setup_case.data.kind == 'positive' %}<input type="hidden" name="enable_after_confirm" value="on">{% endif %}
+      <label class="switch-line"><input type="checkbox" name="confirm_evidence" required>我已核对原文、适用条件和判断理由</label>
+      <div class="form-actions">
+        <button class="primary-button" type="submit">{{ '确认并启用此专项' if not skill.enabled and setup_case.data.kind == 'positive' else '确认并使用此案例' }}</button>
+        <a class="secondary-button" href="{{ url_for(skill_endpoint, skill_id=skill.id, case=setup_case.id, panel='cases', _anchor='case-' ~ setup_case.id) }}">修改案例或先验证</a>
+      </div>
+    </form>
+  </div>
+  {% elif source %}
+  <h2>报告原文已带入</h2>
+  <p>在下面补充你确认的问题理由，保存后核对这个案例。</p>
+  {% elif skill.enabled %}
+  <h2>这个专项已经可以使用</h2>
+  <p>创建单文档检查任务时，在“专项 skill（按需选择）”勾选“{{ skill.name }}”，再提交文档。</p>
+  <a class="primary-button" href="{{ url_for('admin_tasks' if is_superadmin else 'user_tasks') }}">去检查文档</a>
+  {% else %}
+  <h2>第一步：记录一个已知问题</h2>
+  <p>在下面粘贴原文，说明问题。工具会按模板整理判断规则和案例供你核对。</p>
+  {% endif %}
+</section>
+<section class="panel" id="new-case">
+  <details class="skill-advanced"{% if not cases or source or new_case_open %} open{% endif %}>
+  <summary>{{ '再记录一个问题或正确反例' if cases else '贴原文，说明问题' }}</summary>
+  <p class="muted">两项必填，正确写法可选。需要比较两处内容时，把两处原文一起贴入。</p>
+  {% if source %}<p class="report-limit-notice">已带入来源任务 #{{ source.source_task_id }} 的报告证据，补充你确认的问题理由即可。</p>{% endif %}
+  <form method="post" class="stack-form" data-prevent-double-submit="true">
+    <input type="hidden" name="action" value="add_quick_case">
+    <input type="hidden" name="version" value="{{ skill.version }}">
+    {% for key, value in source.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+    {% set case_data = case_form %}{% set quick_creation = false %}{% include "_quick_skill_case_fields.html" %}
+    <div class="form-actions"><button class="primary-button" type="submit">保存并查看案例</button></div>
+  </form>
+  </details>
+</section>
 <section class="panel">
-  <h2>判断规则</h2>
-  <p class="muted">填写可复用的判断方法。现有检查项继续执行；启用专项前至少录入一条已人工确认的真实问题案例。</p>
+  <details class="skill-advanced" id="skill-rule-editor"{% if rules_open %} open{% endif %}>
+  <summary>高级设置：调整判断规则、名称与启停</summary>
+  <p class="muted">按需要调整判断方法和适用边界。规则变更会更新版本。</p>
   <form method="post" class="stack-form">
     <input type="hidden" name="action" value="save_skill">
     <input type="hidden" name="version" value="{{ skill.version }}">
@@ -24,21 +77,11 @@
     </div>
   </form>
   <details class="result-raw-details"><summary>查看实际执行提示词</summary><pre class="model-output-text">{{ preview }}</pre></details>
+  </details>
 </section>
-<section class="panel" id="new-case">
-  <h2>新增问题案例或正确反例</h2>
-  <p class="muted">保留原文和必要上下文。一致性问题提供两处证据；缺失问题提供完整验证文本并核对全文。期望结果说明应报告的具体问题，或说明反例应当放行。</p>
-  {% if source %}<p class="report-limit-notice">已带入来源任务 #{{ source.source_task_id }} 的报告证据。请补充确认理由、文档版本和适用条件。</p>{% endif %}
-  <form method="post" class="stack-form">
-    <input type="hidden" name="action" value="add_case">
-    <input type="hidden" name="version" value="{{ skill.version }}">
-    {% for key, value in source.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
-    {% set case_data = case_form %}{% include "_skill_case_fields.html" %}
-    <div class="form-actions"><button class="primary-button" type="submit">保存案例</button></div>
-  </form>
-</section>
-<section class="panel" id="skill-examples">
-  <h2>代表性示例</h2>
+<section class="panel">
+  <details class="skill-advanced" id="skill-examples"{% if request.args.get('panel') == 'examples' or (request.method == 'POST' and request.form.get('action') == 'select_examples') %} open{% endif %}>
+  <summary>高级设置：选择代表性示例</summary>
   <p class="muted">选择正式检查引用的已确认案例，真实问题和正确反例各最多两条。其余案例继续用于验证。</p>
   <form method="post" class="stack-form">
     <input type="hidden" name="action" value="select_examples">
@@ -50,15 +93,20 @@
     </div>
     <div class="form-actions"><button class="secondary-button" type="submit"{% if not cases %} disabled{% endif %}>保存示例选择</button></div>
   </form>
+  </details>
 </section>
-<section class="panel" id="skill-cases">
-  <h2>案例库与验证</h2>
-  <p class="muted">执行验证会使用所选模型创建独立任务，读取完整验证文本，并排除当前案例的提示词示例。验证完成后对照期望结果，保存通过或未通过的复核结论。</p>
+<section class="panel">
+  <details class="skill-advanced" id="skill-cases"{% if cases_open %} open{% endif %}>
+  <summary>案例库与验证（{{ cases|length }} 条）</summary>
+  <p class="muted">可用所选模型验证案例，再对照期望结果保存通过或未通过的结论。验证使用你提供的文字，被验证案例自身从参考示例中排除。</p>
   <p class="report-limit-notice">当前 v{{ skill.version }}：{{ validation_counts.passed }} 条验证通过，{{ validation_counts.failed }} 条未通过，{{ validation_counts.pending }} 条待验证或待复核。</p>
   {% for case in cases %}
   <details class="result-raw-details" id="case-{{ case.id }}"{% if case.focused %} open{% endif %}>
     <summary>{{ case.data.title }} · {{ '真实问题' if case.data.kind == 'positive' else '正确反例' }} · {{ '已确认' if case.data.reviewed else '待确认' }}{% if case.is_example %} · 提示词示例{% endif %}</summary>
     <p class="muted">{{ case.data.reference }} · {{ case.data.location }}</p>
+    <blockquote class="skill-evidence">{{ case.data.evidence }}</blockquote>
+    <p class="skill-note">{{ case.data.rationale }}</p>
+    {% if case.data.context_scope == 'excerpt' %}<p class="muted">验证范围：上面这段原文。可在编辑案例中补充更多上下文或全文。</p>{% endif %}
     <div class="markdown-body">期望结果：{{ case.data.expected_result|markdown }}</div>
     <details class="result-raw-details"{% if case.edit_open %} open{% endif %}>
     <summary>编辑案例内容与证据</summary>
@@ -100,7 +148,7 @@
       <label>验证模型<select name="model_id" required>
         {% for model in models %}<option value="{{ model.id }}">{{ model.provider_name }} / {{ model.model_name }}</option>{% else %}<option value="">请先配置可用模型</option>{% endfor %}
       </select></label>
-      <div class="form-actions"><button class="secondary-button" type="submit"{% if not models %} disabled{% endif %}>执行案例验证</button></div>
+      <div class="form-actions"><button class="secondary-button" type="submit"{% if not models %} disabled{% endif %}>{{ '验证这段原文' if case.data.context_scope == 'excerpt' else '执行案例验证' }}</button></div>
     </form>
     <form method="post">
       <input type="hidden" name="action" value="delete_case"><input type="hidden" name="case_id" value="{{ case.id }}"><input type="hidden" name="version" value="{{ skill.version }}">
@@ -108,8 +156,11 @@
     </form>
   </details>
   {% else %}<p class="muted">录入真实问题和正确反例后，可以执行案例验证。</p>{% endfor %}
+  </details>
 </section>
 <section class="panel">
+  <details class="skill-advanced"><summary>更多管理操作</summary>
   <form method="post"><input type="hidden" name="action" value="delete_skill"><input type="hidden" name="version" value="{{ skill.version }}"><button class="small-button danger" type="submit" data-confirm-click="确认删除此专项 skill 及案例？已提交任务继续使用其规则快照。">删除专项 skill</button></form>
+  </details>
 </section>
 {% endblock %}

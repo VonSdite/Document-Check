@@ -20,6 +20,7 @@ from app.checks.catalog import (
     _next_check_item_sort_order,
     _reorder_check_items,
 )
+from app.checks.skill_intake import create_quick_skill
 from app.checks.skills import create_skill, list_skills
 from app.contracts.limits import (
     MAX_ISSUE_OUTPUT_LIMIT,
@@ -56,6 +57,7 @@ from app.tasks.runtime.artifacts import (
 )
 from app.tasks.submission import _consistency_task_title
 from app.web.auth import (
+    _current_user_identity,
     _ip_username_management_enabled,
     admin_required,
     is_superadmin,
@@ -67,6 +69,7 @@ from app.web.constants import (
     ISSUE_OUTPUT_LIMIT_DEFAULT,
     TASK_FILE_RETENTION_DAYS_DEFAULT,
 )
+from app.web.skills import _report_source
 
 
 def register_settings_routes(app):
@@ -139,7 +142,40 @@ def register_settings_routes(app):
 
     def settings_response(rules_only=False):
         db = get_db()
-        if request.method == "POST":
+        quick_form = None
+        quick_status = 200
+        skill_source, skill_prefill = _report_source(request.args)
+        if (
+            request.method == "POST"
+            and request.form.get("action") == "quick_create_skill"
+        ):
+            _current_user_identity()
+            skill_source, skill_prefill = _report_source(
+                {**request.args, **request.form}
+            )
+            try:
+                if not db.in_transaction:
+                    db.execute("BEGIN IMMEDIATE")
+                skill_id, case_id = create_quick_skill(db, request.form, skill_source)
+                db.commit()
+                flash("已整理规则草稿和问题案例，请核对后确认并启用。", "success")
+                return redirect(
+                    url_for(
+                        "admin_skill" if is_superadmin() else "user_skill",
+                        skill_id=skill_id,
+                        case=case_id,
+                        _anchor="skill-start",
+                    )
+                )
+            except ValueError as error:
+                db.rollback()
+                flash(str(error), "error")
+                quick_form = dict(request.form)
+                quick_status = 400
+            except Exception:
+                db.rollback()
+                raise
+        if request.method == "POST" and quick_form is None:
             action = request.form.get("action", "concurrency")
             if rules_only and action not in {
                 "report_suppression_rule",
@@ -148,6 +184,7 @@ def register_settings_routes(app):
                 "delete_check_item",
                 "prompt",
                 "create_skill",
+                "quick_create_skill",
             }:
                 abort(403, description="运行设置仅限超级管理员修改。")
             if action == "create_skill":
@@ -498,11 +535,8 @@ def register_settings_routes(app):
             rules_only=rules_only,
             active_nav="rules" if rules_only else "settings",
             specialist_skills=list_skills(db),
-            skill_case_source={
-                key: request.args[key]
-                for key in ("source_task_id", "source_result_code", "source_item_id")
-                if request.args.get(key)
-            },
+            skill_case_source=skill_source or {},
+            skill_quick_form=quick_form if quick_form is not None else skill_prefill,
             check_item_groups=[
                 {
                     "task_type": DOCUMENT_TASK_TYPE,
@@ -603,7 +637,7 @@ def register_settings_routes(app):
             report_suppression_rules=_report_suppression_rule_rows(),
             report_suppression_keyword=report_suppression_keyword,
             report_suppression_status=report_suppression_status,
-        )
+        ), quick_status
 
 
 def _report_suppression_filter_values(values) -> tuple[str, str]:
