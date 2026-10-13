@@ -45,10 +45,6 @@ from app.reporting.constants import (
     REPORT_SUPPRESSION_FIELDS,
     REPORT_SUPPRESSION_REJECTION_REASONS,
 )
-from app.reporting.skill_duplicates import (
-    apply_task_report_limit,
-    merge_skill_duplicates,
-)
 
 
 def _row_value(row, key: str, default=None):
@@ -294,20 +290,6 @@ def _prepare_task_results(
         item["report_counts"].update(feedback_counts)
         _finalize_report_counts(item["report_counts"])
         prepared.append(item)
-    merge_skill_duplicates(prepared, _report_item_priority_key)
-    apply_task_report_limit(prepared, _report_item_priority_key)
-    for result in prepared:
-        if not result.get("merged_report_items") and not result.get(
-            "task_omitted_report_items"
-        ):
-            continue
-        previous = result["report_counts"]
-        counts = _count_report_items(
-            result["report_items"],
-            suppressed_count=len(result["suppressed_report_items"]),
-        )
-        counts.update(accepted=previous["accepted"], rejected=previous["rejected"])
-        result["report_counts"] = _finalize_report_counts(counts)
     return prepared
 
 

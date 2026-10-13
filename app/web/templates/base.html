@@ -7,12 +7,12 @@
   <title>{% block title %}文档智能门禁{% endblock %}</title>
   <script src="{{ url_for('static', filename='auth.js', v='20260915-2') }}"></script>
   {% block extra_head %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20261012-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20261011-1') }}">
   {{ local_frontend_injection }}
 </head>
 <body>
   {% set is_admin = (request.endpoint and request.endpoint.startswith('admin_') and request.endpoint != 'admin_login') %}
-  {% set is_management = is_admin or request.endpoint in ['user_rules', 'user_skill'] %}
+  {% set is_management = is_admin or request.endpoint == 'user_rules' %}
   {% set task_nav_prefix = 'admin_' if is_superadmin else 'user_' %}
   {% set is_ip_users_page = request.endpoint == 'admin_settings' and request.args.get('tab') == 'ip_users' %}
   <header class="topbar">
@@ -38,9 +38,9 @@
         {% endif %}
         {% if is_superadmin %}
         <a href="{{ url_for('admin_permissions') }}" class="{{ 'active' if request.endpoint == 'admin_permissions' else '' }}" title="用户权限设置">用户权限</a>
-        <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if active_nav|default('') == 'rules' or request.endpoint in ['admin_settings', 'admin_prompts'] and not is_ip_users_page else '' }}" title="系统设置">设置</a>
+        <a href="{{ url_for('admin_settings') }}" class="{{ 'active' if request.endpoint in ['admin_settings', 'admin_prompts'] and not is_ip_users_page else '' }}" title="系统设置">设置</a>
         {% elif has_permission('rules.manage') %}
-        <a href="{{ url_for('user_rules') }}" class="{{ 'active' if active_nav|default('') == 'rules' or request.endpoint in ['user_rules', 'user_skill'] else '' }}" title="公共规则">规则</a>
+        <a href="{{ url_for('user_rules') }}" class="{{ 'active' if request.endpoint == 'user_rules' else '' }}" title="公共规则">规则</a>
         {% endif %}
       </nav>
       <div class="topbar-account">

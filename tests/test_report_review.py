@@ -152,7 +152,7 @@ class ReportStatsMigrationTest(unittest.TestCase):
                 rows = _task_report_stat_rows_for_where("t.id = ?", (1,))
                 self.assertEqual(rows[0]["accepted"], 1)
                 self.assertEqual(rows[0]["rejected"], 1)
-                self.assertTrue(rows[0]["suppression_version"].startswith("6|"))
+                self.assertTrue(rows[0]["suppression_version"].startswith("4|"))
                 init_db()
                 cached = db.execute(
                     "SELECT * FROM task_report_stats WHERE task_id = 1"

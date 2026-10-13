@@ -71,9 +71,6 @@ def init_db():
             name TEXT NOT NULL,
             description TEXT,
             prompt TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'general',
-            definition_json TEXT,
-            version INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 1,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -121,17 +118,6 @@ def init_db():
             finished_at TEXT,
             source_files_cleaned_at TEXT
         );
-
-        CREATE TABLE IF NOT EXISTS skill_cases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            check_item_id INTEGER NOT NULL REFERENCES check_items(id) ON DELETE CASCADE,
-            case_json TEXT NOT NULL,
-            validation_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
-            validation_version INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_skill_cases_check ON skill_cases(check_item_id, id);
 
         CREATE TABLE IF NOT EXISTS user_model_providers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,9 +227,7 @@ def init_db():
     _ensure_column(
         db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
-    _ensure_column(db, "check_items", "kind", "TEXT NOT NULL DEFAULT 'general'")
-    _ensure_column(db, "check_items", "definition_json", "TEXT")
-    _ensure_column(db, "check_items", "version", "INTEGER NOT NULL DEFAULT 1")
+    _normalize_check_item_schema(db, existing_tables)
     _ensure_column(
         db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
@@ -377,6 +361,35 @@ def _ensure_column(db, table: str, column: str, definition: str):
     }
     if column not in columns:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _normalize_check_item_schema(db, existing_tables):
+    """统一检查项字段，保留普通检查项和任务历史。"""
+    columns = {row["name"] for row in db.execute("PRAGMA table_info(check_items)")}
+    if not (
+        columns & {"kind", "definition_json", "version"}
+        or "skill_cases" in existing_tables
+        or db.execute(
+            "SELECT 1 FROM settings WHERE key = 'task_report_limit'"
+        ).fetchone()
+    ):
+        return
+    db.execute("SAVEPOINT check_item_schema")
+    try:
+        db.execute("DELETE FROM settings WHERE key = 'task_report_limit'")
+        db.execute("DELETE FROM task_report_stats")
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(check_items)")}
+        db.execute("DROP TABLE IF EXISTS skill_cases")
+        if "kind" in columns:
+            db.execute("DELETE FROM check_items WHERE kind = 'specialist'")
+        for column in ("kind", "definition_json", "version"):
+            if column in columns:
+                db.execute(f"ALTER TABLE check_items DROP COLUMN {column}")
+    except Exception:
+        db.execute("ROLLBACK TO check_item_schema")
+        raise
+    finally:
+        db.execute("RELEASE check_item_schema")
 
 
 def _migrate_task_owners(db):

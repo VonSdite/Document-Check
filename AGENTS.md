@@ -17,5 +17,4 @@
 - [4+1 架构视图](docs/architecture-4plus1.md)：系统的场景、逻辑、开发、进程和物理视图。
 
 - [开发与模块边界](docs/development.md)：模块职责、依赖方向、扩展方式和回归验证。
-- [专项 skill 与问题案例](docs/skills.md)：专项规则、案例录入、验证任务、版本快照与报告合并。
 - [性能与容量验证](docs/performance.md)：数据库查询策略、文档处理与并发压测。

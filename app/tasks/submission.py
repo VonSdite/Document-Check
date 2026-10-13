@@ -4,12 +4,8 @@ import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 
-from werkzeug.datastructures import FileStorage
-
-from app.checks.skills import check_snapshot
 from app.contracts.task_types import (
     CONSISTENCY_MAX_DATA_FILES,
     CONSISTENCY_MAX_MATERIAL_FILES,
@@ -62,16 +58,6 @@ class SubmissionResult:
 
 
 SUBMISSION_TOKEN_RE = re.compile(r"[0-9a-f]{32}")
-DOCUMENT_TASK_INSERT_SQL = """
-    INSERT INTO tasks(
-        task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
-        original_filename, stored_filename, file_type, file_size,
-        document_text, document_meta_json, checks_json, checks_snapshot_json,
-        provider_id, provider_name, model_name, api_base, api_key, request_timeout,
-        max_input_chars, force_disable_thinking, reasoning_effort, status,
-        progress, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-"""
 
 
 def _row_value(row, key: str, default=None):
@@ -128,20 +114,24 @@ def _enabled_check_item_snapshots(
         return []
 
     placeholders = ",".join("?" for _ in unique_ids)
-    db.execute("SAVEPOINT checks_submission_snapshot")
-    try:
-        rows = db.execute(
-            f"""
-            SELECT *
-            FROM check_items
-            WHERE id IN ({placeholders}) AND task_type = ? AND enabled = 1
-            ORDER BY sort_order ASC, id ASC
-            """,
-            tuple(unique_ids + [task_type]),
-        ).fetchall()
-        return [check_snapshot(db, row) for row in rows]
-    finally:
-        db.execute("RELEASE checks_submission_snapshot")
+    rows = db.execute(
+        f"""
+        SELECT id, code, name, prompt
+        FROM check_items
+        WHERE id IN ({placeholders}) AND task_type = ? AND enabled = 1
+        ORDER BY sort_order ASC, id ASC
+        """,
+        tuple(unique_ids + [task_type]),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "code": row["code"],
+            "name": row["name"],
+            "prompt": row["prompt"],
+        }
+        for row in rows
+    ]
 
 
 def submit_document_task(
@@ -193,7 +183,19 @@ def submit_document_task(
         return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
 
     try:
-        db.executemany(DOCUMENT_TASK_INSERT_SQL, rows)
+        db.executemany(
+            """
+            INSERT INTO tasks(
+                task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
+                original_filename, stored_filename, file_type, file_size,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
+                api_base, api_key, request_timeout, max_input_chars, force_disable_thinking, reasoning_effort,
+                status, progress, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            """,
+            rows,
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -202,34 +204,6 @@ def submit_document_task(
         messages.append(("创建任务失败，请稍后再试。", "error"))
         return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
     return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
-
-
-def submit_skill_case_validation(
-    identity, model_id, snapshot, case, *, saved_paths=None
-):
-    """以专项规则快照创建独立案例验证任务，使用完整验证文本。"""
-    model = _find_enabled_model(model_id, identity.subject)
-    if model is None:
-        raise ValueError("请选择当前用户的可用模型。")
-    text = str(case.get("document_text") or "").strip()
-    if not text:
-        raise ValueError("请填写案例的完整验证文本。")
-    upload = FileStorage(
-        stream=BytesIO(text.encode("utf-8")),
-        filename=f"案例验证_{case['title']}.txt",
-    )
-    if saved_paths is None:
-        saved_paths = []
-    try:
-        row = _prepare_document_task_row(
-            upload, identity, model, [snapshot["id"]], [snapshot], saved_paths
-        )
-        return get_db().execute(DOCUMENT_TASK_INSERT_SQL, row).lastrowid
-    except Exception:
-        _remove_uploaded_files(saved_paths)
-        raise
-    finally:
-        upload.close()
 
 
 def _prepare_document_task_row(

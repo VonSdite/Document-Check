@@ -268,10 +268,8 @@ class UserPermissionTest(unittest.TestCase):
                     "admin_dashboard",
                 }:
                     continue
-                path = (
-                    rule.rule.replace("<int:task_id>", "1")
-                    .replace("<int:skill_id>", "1")
-                    .replace("<media_id>", "missing")
+                path = rule.rule.replace("<int:task_id>", "1").replace(
+                    "<media_id>", "missing"
                 )
                 for method in sorted(rule.methods):
                     with self.subTest(

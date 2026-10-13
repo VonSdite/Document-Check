@@ -3,31 +3,18 @@
     <span>{{ check_label }}</span>
     <span class="help-tip" tabindex="0" data-tip="{{ check_help }}">?</span>
   </div>
-  {% set general_items = check_items|rejectattr('kind', 'equalto', 'specialist')|list %}
-  {% set specialist_items = check_items|selectattr('kind', 'equalto', 'specialist')|list %}
-  {% for group_kind, group_items in [('general', general_items), ('specialist', specialist_items)] %}
-  {% if group_items %}
-  {% if group_kind == 'specialist' %}
-  <div class="check-row-title"><span>专项 skill（按需选择）</span><span class="help-tip" tabindex="0" data-tip="根据文档场景选择适用的专项；每个专项独立执行并保存规则版本。">?</span></div>
-  {% endif %}
-  <div class="check-chip-grid" data-check-group="{{ group_kind }}">
-    {% for item in group_items %}
+  <div class="check-chip-grid">
+    {% for item in check_items %}
     <label class="check-chip">
-      <input type="checkbox" name="checks" value="{{ item.id }}"{% if group_kind == 'general' and (not check_first_only|default(false) or loop.first) %} checked{% endif %} autocomplete="off">
+      <input type="checkbox" name="checks" value="{{ item.id }}"{% if not check_first_only|default(false) or loop.first %} checked{% endif %} autocomplete="off">
       <span>{{ item.name }}</span>
-      {% if item.kind == 'specialist' %}<small class="status-pill">专项 v{{ item.version }}</small>{% endif %}
       <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
     </label>
-    {% endfor %}
-  </div>
-  {% endif %}
-  {% endfor %}
-  {% if not check_items %}
-  <div class="check-chip-grid">
+    {% else %}
     <input class="check-validation-input" data-check-validation aria-label="{{ check_label }}" tabindex="-1" required>
     <div class="empty-state compact">
       <h3>暂无可用{{ check_label }}</h3>
     </div>
+    {% endfor %}
   </div>
-  {% endif %}
 </div>

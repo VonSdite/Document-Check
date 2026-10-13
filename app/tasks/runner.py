@@ -406,19 +406,6 @@ def _document_check_items(db, task) -> list[dict]:
     return _task_check_items(db, task, DOCUMENT_TASK_TYPE)
 
 
-def _check_result_metadata(item):
-    if item.get("kind") != "specialist":
-        return {}
-    result = {
-        "kind": "specialist",
-        "version": item["version"],
-        "task_report_limit": item.get("task_report_limit", 0),
-    }
-    if isinstance(item.get("validation_case"), dict):
-        result["validation_case"] = item["validation_case"]
-    return result
-
-
 def _run_check_items_concurrently(
     app,
     task,
@@ -535,7 +522,6 @@ def _run_check_items_concurrently(
                 error=CHECK_CANCELED_MESSAGE if canceled else error,
                 issue_output_limit=issue_output_limit,
             )
-            result.update(_check_result_metadata(item))
             if execution:
                 result["execution"] = execution
             if canceled:
@@ -570,7 +556,6 @@ def _run_check_items_concurrently(
             item_cancel_event = check_events[item["code"]]
             execution = item_cancel_event.execution
             execution_meta = {"execution": execution} if execution else {}
-            execution_meta.update(_check_result_metadata(item))
 
             def ensure_active():
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):

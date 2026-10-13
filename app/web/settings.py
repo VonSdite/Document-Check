@@ -20,13 +20,7 @@ from app.checks.catalog import (
     _next_check_item_sort_order,
     _reorder_check_items,
 )
-from app.checks.skill_intake import create_quick_skill
-from app.checks.skills import create_skill, list_skills
-from app.contracts.limits import (
-    MAX_ISSUE_OUTPUT_LIMIT,
-    MAX_TASK_REPORT_LIMIT,
-    normalize_issue_output_limit,
-)
+from app.contracts.limits import MAX_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -57,10 +51,8 @@ from app.tasks.runtime.artifacts import (
 )
 from app.tasks.submission import _consistency_task_title
 from app.web.auth import (
-    _current_user_identity,
     _ip_username_management_enabled,
     admin_required,
-    is_superadmin,
     permission_required,
 )
 from app.web.common import _max_task_processes, _wants_json_response
@@ -69,7 +61,6 @@ from app.web.constants import (
     ISSUE_OUTPUT_LIMIT_DEFAULT,
     TASK_FILE_RETENTION_DAYS_DEFAULT,
 )
-from app.web.skills import _report_source
 
 
 def register_settings_routes(app):
@@ -142,40 +133,7 @@ def register_settings_routes(app):
 
     def settings_response(rules_only=False):
         db = get_db()
-        quick_form = None
-        quick_status = 200
-        skill_source, skill_prefill = _report_source(request.args)
-        if (
-            request.method == "POST"
-            and request.form.get("action") == "quick_create_skill"
-        ):
-            _current_user_identity()
-            skill_source, skill_prefill = _report_source(
-                {**request.args, **request.form}
-            )
-            try:
-                if not db.in_transaction:
-                    db.execute("BEGIN IMMEDIATE")
-                skill_id, case_id = create_quick_skill(db, request.form, skill_source)
-                db.commit()
-                flash("已整理规则草稿和问题案例，请核对后确认并启用。", "success")
-                return redirect(
-                    url_for(
-                        "admin_skill" if is_superadmin() else "user_skill",
-                        skill_id=skill_id,
-                        case=case_id,
-                        _anchor="skill-start",
-                    )
-                )
-            except ValueError as error:
-                db.rollback()
-                flash(str(error), "error")
-                quick_form = dict(request.form)
-                quick_status = 400
-            except Exception:
-                db.rollback()
-                raise
-        if request.method == "POST" and quick_form is None:
+        if request.method == "POST":
             action = request.form.get("action", "concurrency")
             if rules_only and action not in {
                 "report_suppression_rule",
@@ -183,38 +141,8 @@ def register_settings_routes(app):
                 "reorder_check_items",
                 "delete_check_item",
                 "prompt",
-                "create_skill",
-                "quick_create_skill",
             }:
                 abort(403, description="运行设置仅限超级管理员修改。")
-            if action == "create_skill":
-                try:
-                    skill_id = create_skill(
-                        db,
-                        request.form.get("name"),
-                        request.form.get("description", ""),
-                    )
-                    db.commit()
-                except ValueError as error:
-                    flash(str(error), "error")
-                    return redirect(
-                        url_for(_settings_endpoint(), _anchor="specialist-skills")
-                    )
-                return redirect(
-                    url_for(
-                        "admin_skill" if is_superadmin() else "user_skill",
-                        skill_id=skill_id,
-                        **{
-                            key: request.args[key]
-                            for key in (
-                                "source_task_id",
-                                "source_result_code",
-                                "source_item_id",
-                            )
-                            if request.args.get(key)
-                        },
-                    )
-                )
             if action == "concurrency":
                 try:
                     global_concurrency = int(
@@ -248,13 +176,6 @@ def register_settings_routes(app):
                             )
                         )
                     )
-                    task_report_limit = int(
-                        request.form.get(
-                            "task_report_limit", get_setting("task_report_limit", 0)
-                        )
-                    )
-                    if not 0 <= task_report_limit <= MAX_TASK_REPORT_LIMIT:
-                        raise ValueError("专项任务报告上限无效")
                     task_file_retention_days = max(
                         0,
                         int(
@@ -266,7 +187,7 @@ def register_settings_routes(app):
                     )
                 except ValueError:
                     flash(
-                        f"任务设置必须是整数；专项任务报告上限为 0-{MAX_TASK_REPORT_LIMIT}，保留天数可为 0。",
+                        "任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。",
                         "error",
                     )
                     return redirect(url_for(_settings_endpoint()))
@@ -282,7 +203,6 @@ def register_settings_routes(app):
                 set_setting("check_item_concurrency", check_item_concurrency)
                 set_setting("image_page_check_max_pages", image_page_check_max_pages)
                 set_setting("issue_output_limit", issue_output_limit)
-                set_setting("task_report_limit", task_report_limit)
                 set_setting("task_file_retention_days", task_file_retention_days)
                 flash("任务设置已保存。", "success")
                 return redirect(url_for(_settings_endpoint()))
@@ -496,13 +416,6 @@ def register_settings_routes(app):
             ):
                 flash("检查项不存在，无法保存。", "error")
                 return redirect(url_for(_settings_endpoint()))
-            if (
-                db.execute(
-                    "SELECT kind FROM check_items WHERE id=?", (item_id,)
-                ).fetchone()["kind"]
-                == "specialist"
-            ):
-                abort(400, description="请在专项 skill 页面编辑结构化规则。")
             db.execute(
                 """
                 UPDATE check_items
@@ -515,11 +428,7 @@ def register_settings_routes(app):
             flash("检查项提示词已保存。", "success")
             return redirect(url_for(_settings_endpoint()))
 
-        document_check_items = [
-            item
-            for item in _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
-            if item["kind"] != "specialist"
-        ]
+        document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
         consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
         language_consistency_check_items = _check_items_for_task_type(
             db, LANGUAGE_CONSISTENCY_TASK_TYPE
@@ -534,9 +443,6 @@ def register_settings_routes(app):
             "admin_settings.html",
             rules_only=rules_only,
             active_nav="rules" if rules_only else "settings",
-            specialist_skills=list_skills(db),
-            skill_case_source=skill_source or {},
-            skill_quick_form=quick_form if quick_form is not None else skill_prefill,
             check_item_groups=[
                 {
                     "task_type": DOCUMENT_TASK_TYPE,
@@ -619,8 +525,6 @@ def register_settings_routes(app):
                 "issue_output_limit", ISSUE_OUTPUT_LIMIT_DEFAULT
             ),
             max_issue_output_limit=MAX_ISSUE_OUTPUT_LIMIT,
-            task_report_limit=get_setting("task_report_limit", 0),
-            max_task_report_limit=MAX_TASK_REPORT_LIMIT,
             task_file_retention_days=get_setting(
                 "task_file_retention_days", TASK_FILE_RETENTION_DAYS_DEFAULT
             ),
@@ -637,7 +541,7 @@ def register_settings_routes(app):
             report_suppression_rules=_report_suppression_rule_rows(),
             report_suppression_keyword=report_suppression_keyword,
             report_suppression_status=report_suppression_status,
-        ), quick_status
+        )
 
 
 def _report_suppression_filter_values(values) -> tuple[str, str]:

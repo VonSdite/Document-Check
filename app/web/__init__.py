@@ -5,7 +5,6 @@ from app.web.overview import register_overview_routes
 from app.web.permissions import register_permission_routes
 from app.web.presentation import register_presentation_routes
 from app.web.settings import register_settings_routes
-from app.web.skills import register_skill_routes
 from app.web.user_tasks import register_user_tasks_routes
 
 
@@ -17,5 +16,4 @@ def register_routes(app):
     register_overview_routes(app)
     register_admin_tasks_routes(app)
     register_settings_routes(app)
-    register_skill_routes(app)
     register_permission_routes(app)
