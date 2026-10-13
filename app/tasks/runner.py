@@ -5,7 +5,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
-from app.checks.agent_policy import DEFAULT_AGENT_PARALLELISM
+from app.checks.agent_policy import DEFAULT_AGENT_PARALLELISM, LOCAL_CODES
 from app.checks.common_terms import (
     COMMON_TERMS_CHECK_CODE,
     build_common_terms_invalid_report,
@@ -825,7 +825,10 @@ def _run_check_items_concurrently(
     try:
         futures = {
             executor.submit(run_item, index, item): item["code"]
-            for index, item in enumerate(check_items, start=1)
+            for index, item in sorted(
+                enumerate(check_items, start=1),
+                key=lambda pair: pair[1]["code"] not in LOCAL_CODES,
+            )
         }
         while True:
             checks = task_activities([task_id]).get(task_id, {}).get("checks", {})

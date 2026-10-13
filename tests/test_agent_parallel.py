@@ -99,9 +99,9 @@ class AgentParallelTest(unittest.TestCase):
             self.assertEqual(result["error"], "")
             self.assertTrue(result["metadata"]["coverage"]["all_checked"])
             self.assertTrue(result["metadata"]["usage_complete"])
-            self.assertEqual(result["metadata"]["model_calls"], 9)
-            self.assertEqual(result["metadata"]["known_input_tokens"], 915)
-            self.assertEqual(result["metadata"]["known_output_tokens"], 465)
+            self.assertEqual(result["metadata"]["model_calls"], 8)
+            self.assertEqual(result["metadata"]["known_input_tokens"], 815)
+            self.assertEqual(result["metadata"]["known_output_tokens"], 415)
             usage = [
                 r["input_tokens"]
                 for r in result["metadata"]["requests"]

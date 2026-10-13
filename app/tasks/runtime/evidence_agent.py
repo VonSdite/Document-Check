@@ -35,13 +35,14 @@ from app.contracts.agent import (
     Comparison,
     Discovery,
     Fact,
+    FullDocumentDiscovery,
     ReportItem,
     Review,
     strict_schema,
 )
 from app.documents.index import DocumentIndex
 from app.models.agent import AgentModel, AgentTurn, IncompleteResponse, ToolsUnsupported
-from app.models.client import LLMError
+from app.models.client import LLMError, _thinking_disabled_in_payload
 from app.tasks.runtime.agent_batches import LimitedModel, run_batch_requests
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,15 @@ SYSTEM_INSTRUCTIONS = """你是文档审查系统。业务标准由检查提示�
 图像、绘图和版式未提供时不能断言缺失。检索没有命中不能证明内容不存在。
 独立阅读原文并寻找可以解释候选的反证；允许撤回或证据不足。
 只返回规定的 JSON 对象或允许的工具调用，不输出推理链。"""
+
+REVIEW_INSTRUCTIONS = (
+    "先独立阅读原文，核实候选的适用性并查找反证。confirmed 必须有直接证据且 applicable=yes；"
+    "explained 表示原文或适用条件能够解释候选；insufficient 表示证据或覆盖不足。"
+    "明确问题与表达建议沿用候选 kind，不把个人偏好作为错误。"
+    "sources 已提供候选的直接原文及相邻上下文，证据充分时直接给出结论。"
+    "仅在缺少影响判定的信息时通过 actions 请求工具，避免重复读取已有来源；arguments 为工具参数的 JSON 字符串。"
+    "最终 decisions 必须恰好覆盖本批每个 candidate_id，actions 为空。理由简洁，引用保留必要原文。"
+)
 
 
 def _json(value):
@@ -179,6 +189,7 @@ class EvidenceAgent:
                     connection.get("model_name"),
                     connection.get("reasoning_effort"),
                     connection.get("force_disable_thinking"),
+                    options.efficient_stages,
                     hashlib.sha256(
                         str(connection.get("api_key") or "").encode()
                     ).hexdigest(),
@@ -191,6 +202,7 @@ class EvidenceAgent:
             if options.max_seconds is not None
             else connection.get("request_timeout", 3600),
         }
+        self.requested_reasoning_effort = connection.get("reasoning_effort")
         self.started = time.monotonic()
         self.max_input = int(connection.get("max_input_chars", 80000))
         self.state = store.load() or {
@@ -234,7 +246,9 @@ class EvidenceAgent:
             on_activity=on_activity,
             capabilities=self.state["capabilities"],
         )
-        self.model = LimitedModel(model, self.request_gate, self.ensure_active)
+        self.model = LimitedModel(
+            model, self.request_gate, self.ensure_active, self.prepare_request
+        )
         self.pdf_evidence = build_pdf_table_evidence_index(
             "\n".join(b.text for b in index.blocks)
         )
@@ -248,10 +262,31 @@ class EvidenceAgent:
         ):
             raise BudgetExceeded("检查项已达到总执行时间预算")
 
+    def prepare_request(self):
+        effort = self.requested_reasoning_effort
+        self.connection["efficient_stage"] = (
+            self.options.efficient_stages
+            and self.state["next"] in {"plan", "discover", "align", "compare"}
+            and not self.connection.get("force_disable_thinking")
+        )
+        if self.connection["efficient_stage"] and effort in {
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        }:
+            effort = "low"
+        self.connection["reasoning_effort"] = effort
+
     def _uses_strategy(self, *strategies):
         return self.strategy in strategies or (
             self.options.strategy == "auto"
             and bool(set(self.state["global_checks"]) & set(strategies))
+        )
+
+    def _tracks_observations(self):
+        return self.strategy == "auto" or self._uses_strategy(
+            "completeness", "compliance", "cross_document", "cross_language"
         )
 
     def persist(self):
@@ -287,6 +322,12 @@ class EvidenceAgent:
         self.state["requests"].append(
             {
                 "stage": self.state["next"],
+                "reasoning_effort": payload.get(
+                    "reasoning_effort", self.connection.get("reasoning_effort")
+                )
+                if not _thinking_disabled_in_payload(payload)
+                else None,
+                "thinking_disabled": _thinking_disabled_in_payload(payload),
                 "input_tokens": None,
                 "output_tokens": None,
                 "duration_seconds": None,
@@ -495,6 +536,13 @@ class EvidenceAgent:
 
     @staticmethod
     def _split_comparison_job(job):
+        if "checks" in job:
+            checks = job["checks"]
+            middle = len(checks) // 2
+            return [
+                group[0] if len(group) == 1 else {"checks": group}
+                for group in (checks[:middle], checks[middle:])
+            ]
         if "left_facts" in job:
             field = max(("left_facts", "right_facts"), key=lambda key: len(job[key]))
             values = job[field]
@@ -525,7 +573,7 @@ class EvidenceAgent:
     def _plan_text_batches(text, limit):
         groups, group, size = [], [], 0
         for line in text.splitlines(keepends=True) or [text]:
-            if group and (size + len(line) > limit or len(group) >= 20):
+            if group and size + len(line) > limit:
                 groups.append("".join(group))
                 group, size = [], 0
             group.append(line)
@@ -698,6 +746,36 @@ class EvidenceAgent:
     def _discovery_jobs(self):
         if "discover" in self._cached_jobs:
             return self._cached_jobs["discover"]
+        if self.options.full_document and not self.state.get("full_document_fallback"):
+            blocks = [b for b in self.index.blocks if b.role != "standard"]
+            job = {
+                "sources": [b.as_dict() for b in blocks],
+                "requirements": self.state["requirements"],
+            }
+            instruction, context = self._discovery_request(job, whole_document=True)
+            size = (
+                len(
+                    _json(
+                        {
+                            "messages": self._messages(
+                                FullDocumentDiscovery, instruction, context
+                            ),
+                            "schema": strict_schema(FullDocumentDiscovery),
+                        }
+                    )
+                )
+                + 4096
+            )
+            if (
+                blocks
+                and size <= self.max_input
+                and len(self.state["requirements"]) <= 80
+            ):
+                self.state["discovery_mode"] = "whole_document"
+                jobs = [(blocks, self.state["requirements"])]
+                self._cached_jobs["discover"] = jobs
+                return jobs
+        self.state["discovery_mode"] = "chunked"
         try:
             chunks = self.index.chunks(
                 min(self.options.chunk_chars, max(1000, self.max_input // 3))
@@ -799,13 +877,16 @@ class EvidenceAgent:
             raise BudgetExceeded("候选数量达到检查预算，已保留可验证的中间结果")
         self.state["candidates"].append(candidate)
 
-    def _discovery_request(self, job):
+    def _discovery_request(self, job, *, whole_document=None):
+        if whole_document is None:
+            whole_document = self.state.get("discovery_mode") == "whole_document"
         sources = job["sources"]
         batch_requirements = job["requirements"]
         ids = {source["id"] for source in sources}
         reusable = (
             self.shared_facts.get(self.fact_key, ids)
-            if self._uses_strategy("consistency", "cross_document", "cross_language")
+            if not whole_document
+            and self._uses_strategy("consistency", "cross_document", "cross_language")
             else []
         )
         reusable = [
@@ -814,16 +895,33 @@ class EvidenceAgent:
             if self._verify_batch_reference(fact["reference"], sources)
         ]
         return (
-            "逐一检查本批来源，covered_source_ids 必须完整返回 expected_source_ids，每个恰好一次，包括最后一个。仅产生具体且有引用依据的候选，保持严格证据门槛。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。每项 requirement 给出本批观察，not_found 仅表示本批未找到，不能表示全文缺失。原文中的换行、HTML 和位置标记属于解析表示。"
+            (
+                "逐一检查本批全部来源；只有完成所有来源和业务要求的核查，才返回 all_sources_checked=true，未检查完返回 false。"
+                if whole_document
+                else "逐一检查本批来源，covered_source_ids 必须完整返回 expected_source_ids，每个恰好一次，包括最后一个。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。"
+            )
+            + "仅产生具体且有引用依据的候选，保持严格证据门槛。按全部 requirements 检查，仅为 observation_requirement_ids 中的要求返回逐项观察，该列表为空时 observations 为空。not_found 仅表示本批未找到，不能表示全文缺失；不把一般行文规则解释为文档必须包含的内容。原文中的换行、HTML 和位置标记属于解析表示。说明保持简洁，引用使用足够支持判断的短原文。"
+            + (
+                "本批包含全部待检查文档，直接完成业务要求和 global_checks 指定的全文核查，"
+                "包括跨章节、跨文档或跨语种的对象、条件、数值及含义对照。"
+                "结合全部来源判断要求覆盖及缺失，综合已有解释与反证，只返回具体候选，不输出中间事实清单。"
+                if whole_document
+                else ""
+            )
             + self._compact_instruction(job),
             {
                 "strategy": self.strategy,
                 "global_checks": self.state["global_checks"],
-                "extract_facts": self._uses_strategy(
+                "whole_document": whole_document,
+                "extract_facts": not whole_document
+                and self._uses_strategy(
                     "consistency", "cross_document", "cross_language"
                 ),
                 "profile": self.state["plans"],
                 "requirements": batch_requirements,
+                "observation_requirement_ids": [r["id"] for r in batch_requirements]
+                if self._tracks_observations()
+                else [],
                 "expected_source_ids": [source["id"] for source in sources],
                 "sources": sources,
                 "shared_facts": reusable,
@@ -835,7 +933,11 @@ class EvidenceAgent:
         jobs = self._discovery_jobs()
         cursor = self.state["discover_cursor"]
         if cursor >= len(jobs):
-            self.state["next"] = "align"
+            self.state["next"] = (
+                "review"
+                if self.state.get("discovery_mode") == "whole_document"
+                else "align"
+            )
             return
         chunk, requirements = jobs[cursor]
         job = self._stage_job(
@@ -849,16 +951,50 @@ class EvidenceAgent:
         reusable = context["shared_facts"]
         try:
             discovery = self._stage_answer(
-                "discover", job, Discovery, instruction, context
+                "discover",
+                job,
+                FullDocumentDiscovery if context["whole_document"] else Discovery,
+                instruction,
+                context,
             )
         except IncompleteResponse as exc:
+            if (
+                self.state.get("discovery_mode") == "whole_document"
+                and exc.finish_reason == "length"
+            ):
+                self._fallback_to_chunks(str(exc))
+                return
             self._recover_stage_job("discover", job, self._split_discovery_job, exc)
             return
+        except LLMError as exc:
+            if (
+                context["whole_document"]
+                and not isinstance(exc, BudgetExceeded)
+                and any(
+                    marker in str(exc).lower()
+                    for marker in (
+                        "不符合阶段契约",
+                        "context_length",
+                        "context length",
+                        "maximum context",
+                    )
+                )
+            ):
+                self._fallback_to_chunks(str(exc))
+                return
+            raise
         data = discovery.model_dump(mode="json")
+        if context["whole_document"]:
+            if not data.pop("all_sources_checked"):
+                self._fallback_to_chunks("未确认检查完所有来源")
+                return
+            data.update(covered_source_ids=list(ids), facts=[])
         requested = {r["id"] for r in batch_requirements}
         observed = [o["requirement_id"] for o in data["observations"]]
         source_error = _coverage_error("来源", ids, data["covered_source_ids"])
-        error = _coverage_error("业务要求", requested, observed)
+        error = _coverage_error(
+            "业务要求", context["observation_requirement_ids"], observed
+        )
         if any(
             r not in requested for c in data["candidates"] for r in c["requirement_ids"]
         ):
@@ -871,6 +1007,9 @@ class EvidenceAgent:
             and len(covered) == len(data["covered_source_ids"])
         )
         error = error or (source_error if not partial else None)
+        if (error or partial) and self.state.get("discovery_mode") == "whole_document":
+            self._fallback_to_chunks(str(error or source_error))
+            return
         if error:
             self._recover_stage_job("discover", job, self._split_discovery_job, error)
             return
@@ -921,13 +1060,19 @@ class EvidenceAgent:
             return
         original_ids = {block.id for block in chunk}
         for requirement in requirements:
+            if not self._tracks_observations():
+                continue
             covered = self.state["requirement_coverage"].setdefault(
                 requirement["id"], []
             )
             covered.extend(
                 source_id for source_id in original_ids if source_id not in covered
             )
-        batches_per_chunk = len(self._pack(self.state["requirements"]) or [[]])
+        batches_per_chunk = (
+            1
+            if context["whole_document"]
+            else len(self._pack(self.state["requirements"]) or [[]])
+        )
         if self.state["discover_cursor"] % batches_per_chunk == 0:
             self.state["checked_ids"].extend(
                 source_id
@@ -935,8 +1080,20 @@ class EvidenceAgent:
                 if source_id not in self.state["checked_ids"]
             )
         self.state["next"] = (
-            "discover" if self.state["discover_cursor"] < len(jobs) else "align"
+            "discover"
+            if self.state["discover_cursor"] < len(jobs)
+            else "review"
+            if self.state.get("discovery_mode") == "whole_document"
+            else "align"
         )
+
+    def _fallback_to_chunks(self, reason):
+        self.state["full_document_fallback"] = True
+        self.state["discovery_mode"] = "chunked"
+        self._cached_jobs.pop("discover", None)
+        self.state.get("batch_outputs", {}).pop("discover", None)
+        self._record_recovery(f"全文核查{reason}，转入分批检查并完整核对所有来源")
+        self.state["next"] = "discover"
 
     def _align(self):
         facts = [
@@ -1047,12 +1204,23 @@ class EvidenceAgent:
                             ),
                         }
                     )
-        self._cached_jobs["compare"] = jobs
-        return jobs
+        packed, current, size = [], [], 0
+        limit = min(self.options.chunk_chars, self.max_input // 3)
+        for job in jobs:
+            chars = len(_json(job)) + 2
+            if current and size + chars > limit:
+                packed.append(current[0] if len(current) == 1 else {"checks": current})
+                current, size = [], 0
+            current.append(job)
+            size += chars
+        if current:
+            packed.append(current[0] if len(current) == 1 else {"checks": current})
+        self._cached_jobs["compare"] = packed
+        return packed
 
     def _comparison_request(self, job):
         return (
-            "进行全局对照，核实对象、用途、版本、条件和单位。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，只生成待审查候选。left_facts 和 right_facts 同时提供时，仅对照两组之间的事实，各组内部另行检查。缺失候选必须对应已提供的业务要求，且观察不能被其他章节已有内容解释。覆盖不完整时保持待核实。"
+            "进行全局对照，核实对象、用途、版本、条件和单位。checks 中每组是独立的对照任务，逐组完成后合并候选，不跨组拼接条件。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，只生成待审查候选。left_facts 和 right_facts 同时提供时，仅对照两组之间的事实，各组内部另行检查。缺失候选必须对应已提供的业务要求，且观察不能被其他章节已有内容解释。覆盖不完整时保持待核实。只报告具体问题，同一原因和证据的候选合并，说明保持简洁。"
             + self._compact_instruction(job),
             {
                 "strategy": self.strategy,
@@ -1085,48 +1253,101 @@ class EvidenceAgent:
             "compare" if self.state["compare_cursor"] < len(jobs) else "review"
         )
 
-    def _review_initial(self):
-        remaining = self.state["candidates"][self.state["review_cursor"] :]
-        batch = remaining[
-            : self.state.get("review_batch_size", self.options.review_batch_size)
-        ]
+    def _review_context(self, batch, recovery_sources=()):
         sources = {}
+        references = [
+            ref for c in batch for ref in c["evidence"] if self.index.verify(ref)
+        ]
+        for ref in references:
+            sources[ref["source_id"]] = self.index.by_id[ref["source_id"]].as_dict()
+        for source_id in recovery_sources:
+            if source_id in self.index.by_id:
+                sources.setdefault(source_id, self.index.by_id[source_id].as_dict())
         for candidate in batch:
             for ref in candidate["evidence"]:
                 if self.index.verify(ref):
                     for source in self.index.context(ref["source_id"], 1):
-                        sources[source["id"]] = source
-        for source_id in self.state.get("review_recovery_sources", []):
-            if source_id in self.index.by_id:
-                sources.setdefault(source_id, self.index.by_id[source_id].as_dict())
+                        sources.setdefault(source["id"], source)
         context_limit = max(4000, self.max_input // 3)
         selected = []
         for source in sources.values():
             if len(_json(selected + [source])) <= context_limit:
                 selected.append(source)
-        self.state["review_batch"] = [c["id"] for c in batch]
-        self.state["review_round"] = 0
-        self.state["seen_sources"] = [s["id"] for s in selected]
         requirements = [
             r
             for r in self.state["requirements"]
             if r["id"] in {rid for c in batch for rid in c["requirement_ids"]}
         ]
-        self.state["messages"] = self._messages(
-            Review,
-            "先独立阅读原文，核实候选的适用性并查找反证。confirmed 必须有直接证据且 applicable=yes；explained 表示原文或适用条件能够解释候选；insufficient 表示证据或覆盖不足。明确问题与表达建议沿用候选 kind，不把个人偏好作为错误。可通过 actions 请求工具，arguments 为工具参数的 JSON 字符串；使用原生工具时调用提供的函数。最终 decisions 必须恰好覆盖本批每个 candidate_id，actions 为空。",
-            {
-                "candidates": batch,
-                "expected_candidate_ids": [candidate["id"] for candidate in batch],
-                "sources": selected,
-                "requirements": requirements,
-                "requirement_observations": [
-                    observation_summary(self.state, r["id"]) for r in requirements
-                ],
-                "coverage": self.index.coverage(self.state["checked_ids"]),
-                "tools": tool_definitions(),
-            },
+        return {
+            "candidates": batch,
+            "expected_candidate_ids": [candidate["id"] for candidate in batch],
+            "sources": selected,
+            "requirements": requirements,
+            "requirement_observations": [
+                observation_summary(self.state, r["id"]) for r in requirements
+            ],
+            "coverage": self.index.coverage(self.state["checked_ids"]),
+            "tools": tool_definitions(),
+        }
+
+    def _review_initial(self):
+        remaining = self.state["candidates"][self.state["review_cursor"] :]
+        batch = remaining[
+            : self.state.get("review_batch_size", self.options.review_batch_size)
+        ]
+        context = self._review_context(
+            batch, self.state.get("review_recovery_sources", [])
         )
+        self.state["review_batch"] = [c["id"] for c in batch]
+        self.state["review_round"] = 0
+        self.state["seen_sources"] = [s["id"] for s in context["sources"]]
+        self.state["messages"] = self._messages(Review, REVIEW_INSTRUCTIONS, context)
+
+    def _initial_review_turn(self):
+        """独立批次的首轮复核并行，补充取证沿用各批自己的上下文。"""
+        cursor = self.state["review_cursor"]
+        key = str(cursor)
+        outputs = self.state.setdefault("batch_outputs", {}).setdefault("review", {})
+        digest = _json(self.state["review_batch"])
+        response = outputs.pop(key, None)
+        if response is not None and response["digest"] == digest:
+            return AgentTurn(_json(response["output"]))
+        failure_key = ("review", key)
+        if failure_key in self._batch_failures:
+            raise self._batch_failures.pop(failure_key)
+        if self.parallelism <= 1 or self.state.get("review_recovery_end"):
+            return self.model.turn(self.state["messages"], schema=strict_schema(Review))
+        requests, digests = {}, {}
+        size = self.state.get("review_batch_size", self.options.review_batch_size)
+        for start in range(
+            cursor,
+            min(len(self.state["candidates"]), cursor + size * self.parallelism),
+            size,
+        ):
+            batch_key = str(start)
+            if batch_key in outputs or ("review", batch_key) in self._batch_failures:
+                continue
+            batch = self.state["candidates"][start : start + size]
+            digests[batch_key] = _json([c["id"] for c in batch])
+            requests[batch_key] = (
+                Review,
+                REVIEW_INSTRUCTIONS,
+                self._review_context(batch),
+            )
+
+        def save_output(batch_key, result, capabilities):
+            outputs[batch_key] = {
+                "digest": digests[batch_key],
+                "output": result.model_dump(mode="json"),
+            }
+            self.state["capabilities"].update(capabilities)
+            self.persist()
+
+        failures = run_batch_requests(self, requests, save_output)
+        self._batch_failures.update({("review", k): v for k, v in failures.items()})
+        if failure_key in self._batch_failures:
+            raise self._batch_failures.pop(failure_key)
+        return AgentTurn(_json(outputs.pop(key)["output"]))
 
     def _review(self):
         initial_round = self.state["review_round"]
@@ -1194,6 +1415,10 @@ class EvidenceAgent:
         native = (
             self.options.protocol != "structured"
             and self.state["capabilities"].get("native_tools") is not False
+            and (
+                self.options.protocol == "native"
+                or self.state["capabilities"].get("native_tools") is True
+            )
             and not last_round
         )
         force = None
@@ -1207,11 +1432,15 @@ class EvidenceAgent:
                 }
             )
         try:
-            turn = self.model.turn(
-                self.state["messages"],
-                schema=strict_schema(Review),
-                tools=tool_definitions() if native else None,
-                force_tool=force,
+            turn = (
+                self._initial_review_turn()
+                if not native and self.state["review_round"] == 0
+                else self.model.turn(
+                    self.state["messages"],
+                    schema=strict_schema(Review),
+                    tools=tool_definitions() if native else None,
+                    force_tool=force,
+                )
             )
         except ToolsUnsupported:
             if self.options.protocol == "native":
@@ -1672,6 +1901,7 @@ class EvidenceAgent:
         metadata = {
             "workflow_version": WORKFLOW_VERSION,
             "strategy": self.strategy,
+            "discovery_mode": self.state.get("discovery_mode", "chunked"),
             "global_checks": list(self.state["global_checks"]),
             "capabilities": self.state["capabilities"],
             "coverage": coverage,

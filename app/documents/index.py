@@ -5,11 +5,35 @@ import json
 import re
 from dataclasses import asdict, dataclass
 
-INDEX_VERSION = "source-index-v1"
+INDEX_VERSION = "source-index-v2"
 _PAGE = re.compile(r"^\[第(\d+)页\]$")
 _TABLE = re.compile(
     r"\[PDF结构化表格 ([^\s；]+) 开始.*?\[PDF结构化表格 \1 结束\]", re.S
 )
+
+
+def compact_page_blocks(blocks: list[dict]) -> list[dict]:
+    """同页同章节的连续正文合并，保留原文顺序和首尾行位置。"""
+    result = []
+    previous_page = None
+    for original in blocks:
+        block = dict(original)
+        match = re.fullmatch(r"(第\d+页) / (第\d+行)", block.get("location", ""))
+        page = match[1] if match and block.get("kind") == "paragraph" else None
+        if (
+            page
+            and page == previous_page
+            and result[-1].get("section") == block.get("section")
+            and len(result[-1]["text"]) + len(block["text"]) + 1 <= 1600
+        ):
+            result[-1]["text"] += "\n" + block["text"]
+            result[-1]["location"] = (
+                result[-1]["location"].split("～")[0] + "～" + match[2]
+            )
+        else:
+            result.append(block)
+        previous_page = page
+    return result
 
 
 @dataclass(frozen=True)
@@ -38,7 +62,9 @@ class DocumentIndex:
         for doc_number, document in enumerate(documents, start=1):
             filename = str(document.get("filename") or f"文档{doc_number}")
             role = str(document.get("role") or "document")
-            raw = document.get("blocks") or text_blocks(str(document.get("text") or ""))
+            raw = compact_page_blocks(
+                document.get("blocks") or text_blocks(str(document.get("text") or ""))
+            )
             identity = hashlib.sha256(
                 json.dumps(
                     [INDEX_VERSION, doc_number, filename, role, raw],
@@ -176,7 +202,8 @@ class DocumentIndex:
             if length > max_chars:
                 raise RuntimeError("单个来源片段超过检查上下文预算")
             if current and (
-                size + length > max_chars or current[-1].filename != block.filename
+                size + length > max_chars
+                or current[-1].document_id != block.document_id
             ):
                 chunks.append(current)
                 current, size = [], 0

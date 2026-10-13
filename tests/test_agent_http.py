@@ -76,7 +76,7 @@ class AgentHTTPTest(unittest.TestCase):
                         if behavior["truncate_plan"]:
                             behavior["truncate_plan"] = False
                             reason = "length"
-                    elif title == "Discovery":
+                    elif title in {"Discovery", "FullDocumentDiscovery"}:
                         sources = context["sources"]
                         groups = (
                             [[source] for source in sources]
@@ -99,6 +99,12 @@ class AgentHTTPTest(unittest.TestCase):
                             reason = "length"
                         if behavior["omit_last_source"] and len(sources) > 1:
                             data["covered_source_ids"].pop()
+                        if title == "FullDocumentDiscovery":
+                            data = {
+                                "all_sources_checked": not behavior["omit_last_source"],
+                                "candidates": data["candidates"],
+                                "observations": data["observations"],
+                            }
                     elif context.get("candidates"):
                         data = {
                             "actions": [],
@@ -168,6 +174,7 @@ class AgentHTTPTest(unittest.TestCase):
         self.thread.join(2)
 
     def test_native_tool_roundtrip_and_validated_report_over_real_http(self):
+        self.connection["reasoning_effort"] = "max"
         index = DocumentIndex(
             [
                 {
@@ -200,6 +207,57 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["model_calls"], 4)
         self.assertTrue(result["metadata"]["usage_complete"])
         self.assertAlmostEqual(result["metadata"]["cost"], 0.00056)
+        self.assertEqual(
+            [p.get("reasoning_effort") for p in self.payloads],
+            ["low", "low", "max", "max"],
+        )
+        self.assertEqual(
+            [r["reasoning_effort"] for r in result["metadata"]["requests"]],
+            ["low", "low", "max", "max"],
+        )
+
+    def test_explicit_inherited_effort_keeps_all_requests_at_selected_level(self):
+        self.connection["reasoning_effort"] = "high"
+        result = EvidenceAgent(
+            index=DocumentIndex(
+                [{"filename": "a.txt", "text": "设备电压220 V", "text_complete": True}]
+            ),
+            item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+            task_type="document_check",
+            connection=self.connection,
+            options=AgentOptions(efficient_stages=False),
+            store=MemoryCheckpointStore(),
+            ensure_active=lambda: None,
+        ).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual([p["reasoning_effort"] for p in self.payloads], ["high"] * 3)
+
+    def test_deepseek_fast_stages_disable_thinking_and_restore_review_setting(self):
+        self.connection.update(
+            model_name="api_openai/deepseek-v4.1-flash", reasoning_effort="max"
+        )
+        result = EvidenceAgent(
+            index=DocumentIndex(
+                [{"filename": "a.txt", "text": "设备电压220 V", "text_complete": True}]
+            ),
+            item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+            task_type="document_check",
+            connection=self.connection,
+            options=AgentOptions(),
+            store=MemoryCheckpointStore(),
+            ensure_active=lambda: None,
+        ).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(self.payloads), 3)
+        for payload in self.payloads[:2]:
+            self.assertEqual(payload["thinking"], {"type": "disabled"})
+            self.assertNotIn("reasoning_effort", payload)
+        self.assertEqual(self.payloads[-1]["reasoning_effort"], "max")
+        self.assertNotIn("thinking", self.payloads[-1])
+        self.assertEqual(
+            [r["thinking_disabled"] for r in result["metadata"]["requests"]],
+            [True, True, False],
+        )
 
     def test_baseline_evaluation_records_real_api_usage(self):
         case = {
@@ -214,6 +272,7 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["known_output_tokens"], 20)
 
     def test_parallel_discovery_over_http_keeps_coverage_report_and_usage(self):
+        self.connection["reasoning_effort"] = "max"
         self.behavior["discovery_barrier"] = threading.Barrier(3)
         self.behavior["per_source_candidates"] = True
         agent = EvidenceAgent(
@@ -231,12 +290,19 @@ class AgentHTTPTest(unittest.TestCase):
             item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
             task_type="document_check",
             connection=self.connection,
-            options=AgentOptions(protocol="structured", chunk_chars=1000),
+            options=AgentOptions(
+                protocol="structured", chunk_chars=1000, full_document=False
+            ),
             store=MemoryCheckpointStore(),
             ensure_active=lambda: None,
         )
         result = agent.run()
         self.assertEqual(result["error"], "")
+        for payload in self.payloads:
+            title = payload["response_format"]["json_schema"]["schema"]["title"]
+            self.assertEqual(
+                payload["reasoning_effort"], "max" if title == "Review" else "low"
+            )
         self.assertTrue(result["metadata"]["coverage"]["all_checked"])
         self.assertEqual(len(result["report"]["items"]), 3)
         self.assertEqual(result["metadata"]["model_calls"], 5)
@@ -290,7 +356,7 @@ class AgentHTTPTest(unittest.TestCase):
             item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
             task_type="document_check",
             connection=self.connection,
-            options=AgentOptions(protocol="structured"),
+            options=AgentOptions(protocol="structured", full_document=False),
             store=MemoryCheckpointStore(),
             ensure_active=lambda: None,
         )
@@ -317,7 +383,7 @@ class AgentHTTPTest(unittest.TestCase):
             item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
             task_type="document_check",
             connection=self.connection,
-            options=AgentOptions(protocol="structured"),
+            options=AgentOptions(protocol="structured", full_document=False),
             store=MemoryCheckpointStore(),
             ensure_active=lambda: None,
         )
@@ -359,7 +425,7 @@ class AgentHTTPTest(unittest.TestCase):
                     item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
                     task_type="document_check",
                     connection=self.connection,
-                    options=AgentOptions(protocol="structured"),
+                    options=AgentOptions(protocol="structured", full_document=False),
                     store=MemoryCheckpointStore(),
                     ensure_active=lambda: None,
                 )

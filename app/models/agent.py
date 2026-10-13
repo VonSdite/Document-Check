@@ -22,6 +22,7 @@ from app.models.client import (
     _raise_for_http_error,
     _raise_if_request_canceled,
     _start_response_cancel_watcher,
+    _uses_deepseek_json_object_response_format,
     _wait_before_retry,
 )
 
@@ -83,7 +84,12 @@ class AgentModel:
         if self.capabilities.get("temperature") is not False:
             payload["temperature"] = 0
         _apply_reasoning_effort(payload, connection.get("reasoning_effort"))
-        if connection.get("force_disable_thinking"):
+        if connection.get("force_disable_thinking") or (
+            connection.get("efficient_stage")
+            and _uses_deepseek_json_object_response_format(
+                connection["api_base"], connection["model_name"]
+            )
+        ):
             _disable_thinking_in_payload(
                 payload,
                 api_base=connection["api_base"],
@@ -335,6 +341,7 @@ class AgentModel:
         turn, calls = AgentTurn(), {}
         content_parts = []
         finished = False
+        phase = None
         for frame in frames:
             self.ensure_active()
             if not isinstance(frame, dict):
@@ -358,6 +365,17 @@ class AgentModel:
                             {"kind": "content", "text": text, "stream": request_id}
                         )
                 _, reasoning = _extract_reasoning(message)
+                current_phase = (
+                    "output"
+                    if text or message.get("tool_calls")
+                    else "thinking"
+                    if reasoning
+                    else None
+                )
+                if current_phase and current_phase != phase:
+                    phase = current_phase
+                    if self.on_activity:
+                        self.on_activity(phase, None)
                 if reasoning and self.on_output:
                     self.on_output(
                         {"kind": "thinking", "text": reasoning, "stream": request_id}

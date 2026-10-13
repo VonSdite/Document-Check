@@ -10,16 +10,18 @@ from app.models.client import LLMError, LLMRequestCanceled
 
 
 class LimitedModel:
-    def __init__(self, model, gate, ensure_active):
+    def __init__(self, model, gate, ensure_active, prepare_request):
         self.model = model
         self.gate = gate
         self.ensure_active = ensure_active
+        self.prepare_request = prepare_request
 
     def turn(self, *args, **kwargs):
         while not self.gate.acquire(timeout=0.1):
             self.ensure_active()
         try:
             self.ensure_active()
+            self.prepare_request()
             return self.model.turn(*args, **kwargs)
         finally:
             self.gate.release()
@@ -104,6 +106,7 @@ def run_batch_requests(agent, requests, on_result):
             ),
             agent.request_gate,
             worker.ensure_active,
+            worker.prepare_request,
         )
         with agent.request_context():
             result = worker._ask(contract, instruction, context)

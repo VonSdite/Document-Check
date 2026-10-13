@@ -167,7 +167,11 @@ class EvidenceIntegrationTest(unittest.TestCase):
         }
         index = DocumentIndex.from_task(text, meta, "a.txt")
         old_options = AgentOptions(
-            protocol="structured", chunk_chars=1000, max_calls=96, max_seconds=3600
+            protocol="structured",
+            chunk_chars=1000,
+            max_calls=96,
+            max_seconds=3600,
+            full_document=False,
         )
         for missing_limits in (False, True):
             with self.subTest(missing_limits=missing_limits):

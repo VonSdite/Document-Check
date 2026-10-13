@@ -4,16 +4,27 @@ import argparse
 import json
 import threading
 import time
+from pathlib import Path
 
 from app.checks.agent_policy import DEFAULT_AGENT_PARALLELISM
 from app.contracts.agent import AgentOptions
+from app.documents.extraction import extract_document
 from app.documents.index import DocumentIndex
 from app.models.agent import AgentTurn
 from app.persistence.checkpoints import MemoryCheckpointStore
 from app.tasks.runtime.evidence_agent import EvidenceAgent
+from app.tasks.runtime.preprocessing import _source_document
 
 
-def measure(blocks, delay, parallelism):
+def measure(
+    blocks,
+    delay,
+    parallelism,
+    *,
+    source_index=None,
+    full_document=False,
+    max_input_chars=80000,
+):
     lock = threading.Lock()
     active = peak = 0
 
@@ -40,6 +51,12 @@ def measure(blocks, delay, parallelism):
                         "global_checks": [],
                         "requirements": [],
                     }
+                elif schema["title"] == "FullDocumentDiscovery":
+                    answer = {
+                        "all_sources_checked": True,
+                        "candidates": [],
+                        "observations": [],
+                    }
                 elif schema["title"] == "Discovery":
                     context = json.loads(messages[-1]["content"].split("输入：", 1)[1])
                     answer = {
@@ -61,7 +78,7 @@ def measure(blocks, delay, parallelism):
                 with lock:
                     active -= 1
 
-    index = DocumentIndex(
+    index = source_index or DocumentIndex(
         [
             {
                 "filename": "synthetic.txt",
@@ -76,8 +93,16 @@ def measure(blocks, delay, parallelism):
         index=index,
         item={"code": "custom", "name": "参数检查", "prompt": "核实参数。"},
         task_type="document_check",
-        connection={"api_base": "http://benchmark.invalid", "model_name": "delayed"},
-        options=AgentOptions(protocol="structured", chunk_chars=1000),
+        connection={
+            "api_base": "http://benchmark.invalid",
+            "model_name": "delayed",
+            "max_input_chars": max_input_chars,
+        },
+        options=AgentOptions(
+            protocol="structured",
+            chunk_chars=20000 if source_index else 1000,
+            full_document=full_document,
+        ),
         store=MemoryCheckpointStore(),
         ensure_active=lambda: None,
         model_factory=DelayedModel,
@@ -105,12 +130,32 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blocks", type=int, default=24)
     parser.add_argument("--delay", type=float, default=0.25)
+    parser.add_argument(
+        "--document", type=Path, help="解析真实文档，使用固定延迟模拟模型核查全部来源"
+    )
+    parser.add_argument("--max-input-chars", type=int, default=1000000)
     args = parser.parse_args()
-    if args.blocks < 1 or args.delay < 0:
+    if args.blocks < 1 or args.delay < 0 or args.max_input_chars < 1000:
         parser.error("blocks 必须为正数，delay 必须为非负数")
-    serial, serial_stats = measure(args.blocks, args.delay, 1)
+    source_index, document_stats = None, {}
+    if args.document:
+        started = time.monotonic()
+        blocks = []
+        kind = args.document.suffix.lstrip(".").lower()
+        body, _ = extract_document(args.document, kind, blocks=blocks)
+        source = _source_document(args.document.name, kind, body, blocks)
+        source_index = DocumentIndex([source])
+        document_stats = {
+            "filename": args.document.name,
+            "extraction_seconds": round(time.monotonic() - started, 3),
+            "raw_source_blocks": len(source["blocks"]),
+            "source_blocks": len(source_index.blocks),
+            "text_characters": len(body),
+        }
+    kwargs = {"source_index": source_index, "max_input_chars": args.max_input_chars}
+    serial, serial_stats = measure(args.blocks, args.delay, 1, **kwargs)
     parallel, parallel_stats = measure(
-        args.blocks, args.delay, DEFAULT_AGENT_PARALLELISM
+        args.blocks, args.delay, DEFAULT_AGENT_PARALLELISM, **kwargs
     )
     equal_keys = (
         "coverage",
@@ -123,10 +168,29 @@ def main():
         serial["metadata"][key] != parallel["metadata"][key] for key in equal_keys
     ):
         raise AssertionError("串行与并行的报告、覆盖和用量应一致")
+    if source_index:
+        full, full_stats = measure(
+            args.blocks,
+            args.delay,
+            DEFAULT_AGENT_PARALLELISM,
+            full_document=True,
+            **kwargs,
+        )
+        if (
+            full["report"] != parallel["report"]
+            or full["metadata"]["coverage"] != parallel["metadata"]["coverage"]
+        ):
+            raise AssertionError("不同执行模式的模拟报告和完整覆盖应一致")
+        document_stats["adaptive"] = {
+            **full_stats,
+            "mode": full["metadata"]["discovery_mode"],
+        }
     print(
         json.dumps(
             {
                 "blocks": args.blocks,
+                "model": "fixed_delay_simulation",
+                **document_stats,
                 "model_delay_seconds": args.delay,
                 "serial": serial_stats,
                 "parallel": parallel_stats,

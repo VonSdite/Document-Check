@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -35,7 +36,10 @@ from app.tasks.runtime.artifacts import (
     task_file_cache_snapshot,
 )
 from app.tasks.runtime.common import _merge_check_results
-from app.tasks.runtime.image_checks import _image_check_target
+from app.tasks.runtime.image_checks import (
+    _image_check_target,
+    _run_image_check_items_concurrently,
+)
 from app.tasks.runtime.multimodal_common import (
     _check_item_groups,
     _document_text_for_image_batch,
@@ -47,7 +51,10 @@ from app.tasks.runtime.multimodal_protocol import (
     _split_combined_structured_output,
 )
 from app.tasks.runtime.state import _mark_failed, _save_intermediate_results
-from app.tasks.runtime.video_checks import _merge_video_batch_reports
+from app.tasks.runtime.video_checks import (
+    _merge_video_batch_reports,
+    _run_video_check_items_concurrently,
+)
 from app.tasks.supervisor import TaskSupervisor
 
 
@@ -273,29 +280,32 @@ class TaskExecutionTest(unittest.TestCase):
         task_id = self._insert_running_document_task(checks)
         set_setting("check_item_concurrency", 1)
 
-        def model(**kwargs):
-            self.assertEqual(kwargs["check_name"], "第一项")
+        def local(*args):
+            self.assertTrue(request_check_cancellation(task_id, None, "first"))
             self.assertTrue(request_check_cancellation(task_id, None, "second"))
-            self.assertTrue(
-                request_check_cancellation(task_id, None, COMMON_TERMS_CHECK_CODE)
-            )
-            return "第一项完成"
+            return {"summary": "本地规则完成", "items": []}
 
         with (
             patch(
                 "app.tasks.runner._start_task_cancel_watcher", return_value=(None, None)
             ),
-            patch("app.tasks.runner.run_check", side_effect=model) as run_model,
-            patch("app.tasks.runner._run_common_terms_check") as local_check,
+            patch("app.tasks.runner.run_check") as run_model,
+            patch(
+                "app.tasks.runner._run_common_terms_check", side_effect=local
+            ) as local_check,
+            patch(
+                "app.tasks.runner.format_common_terms_report",
+                return_value="本地规则完成",
+            ),
         ):
             TaskRunner(self.app).run(task_id)
-        self.assertEqual(run_model.call_count, 1)
-        local_check.assert_not_called()
+        run_model.assert_not_called()
+        self.assertEqual(local_check.call_count, 1)
         task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         self.assertEqual(task["status"], "partial")
         results = json.loads(task["result_json"])
-        self.assertEqual(results[0]["result"], "第一项完成")
-        self.assertTrue(all(result["canceled"] for result in results[1:]))
+        self.assertEqual(results[-1]["result"], "本地规则完成")
+        self.assertTrue(all(result["canceled"] for result in results[:-1]))
 
     def test_pending_cancellation_and_retry_finish_queue_bookkeeping_while_busy(self):
         from app.tasks.activity import request_check_cancellation, task_activities
@@ -3189,6 +3199,86 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertIn("明确问题", results[0]["result"])
         self.assertIn("图片中中文说明与英文文档语种不一致", results[0]["result"])
         self.assertIn("需人工确认", results[0]["result"])
+
+    def test_media_pages_parallelize_batches_and_merge_in_source_order(self):
+        for task_type, code in (
+            (IMAGE_TASK_TYPE, "image-small-language-text"),
+            (VIDEO_TASK_TYPE, "video-installation-sequence"),
+        ):
+            with self.subTest(task_type=task_type):
+                checks = [
+                    {"id": 101, "code": code, "name": "媒体检查", "prompt": "检查内容"}
+                ]
+                task_id = self._insert_running_document_task(checks)
+                get_db().execute(
+                    "UPDATE tasks SET task_type=? WHERE id=?", (task_type, task_id)
+                )
+                get_db().commit()
+                task = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                    .fetchone()
+                )
+                images = []
+                for number in range(12):
+                    filename = f"media-{number}.jpg"
+                    (Path(self.app.config["IMAGE_FOLDER"]) / filename).write_bytes(
+                        b"jpeg"
+                    )
+                    images.append(
+                        {
+                            "id": f"frame-{number}",
+                            "filename": filename,
+                            "relative_path": filename,
+                            "mime_type": "image/jpeg",
+                            "position": f"00:{number:02d}.000",
+                            "timestamp_seconds": number,
+                        }
+                    )
+                barrier = Barrier(3)
+                finished = []
+
+                def model(**kwargs):
+                    self.assertEqual(get_db().execute("SELECT 1").fetchone()[0], 1)
+                    barrier.wait(timeout=3)
+                    batch = kwargs["batch_index"]
+                    time.sleep((4 - batch) * 0.04)
+                    finished.append(batch)
+                    output = json.dumps(
+                        {
+                            "results": [
+                                {"code": code, "summary": f"结果{batch}", "items": []}
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                    kwargs["on_content"](output)
+                    return output
+
+                with patch(
+                    "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
+                    side_effect=model,
+                ):
+                    common = dict(
+                        document_meta={}, max_workers=1, stream_trace_enabled=False
+                    )
+                    if task_type == IMAGE_TASK_TYPE:
+                        results = _run_image_check_items_concurrently(
+                            self.app, task, checks, images, [], "测试文档", **common
+                        )
+                    else:
+                        results = _run_video_check_items_concurrently(
+                            self.app, task, checks, images, "测试视频", **common
+                        )
+                self.assertEqual(finished, [3, 2, 1])
+                report = results[0]["result"]
+                self.assertLess(report.index("结果1"), report.index("结果2"))
+                self.assertLess(report.index("结果2"), report.index("结果3"))
+                if task_type == VIDEO_TASK_TYPE:
+                    self.assertEqual(
+                        [batch["batch_index"] for batch in results[0]["batch_reports"]],
+                        [1, 2, 3],
+                    )
 
     def test_image_task_merges_page_level_checks_for_page_screenshots(self):
         image_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-pages"

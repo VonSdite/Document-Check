@@ -5,6 +5,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from app.checks.agent_policy import DEFAULT_AGENT_PARALLELISM
 from app.infrastructure.network import outbound_network_config
 from app.models.client import MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK
 from app.persistence.connection import get_db
@@ -24,6 +25,7 @@ from app.tasks.runtime.common import (
     _ordered_results,
     _task_value,
 )
+from app.tasks.runtime.media_batches import run_media_batches
 from app.tasks.runtime.multimodal_common import (
     IMAGE_DOCUMENT_CONTEXT_MAX_CHARS,
     _check_item_groups,
@@ -69,6 +71,7 @@ def _run_video_check_items_concurrently(
     task_id = task["id"]
     output_recorder = ModelOutputRecorder(app, task_id)
     claim_token = _task_claim_token(task)
+    request_gate = threading.BoundedSemaphore(DEFAULT_AGENT_PARALLELISM)
     total = len(check_items)
     initialize_activity(task_id, claim_token, phase="checking", checks=check_items)
     output_executions = {
@@ -152,7 +155,9 @@ def _run_video_check_items_concurrently(
             db = get_db()
 
             def ensure_active():
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                if cancel_event.is_set() or _cancel_requested(
+                    get_db(), task_id, claim_token
+                ):
                     raise TaskCanceled
 
             ensure_active()
@@ -261,11 +266,9 @@ def _run_video_check_items_concurrently(
                     len(check_groups),
                     len(items),
                 )
-                for batch_index, batch in enumerate(batches, start=1):
-                    if cancel_event.is_set() or _cancel_requested(
-                        db, task_id, claim_token
-                    ):
-                        raise TaskCanceled
+
+                def execute_batch(batch_index, batch, emit, batch_cancel):
+                    ensure_active()
                     multimodal_images = _multimodal_image_inputs(image_folder, batch)
                     current_batch = {
                         "batch_index": batch_index,
@@ -274,7 +277,7 @@ def _run_video_check_items_concurrently(
                         "target_label": "视频帧检查",
                         "target_kind": "video_frame",
                     }
-                    sections = _run_combined_multimodal_check_with_repair(
+                    return _run_combined_multimodal_check_with_repair(
                         app,
                         check_items=items,
                         prompt_builder=_combined_video_check_prompt,
@@ -301,12 +304,10 @@ def _run_video_check_items_concurrently(
                             "batch_count": len(batches),
                             "issue_output_limit": issue_output_limit,
                             "output_contract": MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
-                            "on_content": lambda content, current=current_batch: (
-                                save_partial(
-                                    current,
-                                    content,
-                                    f"正在进行视频帧检查：批次 {current['batch_index']}/{current['batch_count']}",
-                                )
+                            "on_content": lambda content, current=current_batch: emit(
+                                current,
+                                content,
+                                f"正在进行视频帧检查：批次 {current['batch_index']}/{current['batch_count']}",
                             ),
                             "task_id": task_id,
                             "stream_trace_enabled": stream_trace_enabled,
@@ -322,10 +323,12 @@ def _run_video_check_items_concurrently(
                                 phase,
                                 attempt,
                             ),
-                            "cancel_event": cancel_event,
+                            "cancel_event": batch_cancel,
                             "check_canceled": ensure_active,
                         },
                     )
+
+                def save_batch(batch_index, batch, sections):
                     with result_lock:
                         incomplete_codes.update(
                             _unresolved_check_codes(sections, items)
@@ -345,11 +348,14 @@ def _run_video_check_items_concurrently(
                                 "structured_report": structured_report,
                             }
                         )
+                        batch_results_by_code[item["code"]].sort(
+                            key=lambda result: result["batch_index"]
+                        )
                     progress = mark_unit_completed()
                     save_partial(
                         None,
                         "",
-                        f"已完成视频帧检查：检查组 {group_index}/{len(check_groups)}，批次 {batch_index}/{len(batches)}",
+                        f"已完成视频帧检查：检查组 {group_index}/{len(check_groups)}，批次 {len(batch_results_by_code[items[0]['code']])}/{len(batches)}",
                         force=True,
                     )
                     save_snapshot(
@@ -357,6 +363,17 @@ def _run_video_check_items_concurrently(
                         f"正在进行视频检查，已完成 {completed_units}/{total_units} 个检查组批次。",
                         progress,
                     )
+
+                run_media_batches(
+                    app,
+                    batches,
+                    execute_batch,
+                    save_partial,
+                    save_batch,
+                    ensure_active,
+                    cancel_event,
+                    request_gate,
+                )
 
                 with result_lock:
                     for item in items:

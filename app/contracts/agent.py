@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-WORKFLOW_VERSION = "evidence-review-v3"
+WORKFLOW_VERSION = "evidence-review-v4"
 NonEmpty = Annotated[str, Field(min_length=1, max_length=12000)]
 
 
@@ -30,11 +30,13 @@ class AgentOptions(Contract):
         "cross_language",
     ] = "auto"
     protocol: Literal["auto", "native", "structured"] = "auto"
-    chunk_chars: int = Field(default=10000, ge=1000, le=50000)
+    chunk_chars: int = Field(default=20000, ge=1000, le=50000)
+    full_document: bool = True
+    efficient_stages: bool = True
     max_calls: int | None = Field(default=None, ge=4, le=1000)
     max_seconds: int | None = Field(default=None, ge=30, le=14400)
     max_review_rounds: int = Field(default=3, ge=1, le=6)
-    review_batch_size: int = Field(default=4, ge=1, le=12)
+    review_batch_size: int = Field(default=8, ge=1, le=12)
     max_candidates: int = Field(default=200, ge=1, le=1000)
     standards: list[Standard] = Field(default_factory=list, max_length=12)
     input_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
@@ -110,6 +112,12 @@ class RequirementObservation(Contract):
 class Discovery(Contract):
     covered_source_ids: list[str]
     facts: list[Fact] = Field(max_length=200)
+    candidates: list[Candidate] = Field(max_length=100)
+    observations: list[RequirementObservation] = Field(max_length=80)
+
+
+class FullDocumentDiscovery(Contract):
+    all_sources_checked: bool
     candidates: list[Candidate] = Field(max_length=100)
     observations: list[RequirementObservation] = Field(max_length=80)
 

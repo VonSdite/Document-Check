@@ -8,6 +8,21 @@ from tests.test_llm import FakeResponse, FakeSession
 
 
 class AgentModelTest(unittest.TestCase):
+    def test_stream_activity_reports_thinking_and_output_only_on_phase_changes(self):
+        model = self.make_model()
+        phases = []
+        model.on_activity = lambda phase, attempt: phases.append((phase, attempt))
+        model._collect(
+            [
+                {"choices": [{"delta": {"reasoning_content": "核实原文"}}]},
+                {"choices": [{"delta": {"reasoning_content": "继续核实"}}]},
+                {"choices": [{"delta": {"content": "{"}}]},
+                {"choices": [{"delta": {"content": "}"}, "finish_reason": "stop"}]},
+            ],
+            "test-stream",
+        )
+        self.assertEqual(phases, [("thinking", None), ("output", None)])
+
     def make_model(self):
         self.reservations, self.completed = [], []
         return AgentModel(

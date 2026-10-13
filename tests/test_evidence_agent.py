@@ -130,7 +130,9 @@ class EvidenceAgentTest(unittest.TestCase):
         parallelism=1,
         request_gate=None,
     ):
-        options = options or AgentOptions(protocol="structured")
+        options = (options or AgentOptions(protocol="structured")).model_copy(
+            update={"full_document": False}
+        )
         index = DocumentIndex(
             documents
             or [
@@ -1300,24 +1302,24 @@ class EvidenceAgentTest(unittest.TestCase):
                     ]
                 }
             if title == "Comparison":
-                comparisons.append("facts" if "facts" in context else "requirement")
-                if "facts" in context:
-                    return {
-                        "candidates": [
-                            candidate([f["reference"] for f in context["facts"]])
-                        ]
-                    }
-                self.assertTrue(context["coverage"]["all_checked"])
-                return {
-                    "candidates": [
+                found = []
+                for check in context.get("checks", [context]):
+                    comparisons.append("facts" if "facts" in check else "requirement")
+                    if "facts" in check:
+                        found.append(
+                            candidate([f["reference"] for f in check["facts"]])
+                        )
+                        continue
+                    self.assertTrue(check["coverage"]["all_checked"])
+                    found.append(
                         candidate(
                             [],
                             description="未说明接线前断电",
                             absence_claim=True,
-                            requirement_ids=[context["requirement"]["id"]],
+                            requirement_ids=[check["requirement"]["id"]],
                         )
-                    ]
-                }
+                    )
+                return {"candidates": found}
             return {
                 "actions": [],
                 "decisions": [
@@ -1464,7 +1466,9 @@ class EvidenceAgentTest(unittest.TestCase):
                 }
             return {"actions": [], "decisions": [decision(c["id"], c["evidence"])]}
 
-        result = self.make_agent(handler, options=AgentOptions(protocol="auto")).run()
+        agent = self.make_agent(handler, options=AgentOptions(protocol="auto"))
+        agent.state["capabilities"]["native_tools"] = True
+        result = agent.run()
         self.assertFalse(result["metadata"]["capabilities"]["native_tools"])
         self.assertEqual(len(result["report"]["items"]), 1)
         self.assertEqual(count, 2)
@@ -1687,7 +1691,7 @@ class EvidenceAgentTest(unittest.TestCase):
                 )
             ),
         )
-        self.assertEqual(
+        self.assertNotEqual(
             workflow_signature(
                 agent.index,
                 agent.item,
@@ -2134,7 +2138,7 @@ class EvidenceAgentTest(unittest.TestCase):
                     ],
                 )
             c = context["candidates"][0]
-            if force:
+            if tools and not any(m["role"] == "tool" for m in messages):
                 return AgentTurn(
                     tool_calls=[
                         {
@@ -2158,7 +2162,9 @@ class EvidenceAgentTest(unittest.TestCase):
             self.assertIsNone(tools)
             return {"actions": [], "decisions": [decision(c["id"], c["evidence"])]}
 
-        result = self.make_agent(handler, options=AgentOptions(protocol="auto")).run()
+        agent = self.make_agent(handler, options=AgentOptions(protocol="auto"))
+        agent.state["capabilities"]["native_tools"] = True
+        result = agent.run()
         self.assertEqual(result["error"], "")
         self.assertFalse(result["metadata"]["capabilities"]["native_tools"])
         self.assertEqual(len(result["report"]["items"]), 1)

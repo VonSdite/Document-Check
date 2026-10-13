@@ -3,6 +3,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from app.checks.agent_policy import DEFAULT_AGENT_PARALLELISM
 from app.infrastructure.network import outbound_network_config
 from app.models.client import MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK
 from app.persistence.connection import get_db
@@ -22,6 +23,7 @@ from app.tasks.runtime.common import (
     _ordered_results,
     _task_value,
 )
+from app.tasks.runtime.media_batches import run_media_batches
 from app.tasks.runtime.multimodal_common import (
     _check_item_groups,
     _document_text_for_image_batch,
@@ -86,6 +88,7 @@ def _run_image_check_items_concurrently(
     task_id = task["id"]
     output_recorder = ModelOutputRecorder(app, task_id)
     claim_token = _task_claim_token(task)
+    request_gate = threading.BoundedSemaphore(DEFAULT_AGENT_PARALLELISM)
     total = len(check_items)
     initialize_activity(task_id, claim_token, phase="checking", checks=check_items)
     output_executions = {
@@ -168,7 +171,9 @@ def _run_image_check_items_concurrently(
             db = get_db()
 
             def ensure_active():
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                if cancel_event.is_set() or _cancel_requested(
+                    get_db(), task_id, claim_token
+                ):
                     raise TaskCanceled
 
             ensure_active()
@@ -273,9 +278,8 @@ def _run_image_check_items_concurrently(
                 )
                 return
 
-            for batch_index, batch in enumerate(batches, start=1):
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
-                    raise TaskCanceled
+            def execute_batch(batch_index, batch, emit, batch_cancel):
+                ensure_active()
                 multimodal_images = _multimodal_image_inputs(image_folder, batch)
                 batch_document_text = _document_text_for_image_batch(
                     document_text, batch
@@ -288,7 +292,7 @@ def _run_image_check_items_concurrently(
                     "target_kind": group["target_kind"],
                 }
 
-                sections = _run_combined_multimodal_check_with_repair(
+                return _run_combined_multimodal_check_with_repair(
                     app,
                     check_items=items,
                     prompt_builder=lambda selected_items: _combined_image_check_prompt(
@@ -316,12 +320,10 @@ def _run_image_check_items_concurrently(
                         "batch_count": batch_count,
                         "issue_output_limit": issue_output_limit,
                         "output_contract": MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK,
-                        "on_content": lambda content, current=current_batch: (
-                            save_partial(
-                                current,
-                                content,
-                                f"正在进行{target_label}：批次 {current['batch_index']}/{current['batch_count']}",
-                            )
+                        "on_content": lambda content, current=current_batch: emit(
+                            current,
+                            content,
+                            f"正在进行{target_label}：批次 {current['batch_index']}/{current['batch_count']}",
                         ),
                         "task_id": task_id,
                         "stream_trace_enabled": stream_trace_enabled,
@@ -337,10 +339,12 @@ def _run_image_check_items_concurrently(
                             phase,
                             attempt,
                         ),
-                        "cancel_event": cancel_event,
+                        "cancel_event": batch_cancel,
                         "check_canceled": ensure_active,
                     },
                 )
+
+            def save_batch(batch_index, batch, sections):
                 with result_lock:
                     incomplete_codes.update(_unresolved_check_codes(sections, items))
                 for item in items:
@@ -354,11 +358,14 @@ def _run_image_check_items_concurrently(
                             "content": sections.get(item["code"], ""),
                         }
                     )
+                    batch_results_by_code[item["code"]].sort(
+                        key=lambda result: result["batch_index"]
+                    )
                 progress = mark_unit_completed()
                 save_partial(
                     None,
                     "",
-                    f"已完成 {target_label}：{batch_index}/{batch_count} 个图文批次",
+                    f"已完成 {target_label}：{len(batch_results_by_code[items[0]['code']])}/{batch_count} 个图文批次",
                     force=True,
                 )
                 save_snapshot(
@@ -366,6 +373,17 @@ def _run_image_check_items_concurrently(
                     f"正在进行图片检查，已完成 {completed_units}/{total_units} 个图文批次。",
                     progress,
                 )
+
+            run_media_batches(
+                app,
+                batches,
+                execute_batch,
+                save_partial,
+                save_batch,
+                ensure_active,
+                cancel_event,
+                request_gate,
+            )
 
             with result_lock:
                 for item in items:
