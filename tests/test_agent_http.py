@@ -209,11 +209,11 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertAlmostEqual(result["metadata"]["cost"], 0.00056)
         self.assertEqual(
             [p.get("reasoning_effort") for p in self.payloads],
-            ["low", "low", "max", "max"],
+            ["low"] * 4,
         )
         self.assertEqual(
             [r["reasoning_effort"] for r in result["metadata"]["requests"]],
-            ["low", "low", "max", "max"],
+            ["low"] * 4,
         )
 
     def test_explicit_inherited_effort_keeps_all_requests_at_selected_level(self):
@@ -232,7 +232,7 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertEqual(result["error"], "")
         self.assertEqual([p["reasoning_effort"] for p in self.payloads], ["high"] * 3)
 
-    def test_deepseek_fast_stages_disable_thinking_and_restore_review_setting(self):
+    def test_deepseek_fast_review_uses_explicit_thinking_disable(self):
         self.connection.update(
             model_name="api_openai/deepseek-v4.1-flash", reasoning_effort="max"
         )
@@ -249,14 +249,12 @@ class AgentHTTPTest(unittest.TestCase):
         ).run()
         self.assertEqual(result["error"], "")
         self.assertEqual(len(self.payloads), 3)
-        for payload in self.payloads[:2]:
+        for payload in self.payloads:
             self.assertEqual(payload["thinking"], {"type": "disabled"})
             self.assertNotIn("reasoning_effort", payload)
-        self.assertEqual(self.payloads[-1]["reasoning_effort"], "max")
-        self.assertNotIn("thinking", self.payloads[-1])
         self.assertEqual(
             [r["thinking_disabled"] for r in result["metadata"]["requests"]],
-            [True, True, False],
+            [True, True, True],
         )
 
     def test_baseline_evaluation_records_real_api_usage(self):
@@ -299,10 +297,7 @@ class AgentHTTPTest(unittest.TestCase):
         result = agent.run()
         self.assertEqual(result["error"], "")
         for payload in self.payloads:
-            title = payload["response_format"]["json_schema"]["schema"]["title"]
-            self.assertEqual(
-                payload["reasoning_effort"], "max" if title == "Review" else "low"
-            )
+            self.assertEqual(payload["reasoning_effort"], "low")
         self.assertTrue(result["metadata"]["coverage"]["all_checked"])
         self.assertEqual(len(result["report"]["items"]), 3)
         self.assertEqual(result["metadata"]["model_calls"], 5)

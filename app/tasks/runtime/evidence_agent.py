@@ -266,7 +266,7 @@ class EvidenceAgent:
         effort = self.requested_reasoning_effort
         self.connection["efficient_stage"] = (
             self.options.efficient_stages
-            and self.state["next"] in {"plan", "discover", "align", "compare"}
+            and self.state["next"] in {"plan", "discover", "align", "compare", "review"}
             and not self.connection.get("force_disable_thinking")
         )
         if self.connection["efficient_stage"] and effort in {
@@ -1902,6 +1902,7 @@ class EvidenceAgent:
             "workflow_version": WORKFLOW_VERSION,
             "strategy": self.strategy,
             "discovery_mode": self.state.get("discovery_mode", "chunked"),
+            "efficient_stages": self.options.efficient_stages,
             "global_checks": list(self.state["global_checks"]),
             "capabilities": self.state["capabilities"],
             "coverage": coverage,
