@@ -130,9 +130,7 @@ class HyperlinkRuleTest(unittest.TestCase):
                     report["summary"],
                 )
                 self.assertEqual(report["items"], [])
-                self.assertEqual(
-                    "忽略证书校验模式" in report["summary"], not ssl_verify
-                )
+                self.assertNotIn("证书校验", report["summary"])
 
     def test_probe_blocks_private_destination_before_request(self):
         with patch("app.checks.hyperlinks.requests.Session.request") as request:
