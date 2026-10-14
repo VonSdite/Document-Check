@@ -3409,6 +3409,7 @@ body.table-column-resize-active * {
 .agent-check-details {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 4px 16px;
   margin-top: 16px;
   padding-top: 12px;
@@ -4451,7 +4452,7 @@ body.table-column-resize-active * {
 .model-output-scroll {
   max-height: 480px;
   overflow: auto;
-  padding: 0 16px 16px;
+  padding: 0 16px 16px 32px;
   overflow-anchor: none;
 }
 
@@ -4504,6 +4505,11 @@ body.table-column-resize-active * {
   color: var(--muted);
   border-left: 2px solid var(--line);
   padding-left: 12px;
+}
+
+.model-output-request > :not(summary),
+.model-output-thinking-details > :not(summary) {
+  margin-left: 16px;
 }
 
 .task-refresh-button {
