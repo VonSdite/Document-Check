@@ -238,6 +238,7 @@ def init_db():
     _ensure_column(
         db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
+    _normalize_check_item_schema(db, existing_tables)
     _ensure_column(
         db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
@@ -374,6 +375,35 @@ def _ensure_column(db, table: str, column: str, definition: str):
     }
     if column not in columns:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _normalize_check_item_schema(db, existing_tables):
+    """统一检查项字段，保留普通检查项和任务历史。"""
+    columns = {row["name"] for row in db.execute("PRAGMA table_info(check_items)")}
+    if not (
+        columns & {"kind", "definition_json", "version"}
+        or "skill_cases" in existing_tables
+        or db.execute(
+            "SELECT 1 FROM settings WHERE key = 'task_report_limit'"
+        ).fetchone()
+    ):
+        return
+    db.execute("SAVEPOINT check_item_schema")
+    try:
+        db.execute("DELETE FROM settings WHERE key = 'task_report_limit'")
+        db.execute("DELETE FROM task_report_stats")
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(check_items)")}
+        db.execute("DROP TABLE IF EXISTS skill_cases")
+        if "kind" in columns:
+            db.execute("DELETE FROM check_items WHERE kind = 'specialist'")
+        for column in ("kind", "definition_json", "version"):
+            if column in columns:
+                db.execute(f"ALTER TABLE check_items DROP COLUMN {column}")
+    except Exception:
+        db.execute("ROLLBACK TO check_item_schema")
+        raise
+    finally:
+        db.execute("RELEASE check_item_schema")
 
 
 def _migrate_task_owners(db):

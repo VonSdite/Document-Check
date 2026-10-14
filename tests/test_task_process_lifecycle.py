@@ -296,7 +296,7 @@ class TaskProcessLifecycleTest(unittest.TestCase):
         )
         orphan = None
         try:
-            self._wait(lambda: (self.root / f"started-{task_id}").exists())
+            self._wait(lambda: (self.root / f"started-{task_id}").exists(), timeout=30)
             state = json.loads(
                 supervisor_state_path(self.app).read_text(encoding="utf-8")
             )
@@ -312,12 +312,22 @@ class TaskProcessLifecycleTest(unittest.TestCase):
             self.assertEqual(self._task(task_id)["status"], "queued")
             self.assertIsNone(self._task(task_id)["claim_token"])
         finally:
+            descendants = []
             if parent.poll() is None:
+                try:
+                    descendants = psutil.Process(parent.pid).children(recursive=True)
+                except psutil.NoSuchProcess:
+                    pass
                 parent.kill()
                 parent.wait(timeout=5)
-            if orphan is not None and process_is_running(orphan):
-                orphan.kill()
-                psutil.wait_procs([orphan], timeout=3)
+            if orphan is None:
+                self.supervisor._recover_previous_processes()
+            else:
+                descendants.append(orphan)
+            for process in descendants:
+                if process_is_running(process):
+                    process.kill()
+            psutil.wait_procs(descendants, timeout=5)
 
 
 if __name__ == "__main__":

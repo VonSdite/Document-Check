@@ -1,7 +1,6 @@
 """在独立运行目录验证真实 Web 服务、任务进程与生命周期。"""
 
 import concurrent.futures
-import os
 import re
 import signal
 import socket
@@ -18,6 +17,8 @@ import psutil
 import requests
 import yaml
 from openpyxl import Workbook
+
+from app.infrastructure.subprocesses import python_module_command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,14 +43,17 @@ class ServerIntegrationTest(unittest.TestCase):
             },
         }
         (root / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-        environment = {k: v for k, v in os.environ.items() if k not in {"HOST", "PORT"}}
+        command, environment = python_module_command("run")
+        environment = {
+            k: v for k, v in environment.items() if k not in {"HOST", "PORT"}
+        }
         environment["DOCUMENTCHECK_ROOT_DIR"] = str(root)
         environment["PYTHONIOENCODING"] = "utf-8"
         base_url = f"http://127.0.0.1:{port}"
         output_path = root / "server-output.log"
         with output_path.open("w", encoding="utf-8") as output:
             process = subprocess.Popen(
-                [sys.executable, str(PROJECT_ROOT / "run.py")],
+                command,
                 cwd=PROJECT_ROOT,
                 env=environment,
                 stdout=output,

@@ -2853,7 +2853,8 @@ body.table-column-resize-active * {
   display: block;
   color: var(--text);
   font-size: 20px;
-  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
 
 @media print {
