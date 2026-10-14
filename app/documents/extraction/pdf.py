@@ -723,13 +723,14 @@ def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str, bool | None]]
     for link in links:
         target = _clean_hyperlink_target(link.get("uri") or link.get("file"))
         internal_target_exists = None
+        page_index = link.get("page")
         if not target and link.get("kind") == fitz.LINK_GOTO:
-            page_index = link.get("page")
             if isinstance(page_index, int):
                 target = f"#page={page_index + 1}"
-                internal_target_exists = 0 <= page_index < page.parent.page_count
         if not target and link.get("nameddest"):
             target = f"#{_clean_hyperlink_target(link.get('nameddest')).lstrip('#')}"
+        if target.startswith("#") and isinstance(page_index, int):
+            internal_target_exists = 0 <= page_index < page.parent.page_count
         label = ""
         link_rect = link.get("from")
         if link_rect:
