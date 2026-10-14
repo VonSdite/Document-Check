@@ -6,7 +6,7 @@ REPORT_ITEM_TYPES = {
     "issue": "问题",
     "suggestion": "建议",
     "non_issue": "非问题",
-    "unverified": "需人工确认",
+    "unverified": "待核实",
 }
 REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue", "unverified")
 REPORT_COUNT_KEYS = REPORT_ITEM_TYPE_ORDER + (
@@ -142,10 +142,10 @@ REPORT_EXPORT_EDITABLE_FILL = PatternFill("solid", fgColor="FFF4CC")
 REPORT_TOTAL_EXPORT_ROWS = (
     ("问题", "issue"),
     ("建议", "suggestion"),
-    ("人工确认项", "unverified"),
+    ("AI 待核实", "unverified"),
     ("认可结论", "accepted"),
     ("不认可结论", "rejected"),
-    ("待确认条目", "pending_review"),
+    ("待人工复核", "pending_review"),
     ("已忽略误报", "suppressed"),
     ("问题条目占比", "issue_item_ratio"),
     ("整体结论认可率", "conclusion_acceptance_rate"),

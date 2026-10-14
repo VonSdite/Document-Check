@@ -96,10 +96,10 @@
       <div class="report-counts">
         <span>问题<strong>{{ report_totals.issue }}</strong></span>
         <span>建议<strong>{{ report_totals.suggestion }}</strong></span>
-        <span>人工确认项<strong>{{ report_totals.unverified }}</strong></span>
+        <span>AI 待核实<strong>{{ report_totals.unverified }}</strong></span>
         <span>认可结论<strong>{{ report_totals.accepted }}</strong></span>
         <span>不认可结论<strong>{{ report_totals.rejected }}</strong></span>
-        <span>待确认条目<strong>{{ report_totals.pending_review }}</strong></span>
+        <span>待人工复核<strong>{{ report_totals.pending_review }}</strong></span>
         <span>问题条目占比<strong>{{ report_totals.issue_item_ratio }}</strong></span>
         <span>整体结论认可率<strong>{{ report_totals.conclusion_acceptance_rate }}</strong></span>
         <span>复核覆盖率<strong>{{ report_totals.review_coverage_rate }}</strong></span>
@@ -129,7 +129,7 @@
           已合并 {{ result.report_limit.duplicate_count }} 条重复问题，去重后共 {{ result.report_limit.deduplicated_count }} 条。
           {% endif %}
           {% if result.report_limit.limit_applied %}
-          问题和建议按证据可信度和严重程度排序，保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条。需人工确认的条目全部列出。
+          问题和建议按证据可信度和严重程度排序，保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条。AI 待核实项全部列出。
           {% endif %}
         </div>
         {% endif %}

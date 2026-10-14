@@ -1785,9 +1785,22 @@ class EvidenceAgent:
             key=lambda i: (i["status"] != "issue", severity[i["severity"]], i["id"])
         )
         coverage = self.index.coverage(self.state["checked_ids"])
-        summary = f"AI 检查发现 {sum(i['status'] == 'issue' for i in items)} 个问题、{sum(i['status'] == 'suggestion' for i in items)} 条建议。"
-        if pending:
-            summary += f"另有 {len(pending)} 项需人工确认。"
+        findings = [
+            f"{count} {label}"
+            for count, label in (
+                (sum(i["status"] == "issue" for i in items), "个问题"),
+                (sum(i["status"] == "suggestion" for i in items), "条建议"),
+                (len(pending), "项待核实"),
+            )
+            if count
+        ]
+        summary = (
+            "AI 检出 " + "、".join(findings) + "。"
+            if findings
+            else "AI 未检出需要复核的条目。"
+        )
+        if items or pending:
+            summary += f"共 {len(items) + len(pending)} 项待人工复核。"
         if not coverage["text_complete"]:
             summary += "部分原文未可靠解析，结论仅覆盖已读取内容。"
         return CheckedReport(

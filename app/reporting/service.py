@@ -317,14 +317,14 @@ def _prepare_task_results(
                 item, structured_report, dictionary_status_items
             )
         )
-        if item.get("agent") and "pending_items" in structured_report:
-            item["result_summary"] = _agent_report_summary(item, report_items)
         item["report_items"] = report_items
         item["report_limit"] = report_limit
         item["suppressed_report_items"] = suppressed_items
         item["report_counts"] = _count_report_items(
             report_items, suppressed_count=len(suppressed_items)
         )
+        if item.get("agent") and "pending_items" in structured_report:
+            item["result_summary"] = _agent_report_summary(item, item["report_counts"])
         # 结论反馈按已保存的条目标识统计，报告过滤和折叠保留已提交的反馈。
         feedback_counts = {"accepted": 0, "rejected": 0}
         for item_id, saved_acceptance in acceptances.items():
@@ -724,17 +724,31 @@ def _report_text_evidence(item: dict) -> list[dict]:
     return list(groups.values())
 
 
-def _agent_report_summary(result: dict, items: list[dict]) -> str:
-    issues = sum(item["type"] == "issue" for item in items)
-    suggestions = sum(item["type"] == "suggestion" for item in items)
-    summary = f"AI 检查发现 {issues} 个问题、{suggestions} 条建议。"
-    unverified = [item for item in items if item["type"] == "unverified"]
-    pending = sum(item["acceptance_status"] == "pending" for item in unverified)
-    reviewed = len(unverified) - pending
+def _agent_report_summary(result: dict, counts: dict) -> str:
+    findings = [
+        f"{counts[key]} {label}"
+        for key, label in (
+            ("issue", "个问题"),
+            ("suggestion", "条建议"),
+            ("unverified", "项待核实"),
+        )
+        if counts[key]
+    ]
+    summary = (
+        "AI 检出 " + "、".join(findings) + "。"
+        if findings
+        else "AI 未检出需要复核的条目。"
+    )
+    pending = counts["pending_review"]
+    reviewed = counts["reviewed"]
     if pending:
-        summary += f"另有 {pending} 项需人工确认。"
-    if reviewed:
-        summary += f"已完成人工确认 {reviewed} 项。"
+        summary += (
+            f"已复核 {reviewed} 项，剩余 {pending} 项待人工复核。"
+            if reviewed
+            else f"共 {pending} 项待人工复核。"
+        )
+    elif reviewed:
+        summary += f"{reviewed} 项均已完成人工复核。"
     if result.get("agent", {}).get("coverage", {}).get("text_complete") is False:
         summary += "部分原文未可靠解析，结论仅覆盖已读取内容。"
     return summary

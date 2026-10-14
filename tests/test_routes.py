@@ -1242,8 +1242,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertEqual(data["acceptance_label"], label)
                 self.assertEqual(data["item_type"], "unverified")
                 self.assertFalse(data["suppression_candidate_created"])
-                self.assertEqual(
-                    "需人工确认" in data["result_summary"], status == "pending"
+                self.assertIn("1 项待核实", data["result_summary"])
+                self.assertIn(
+                    "共 2 项待人工复核"
+                    if status == "pending"
+                    else "已复核 1 项，剩余 1 项待人工复核",
+                    data["result_summary"],
                 )
                 self.assertEqual(data["totals"]["issue"], 1)
                 self.assertEqual(data["totals"]["unverified"], 1)
@@ -1280,6 +1284,35 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         stats["reviewed_item_count"], int(status != "pending")
                     )
 
+    def test_reviewing_an_ai_issue_updates_summary_in_response_and_report(self):
+        task_id, _ = self._insert_pending_report_task()
+        for item_id, status, expected in (
+            ("issue-1", "accepted", "已复核 1 项，剩余 1 项待人工复核。"),
+            ("candidate-2", "rejected", "2 项均已完成人工复核。"),
+            ("issue-1", "pending", "已复核 1 项，剩余 1 项待人工复核。"),
+        ):
+            with self.subTest(item_id=item_id, status=status):
+                response = self.client.post(
+                    f"/admin/tasks/{task_id}/report-items",
+                    json={
+                        "result_code": "consistency",
+                        "item_id": item_id,
+                        "acceptance_status": status,
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                summary = response.get_json()["result_summary"]
+                self.assertIn(expected, summary)
+                for suffix in ("", "/export"):
+                    page = BeautifulSoup(
+                        self.client.get(f"/admin/tasks/{task_id}{suffix}").data,
+                        "html.parser",
+                    )
+                    rendered = _required_tag(page.select_one(".result-summary"))
+                    self.assertEqual(rendered.get_text(strip=True), summary)
+                    if not suffix:
+                        self.assertTrue(rendered.has_attr("data-result-summary"))
+
     def test_pending_report_excel_roundtrip_and_legacy_review_header(self):
         task_id, source = self._insert_pending_report_task()
         for header, verdict in (
@@ -1298,7 +1331,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertIn("引用原文", workbook.sheetnames)
                 self.assertNotIn("证据审查", workbook.sheetnames)
                 self.assertEqual(workbook["引用原文"].max_row, 4)
-                self.assertEqual(sheet.cell(3, columns["AI判定"]).value, "需人工确认")
+                self.assertEqual(sheet.cell(3, columns["AI判定"]).value, "待核实")
                 cell = sheet.cell(3, columns["人工复核"])
                 validation = next(
                     v
@@ -5000,7 +5033,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
                     self.assertIsNone(soup.select_one(".report-table"))
                     self.assertIsNone(soup.select_one("[data-report-item]"))
-                    self.assertNotIn("人工复核", soup.get_text())
+                    self.assertIsNone(
+                        soup.select_one("[data-report-acceptance-status]")
+                    )
                     self.assertIn("检查未执行", soup.get_text())
                     self.assertIn("未读取到有效词表规则", soup.get_text())
 

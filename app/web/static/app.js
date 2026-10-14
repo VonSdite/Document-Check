@@ -445,7 +445,7 @@ function applyReportItemSave(item, data) {
     controls.note.dataset.savedValue = savedNote;
   }
   item.dataset.acceptanceStatus = savedAcceptance;
-  if (item.dataset.itemType === "unverified" && typeof data.result_summary === "string") {
+  if (typeof data.result_summary === "string") {
     const summary = item.closest("[data-detail-result]")?.querySelector("[data-result-summary]");
     if (summary) summary.textContent = data.result_summary;
   }

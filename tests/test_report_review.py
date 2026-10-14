@@ -79,7 +79,8 @@ class ReportFeedbackTest(unittest.TestCase):
                 self.assertEqual(len(pending["evidence_refs"]), 2)
                 self.assertEqual(len(pending["text_evidence"][0]["quotes"]), 2)
                 self.assertEqual(pending["text_evidence"][1]["label"], "相关原文")
-                self.assertIn("1 项需人工确认", prepared["result_summary"])
+                self.assertIn("1 项待核实", prepared["result_summary"])
+                self.assertIn("共 2 项待人工复核", prepared["result_summary"])
                 self.assertNotIn("候选", prepared["result_summary"])
                 self.assertNotIn("撤回", prepared["result_summary"])
                 self.assertEqual(prepared["report_counts"]["total"], 2)
@@ -101,9 +102,75 @@ class ReportFeedbackTest(unittest.TestCase):
             self.assertEqual(counts["conclusion_acceptance_rate"], "-")
             self.assertEqual(counts["reviewed"], int(verdict != "pending"))
             self.assertEqual(counts["pending_review"], 2 if verdict == "pending" else 1)
-            self.assertEqual(
-                "需人工确认" in prepared["result_summary"], verdict == "pending"
+            self.assertIn("1 项待核实", prepared["result_summary"])
+            self.assertIn(
+                "共 2 项待人工复核"
+                if verdict == "pending"
+                else "已复核 1 项，剩余 1 项待人工复核",
+                prepared["result_summary"],
             )
+
+    def test_agent_summary_tracks_human_review_for_every_ai_finding(self):
+        source = json.loads(
+            (Path(__file__).parent / "fixtures" / "pending_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        source["issue_output_limit"] = 10
+        original_item = source["structured_report"]["items"][0]
+        source["structured_report"]["items"] = [
+            {
+                **original_item,
+                "id": f"issue-{index}",
+                "description": f"参数{index}前后不一致",
+            }
+            for index in range(1, 5)
+        ]
+        prepared = _prepare_task_results([source], suppression_rules={})[0]
+        self.assertEqual(
+            prepared["result_summary"],
+            "AI 检出 4 个问题、1 项待核实。共 5 项待人工复核。",
+        )
+        source["item_acceptances"] = {}
+        for item_id, status, pending in (
+            ("issue-1", "accepted", 4),
+            ("issue-2", "rejected", 3),
+            ("candidate-2", "accepted", 2),
+            ("issue-3", "accepted", 1),
+            ("issue-4", "accepted", 0),
+            ("issue-1", "pending", 1),
+        ):
+            with self.subTest(item_id=item_id, status=status):
+                source["item_acceptances"][item_id] = {"status": status}
+                prepared = _prepare_task_results([source], suppression_rules={})[0]
+                self.assertTrue(
+                    prepared["result_summary"].startswith(
+                        "AI 检出 4 个问题、1 项待核实。"
+                    )
+                )
+                self.assertEqual(prepared["report_counts"]["pending_review"], pending)
+                self.assertIn(
+                    f"已复核 {5 - pending} 项，剩余 {pending} 项待人工复核。"
+                    if pending
+                    else "5 项均已完成人工复核。",
+                    prepared["result_summary"],
+                )
+
+    def test_agent_summary_counts_suggestions_and_handles_no_findings(self):
+        source = json.loads(
+            (Path(__file__).parent / "fixtures" / "pending_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        source["structured_report"]["pending_items"] = []
+        source["structured_report"]["items"][0]["status"] = "suggestion"
+        prepared = _prepare_task_results([source], suppression_rules={})[0]
+        self.assertEqual(
+            prepared["result_summary"], "AI 检出 1 条建议。共 1 项待人工复核。"
+        )
+        source["structured_report"]["items"] = []
+        prepared = _prepare_task_results([source], suppression_rules={})[0]
+        self.assertEqual(prepared["result_summary"], "AI 未检出需要复核的条目。")
 
     def test_visual_uncertainty_remains_available_for_manual_verification(self):
         source = json.loads(
