@@ -189,7 +189,6 @@ class EvidenceAgent:
                     connection.get("model_name"),
                     connection.get("reasoning_effort"),
                     connection.get("force_disable_thinking"),
-                    options.efficient_stages,
                     hashlib.sha256(
                         str(connection.get("api_key") or "").encode()
                     ).hexdigest(),
@@ -202,7 +201,6 @@ class EvidenceAgent:
             if options.max_seconds is not None
             else connection.get("request_timeout", 3600),
         }
-        self.requested_reasoning_effort = connection.get("reasoning_effort")
         self.started = time.monotonic()
         self.max_input = int(connection.get("max_input_chars", 80000))
         self.state = store.load() or {
@@ -246,9 +244,7 @@ class EvidenceAgent:
             on_activity=on_activity,
             capabilities=self.state["capabilities"],
         )
-        self.model = LimitedModel(
-            model, self.request_gate, self.ensure_active, self.prepare_request
-        )
+        self.model = LimitedModel(model, self.request_gate, self.ensure_active)
         self.pdf_evidence = build_pdf_table_evidence_index(
             "\n".join(b.text for b in index.blocks)
         )
@@ -261,22 +257,6 @@ class EvidenceAgent:
             > self.options.max_seconds
         ):
             raise BudgetExceeded("检查项已达到总执行时间预算")
-
-    def prepare_request(self):
-        effort = self.requested_reasoning_effort
-        self.connection["efficient_stage"] = (
-            self.options.efficient_stages
-            and self.state["next"] in {"plan", "discover", "align", "compare", "review"}
-            and not self.connection.get("force_disable_thinking")
-        )
-        if self.connection["efficient_stage"] and effort in {
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-        }:
-            effort = "low"
-        self.connection["reasoning_effort"] = effort
 
     def _uses_strategy(self, *strategies):
         return self.strategy in strategies or (
@@ -1902,7 +1882,6 @@ class EvidenceAgent:
             "workflow_version": WORKFLOW_VERSION,
             "strategy": self.strategy,
             "discovery_mode": self.state.get("discovery_mode", "chunked"),
-            "efficient_stages": self.options.efficient_stages,
             "global_checks": list(self.state["global_checks"]),
             "capabilities": self.state["capabilities"],
             "coverage": coverage,

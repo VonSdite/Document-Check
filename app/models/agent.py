@@ -22,7 +22,6 @@ from app.models.client import (
     _raise_for_http_error,
     _raise_if_request_canceled,
     _start_response_cancel_watcher,
-    _uses_deepseek_json_object_response_format,
     _wait_before_retry,
 )
 
@@ -84,12 +83,7 @@ class AgentModel:
         if self.capabilities.get("temperature") is not False:
             payload["temperature"] = 0
         _apply_reasoning_effort(payload, connection.get("reasoning_effort"))
-        if connection.get("force_disable_thinking") or (
-            connection.get("efficient_stage")
-            and _uses_deepseek_json_object_response_format(
-                connection["api_base"], connection["model_name"]
-            )
-        ):
+        if connection.get("force_disable_thinking"):
             _disable_thinking_in_payload(
                 payload,
                 api_base=connection["api_base"],

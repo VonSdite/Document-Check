@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-WORKFLOW_VERSION = "evidence-review-v4"
+WORKFLOW_VERSION = "evidence-review-v5"
 NonEmpty = Annotated[str, Field(min_length=1, max_length=12000)]
 
 
@@ -32,7 +32,6 @@ class AgentOptions(Contract):
     protocol: Literal["auto", "native", "structured"] = "auto"
     chunk_chars: int = Field(default=20000, ge=1000, le=50000)
     full_document: bool = True
-    efficient_stages: bool = True
     max_calls: int | None = Field(default=None, ge=4, le=1000)
     max_seconds: int | None = Field(default=None, ge=30, le=14400)
     max_review_rounds: int = Field(default=3, ge=1, le=6)
@@ -45,12 +44,12 @@ class AgentOptions(Contract):
 
     @model_validator(mode="before")
     @classmethod
-    def use_upstream_output_defaults(cls, value):
+    def use_model_request_settings(cls, value):
         if isinstance(value, dict):
             return {
                 key: item
                 for key, item in value.items()
-                if key not in {"max_output_tokens", "max_tokens"}
+                if key not in {"max_output_tokens", "max_tokens", "efficient_stages"}
             }
         return value
 

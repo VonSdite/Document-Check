@@ -113,6 +113,39 @@ class EvidenceIntegrationTest(unittest.TestCase):
             store.save({"next": "done"})
         self.assertEqual(store.load()["next"], "discover")
 
+    def test_checkpoint_from_different_thinking_workflow_is_not_reused(self):
+        task_id = self.insert_task([])
+        index = DocumentIndex([{"filename": "a.txt", "text": "设备电压220 V"}])
+        item = {"code": "check", "prompt": "核实参数。"}
+        connection = {"model_name": "deepseek", "reasoning_effort": "max"}
+        options = AgentOptions.model_validate({"efficient_stages": True})
+        with patch(
+            "app.tasks.runtime.evidence_agent.WORKFLOW_VERSION", "evidence-review-v4"
+        ):
+            old_signature = workflow_signature(
+                index, item, connection, options, "document_check"
+            )
+        CheckpointStore(task_id, "check", old_signature, "owner").save({"next": "done"})
+        signature = workflow_signature(
+            index, item, connection, options, "document_check"
+        )
+        compatible_signature = workflow_signature(
+            index,
+            item,
+            connection,
+            options,
+            "document_check",
+            include_execution_limits=True,
+        )
+        store = CheckpointStore(
+            task_id,
+            "check",
+            signature,
+            "owner",
+            compatible_signatures=(compatible_signature,),
+        )
+        self.assertIsNone(store.load())
+
     def test_checkpoint_compatibility_keeps_task_item_and_execution_owner_boundaries(
         self,
     ):

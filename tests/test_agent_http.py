@@ -209,53 +209,97 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertAlmostEqual(result["metadata"]["cost"], 0.00056)
         self.assertEqual(
             [p.get("reasoning_effort") for p in self.payloads],
-            ["low"] * 4,
+            ["max"] * 4,
         )
         self.assertEqual(
             [r["reasoning_effort"] for r in result["metadata"]["requests"]],
-            ["low"] * 4,
+            ["max"] * 4,
         )
 
-    def test_explicit_inherited_effort_keeps_all_requests_at_selected_level(self):
-        self.connection["reasoning_effort"] = "high"
-        result = EvidenceAgent(
-            index=DocumentIndex(
-                [{"filename": "a.txt", "text": "设备电压220 V", "text_complete": True}]
-            ),
-            item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
-            task_type="document_check",
-            connection=self.connection,
-            options=AgentOptions(efficient_stages=False),
-            store=MemoryCheckpointStore(),
-            ensure_active=lambda: None,
-        ).run()
-        self.assertEqual(result["error"], "")
-        self.assertEqual([p["reasoning_effort"] for p in self.payloads], ["high"] * 3)
+    def test_default_workflow_keeps_all_requests_at_selected_effort(self):
+        for effort in (None, "medium", "high", "xhigh", "max"):
+            with self.subTest(effort=effort):
+                self.payloads.clear()
+                self.connection["reasoning_effort"] = effort
+                result = EvidenceAgent(
+                    index=DocumentIndex(
+                        [
+                            {
+                                "filename": "a.txt",
+                                "text": "设备电压220 V",
+                                "text_complete": True,
+                            }
+                        ]
+                    ),
+                    item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+                    task_type="document_check",
+                    connection=self.connection,
+                    options=AgentOptions(),
+                    store=MemoryCheckpointStore(),
+                    ensure_active=lambda: None,
+                ).run()
+                self.assertEqual(result["error"], "")
+                self.assertEqual(
+                    [p.get("reasoning_effort") for p in self.payloads], [effort] * 3
+                )
+                self.assertEqual(
+                    [r["reasoning_effort"] for r in result["metadata"]["requests"]],
+                    [effort] * 3,
+                )
+                self.assertFalse(
+                    any(r["thinking_disabled"] for r in result["metadata"]["requests"])
+                )
 
-    def test_deepseek_fast_review_uses_explicit_thinking_disable(self):
+    def test_deepseek_follows_model_settings_with_saved_stage_options(self):
         self.connection.update(
             model_name="api_openai/deepseek-v4.1-flash", reasoning_effort="max"
         )
-        result = EvidenceAgent(
-            index=DocumentIndex(
-                [{"filename": "a.txt", "text": "设备电压220 V", "text_complete": True}]
-            ),
-            item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
-            task_type="document_check",
-            connection=self.connection,
-            options=AgentOptions(),
-            store=MemoryCheckpointStore(),
-            ensure_active=lambda: None,
-        ).run()
-        self.assertEqual(result["error"], "")
-        self.assertEqual(len(self.payloads), 3)
-        for payload in self.payloads:
-            self.assertEqual(payload["thinking"], {"type": "disabled"})
-            self.assertNotIn("reasoning_effort", payload)
-        self.assertEqual(
-            [r["thinking_disabled"] for r in result["metadata"]["requests"]],
-            [True, True, True],
-        )
+        options = AgentOptions.model_validate({"efficient_stages": True})
+        self.assertNotIn("efficient_stages", options.model_dump())
+        for disabled in (False, True):
+            with self.subTest(force_disable_thinking=disabled):
+                self.payloads.clear()
+                self.connection["force_disable_thinking"] = disabled
+                result = EvidenceAgent(
+                    index=DocumentIndex(
+                        [
+                            {
+                                "filename": "a.txt",
+                                "text": "设备电压220 V",
+                                "text_complete": True,
+                            }
+                        ]
+                    ),
+                    item={"code": "custom", "name": "检查", "prompt": "核实参数。"},
+                    task_type="document_check",
+                    connection=self.connection,
+                    options=options,
+                    store=MemoryCheckpointStore(),
+                    ensure_active=lambda: None,
+                ).run()
+                self.assertEqual(result["error"], "")
+                self.assertEqual(len(self.payloads), 3)
+                for payload in self.payloads:
+                    if disabled:
+                        self.assertEqual(payload["thinking"], {"type": "disabled"})
+                        self.assertIs(payload["enable_thinking"], False)
+                        self.assertNotIn("reasoning_effort", payload)
+                    else:
+                        self.assertEqual(payload["reasoning_effort"], "max")
+                        for key in (
+                            "thinking",
+                            "enable_thinking",
+                            "chat_template_kwargs",
+                        ):
+                            self.assertNotIn(key, payload)
+                self.assertEqual(
+                    [r["thinking_disabled"] for r in result["metadata"]["requests"]],
+                    [disabled] * 3,
+                )
+                self.assertEqual(
+                    [r["reasoning_effort"] for r in result["metadata"]["requests"]],
+                    [None if disabled else "max"] * 3,
+                )
 
     def test_baseline_evaluation_records_real_api_usage(self):
         case = {
@@ -297,7 +341,7 @@ class AgentHTTPTest(unittest.TestCase):
         result = agent.run()
         self.assertEqual(result["error"], "")
         for payload in self.payloads:
-            self.assertEqual(payload["reasoning_effort"], "low")
+            self.assertEqual(payload["reasoning_effort"], "max")
         self.assertTrue(result["metadata"]["coverage"]["all_checked"])
         self.assertEqual(len(result["report"]["items"]), 3)
         self.assertEqual(result["metadata"]["model_calls"], 5)

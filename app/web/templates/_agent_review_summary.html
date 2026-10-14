@@ -2,7 +2,7 @@
 <details class="result-raw-details">
   <summary>证据审查记录 · 待核实 {{ result.pending_items|length }} · 撤回 {{ result.withdrawn_items|length }}</summary>
   <p>已检查 {{ result.agent.coverage.checked_blocks }}/{{ result.agent.coverage.total_blocks }} 个来源片段，模型请求 {{ result.agent.model_calls }} 次，用时 {{ result.agent.elapsed_seconds|round(1) }} 秒。</p>
-  {% if result.agent.discovery_mode %}<p>执行方式：{{ '全文核查' if result.agent.discovery_mode == 'whole_document' else '分批核查' }}。{% if result.agent.efficient_stages %}思考策略：快速（按模型降低强度或关闭思考），包含独立证据复核。{% else %}思考策略：使用所选模型配置。{% endif %}</p>{% endif %}
+  {% if result.agent.discovery_mode %}<p>执行方式：{{ '全文核查' if result.agent.discovery_mode == 'whole_document' else '分批核查' }}。{% if result.agent.efficient_stages %}思考设置：本次检查降低了思考强度或关闭了思考。{% else %}思考设置：使用任务所选模型配置。{% endif %}</p>{% endif %}
   <p>服务已返回用量：输入 {{ result.agent.known_input_tokens }} token，输出 {{ result.agent.known_output_tokens }} token。{% if not result.agent.usage_complete %}部分请求未返回用量，统计仅包含已知用量。{% endif %}</p>
   {% if not result.agent.coverage.text_complete %}<p>部分原文未可靠解析，结论仅覆盖已读取内容。</p>{% endif %}
   {% if result.pending_items %}
