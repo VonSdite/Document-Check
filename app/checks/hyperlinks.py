@@ -157,12 +157,6 @@ def build_hyperlink_report(
         )
     if hidden_count:
         summary += f"受报告条目上限限制，另有 {hidden_count} 条未展开。"
-    checked_https = any(
-        urlsplit(groups[index]["target"]).scheme.lower() == "https"
-        for index in network_indexes
-    )
-    if not bool(network.get("ssl_verify")) and checked_https:
-        summary += "HTTPS 链接按忽略证书校验模式检查连接与 HTTP 响应。"
     return {"summary": summary, "items": visible_items}
 
 

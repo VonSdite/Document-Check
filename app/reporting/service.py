@@ -665,6 +665,12 @@ def _result_report_summary(
     if structured_report is None:
         return ""
     summary = str(structured_report.get("summary") or "").strip()
+    if result.get("code") == "hyperlink-validity":
+        for notice in (
+            "HTTPS 链接按忽略证书校验模式检查连接与 HTTP 响应。",
+            "当前系统未启用 HTTPS 证书校验，本次仅检查连接与 HTTP 响应。",
+        ):
+            summary = summary.replace(notice, "").strip()
     if dictionary_status_items:
         if len(dictionary_status_items) == len(structured_report.get("items") or []):
             summary = summary.replace("检查结论：", "检查未执行：", 1)
