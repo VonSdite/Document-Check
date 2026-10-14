@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.checks.hyperlinks import (
     HYPERLINK_CHECK_CODE,
@@ -61,6 +61,78 @@ class HyperlinkRuleTest(unittest.TestCase):
         self.assertFalse(probe_called)
         self.assertEqual(report["items"][0]["type"], "issue")
         self.assertEqual(report["items"][0]["category"], "超链接格式错误")
+
+    def test_report_explains_skips_and_checks_known_internal_targets(self):
+        probe = Mock(return_value={"state": "valid"})
+        with patch("app.checks.hyperlinks.HYPERLINK_MAX_NETWORK_TARGETS", 1):
+            report = build_hyperlink_report(
+                [
+                    {"target": "https://docs.example.com/guide"},
+                    {"target": "https://docs.example.com/extra"},
+                    {"target": "#chapter", "internal_target_exists": True},
+                    {"target": "#missing", "internal_target_exists": False},
+                    {"target": "#unknown"},
+                    {"target": "mailto:support@example.com"},
+                    {"target": "guide.pdf"},
+                    {"target": "tel:123456"},
+                ],
+                issue_limit=30,
+                probe=probe,
+            )
+
+        probe.assert_called_once_with("https://docs.example.com/guide", {})
+        self.assertIn(
+            "有效 2 个，明确无效 1 个，需人工确认 0 个，跳过 5 个", report["summary"]
+        )
+        for reason in (
+            "检测覆盖限制",
+            "内部链接目标未解析",
+            "邮件链接",
+            "相对路径缺少基准地址",
+            "非 HTTP/HTTPS 链接",
+        ):
+            self.assertIn(f"{reason} 1 个", report["summary"])
+        self.assertEqual(len(report["items"]), 1)
+        self.assertEqual(report["items"][0]["category"], "内部链接目标不存在")
+
+    def test_https_certificate_setting_applies_to_fallback_and_redirects(self):
+        for ssl_verify in (False, True):
+            with self.subTest(ssl_verify=ssl_verify):
+                with (
+                    patch("app.checks.hyperlinks._ensure_safe_http_destination"),
+                    patch(
+                        "app.checks.hyperlinks.requests.Session.request",
+                        side_effect=[
+                            Mock(status_code=405, headers={}),
+                            Mock(status_code=302, headers={"Location": "/guide"}),
+                            Mock(status_code=200, headers={}),
+                        ],
+                    ) as request,
+                ):
+                    report = build_hyperlink_report(
+                        [{"target": "https://docs.example.com/start"}],
+                        issue_limit=30,
+                        network={"ssl_verify": ssl_verify},
+                    )
+
+                self.assertEqual(
+                    [call.args[:2] for call in request.call_args_list],
+                    [
+                        ("HEAD", "https://docs.example.com/start"),
+                        ("GET", "https://docs.example.com/start"),
+                        ("HEAD", "https://docs.example.com/guide"),
+                    ],
+                )
+                for call in request.call_args_list:
+                    self.assertIs(call.kwargs["verify"], ssl_verify)
+                self.assertIn(
+                    "有效 1 个，明确无效 0 个，需人工确认 0 个，跳过 0 个",
+                    report["summary"],
+                )
+                self.assertEqual(report["items"], [])
+                self.assertEqual(
+                    "忽略证书校验模式" in report["summary"], not ssl_verify
+                )
 
     def test_probe_blocks_private_destination_before_request(self):
         with patch("app.checks.hyperlinks.requests.Session.request") as request:

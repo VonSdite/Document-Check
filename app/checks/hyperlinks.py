@@ -2,6 +2,7 @@ import ipaddress
 import json
 import re
 import socket
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -121,6 +122,7 @@ def build_hyperlink_report(
                     )
 
     counts = {"valid": 0, "issue": 0, "suggestion": 0, "skipped": 0}
+    skipped_reasons = Counter()
     report_items = []
     for group, result in zip(groups, results):
         result = result or _result(
@@ -133,6 +135,8 @@ def build_hyperlink_report(
         )
         state = result["state"]
         counts[state] += 1
+        if state == "skipped":
+            skipped_reasons[result.get("category") or "未覆盖的链接"] += 1
         if state in {"issue", "suggestion"}:
             report_items.append(_report_item(group, result))
 
@@ -143,6 +147,14 @@ def build_hyperlink_report(
         f"有效 {counts['valid']} 个，明确无效 {counts['issue']} 个，"
         f"需人工确认 {counts['suggestion']} 个，跳过 {counts['skipped']} 个。"
     )
+    if skipped_reasons:
+        summary += (
+            "跳过原因："
+            + "，".join(
+                f"{reason} {count} 个" for reason, count in skipped_reasons.items()
+            )
+            + "。"
+        )
     if hidden_count:
         summary += f"受报告条目上限限制，另有 {hidden_count} 条未展开。"
     checked_https = any(
@@ -150,7 +162,7 @@ def build_hyperlink_report(
         for index in network_indexes
     )
     if not bool(network.get("ssl_verify")) and checked_https:
-        summary += "当前系统未启用 HTTPS 证书校验，本次仅检查连接与 HTTP 响应。"
+        summary += "HTTPS 链接按忽略证书校验模式检查连接与 HTTP 响应。"
     return {"summary": summary, "items": visible_items}
 
 
@@ -341,7 +353,7 @@ def _check_without_network(group: dict) -> dict | None:
             )
         if states:
             return _result("valid")
-        return _result("skipped")
+        return _result("skipped", "内部链接目标未解析")
 
     try:
         parsed = urlsplit(target)
@@ -350,11 +362,13 @@ def _check_without_network(group: dict) -> dict | None:
         return _invalid_url_result("链接中的主机名或端口格式无效。")
     scheme = parsed.scheme.lower()
     if not scheme:
-        return _result("skipped")
+        return _result("skipped", "相对路径缺少基准地址")
     if scheme not in {"http", "https"}:
         if scheme in {"javascript", "data"}:
             return _invalid_url_result(f"链接使用了不安全的 {scheme}: 协议。")
-        return _result("skipped")
+        return _result(
+            "skipped", "邮件链接" if scheme == "mailto" else "非 HTTP/HTTPS 链接"
+        )
     if not parsed.hostname:
         return _invalid_url_result("HTTP 链接缺少有效域名或 IP 地址。")
     if parsed.username is not None or parsed.password is not None:

@@ -14,6 +14,14 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from openpyxl import Workbook
+from pypdf import PdfWriter
+from pypdf.generic import (
+    ArrayObject,
+    DictionaryObject,
+    NameObject,
+    NumberObject,
+    TextStringObject,
+)
 
 from app.documents.extraction import (
     allowed_file,
@@ -264,6 +272,45 @@ class DocumentFormattingTest(unittest.TestCase):
         self.assertIn("https://docs.example.com/install", text)
         self.assertEqual(hyperlinks[0]["location"], "第1页")
         self.assertEqual(hyperlinks[0]["target"], "https://docs.example.com/install")
+
+    def test_pdf_named_links_preserve_resolved_target_pages(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "named-links.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=300, height=300)
+            writer.add_blank_page(width=300, height=300)
+            writer.add_named_destination("chapter2", 1)
+            for index, name in enumerate(("chapter2", "unknown")):
+                writer.add_annotation(
+                    0,
+                    DictionaryObject(
+                        {
+                            NameObject("/Subtype"): NameObject("/Link"),
+                            NameObject("/Rect"): ArrayObject(
+                                [
+                                    NumberObject(10),
+                                    NumberObject(index * 40 + 10),
+                                    NumberObject(150),
+                                    NumberObject(index * 40 + 30),
+                                ]
+                            ),
+                            NameObject("/A"): DictionaryObject(
+                                {
+                                    NameObject("/S"): NameObject("/GoTo"),
+                                    NameObject("/D"): TextStringObject(name),
+                                }
+                            ),
+                        }
+                    ),
+                )
+            writer.write(path)
+
+            _text, hyperlinks = extract_document(path, "pdf")
+
+        self.assertEqual(hyperlinks[0]["target"], "#chapter2")
+        self.assertIs(hyperlinks[0]["internal_target_exists"], True)
+        self.assertEqual(hyperlinks[1]["target"], "#unknown")
+        self.assertIsNone(hyperlinks[1].get("internal_target_exists"))
 
     def test_pdf_extraction_skips_pypdf_for_clean_pymupdf_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
