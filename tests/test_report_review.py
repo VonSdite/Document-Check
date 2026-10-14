@@ -6,7 +6,11 @@ from pathlib import Path
 
 from flask import Flask
 
-from app.contracts.task_types import DOCUMENT_TASK_TYPE
+from app.contracts.task_types import (
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+)
 from app.persistence.connection import get_db
 from app.persistence.schema import init_db
 from app.reporting.constants import REPORT_STATS_PREPARATION_VERSION
@@ -43,6 +47,84 @@ def report_result():
 
 
 class ReportFeedbackTest(unittest.TestCase):
+    def test_pending_items_are_actionable_and_keep_distinct_quotes(self):
+        source = json.loads(
+            (Path(__file__).parent / "fixtures" / "pending_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        original = copy.deepcopy(source)
+        rules = {
+            "consistency": [
+                {"id": 1, "reason": "误报", "description": "布线说明可能缺少操作动词"}
+            ]
+        }
+        for task_type in (
+            DOCUMENT_TASK_TYPE,
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+        ):
+            with self.subTest(task_type=task_type):
+                prepared = _prepare_task_results(
+                    [source], task_type=task_type, suppression_rules=rules
+                )[0]
+                self.assertEqual(source, original)
+                self.assertEqual(
+                    [item["type"] for item in prepared["report_items"]],
+                    ["issue", "unverified"],
+                )
+                pending = prepared["report_items"][1]
+                self.assertEqual(pending["id"], "candidate-2")
+                self.assertEqual(pending["acceptance_label"], "暂不确定")
+                self.assertEqual(len(pending["evidence_refs"]), 2)
+                self.assertEqual(len(pending["text_evidence"][0]["quotes"]), 2)
+                self.assertEqual(pending["text_evidence"][1]["label"], "相关原文")
+                self.assertIn("1 项需人工确认", prepared["result_summary"])
+                self.assertNotIn("候选", prepared["result_summary"])
+                self.assertNotIn("撤回", prepared["result_summary"])
+                self.assertEqual(prepared["report_counts"]["total"], 2)
+                self.assertEqual(prepared["report_counts"]["issue"], 1)
+                self.assertEqual(prepared["report_counts"]["unverified"], 1)
+
+    def test_pending_feedback_is_separate_from_ai_acceptance_statistics(self):
+        source = json.loads(
+            (Path(__file__).parent / "fixtures" / "pending_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for verdict in ("accepted", "rejected", "pending"):
+            source["item_acceptances"] = {"candidate-2": {"status": verdict}}
+            prepared = _prepare_task_results([source], suppression_rules={})[0]
+            counts = prepared["report_counts"]
+            self.assertEqual(counts["accepted"], 0)
+            self.assertEqual(counts["rejected"], 0)
+            self.assertEqual(counts["conclusion_acceptance_rate"], "-")
+            self.assertEqual(counts["reviewed"], int(verdict != "pending"))
+            self.assertEqual(counts["pending_review"], 2 if verdict == "pending" else 1)
+            self.assertEqual(
+                "需人工确认" in prepared["result_summary"], verdict == "pending"
+            )
+
+    def test_visual_uncertainty_remains_available_for_manual_verification(self):
+        source = json.loads(
+            (Path(__file__).parent / "fixtures" / "pending_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        source["structured_report"]["pending_items"][0].update(
+            description="图1缺少图片",
+            category="图片缺失",
+            rationale="当前文本来源未建立视觉对象或表格缺失的充分证据",
+        )
+        prepared = _prepare_task_results(
+            [source], task_type=DOCUMENT_TASK_TYPE, suppression_rules={}
+        )[0]
+        self.assertEqual(prepared["report_items"][1]["type"], "unverified")
+        self.assertIn(
+            "请对照原文中的图片或表格",
+            prepared["report_items"][1]["verification_reason"],
+        )
+
     def test_overall_rate_includes_both_types_and_excludes_pending(self):
         counts = _count_report_items(
             [
@@ -251,6 +333,7 @@ class ReportStatsMigrationTest(unittest.TestCase):
             with app.app_context():
                 init_db()
                 db = get_db()
+                db.execute("ALTER TABLE task_report_stats DROP COLUMN unverified_count")
                 source_json = json.dumps([report_result()], ensure_ascii=False)
                 db.execute(
                     """
@@ -293,6 +376,7 @@ class ReportStatsMigrationTest(unittest.TestCase):
                 ).fetchone()
                 self.assertEqual(cached["accepted_count"], 1)
                 self.assertEqual(cached["rejected_count"], 1)
+                self.assertEqual(cached["unverified_count"], 0)
                 self.assertEqual(
                     db.execute("SELECT result_json FROM tasks WHERE id = 1").fetchone()[
                         0

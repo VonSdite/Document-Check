@@ -151,11 +151,12 @@
   <div class="report-counts">
     <span>问题<strong data-report-count="issue">{{ report_totals.issue }}</strong></span>
     <span>建议<strong data-report-count="suggestion">{{ report_totals.suggestion }}</strong></span>
+    <span>人工确认项<strong data-report-count="unverified">{{ report_totals.unverified }}</strong></span>
     <span>认可结论<strong data-report-count="accepted">{{ report_totals.accepted }}</strong></span>
     <span>不认可结论<strong data-report-count="rejected">{{ report_totals.rejected }}</strong></span>
     <span>待确认条目<strong data-report-count="pending_review">{{ report_totals.pending_review }}</strong></span>
     <span>问题条目占比<strong data-report-count="issue_item_ratio">{{ report_totals.issue_item_ratio }}</strong></span>
-    <span title="认可结论数 ÷（认可结论数 + 不认可结论数）；已提交反馈在报告过滤或折叠后仍计入统计">整体结论认可率<strong data-report-count="conclusion_acceptance_rate">{{ report_totals.conclusion_acceptance_rate }}</strong></span>
+    <span title="认可结论数 ÷（认可结论数 + 不认可结论数）；需人工确认项单独统计；已提交反馈在报告过滤或折叠后仍计入统计">整体结论认可率<strong data-report-count="conclusion_acceptance_rate">{{ report_totals.conclusion_acceptance_rate }}</strong></span>
     <span>复核覆盖率<strong data-report-count="review_coverage_rate">{{ report_totals.review_coverage_rate }}</strong></span>
     <span>已忽略误报<strong data-report-count="suppressed">{{ report_totals.suppressed or 0 }}</strong></span>
     <span>合计<strong data-report-count="total">{{ report_totals.total }}</strong></span>
@@ -175,27 +176,15 @@
         <small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{% if result.execution_label %}状态：{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}{% endif %}</small>
       </div>
     </div>
-    {% if result.uses_model %}
-    <details class="model-output-details" data-model-output="{{ result.code }}">
-      <summary>模型输出内容<small data-output-status></small></summary>
-      <div class="model-output-scroll" data-output-scroll>
-        <div data-output-requests></div>
-        <div data-output-fallback>
-          <h3>思考</h3>
-          <p class="muted">{% if task_progress.active %}等待模型输出。{% else %}此项没有保存思考内容。{% endif %}</p>
-          <h3>正文</h3>
-          <pre class="model-output-text">{{ result.result or '暂无正文。' }}</pre>
-        </div>
-      </div>
-    </details>
+    {% if task_progress.active %}
+    {% include "_model_output.html" %}
     {% endif %}
     {% if result.error %}
     <div class="error-box report-error">{{ "本检查项已取消：" if result.canceled else "本检查项执行失败：" }}{{ result.error }}</div>
     {% endif %}
-    {% include "_agent_review_summary.html" %}
     {% if result.report_items %}
     {% if result.result_summary %}
-    <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
+    <div class="result-summary markdown-body" data-result-summary>{{ result.result_summary|markdown }}</div>
     {% endif %}
     {% if result.report_limit %}
     <div class="report-limit-notice">
@@ -203,7 +192,7 @@
       已合并 {{ result.report_limit.duplicate_count }} 条重复问题，去重后共 {{ result.report_limit.deduplicated_count }} 条。
       {% endif %}
       {% if result.report_limit.limit_applied %}
-      已按问题判定、证据可信度和严重程度排序，报告硬限制保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条。{% if result.uses_model %}模型输出内容可在上方展开查看。{% endif %}
+      问题和建议按证据可信度和严重程度排序，保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条。需人工确认的条目全部列出。
       {% endif %}
     </div>
     {% endif %}
@@ -216,7 +205,7 @@
             <th class="report-field-{{ field }}">{{ label }}</th>
             {% endfor %}
             <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
-            <th class="report-acceptance-cell">是否认可 AI 结论</th>
+            <th class="report-acceptance-cell">人工复核</th>
           </tr>
         </thead>
         <tbody>
@@ -235,13 +224,13 @@
             </td>
             <td class="report-acceptance-cell">
               {% if task_editable %}
-              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">
-                {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
+              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 人工复核">
+                {% for status, label in item.acceptance_options.items() %}
                 <label class="report-radio-option report-radio-option-{{ status }}">
-                  <input type="radio" name="report-acceptance-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ '认可' if status == 'accepted' else '不认可' if status == 'rejected' else label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
-                  <span>{{ "认可" if status == "accepted" else "不认可" if status == "rejected" else label }}</span>
+                  <input type="radio" name="report-acceptance-{{ result.code }}-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <span>{{ label }}</span>
                 </label>
-                {% if status == "rejected" %}
+                {% if status == "rejected" and item.type != "unverified" %}
                 <div class="rejection-controls" data-report-rejection-controls {{ "hidden" if item.acceptance_status != "rejected" else "" }}>
                   <input type="hidden" value="{{ item.rejection_reason }}" data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
                   <button class="rejection-reason-trigger{{ ' has-value' if item.rejection_reason else '' }}" type="button" data-report-rejection-trigger {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
@@ -305,6 +294,10 @@
       </div>
     </details>
     {% endif %}
+    {% if not task_progress.active %}
+    {% include "_model_output.html" %}
+    {% endif %}
+    {% include "_agent_review_summary.html" %}
   </article>
   {% endfor %}
 </section>

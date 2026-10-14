@@ -58,7 +58,7 @@ def _task_filter_sql(filters, *, search_owner, join_ip_usernames):
     if status:
         clauses.append("t.status = ?")
         params.append(status)
-    report_total_expr = "(COALESCE(trs.issue_count, 0) + COALESCE(trs.suggestion_count, 0) + COALESCE(trs.non_issue_count, 0))"
+    report_total_expr = "(COALESCE(trs.issue_count, 0) + COALESCE(trs.suggestion_count, 0) + COALESCE(trs.non_issue_count, 0) + COALESCE(trs.unverified_count, 0))"
     if review_status == "pending":
         clauses.append(
             f"{report_total_expr} > 0 AND COALESCE(trs.reviewed_item_count, 0) = 0"
@@ -266,6 +266,7 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
                 s.issue_count AS issue,
                 s.suggestion_count AS suggestion,
                 s.non_issue_count AS non_issue,
+                s.unverified_count AS unverified,
                 s.reviewed_item_count AS reviewed,
                 s.pending_review_item_count AS pending_review
             FROM tasks t

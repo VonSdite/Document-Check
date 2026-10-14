@@ -1679,6 +1679,11 @@ class EvidenceAgent:
                 "id": candidate["id"],
                 "category": candidate["category"],
                 "description": candidate["description"],
+                "severity": candidate["severity"],
+                "impact": decision["impact"] if decision else candidate["impact"],
+                "suggestion": decision["suggestion"]
+                if decision
+                else candidate["suggestion"],
                 "rationale": decision["rationale"]
                 if decision
                 else "候选尚未完成证据审查",
@@ -1780,7 +1785,9 @@ class EvidenceAgent:
             key=lambda i: (i["status"] != "issue", severity[i["severity"]], i["id"])
         )
         coverage = self.index.coverage(self.state["checked_ids"])
-        summary = f"确认 {sum(i['status'] == 'issue' for i in items)} 个问题、{sum(i['status'] == 'suggestion' for i in items)} 条建议；待核实 {len(pending)} 个候选，撤回 {len(withdrawn)} 个候选。已检查 {coverage['checked_blocks']}/{coverage['total_blocks']} 个来源片段。"
+        summary = f"AI 检查发现 {sum(i['status'] == 'issue' for i in items)} 个问题、{sum(i['status'] == 'suggestion' for i in items)} 条建议。"
+        if pending:
+            summary += f"另有 {len(pending)} 项需人工确认。"
         if not coverage["text_complete"]:
             summary += "部分原文未可靠解析，结论仅覆盖已读取内容。"
         return CheckedReport(

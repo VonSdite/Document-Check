@@ -445,6 +445,10 @@ function applyReportItemSave(item, data) {
     controls.note.dataset.savedValue = savedNote;
   }
   item.dataset.acceptanceStatus = savedAcceptance;
+  if (item.dataset.itemType === "unverified" && typeof data.result_summary === "string") {
+    const summary = item.closest("[data-detail-result]")?.querySelector("[data-result-summary]");
+    if (summary) summary.textContent = data.result_summary;
+  }
   syncReportAcceptanceFields(item);
   syncReportRejectionTrigger(item);
 }
@@ -464,7 +468,7 @@ function validateReportAcceptance(item) {
   const controls = reportItemControls(item);
   const payload = reportItemPayload(item);
   syncReportAcceptanceFields(item);
-  if (payload.acceptance_status !== "rejected") {
+  if (payload.acceptance_status !== "rejected" || item.dataset.itemType === "unverified") {
     return true;
   }
   if (!payload.rejection_reason) {

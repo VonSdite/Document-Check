@@ -1,7 +1,20 @@
 {% set evidence_refs = item.evidence_refs or [] %}
 {% set has_video_evidence = video_report and evidence_refs %}
-{% if field_value %}
+{% set has_text_evidence = field == "excerpt" and item.text_evidence %}
+{% if has_text_evidence %}
+<div class="report-text-evidence">
+  {% for source in item.text_evidence %}
+  <section class="report-evidence-source">
+    <div class="report-evidence-location">{% if source.label != "原文" %}{{ source.label }} · {% endif %}{{ source.filename }}{% if source.position %}<span>{{ source.position }}</span>{% endif %}</div>
+    {% for quote in source.quotes %}<blockquote>{{ quote }}</blockquote>{% endfor %}
+  </section>
+  {% endfor %}
+</div>
+{% elif field_value %}
 <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
+{% endif %}
+{% if field in ["description", "media_summary"] and item.verification_reason %}
+<div class="report-verification-reason"><span>需要确认</span>{{ item.verification_reason }}</div>
 {% endif %}
 {% if has_video_evidence and field == "location" %}
 <div class="video-evidence-times" aria-label="视频证据时间点">
@@ -35,6 +48,6 @@
   {% endfor %}
 </div>
 {% endif %}
-{% if not field_value and not (has_video_evidence and field in ["location", "excerpt"]) %}
+{% if not field_value and not has_text_evidence and not (has_video_evidence and field in ["location", "excerpt"]) %}
 <span class="report-empty-cell">-</span>
 {% endif %}

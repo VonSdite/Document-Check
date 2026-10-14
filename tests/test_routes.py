@@ -410,7 +410,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 soup.select_one('[data-detail-result="check-a"]').get_text(),
             )
 
-    def test_model_output_is_collapsed_above_report_and_escapes_text(self):
+    def test_model_output_is_collapsed_below_report_and_escapes_text(self):
         task_id = self._insert_task()
         with self.app.app_context():
             get_db().execute(
@@ -434,13 +434,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         article = soup.select_one("[data-detail-result]")
         output = article.select_one("[data-model-output]")
         self.assertFalse(output.has_attr("open"))
-        self.assertIn("模型输出内容", output.select_one("summary").get_text())
+        self.assertIn("查看检查过程", output.select_one("summary").get_text())
         self.assertIsNone(output.select_one("script"))
         self.assertIn(
             '<script>alert("output")</script>', output.select_one("pre").get_text()
         )
         self.assertNotIn("查看原始结果", article.get_text())
-        self.assertLess(
+        self.assertGreater(
             str(article).index("data-model-output"),
             str(article).index(
                 str(
@@ -532,7 +532,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                             soup.select_one("[data-model-output] summary").get_text(
                                 strip=True
                             ),
-                            "模型输出内容",
+                            "查看检查过程",
                         )
                         self.assertEqual(
                             self.client.post(
@@ -1175,6 +1175,175 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
             get_db().commit()
             return cursor.lastrowid
+
+    def _insert_pending_report_task(self, status="completed"):
+        source = json.loads(
+            (Path(__file__).parent / "fixtures" / "pending_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        task_id = self._insert_task(status=status)
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=? WHERE id=?",
+                (json.dumps([source], ensure_ascii=False), task_id),
+            )
+            get_db().commit()
+        return task_id, source
+
+    def test_pending_report_is_actionable_and_evidence_is_grouped(self):
+        task_id, _ = self._insert_pending_report_task()
+        for prefix in ("/tasks", "/admin/tasks"):
+            for suffix in ("", "/export"):
+                with self.subTest(prefix=prefix, suffix=suffix):
+                    response = self.client.get(f"{prefix}/{task_id}{suffix}")
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.data, "html.parser")
+                    row = _required_tag(
+                        soup.select_one('[data-item-type="unverified"]')
+                    )
+                    sources = row.select(".report-evidence-source")
+                    self.assertEqual(len(sources), 2)
+                    self.assertEqual(len(sources[0].select("blockquote")), 2)
+                    self.assertIn("<script>alert(1)</script>", sources[1].get_text())
+                    self.assertIsNone(row.select_one("script"))
+                    self.assertIsNone(
+                        row.select_one("[data-report-rejection-controls]")
+                    )
+                    if not suffix:
+                        labels = [
+                            control["aria-label"]
+                            for control in row.select("[data-report-acceptance-status]")
+                        ]
+                        self.assertEqual(labels, ["暂不确定", "确认有问题", "不是问题"])
+                    self.assertNotIn("证据审查记录", soup.get_text())
+                    self.assertNotIn("个候选", soup.get_text())
+                    self.assertNotIn("内部已排除的判断", soup.get_text())
+
+    def test_pending_report_judgments_persist_without_overwriting_ai_report(self):
+        task_id, source = self._insert_pending_report_task()
+        for status, label in (
+            ("accepted", "确认有问题"),
+            ("rejected", "不是问题"),
+            ("pending", "暂不确定"),
+        ):
+            with self.subTest(status=status):
+                response = self.client.post(
+                    f"/admin/tasks/{task_id}/report-items",
+                    json={
+                        "result_code": "consistency",
+                        "item_id": "candidate-2",
+                        "acceptance_status": status,
+                        "rejection_reason": "false_positive",
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                data = response.get_json()
+                self.assertEqual(data["acceptance_label"], label)
+                self.assertEqual(data["item_type"], "unverified")
+                self.assertFalse(data["suppression_candidate_created"])
+                self.assertEqual(
+                    "需人工确认" in data["result_summary"], status == "pending"
+                )
+                self.assertEqual(data["totals"]["issue"], 1)
+                self.assertEqual(data["totals"]["unverified"], 1)
+                self.assertEqual(data["totals"]["accepted"], 0)
+                self.assertEqual(data["totals"]["rejected"], 0)
+                refreshed = BeautifulSoup(
+                    self.client.get(f"/admin/tasks/{task_id}").data, "html.parser"
+                )
+                checked = refreshed.select_one(
+                    '[data-item-type="unverified"] input[checked]'
+                )
+                self.assertEqual(checked["value"], status)
+                with self.app.app_context():
+                    db = get_db()
+                    stored = json.loads(
+                        db.execute(
+                            "SELECT result_json FROM tasks WHERE id=?", (task_id,)
+                        ).fetchone()[0]
+                    )[0]
+                    self.assertEqual(
+                        stored["structured_report"], source["structured_report"]
+                    )
+                    self.assertEqual(
+                        db.execute(
+                            "SELECT COUNT(*) FROM report_suppression_rules"
+                        ).fetchone()[0],
+                        0,
+                    )
+                    stats = db.execute(
+                        "SELECT * FROM task_report_stats WHERE task_id=?", (task_id,)
+                    ).fetchone()
+                    self.assertEqual(stats["unverified_count"], 1)
+                    self.assertEqual(
+                        stats["reviewed_item_count"], int(status != "pending")
+                    )
+
+    def test_pending_report_excel_roundtrip_and_legacy_review_header(self):
+        task_id, source = self._insert_pending_report_task()
+        for header, verdict in (
+            ("人工复核", "不是问题"),
+            ("是否认可 AI 结论", "确认有问题"),
+        ):
+            with self.subTest(header=header):
+                workbook = load_workbook(
+                    io.BytesIO(
+                        self.client.get(f"/admin/tasks/{task_id}/export.xlsx").data
+                    )
+                )
+                sheet = workbook["报告条目"]
+                columns = {cell.value: cell.column for cell in sheet[1]}
+                self.assertEqual(sheet.max_row, 3)
+                self.assertIn("引用原文", workbook.sheetnames)
+                self.assertNotIn("证据审查", workbook.sheetnames)
+                self.assertEqual(workbook["引用原文"].max_row, 4)
+                self.assertEqual(sheet.cell(3, columns["AI判定"]).value, "需人工确认")
+                cell = sheet.cell(3, columns["人工复核"])
+                validation = next(
+                    v
+                    for v in sheet.data_validations.dataValidation
+                    if cell.coordinate in v
+                )
+                self.assertIn("确认有问题", validation.formula1)
+                self.assertIn("需要确认", sheet.cell(3, columns["问题描述"]).value)
+                sheet.cell(1, columns["人工复核"]).value = header
+                cell.value = verdict
+                payload = io.BytesIO()
+                workbook.save(payload)
+                workbook.close()
+                payload.seek(0)
+                response = self.client.post(
+                    f"/admin/tasks/{task_id}/import.xlsx",
+                    data={"report_excel": (payload, "review.xlsx")},
+                    follow_redirects=True,
+                )
+                self.assertEqual(response.status_code, 200)
+                with self.app.app_context():
+                    stored = json.loads(
+                        get_db()
+                        .execute("SELECT result_json FROM tasks WHERE id=?", (task_id,))
+                        .fetchone()[0]
+                    )[0]
+                    self.assertEqual(
+                        stored["item_acceptances"]["candidate-2"]["status"],
+                        "rejected" if verdict == "不是问题" else "accepted",
+                    )
+                    self.assertEqual(
+                        stored["structured_report"], source["structured_report"]
+                    )
+
+    def test_pending_report_cannot_be_reviewed_while_running(self):
+        task_id, _ = self._insert_pending_report_task(status="running")
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "consistency",
+                "item_id": "candidate-2",
+                "acceptance_status": "accepted",
+            },
+        )
+        self.assertEqual(response.status_code, 409)
 
     def test_admin_delete_task_reports_locked_file_without_removing_task(self):
         self._insert_task()
@@ -4831,7 +5000,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
                     self.assertIsNone(soup.select_one(".report-table"))
                     self.assertIsNone(soup.select_one("[data-report-item]"))
-                    self.assertNotIn("是否认可 AI 结论", soup.get_text())
+                    self.assertNotIn("人工复核", soup.get_text())
                     self.assertIn("检查未执行", soup.get_text())
                     self.assertIn("未读取到有效词表规则", soup.get_text())
 
@@ -4842,7 +5011,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     rows = list(workbook["报告条目"].iter_rows(values_only=True))
                     columns = {label: index for index, label in enumerate(rows[0])}
                     self.assertEqual(len(rows), 2)
-                    self.assertIsNone(rows[1][columns["是否认可 AI 结论"]])
+                    self.assertIsNone(rows[1][columns["人工复核"]])
                     self.assertNotIn(rows[1][columns["AI判定"]], ("问题", "建议"))
                     totals = dict(
                         workbook["统计"].iter_rows(min_row=2, values_only=True)
@@ -4983,7 +5152,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             node.get_text(strip=True)
             for node in exported_soup.select(".report-table th")
         ]
-        self.assertEqual(exported_headers[-2:], ["AI判定", "是否认可 AI 结论"])
+        self.assertEqual(exported_headers[-2:], ["AI判定", "人工复核"])
         self.assertNotIn("不认可原因", exported_headers)
         self.assertIn("AI 检查条目统计", exported_text)
         self.assertNotIn("共 2 条：", exported_text)
@@ -5115,7 +5284,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "影响",
                     "修改建议",
                     "AI判定",
-                    "是否认可 AI 结论",
+                    "人工复核",
                     "不认可原因",
                     "人工原因",
                     "检查项编码（请勿修改）",
@@ -5185,7 +5354,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
             item_id = sheet.cell(2, item_id_column).value
             sheet.cell(2, headers["AI判定"]).value = "非问题"
-            sheet.cell(2, headers["是否认可 AI 结论"]).value = "不认可"
+            sheet.cell(2, headers["人工复核"]).value = "不认可"
             sheet.cell(2, headers["不认可原因"]).value = "模型误报"
             sheet.cell(2, headers["人工原因"]).value = "已由业务人员确认"
             annotated = io.BytesIO()
@@ -5249,8 +5418,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         try:
             sheet = workbook["报告条目"]
             headers = {cell.value: cell.column for cell in sheet[1]}
-            sheet.cell(2, headers["是否认可 AI 结论"]).value = "认可"
-            sheet.cell(3, headers["是否认可 AI 结论"]).value = "无法判断"
+            sheet.cell(2, headers["人工复核"]).value = "认可"
+            sheet.cell(3, headers["人工复核"]).value = "无法判断"
             annotated = io.BytesIO()
             workbook.save(annotated)
         finally:
@@ -5265,7 +5434,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("第 3 行“是否认可 AI 结论”无效", response.get_data(as_text=True))
+        self.assertIn("第 3 行“人工复核”无效", response.get_data(as_text=True))
         with self.app.app_context():
             task = (
                 get_db()
@@ -5295,9 +5464,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             item_id = sheet.cell(2, headers["条目标识（请勿修改）"]).value
             sheet.cell(2, headers["AI判定"]).value = "非问题"
             sheet.cell(1, headers["AI判定"]).value = "条目判定"
-            sheet.cell(1, headers["是否认可 AI 结论"]).value = "是否接纳"
+            sheet.cell(1, headers["人工复核"]).value = "是否接纳"
             sheet.cell(1, headers["不认可原因"]).value = "不接纳原因"
-            sheet.cell(2, headers["是否认可 AI 结论"]).value = "接纳"
+            sheet.cell(2, headers["人工复核"]).value = "接纳"
             sheet.delete_cols(headers["检查项编码（请勿修改）"], 2)
             legacy = io.BytesIO()
             workbook.save(legacy)
@@ -5394,7 +5563,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "影响",
                     "修改建议",
                     "AI判定",
-                    "是否认可 AI 结论",
+                    "人工复核",
                     "不认可原因",
                     "人工原因",
                     "检查项编码（请勿修改）",
@@ -5514,7 +5683,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "影响",
                 "修改建议",
                 "AI判定",
-                "是否认可 AI 结论",
+                "人工复核",
             ],
         )
         row = _required_tag(soup.select_one("tr[data-report-item]"))
@@ -5622,7 +5791,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "影响",
                 "修改建议",
                 "AI判定",
-                "是否认可 AI 结论",
+                "人工复核",
             ],
         )
         self.assertIn(
@@ -5710,9 +5879,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         self.assertIsNone(rows[0].select_one(".report-rejection-cell"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
-        self.assertIn(
-            "报告硬限制保留前 1 条，省略 1 条", soup.get_text(" ", strip=True)
-        )
+        self.assertIn("保留前 1 条，省略 1 条", soup.get_text(" ", strip=True))
         self.assertEqual(
             _required_tag(soup.select_one('[data-report-count="issue"]')).get_text(
                 strip=True
@@ -5780,7 +5947,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         headers = [
             node.get_text(strip=True) for node in soup.select(".report-table th")
         ]
-        self.assertEqual(headers, ["条目", "AI检查结论", "AI判定", "是否认可 AI 结论"])
+        self.assertEqual(headers, ["条目", "AI检查结论", "AI判定", "人工复核"])
         table = _required_tag(soup.select_one(".report-table-media"))
         self.assertIn("report-table-media", table.get("class", []))
         row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(
@@ -6206,7 +6373,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("低风险问题", second_row)
         page_text = soup.get_text(" ", strip=True)
         self.assertIn("已合并 1 条重复问题", page_text)
-        self.assertIn("硬限制保留前 2 条，省略 1 条", page_text)
+        self.assertIn("保留前 2 条，省略 1 条", page_text)
         self.assertNotIn(
             "安全约束前后矛盾", " ".join(row.get_text(" ", strip=True) for row in rows)
         )
@@ -7892,8 +8059,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 try:
                     sheet = workbook["报告条目"]
                     headers = {cell.value: cell.column for cell in sheet[1]}
-                    sheet.cell(2, headers["是否认可 AI 结论"]).value = "认可"
-                    sheet.cell(3, headers["是否认可 AI 结论"]).value = "不认可"
+                    sheet.cell(2, headers["人工复核"]).value = "认可"
+                    sheet.cell(3, headers["人工复核"]).value = "不认可"
                     sheet.cell(3, headers["不认可原因"]).value = reason
                     annotated = io.BytesIO()
                     workbook.save(annotated)

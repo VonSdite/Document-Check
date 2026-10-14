@@ -24,9 +24,11 @@ from app.reporting.constants import (
     REPORT_EXPORT_SHEET_NAME,
     REPORT_IMPORT_MAX_ROWS,
     REPORT_ITEM_TYPE_LABEL,
+    REPORT_ITEM_TYPES,
     REPORT_REJECTION_REASON_LABEL,
     REPORT_REJECTION_REASONS,
     REPORT_TOTAL_EXPORT_ROWS,
+    REPORT_VERIFICATION_STATUSES,
     ReportExcelImportError,
 )
 from app.reporting.service import (
@@ -56,9 +58,9 @@ def build_report_workbook(task):
     _fill_report_items_sheet(report_sheet, task, results, document_groups)
     _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
     if any(result.get("agent") for result in results):
-        audit_sheet = workbook.create_sheet("证据审查")
+        audit_sheet = workbook.create_sheet("引用原文")
         audit_sheet.append(
-            ["检查项", "处理结果", "候选描述", "依据", "位置", "原文引用"]
+            ["检查项", "条目", "问题描述", "原文类型", "位置", "原文引用"]
         )
         usage_sheet = workbook.create_sheet("执行用量")
         usage_sheet.append(
@@ -89,45 +91,19 @@ def build_report_workbook(task):
                     meta["coverage"]["total_blocks"],
                 ]
             )
-            for kind, entries in (
-                ("待核实", result.get("pending_items", [])),
-                ("已撤回", result.get("withdrawn_items", [])),
-            ):
-                for candidate in entries:
-                    refs = candidate.get("evidence_refs", []) + candidate.get(
-                        "counterevidence_refs", []
-                    )
-                    audit_sheet.append(
-                        [
-                            _excel_cell_text(v)
-                            for v in (
-                                result["name"],
-                                kind,
-                                candidate["description"],
-                                candidate["rationale"],
-                                "\n".join(
-                                    dict.fromkeys(
-                                        ref["filename"] + " / " + ref["position"]
-                                        for ref in refs
-                                    )
-                                ),
-                                "\n".join(dict.fromkeys(ref["quote"] for ref in refs)),
-                            )
-                        ]
-                    )
             for item in result.get("report_items", []):
-                for ref in item.get("evidence_refs", []):
-                    if ref.get("kind") in {"document_text", "requirement"}:
+                for source in item.get("text_evidence", []):
+                    for quote in source["quotes"]:
                         audit_sheet.append(
                             [
                                 _excel_cell_text(v)
                                 for v in (
                                     result["name"],
-                                    "已确认",
+                                    f"条目 {item['index']}",
                                     item["description"],
-                                    "原文引用已核实",
-                                    ref["filename"] + " / " + ref["position"],
-                                    ref.get("quote", ""),
+                                    source["label"],
+                                    source["filename"] + " / " + source["position"],
+                                    quote,
                                 )
                             ]
                         )
@@ -220,7 +196,11 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
         if required_header not in columns:
             raise ReportExcelImportError(f"回填文件缺少“{required_header}”列。")
     acceptance_header = next(
-        (label for label in (REPORT_ACCEPTANCE_LABEL, "是否接纳") if label in columns),
+        (
+            label
+            for label in (REPORT_ACCEPTANCE_LABEL, "是否认可 AI 结论", "是否接纳")
+            if label in columns
+        ),
         None,
     )
     if acceptance_header is None:
@@ -243,10 +223,17 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
 
     results = _raw_task_results(task)
     item_targets = _report_excel_item_targets(results)
+    unverified_targets = {
+        (str(result.get("code") or ""), item["id"])
+        for result in results
+        for item in _result_report_items(result)
+        if item["type"] == "unverified"
+    }
     legacy_targets = _legacy_report_excel_item_targets(task, results)
     acceptance_values = {
         **{code: code for code in REPORT_ACCEPTANCE_STATUSES},
         **{label: code for code, label in REPORT_ACCEPTANCE_STATUSES.items()},
+        **{label: code for code, label in REPORT_VERIFICATION_STATUSES.items()},
         "接纳": "accepted",
         "不接纳": "rejected",
     }
@@ -275,7 +262,7 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
         acceptance_status = acceptance_values.get(acceptance_text)
         if acceptance_status is None:
             raise ReportExcelImportError(
-                f"第 {row_number} 行“{REPORT_ACCEPTANCE_LABEL}”无效，请选择未确认、认可或不认可。"
+                f"第 {row_number} 行“{REPORT_ACCEPTANCE_LABEL}”无效，请使用该行下拉列表中的选项。"
             )
 
         task_id = _excel_import_task_id(_excel_row_value(row, columns, "任务ID"))
@@ -313,7 +300,7 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
 
         rejection_reason = ""
         rejection_note = ""
-        if acceptance_status == "rejected":
+        if acceptance_status == "rejected" and target_key not in unverified_targets:
             reason_text = _excel_import_text(
                 _excel_row_value(row, columns, rejection_header)
             )
@@ -463,6 +450,14 @@ def _fill_report_items_sheet(
 
 def _excel_report_item_field(item: dict, field: str, task_type: str | None):
     value = _excel_cell_text(item.get(field))
+    if field in {"description", "media_summary"} and item.get("verification_reason"):
+        value += f"\n需要确认：{item['verification_reason']}"
+    if field == "excerpt" and item.get("text_evidence"):
+        return "\n\n".join(
+            f"{source['label']} · {source['filename']} / {source['position']}\n"
+            + "\n".join(source["quotes"])
+            for source in item["text_evidence"]
+        )
     if (task_type or DOCUMENT_TASK_TYPE) != VIDEO_TASK_TYPE or field != "excerpt":
         return value
     evidence_lines = []
@@ -484,10 +479,15 @@ def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
     columns = {header: index + 1 for index, header in enumerate(headers)}
     last_row = max(sheet.max_row, 2)
     validation_choices = (
-        (REPORT_ACCEPTANCE_LABEL, tuple(REPORT_ACCEPTANCE_STATUSES.values())),
-        (REPORT_REJECTION_REASON_LABEL, tuple(REPORT_REJECTION_REASONS.values())),
+        (REPORT_ACCEPTANCE_LABEL, tuple(REPORT_ACCEPTANCE_STATUSES.values()), False),
+        (REPORT_ACCEPTANCE_LABEL, tuple(REPORT_VERIFICATION_STATUSES.values()), True),
+        (
+            REPORT_REJECTION_REASON_LABEL,
+            tuple(REPORT_REJECTION_REASONS.values()),
+            False,
+        ),
     )
-    for header, choices in validation_choices:
+    for header, choices, unverified in validation_choices:
         column = columns[header]
         column_letter = get_column_letter(column)
         validation = DataValidation(
@@ -502,8 +502,14 @@ def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
         validation.showErrorMessage = True
         validation.showInputMessage = True
         sheet.add_data_validation(validation)
-        validation.add(f"{column_letter}2:{column_letter}{last_row}")
-        for row in range(2, sheet.max_row + 1):
+        for row in range(2, last_row + 1):
+            is_unverified = (
+                sheet.cell(row, columns[REPORT_ITEM_TYPE_LABEL]).value
+                == REPORT_ITEM_TYPES["unverified"]
+            )
+            if is_unverified != unverified:
+                continue
+            validation.add(f"{column_letter}{row}")
             sheet.cell(row=row, column=column).fill = REPORT_EXPORT_EDITABLE_FILL
 
     for header in (REPORT_EXPORT_RESULT_CODE_HEADER, REPORT_EXPORT_ITEM_ID_HEADER):

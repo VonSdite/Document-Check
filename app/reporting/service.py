@@ -48,6 +48,7 @@ from app.reporting.constants import (
     REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD,
     REPORT_SUPPRESSION_FIELDS,
     REPORT_SUPPRESSION_REJECTION_REASONS,
+    REPORT_VERIFICATION_STATUSES,
 )
 
 
@@ -83,17 +84,18 @@ def _write_task_report_stat_rows(cache_rows: list[tuple]) -> None:
         """
             INSERT INTO task_report_stats(
                 task_id, source_updated_at, suppression_version,
-                issue_count, suggestion_count, non_issue_count,
+                issue_count, suggestion_count, non_issue_count, unverified_count,
                 accepted_count, rejected_count, suppressed_count,
                 reviewed_item_count, pending_review_item_count, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 source_updated_at = excluded.source_updated_at,
                 suppression_version = excluded.suppression_version,
                 issue_count = excluded.issue_count,
                 suggestion_count = excluded.suggestion_count,
                 non_issue_count = excluded.non_issue_count,
+                unverified_count = excluded.unverified_count,
                 accepted_count = excluded.accepted_count,
                 rejected_count = excluded.rejected_count,
                 suppressed_count = excluded.suppressed_count,
@@ -245,6 +247,9 @@ def _prepare_task_results(
             else []
         )
         report_items = _result_report_items(item, structured_report)
+        unverified_ids = {
+            entry["id"] for entry in report_items if entry["type"] == "unverified"
+        }
         dictionary_status_ids = {entry["id"] for entry in dictionary_status_items}
         filtered_visual_missing_count = 0
         if task_type in {
@@ -254,7 +259,9 @@ def _prepare_task_results(
         }:
             retained_report_items = []
             for report_item in report_items:
-                if is_unsupported_visual_missing_item(report_item):
+                if report_item[
+                    "type"
+                ] != "unverified" and is_unsupported_visual_missing_item(report_item):
                     filtered_visual_missing_count += 1
                 else:
                     retained_report_items.append(report_item)
@@ -291,6 +298,15 @@ def _prepare_task_results(
                 acceptances.get(report_item["id"])
             )
             report_item.update(acceptance)
+            report_item["acceptance_options"] = (
+                REPORT_VERIFICATION_STATUSES
+                if report_item["type"] == "unverified"
+                else REPORT_ACCEPTANCE_STATUSES
+            )
+            report_item["acceptance_label"] = report_item["acceptance_options"][
+                report_item["acceptance_status"]
+            ]
+            report_item["text_evidence"] = _report_text_evidence(report_item)
             report_item["media_summary"] = _media_report_item_text(report_item)
         for display_index, report_item in enumerate(report_items, start=1):
             report_item["index"] = display_index
@@ -301,6 +317,8 @@ def _prepare_task_results(
                 item, structured_report, dictionary_status_items
             )
         )
+        if item.get("agent") and "pending_items" in structured_report:
+            item["result_summary"] = _agent_report_summary(item, report_items)
         item["report_items"] = report_items
         item["report_limit"] = report_limit
         item["suppressed_report_items"] = suppressed_items
@@ -310,7 +328,7 @@ def _prepare_task_results(
         # 结论反馈按已保存的条目标识统计，报告过滤和折叠保留已提交的反馈。
         feedback_counts = {"accepted": 0, "rejected": 0}
         for item_id, saved_acceptance in acceptances.items():
-            if item_id in dictionary_status_ids:
+            if item_id in dictionary_status_ids or item_id in unverified_ids:
                 continue
             status = _normalize_report_acceptance(saved_acceptance)["acceptance_status"]
             if status in feedback_counts:
@@ -369,6 +387,9 @@ def _apply_report_suppression(
     suppressed_items = []
     db = get_db() if record_hits and task_id is not None else None
     for item in report_items:
+        if item.get("type") == "unverified":
+            visible_items.append(item)
+            continue
         rule, similarity = _matching_report_suppression_rule(
             item,
             suppression_rules.get(result_code, []),
@@ -506,7 +527,7 @@ def _maybe_create_report_suppression_candidate(
         (item for item in _result_report_items(result) if item.get("id") == item_id),
         None,
     )
-    if report_item is None:
+    if report_item is None or report_item.get("type") == "unverified":
         return False
 
     task_type = task["task_type"] or DOCUMENT_TASK_TYPE
@@ -602,11 +623,14 @@ def _result_report_items(
     if structured_report is None:
         structured_report = _result_structured_report(result)
     if structured_report is not None:
-        return [
+        items = [
             item
             for item in _structured_report_items(code, structured_report)
             if not _is_dictionary_status_item(code, item)
         ]
+        if result.get("agent"):
+            items.extend(_pending_report_items(code, structured_report))
+        return items
 
     text = str(result.get("result") or "").strip()
     if not text:
@@ -628,6 +652,92 @@ def _result_report_items(
             }
         )
     return items
+
+
+def _pending_report_items(result_code: str, report: dict) -> list[dict]:
+    """将证据不足的条目投影为可人工复核的结果，保留原始 AI 报告。"""
+    items = []
+    for candidate in report.get("pending_items", []):
+        refs = _normalize_report_evidence_refs(candidate.get("evidence_refs"))
+        raw = {
+            **candidate,
+            "status": "unverified",
+            "confidence": "low",
+            "location": "；".join(
+                dict.fromkeys(
+                    " / ".join(filter(None, (ref["filename"], ref["position"])))
+                    for ref in refs
+                )
+            ),
+            "excerpt": "\n".join(dict.fromkeys(ref.get("quote", "") for ref in refs)),
+        }
+        item = _structured_report_items(result_code, {"items": [raw]})[0]
+        item["type"] = "unverified"
+        item["verification_reason"] = _verification_reason(candidate.get("rationale"))
+        item["counterevidence_refs"] = _normalize_report_evidence_refs(
+            candidate.get("counterevidence_refs")
+        )
+        items.append(item)
+    return items
+
+
+def _verification_reason(value) -> str:
+    reason = str(value or "").strip()
+    if reason == "候选缺少直接证据或适用性尚未建立":
+        return "请对照原文，确认这项要求是否适用，以及是否存在所述问题。"
+    if reason == "审查引用没有在本批已读取的原文中核实":
+        return "引用尚未核实，请先在原文中找到对应内容，再确认是否存在问题。"
+    if reason == "撤回结论缺少原文解释或明确的不适用条件":
+        return "现有依据还不能排除所述问题，请结合原文确认。"
+    if reason.startswith("缺失判断缺少适用要求"):
+        return "请结合适用要求和相关章节，确认所述内容是否确实缺失。"
+    if reason == "当前文本来源未建立视觉对象或表格缺失的充分证据":
+        return "请对照原文中的图片或表格，确认是否存在所述问题。"
+    if not reason or reason == "候选尚未完成证据审查":
+        return "这项内容尚未完成核实，请对照原文确认。"
+    return reason
+
+
+def _report_text_evidence(item: dict) -> list[dict]:
+    groups = {}
+    for label, refs in (
+        ("原文", item.get("evidence_refs", [])),
+        ("相关原文", item.get("counterevidence_refs", [])),
+    ):
+        for ref in refs:
+            if ref.get("kind") not in {"document_text", "requirement"} or not ref.get(
+                "quote"
+            ):
+                continue
+            key = (label, ref["filename"], ref["position"])
+            group = groups.setdefault(
+                key,
+                {
+                    "label": label,
+                    "filename": ref["filename"],
+                    "position": ref["position"],
+                    "quotes": [],
+                },
+            )
+            if ref["quote"] not in group["quotes"]:
+                group["quotes"].append(ref["quote"])
+    return list(groups.values())
+
+
+def _agent_report_summary(result: dict, items: list[dict]) -> str:
+    issues = sum(item["type"] == "issue" for item in items)
+    suggestions = sum(item["type"] == "suggestion" for item in items)
+    summary = f"AI 检查发现 {issues} 个问题、{suggestions} 条建议。"
+    unverified = [item for item in items if item["type"] == "unverified"]
+    pending = sum(item["acceptance_status"] == "pending" for item in unverified)
+    reviewed = len(unverified) - pending
+    if pending:
+        summary += f"另有 {pending} 项需人工确认。"
+    if reviewed:
+        summary += f"已完成人工确认 {reviewed} 项。"
+    if result.get("agent", {}).get("coverage", {}).get("text_complete") is False:
+        summary += "部分原文未可靠解析，结论仅覆盖已读取内容。"
+    return summary
 
 
 def _result_structured_report(result: dict) -> dict | None:
@@ -988,7 +1098,11 @@ def _normalize_report_evidence_refs(value) -> list[dict]:
         ).strip()
         if not media_id and not filename and not position:
             continue
-        key = media_id or filename or position
+        key = (
+            (media_id, filename, position, str(raw_ref.get("quote") or ""))
+            if raw_ref.get("kind") in {"document_text", "requirement"}
+            else media_id or filename or position
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -1077,6 +1191,9 @@ def _deduplicate_report_items(report_items: list[dict]) -> list[dict]:
     unique_items = []
     items_by_key = {}
     for report_item in report_items:
+        if report_item.get("type") == "unverified":
+            unique_items.append(report_item)
+            continue
         key = (
             _normalize_suppression_text(report_item.get("type")),
             _normalize_suppression_text(report_item.get("category")),
@@ -1146,6 +1263,8 @@ def _limit_ranked_report_items(
 ) -> tuple[list[dict], dict | None]:
     limit = normalize_issue_output_limit(issue_output_limit)
 
+    unverified = [item for item in report_items if item["type"] == "unverified"]
+    report_items = [item for item in report_items if item["type"] != "unverified"]
     before_limit_count = len(report_items)
     omitted_count = 0
     limit_applied = False
@@ -1153,6 +1272,8 @@ def _limit_ranked_report_items(
         omitted_count = before_limit_count - limit
         report_items = report_items[:limit]
         limit_applied = True
+
+    report_items.extend(unverified)
 
     if not duplicate_count and not omitted_count:
         return report_items, None
@@ -1528,7 +1649,8 @@ def _count_report_items(items: list[dict], *, suppressed_count: int = 0) -> dict
             counts["pending_review"] += 1
         else:
             counts["reviewed"] += 1
-            counts[acceptance_status] += 1
+            if item_type != "unverified":
+                counts[acceptance_status] += 1
     return _finalize_report_counts(counts)
 
 
@@ -1555,12 +1677,6 @@ def update_report_item_review(task, data):
     rejection_note = str(data.get("rejection_note") or "").strip()
     if acceptance_status is None:
         return {"ok": False, "error": "认可状态数据无效。"}, 400
-    if acceptance_status == "rejected":
-        if not rejection_reason:
-            return {"ok": False, "error": "选择不认可时必须选择原因。"}, 400
-        if rejection_reason == "other" and not rejection_note:
-            return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
-
     results = _raw_task_results(task)
     target = None
     report_item = None
@@ -1575,6 +1691,13 @@ def update_report_item_review(task, data):
         break
     if target is None or report_item is None:
         return {"ok": False, "error": "报告条目不存在。"}, 404
+    if report_item["type"] == "unverified":
+        rejection_reason = rejection_note = ""
+    elif acceptance_status == "rejected":
+        if not rejection_reason:
+            return {"ok": False, "error": "选择不认可时必须选择原因。"}, 400
+        if rejection_reason == "other" and not rejection_note:
+            return {"ok": False, "error": "选择其他原因时必须填写具体原因。"}, 400
 
     db = get_db()
     suppression_candidate_created = _apply_report_item_review(
@@ -1607,6 +1730,10 @@ def update_report_item_review(task, data):
     if not isinstance(saved_acceptances, dict):
         saved_acceptances = {}
     updated_acceptance = _normalize_report_acceptance(saved_acceptances.get(item_id))
+    if report_item["type"] == "unverified":
+        updated_acceptance["acceptance_label"] = REPORT_VERIFICATION_STATUSES[
+            acceptance_status
+        ]
     return {
         "ok": True,
         "item_id": item_id,
@@ -1614,6 +1741,7 @@ def update_report_item_review(task, data):
         "item_type_label": REPORT_ITEM_TYPES[report_item["type"]],
         **updated_acceptance,
         "result_counts": (updated_result or {}).get("report_counts", {}),
+        "result_summary": (updated_result or {}).get("result_summary", ""),
         "totals": _report_item_totals(prepared),
         "suppression_candidate_created": suppression_candidate_created,
     }

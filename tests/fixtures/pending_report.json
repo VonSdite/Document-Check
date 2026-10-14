@@ -1,0 +1,51 @@
+{
+  "code": "consistency",
+  "name": "全文一致性检查",
+  "issue_output_limit": 1,
+  "agent": {
+    "workflow_version": "evidence-review-v5",
+    "elapsed_seconds": 16.8,
+    "model_calls": 3,
+    "known_input_tokens": 100,
+    "known_output_tokens": 200,
+    "usage_complete": true,
+    "coverage": {"checked_blocks": 10, "total_blocks": 10, "text_complete": true}
+  },
+  "structured_report": {
+    "summary": "确认 1 个问题、0 条建议；待核实 1 个候选，撤回 1 个候选。已检查 10/10 个来源片段。",
+    "items": [
+      {
+        "id": "issue-1",
+        "status": "issue",
+        "severity": "high",
+        "confidence": "high",
+        "category": "参数不一致",
+        "location": "第1章",
+        "excerpt": "额定电流 10 A；额定电流 20 A",
+        "description": "额定电流前后不一致",
+        "impact": "影响选型",
+        "suggestion": "统一参数",
+        "evidence_refs": []
+      }
+    ],
+    "pending_items": [
+      {
+        "id": "candidate-2",
+        "category": "表述缺失",
+        "description": "布线说明可能缺少操作动词",
+        "rationale": "缺失判断缺少适用要求或完整的解析与检查覆盖，或其他章节已覆盖该要求、存在不确定观察",
+        "evidence_refs": [
+          {"id": "source-1", "filename": "用户手册.pdf", "position": "第39页 · 第2行至第8行", "kind": "document_text", "quote": "线束较小时，通过裁减环氧板进行布线。"},
+          {"id": "source-1", "filename": "用户手册.pdf", "position": "第39页 · 第2行至第8行", "kind": "document_text", "quote": "线束较大时，通过所有环氧板进行布线。"},
+          {"id": "source-1", "filename": "用户手册.pdf", "position": "第39页 · 第2行至第8行", "kind": "document_text", "quote": "线束较大时，通过所有环氧板进行布线。"}
+        ],
+        "counterevidence_refs": [
+          {"id": "source-2", "filename": "用户手册.pdf", "position": "第40页", "kind": "document_text", "quote": "原文标记 <script>alert(1)</script> 应作为文字显示。"}
+        ]
+      }
+    ],
+    "withdrawn_items": [
+      {"id": "candidate-3", "description": "内部已排除的判断", "rationale": "相关章节已说明"}
+    ]
+  }
+}

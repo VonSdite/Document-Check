@@ -1,0 +1,14 @@
+{% if result.uses_model %}
+<details class="model-output-details" data-model-output="{{ result.code }}">
+  <summary>查看检查过程<small data-output-status></small></summary>
+  <div class="model-output-scroll" data-output-scroll>
+    <div data-output-requests></div>
+    <div data-output-fallback>
+      <h3>思考</h3>
+      <p class="muted">{% if task_progress.active %}等待模型输出。{% else %}此项没有保存思考内容。{% endif %}</p>
+      <h3>正文</h3>
+      <pre class="model-output-text">{{ result.result or '暂无正文。' }}</pre>
+    </div>
+  </div>
+</details>
+{% endif %}

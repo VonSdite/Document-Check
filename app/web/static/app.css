@@ -3364,6 +3364,53 @@ body.table-column-resize-active * {
   color: var(--muted);
 }
 
+.report-evidence-source + .report-evidence-source {
+  margin-top: 16px;
+}
+
+.report-evidence-location {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.report-evidence-location span {
+  display: block;
+}
+
+.report-evidence-source blockquote {
+  margin: 0;
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.report-verification-reason {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.report-verification-reason > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.agent-check-details p {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .report-item-type-badge {
   display: inline-block;
   min-width: 76px;
@@ -3384,6 +3431,12 @@ body.table-column-resize-active * {
 .report-item[data-item-type="suggestion"] .report-item-type-badge {
   background: #fff7e6;
   color: var(--amber);
+}
+
+.report-item[data-item-type="unverified"] .report-item-type-badge {
+  background: #fff7e6;
+  color: var(--amber);
+  font-weight: 600;
 }
 
 .report-item[data-item-type="non_issue"] .report-item-type-badge {

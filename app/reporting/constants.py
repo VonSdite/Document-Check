@@ -6,8 +6,9 @@ REPORT_ITEM_TYPES = {
     "issue": "问题",
     "suggestion": "建议",
     "non_issue": "非问题",
+    "unverified": "需人工确认",
 }
-REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue")
+REPORT_ITEM_TYPE_ORDER = ("issue", "suggestion", "non_issue", "unverified")
 REPORT_COUNT_KEYS = REPORT_ITEM_TYPE_ORDER + (
     "accepted",
     "rejected",
@@ -33,6 +34,11 @@ REPORT_ACCEPTANCE_STATUSES = {
     "accepted": "认可",
     "rejected": "不认可",
 }
+REPORT_VERIFICATION_STATUSES = {
+    "pending": "暂不确定",
+    "accepted": "确认有问题",
+    "rejected": "不是问题",
+}
 REPORT_REJECTION_REASONS = {
     "false_positive": "模型误报",
     "model_hallucination": "模型幻觉",
@@ -55,7 +61,7 @@ REPORT_SUPPRESSION_REJECTION_REASONS = {
     "not_applicable",
 }
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
-REPORT_STATS_PREPARATION_VERSION = "5"
+REPORT_STATS_PREPARATION_VERSION = "6"
 REPORT_DICTIONARY_STATUS_CATEGORIES = {
     "sensitive-terms": {"敏感词表配置", "敏感词表读取失败"},
     "common-terms": {"常用词检查表配置", "常用词检查表读取失败"},
@@ -136,6 +142,7 @@ REPORT_EXPORT_EDITABLE_FILL = PatternFill("solid", fgColor="FFF4CC")
 REPORT_TOTAL_EXPORT_ROWS = (
     ("问题", "issue"),
     ("建议", "suggestion"),
+    ("人工确认项", "unverified"),
     ("认可结论", "accepted"),
     ("不认可结论", "rejected"),
     ("待确认条目", "pending_review"),
@@ -152,7 +159,7 @@ class ReportExcelImportError(ValueError):
 
 
 REPORT_ITEM_TYPE_LABEL = "AI判定"
-REPORT_ACCEPTANCE_LABEL = "是否认可 AI 结论"
+REPORT_ACCEPTANCE_LABEL = "人工复核"
 REPORT_REJECTION_REASON_LABEL = "不认可原因"
 REPORT_ITEM_START_RE = re.compile(
     r"^(?:(?:问题|建议|风险|疑点|不一致|偏差|错误|缺失)\s*\d*[:：]|"
