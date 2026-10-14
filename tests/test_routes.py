@@ -435,6 +435,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         output = article.select_one("[data-model-output]")
         self.assertFalse(output.has_attr("open"))
         self.assertIn("查看检查过程", output.select_one("summary").get_text())
+        thinking = output.select_one("details[data-output-thinking]")
+        self.assertFalse(thinking.has_attr("open"))
+        self.assertEqual(thinking.select_one("summary").get_text(), "思考")
         self.assertIsNone(output.select_one("script"))
         self.assertIn(
             '<script>alert("output")</script>', output.select_one("pre").get_text()
@@ -1219,6 +1222,41 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     self.assertNotIn("证据审查记录", soup.get_text())
                     self.assertNotIn("个候选", soup.get_text())
                     self.assertNotIn("内部已排除的判断", soup.get_text())
+
+    def test_agent_usage_is_a_footer_with_only_usage_time_and_requests(self):
+        task_id, source = self._insert_pending_report_task()
+        source["agent"]["discovery_mode"] = "whole_document"
+        for complete in (True, False):
+            source["agent"]["usage_complete"] = complete
+            with self.app.app_context():
+                get_db().execute(
+                    "UPDATE tasks SET result_json=? WHERE id=?",
+                    (json.dumps([source]), task_id),
+                )
+                get_db().commit()
+            for suffix in ("", "/export"):
+                with self.subTest(complete=complete, suffix=suffix):
+                    page = BeautifulSoup(
+                        self.client.get(f"/admin/tasks/{task_id}{suffix}").data,
+                        "html.parser",
+                    )
+                    footer = _required_tag(page.select_one(".agent-check-details"))
+                    self.assertEqual(footer.name, "div")
+                    self.assertEqual(len(footer.find_all("span", recursive=False)), 4)
+                    self.assertEqual(
+                        footer.parent.find_all(recursive=False)[-1], footer
+                    )
+                    text = footer.get_text(" ", strip=True)
+                    self.assertIn(
+                        "输入 token " + ("" if complete else "≥ ") + "100", text
+                    )
+                    self.assertIn(
+                        "输出 token " + ("" if complete else "≥ ") + "200", text
+                    )
+                    self.assertIn("耗时 16.8 秒", text)
+                    self.assertIn("模型请求 3 次", text)
+                    for label in ("检查详情", "检查方式", "已返回用量", "全文核查"):
+                        self.assertNotIn(label, text)
 
     def test_pending_report_judgments_persist_without_overwriting_ai_report(self):
         task_id, source = self._insert_pending_report_task()

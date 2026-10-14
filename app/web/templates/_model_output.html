@@ -4,10 +4,12 @@
   <div class="model-output-scroll" data-output-scroll>
     <div data-output-requests></div>
     <div data-output-fallback>
-      <h3>思考</h3>
-      <p class="muted">{% if task_progress.active %}等待模型输出。{% else %}此项没有保存思考内容。{% endif %}</p>
-      <h3>正文</h3>
-      <pre class="model-output-text">{{ result.result or '暂无正文。' }}</pre>
+      <details class="model-output-thinking-details" data-output-thinking>
+        <summary>思考</summary>
+        <p class="muted">{% if task_progress.active %}等待模型输出。{% else %}此项没有保存思考内容。{% endif %}</p>
+      </details>
+      <h3>输出</h3>
+      <pre class="model-output-text">{{ result.result or '暂无输出。' }}</pre>
     </div>
   </div>
 </details>

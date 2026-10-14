@@ -1,8 +1,8 @@
 {% if result.agent %}
-<details class="result-raw-details agent-check-details">
-  <summary>检查详情</summary>
-  <p>用时 {{ result.agent.elapsed_seconds|default(0)|round(1) }} 秒 · 模型请求 {{ result.agent.model_calls|default(0) }} 次</p>
-  {% if result.agent.discovery_mode %}<p>检查方式：{{ '全文核查' if result.agent.discovery_mode == 'whole_document' else '分批核查' }}</p>{% endif %}
-  <p>已返回用量：输入 {{ result.agent.known_input_tokens|default(0) }} token，输出 {{ result.agent.known_output_tokens|default(0) }} token。{% if not result.agent.usage_complete %}部分请求未返回用量。{% endif %}</p>
-</details>
+<div class="agent-check-details">
+  <span{% if not result.agent.usage_complete %} title="部分请求未返回用量"{% endif %}>输入 token {% if not result.agent.usage_complete %}≥ {% endif %}{{ result.agent.known_input_tokens|default(0) }}</span>
+  <span{% if not result.agent.usage_complete %} title="部分请求未返回用量"{% endif %}>输出 token {% if not result.agent.usage_complete %}≥ {% endif %}{{ result.agent.known_output_tokens|default(0) }}</span>
+  <span>耗时 {{ result.agent.elapsed_seconds|default(0)|round(1) }} 秒</span>
+  <span>模型请求 {{ result.agent.model_calls|default(0) }} 次</span>
+</div>
 {% endif %}

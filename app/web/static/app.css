@@ -3406,7 +3406,14 @@ body.table-column-resize-active * {
   font-weight: 600;
 }
 
-.agent-check-details p {
+.agent-check-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -4458,6 +4465,25 @@ body.table-column-resize-active * {
   color: var(--muted);
   font-size: 13px;
   margin: 8px 0;
+  cursor: pointer;
+  line-height: 1.6;
+}
+
+.model-output-thinking-details {
+  margin-top: 12px;
+}
+
+.model-output-thinking-details > summary {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.model-output-request > summary:focus-visible,
+.model-output-thinking-details > summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
 }
 
 .model-output-scroll h3 {

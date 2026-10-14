@@ -34,19 +34,25 @@
     if (next.dataset.outputExecution) current.dataset.outputExecution = next.dataset.outputExecution;
     if (next.dataset.checkAttempt) current.dataset.checkAttempt = next.dataset.checkAttempt;
     if (markup.get(current) === html) return;
-    const expanded = [...current.querySelectorAll("details")].map((node) => node.open);
+    const expanded = [...current.querySelectorAll("details")]
+      .filter((node) => !node.closest("[data-model-output]"))
+      .map((node) => node.open);
     const output = current.querySelector("[data-model-output]");
     const outputScroll = output?.querySelector("[data-output-scroll]")?.scrollTop;
     current.innerHTML = html;
     const nextOutput = current.querySelector("[data-model-output]");
     if (output && nextOutput) {
       if (!output.querySelector("[data-output-requests]").childElementCount) {
-        output.querySelector("[data-output-fallback]").replaceWith(nextOutput.querySelector("[data-output-fallback]"));
+        const fallback = nextOutput.querySelector("[data-output-fallback]");
+        fallback.querySelector("[data-output-thinking]").open = output.querySelector("[data-output-fallback] [data-output-thinking]").open;
+        output.querySelector("[data-output-fallback]").replaceWith(fallback);
       }
       nextOutput.replaceWith(output);
       output.querySelector("[data-output-scroll]").scrollTop = outputScroll;
     }
-    current.querySelectorAll("details").forEach((node, index) => { node.open = expanded[index] ?? node.open; });
+    [...current.querySelectorAll("details")]
+      .filter((node) => !node.closest("[data-model-output]"))
+      .forEach((node, index) => { node.open = expanded[index] ?? node.open; });
     markup.set(current, html);
   }
 
@@ -79,6 +85,7 @@
   }
 
   function resetCheck(node, outputExecution, attempt = 0) {
+    const newExecution = outputExecution > Number(node.dataset.outputExecution);
     root.style.minHeight = `${root.offsetHeight}px`;
     const status = root.querySelector(".report-status-panel");
     status.querySelectorAll(".report-error").forEach((error) => error.remove());
@@ -90,7 +97,7 @@
     node.dataset.checkAttempt = attempt;
     markup.delete(node);
     actionVersion += 1;
-    root.dispatchEvent(new CustomEvent("check-output-reset", { detail: { code: node.dataset.detailResult } }));
+    if (newExecution) root.dispatchEvent(new CustomEvent("check-output-reset", { detail: { code: node.dataset.detailResult } }));
   }
 
   function showCanceledCheck(node) {
