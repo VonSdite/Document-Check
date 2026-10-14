@@ -41,6 +41,7 @@ from app.contracts.agent import (
     strict_schema,
 )
 from app.documents.index import DocumentIndex
+from app.documents.segmentation import split_source_text
 from app.models.agent import AgentModel, AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError, _thinking_disabled_in_payload
 from app.tasks.runtime.agent_batches import LimitedModel, run_batch_requests
@@ -107,7 +108,8 @@ REVIEW_INSTRUCTIONS = (
     "先独立阅读原文，核实候选的适用性并查找反证。confirmed 必须有直接证据且 applicable=yes；"
     "explained 表示原文或适用条件能够解释候选；insufficient 表示证据或覆盖不足。"
     "明确问题与表达建议沿用候选 kind，不把个人偏好作为错误。"
-    "sources 已提供候选的直接原文及相邻上下文，证据充分时直接给出结论。"
+    "sources 提供候选的直接原文、章节条件、表格开头及相邻上下文，先核对表头、单位与适用条件。"
+    "context_truncated=true 时部分原文尚未提供，缺少关键条件需补充取证，仍无法核实时返回 insufficient。证据充分时直接给出结论。"
     "仅在缺少影响判定的信息时通过 actions 请求工具，避免重复读取已有来源；arguments 为工具参数的 JSON 字符串。"
     "最终 decisions 必须恰好覆盖本批每个 candidate_id，actions 为空。理由简洁，引用保留必要原文。"
 )
@@ -358,6 +360,19 @@ class EvidenceAgent:
             },
         ]
 
+    def _input_size(self, contract, instruction, context):
+        return (
+            len(
+                _json(
+                    {
+                        "messages": self._messages(contract, instruction, context),
+                        "schema": strict_schema(contract),
+                    }
+                )
+            )
+            + 4096
+        )
+
     def _ask(self, contract, instruction, context, *, allow_repair=True):
         messages = self._messages(contract, instruction, context)
         turn = self.model.turn(
@@ -492,8 +507,12 @@ class EvidenceAgent:
         text = source["text"]
         if len(text) <= 256:
             return []
-        middle = len(text) // 2
-        overlap = min(128, middle // 4)
+        middle = len(
+            split_source_text(text, source.get("kind", "paragraph"), len(text) // 2)[0]
+        )
+        if middle >= len(text):
+            middle = len(text) // 2
+        overlap = min(128, middle // 4, (len(text) - middle) // 4)
         return [
             {**job, "sources": [{**source, "text": fragment}]}
             for fragment in (text[: middle + overlap], text[middle - overlap :])
@@ -733,19 +752,7 @@ class EvidenceAgent:
                 "requirements": self.state["requirements"],
             }
             instruction, context = self._discovery_request(job, whole_document=True)
-            size = (
-                len(
-                    _json(
-                        {
-                            "messages": self._messages(
-                                FullDocumentDiscovery, instruction, context
-                            ),
-                            "schema": strict_schema(FullDocumentDiscovery),
-                        }
-                    )
-                )
-                + 4096
-            )
+            size = self._input_size(FullDocumentDiscovery, instruction, context)
             if (
                 blocks
                 and size <= self.max_input
@@ -874,7 +881,7 @@ class EvidenceAgent:
             for fact in reusable
             if self._verify_batch_reference(fact["reference"], sources)
         ]
-        return (
+        instruction = (
             (
                 "逐一检查本批全部来源；只有完成所有来源和业务要求的核查，才返回 all_sources_checked=true，未检查完返回 false。"
                 if whole_document
@@ -886,28 +893,55 @@ class EvidenceAgent:
                 "包括跨章节、跨文档或跨语种的对象、条件、数值及含义对照。"
                 "结合全部来源判断要求覆盖及缺失，综合已有解释与反证，只返回具体候选，不输出中间事实清单。"
                 if whole_document
-                else ""
+                else "context_sources 提供章节适用条件、表格开头及前后原文，辅助理解本批 sources。"
+                "先核对这些上下文的对象、条件、表头、单位和例外，再判断本批内容。"
+                "事实 reference 只引用 sources；候选必须涉及 sources，可同时引用 context_sources。"
+                "covered_source_ids 只填写 expected_source_ids，不将上下文计入本批覆盖，也不重复提出仅存在于上下文的问题。"
+                "context_truncated=true 表示部分上下文尚未提供；缺少关键适用条件时保留不确定，不推断冲突或全文缺失。"
             )
-            + self._compact_instruction(job),
-            {
-                "strategy": self.strategy,
-                "global_checks": self.state["global_checks"],
-                "whole_document": whole_document,
-                "extract_facts": not whole_document
-                and self._uses_strategy(
-                    "consistency", "cross_document", "cross_language"
-                ),
-                "profile": self.state["plans"],
-                "requirements": batch_requirements,
-                "observation_requirement_ids": [r["id"] for r in batch_requirements]
-                if self._tracks_observations()
-                else [],
-                "expected_source_ids": [source["id"] for source in sources],
-                "sources": sources,
-                "shared_facts": reusable,
-                "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
-            },
+            + self._compact_instruction(job)
         )
+        context = {
+            "strategy": self.strategy,
+            "global_checks": self.state["global_checks"],
+            "whole_document": whole_document,
+            "extract_facts": not whole_document
+            and self._uses_strategy("consistency", "cross_document", "cross_language"),
+            "profile": self.state["plans"],
+            "requirements": batch_requirements,
+            "observation_requirement_ids": [r["id"] for r in batch_requirements]
+            if self._tracks_observations()
+            else [],
+            "expected_source_ids": [source["id"] for source in sources],
+            "sources": sources,
+            "context_sources": [],
+            "context_truncated": False,
+            "shared_facts": reusable,
+            "fact_instruction": "共享事实也是待核实的抽取结果。核对原文和条件后可以复用，只返回新增事实；共享事实不能代替本批业务检查。",
+        }
+        if not whole_document:
+            available = min(
+                12000,
+                self.max_input // 6,
+                max(
+                    0,
+                    self.max_input - self._input_size(Discovery, instruction, context),
+                ),
+            )
+            for source in self.index.supporting_sources(ids):
+                size = len(_json(source)) + 2
+                if size <= available:
+                    context["context_sources"].append(source)
+                    available -= size
+                else:
+                    context["context_truncated"] = True
+            while (
+                context["context_sources"]
+                and self._input_size(Discovery, instruction, context) > self.max_input
+            ):
+                context["context_sources"].pop()
+                context["context_truncated"] = True
+        return instruction, context
 
     def _discover(self):
         jobs = self._discovery_jobs()
@@ -1008,7 +1042,9 @@ class EvidenceAgent:
             if observation["requirement_id"] not in requested:
                 raise LLMError("覆盖观察引用了本批未提供的要求")
             if any(
-                not self._verify_batch_reference(ref, sources)
+                not self._verify_batch_reference(
+                    ref, sources + context["context_sources"]
+                )
                 for ref in observation["evidence"]
             ):
                 observation["status"] = "uncertain"
@@ -1243,11 +1279,8 @@ class EvidenceAgent:
         for source_id in recovery_sources:
             if source_id in self.index.by_id:
                 sources.setdefault(source_id, self.index.by_id[source_id].as_dict())
-        for candidate in batch:
-            for ref in candidate["evidence"]:
-                if self.index.verify(ref):
-                    for source in self.index.context(ref["source_id"], 1):
-                        sources.setdefault(source["id"], source)
+        for source in self.index.supporting_sources(sources):
+            sources.setdefault(source["id"], source)
         context_limit = max(4000, self.max_input // 3)
         selected = []
         for source in sources.values():
@@ -1258,10 +1291,11 @@ class EvidenceAgent:
             for r in self.state["requirements"]
             if r["id"] in {rid for c in batch for rid in c["requirement_ids"]}
         ]
-        return {
+        context = {
             "candidates": batch,
             "expected_candidate_ids": [candidate["id"] for candidate in batch],
             "sources": selected,
+            "context_truncated": len(selected) < len(sources),
             "requirements": requirements,
             "requirement_observations": [
                 observation_summary(self.state, r["id"]) for r in requirements
@@ -1269,6 +1303,13 @@ class EvidenceAgent:
             "coverage": self.index.coverage(self.state["checked_ids"]),
             "tools": tool_definitions(),
         }
+        while (
+            context["sources"]
+            and self._input_size(Review, REVIEW_INSTRUCTIONS, context) > self.max_input
+        ):
+            context["sources"].pop()
+            context["context_truncated"] = True
+        return context
 
     def _review_initial(self):
         remaining = self.state["candidates"][self.state["review_cursor"] :]

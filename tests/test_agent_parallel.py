@@ -434,7 +434,12 @@ class AgentParallelTest(unittest.TestCase):
 
         first = make().run()
         self.assertIn("503", first["error"])
-        self.assertEqual(len(store.load()["batch_outputs"]["compare"]), 2)
+        checkpoint = store.load()
+        # 已完成结果由已推进游标或待合并缓存保存。
+        self.assertEqual(
+            checkpoint["compare_cursor"] + len(checkpoint["batch_outputs"]["compare"]),
+            2,
+        )
         failed_id = seen[0]
         completed_ids = set(seen[1:])
         result = make().run()

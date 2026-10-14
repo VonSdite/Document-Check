@@ -83,7 +83,7 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 ## 证据审查模块
 
 - `contracts/agent.py` 定义策略预算、要求、事实、候选、工具动作、审查决定和报告的严格 Pydantic 契约。阶段输出在使用前校验。
-- `documents/index.py` 保存稳定来源、文档边界、精确引用、上下文、检索和覆盖。来源索引在任务内部共享，离线评测支持为检查项独立加入标准样本。
+- `documents/segmentation.py` 按句子、表格行及单元格边界切分连续原文。`documents/index.py` 保存稳定来源、文档边界、精确引用、章节与表格上下文、检索和覆盖，分批优先保留能容纳的完整语义单元。来源索引在任务内部共享，离线评测支持为检查项独立加入标准样本。
 - `checks/agent_policy.py` 管理内置检查策略和默认请求并行度；`checks/evidence_tools.py` 通过传入的来源接口执行只读工具；`checks/evaluation.py` 计算人工标注指标。这些规则模块遵循现有依赖方向。
 - `models/agent.py` 负责结构化输出、原生工具、兼容切换、阶段思考参数、流式响应与用量，复用模型网络配置与 HTTP 连接池。`models/client.py` 的可选 `on_usage` 回调为整文调用提供实际用量记录。
 - `tasks/runtime/evidence_agent.py` 在每个文本检查项内部构建 LangGraph，按完整请求大小选择全文核查或分批流程，保存分批游标与取证状态，复用任务取消和活动回调。`SharedFacts` 是任务范围内、线程安全的事实池，复用事实需重新核对来源。
@@ -95,6 +95,8 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 扩展节点时维护输入契约、覆盖、预算、取消和持久化边界。新增工具通过白名单注册，参数经契约验证，结果受返回量预算约束。业务提示词提供判定条件与参考条款，规划阶段识别所需全文核查范围，执行节点控制权由代码管理。用户模型配置和人工标注方法见 [证据审查与评估](evidence-agent.md)。
 
 `tests/test_agent_parallel.py` 和 `tests/test_agent_http.py` 验证乱序返回、任务共享请求上限、用量归属、取消、检查点写入异常及失败续跑；截断拆批与遗漏补查保持后续批次缓存。`tests/test_agent_performance.py` 验证全文路径、回退与恢复、来源合并和独立对照组；`tests/test_media_batches.py` 验证媒体请求并发和回调线程边界。`scripts/benchmark_agent.py` 用固定模型延迟比较执行模式，支持解析真实文档并验证完整覆盖。
+
+`tests/test_document_index.py` 验证长段落与表格切分的原文完整性、语义单元分批及跨文档隔离。`tests/test_agent_context.py` 验证跨批次适用条件与表头输入、复核上下文、预算提示，以及辅助来源与检查覆盖的独立计数。
 
 ## 日志约定
 

@@ -4,8 +4,11 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
+from itertools import groupby
 
-INDEX_VERSION = "source-index-v2"
+from app.documents.segmentation import split_source_text
+
+INDEX_VERSION = "source-index-v3"
 _PAGE = re.compile(r"^\[第(\d+)页\]$")
 _TABLE = re.compile(
     r"\[PDF结构化表格 ([^\s；]+) 开始.*?\[PDF结构化表格 \1 结束\]", re.S
@@ -76,7 +79,10 @@ class DocumentIndex:
                 text = str(block.get("text") or "").strip()
                 if not text:
                     continue
-                for fragment, offset in enumerate(range(0, len(text), 4000), start=1):
+                fragments = split_source_text(
+                    text, str(block.get("kind") or "paragraph")
+                )
+                for fragment, content in enumerate(fragments, start=1):
                     self.blocks.append(
                         SourceBlock(
                             id=f"d{doc_number}-{identity}-b{block_number}-{fragment}",
@@ -85,8 +91,8 @@ class DocumentIndex:
                             kind=str(block.get("kind") or "paragraph"),
                             section=str(block.get("section") or ""),
                             location=str(block.get("location") or f"第{block_number}段")
-                            + (f" / 片段{fragment}" if len(text) > 4000 else ""),
-                            text=text[offset : offset + 4000],
+                            + (f" / 片段{fragment}" if len(fragments) > 1 else ""),
+                            text=content,
                             ordinal=len(self.blocks),
                         )
                     )
@@ -99,6 +105,7 @@ class DocumentIndex:
                 }
             )
         self.by_id = {block.id: block for block in self.blocks}
+        self._index_context()
         self.signature = hashlib.sha256(
             json.dumps(
                 [INDEX_VERSION, self.documents, [b.as_dict() for b in self.blocks]],
@@ -151,7 +158,64 @@ class DocumentIndex:
             )
             index.blocks.append(block)
             index.by_id[block.id] = block
+        index._index_context()
         return index
+
+    @staticmethod
+    def _table_key(block):
+        if block.kind != "table":
+            return None
+        table = re.search(r"表格\s*([^ /；>]+)", block.location)
+        return (block.document_id, table[1] if table else block.id.rsplit("-", 1)[0])
+
+    def _index_context(self):
+        self._sections, self._tables = {}, {}
+        for _, group in groupby(self.blocks, lambda b: (b.document_id, b.section)):
+            section = list(group)
+            for block in section:
+                self._sections[block.id] = section
+        for _, group in groupby(self.blocks, self._table_key):
+            table = list(group)
+            if table[0].kind == "table":
+                for block in table:
+                    self._tables[block.id] = table
+
+    def supporting_sources(self, source_ids):
+        """提供同章节的适用条件、表格开头和相邻原文，目标来源独立计数。"""
+        targets = {source_id for source_id in source_ids if source_id in self.by_id}
+        selected = {}
+
+        def add(block):
+            if block.id not in targets:
+                selected.setdefault(block.id, block.as_dict())
+
+        for block in sorted((self.by_id[s] for s in targets), key=lambda b: b.ordinal):
+            section = self._sections[block.id]
+            if block.section:
+                for source in section[:3]:
+                    if source.kind == "table":
+                        break
+                    add(source)
+            table = self._tables.get(block.id)
+            if table:
+                for source in table[:2]:
+                    add(source)
+                for ordinal in (table[0].ordinal - 1, table[-1].ordinal + 1):
+                    if 0 <= ordinal < len(self.blocks):
+                        source = self.blocks[ordinal]
+                        if (
+                            source.document_id == block.document_id
+                            and source.section == block.section
+                        ):
+                            add(source)
+        for block in sorted((self.by_id[s] for s in targets), key=lambda b: b.ordinal):
+            for source in self.blocks[max(0, block.ordinal - 1) : block.ordinal + 2]:
+                if (
+                    source.document_id == block.document_id
+                    and source.section == block.section
+                ):
+                    add(source)
+        return list(selected.values())
 
     def verify(self, reference: dict, *, allowed: set[str] | None = None) -> bool:
         source_id = reference.get("source_id")
@@ -195,19 +259,35 @@ class DocumentIndex:
 
     def chunks(self, max_chars: int):
         chunks, current, size = [], [], 0
-        for block in self.blocks:
-            if block.role == "standard":
+        blocks = [b for b in self.blocks if b.role != "standard"]
+        lengths = {
+            b.id: len(json.dumps(b.as_dict(), ensure_ascii=False)) + 2 for b in blocks
+        }
+        if any(length > max_chars for length in lengths.values()):
+            raise RuntimeError("单个来源片段超过检查上下文预算")
+        units = []
+        for _, group in groupby(blocks, lambda b: (b.document_id, b.section)):
+            section = list(group)
+            if sum(lengths[b.id] for b in section) <= max_chars:
+                units.append(section)
                 continue
-            length = len(json.dumps(block.as_dict(), ensure_ascii=False)) + 2
-            if length > max_chars:
-                raise RuntimeError("单个来源片段超过检查上下文预算")
+            for _, group in groupby(
+                section, lambda b: self._table_key(b) or b.id.rsplit("-", 1)[0]
+            ):
+                unit = list(group)
+                if sum(lengths[b.id] for b in unit) <= max_chars:
+                    units.append(unit)
+                else:
+                    units.extend([b] for b in unit)
+        for unit in units:
+            length = sum(lengths[b.id] for b in unit)
             if current and (
                 size + length > max_chars
-                or current[-1].document_id != block.document_id
+                or current[-1].document_id != unit[0].document_id
             ):
                 chunks.append(current)
                 current, size = [], 0
-            current.append(block)
+            current.extend(unit)
             size += length
         if current:
             chunks.append(current)

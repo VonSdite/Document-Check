@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-WORKFLOW_VERSION = "evidence-review-v5"
+WORKFLOW_VERSION = "evidence-review-v6"
 NonEmpty = Annotated[str, Field(min_length=1, max_length=12000)]
 
 
