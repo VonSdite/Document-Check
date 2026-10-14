@@ -98,6 +98,8 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 
 `tests/test_document_index.py` 验证长段落与表格切分的原文完整性、语义单元分批及跨文档隔离。`tests/test_agent_context.py` 验证跨批次适用条件与表头输入、复核上下文、预算提示，以及辅助来源与检查覆盖的独立计数。
 
+`tests/test_agent_work_reuse.py` 验证属性对齐代表与原始事实的完整映射、比较范围和截断恢复中的事实对覆盖、候选去重的适用条件与严重程度、跨文件证据保留，以及共享事实缓存的引用隔离。
+
 ## 日志约定
 
 各模块使用 `logging.getLogger(__name__)` 记录日志。`app.infrastructure.logging` 集中配置模块名、进程 ID、控制台过滤及多进程安全文件轮转。`app.tasks` 及其子模块写入 `task.log`，`app.models` 及其子模块写入 `llm.log`，其余 `app` 模块、Werkzeug 和 Uvicorn 写入 `app.log`。文件固定记录 INFO 及以上日志；`logging.console_level` 控制终端输出，默认 WARNING。启动入口使用 `app.run` logger，启动摘要和访问地址通过 `console_notice` 标记显示。

@@ -610,7 +610,10 @@ class EvidenceAgentTest(unittest.TestCase):
                         if title == "Discovery":
                             return discovery(
                                 context,
-                                facts=[fact(s) for s in context["sources"]],
+                                facts=[
+                                    {**fact(s), "attribute": f"电压参数{s['ordinal']}"}
+                                    for s in context["sources"]
+                                ],
                                 candidates=[
                                     candidate([fact(s)["reference"]])
                                     for s in context["sources"]
@@ -802,7 +805,10 @@ class EvidenceAgentTest(unittest.TestCase):
             if title == "Discovery":
                 return discovery(
                     context,
-                    facts=[fact(s, s["text"]) for s in context["sources"]],
+                    facts=[
+                        {**fact(s, s["text"]), "attribute": f"电压参数{s['ordinal']}"}
+                        for s in context["sources"]
+                    ],
                 )
             if title == "Alignment":
                 if len(context["facts"]) > 1:

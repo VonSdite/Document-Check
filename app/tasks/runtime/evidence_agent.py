@@ -83,17 +83,20 @@ class SharedFacts:
     def get(self, key, ids):
         with self.lock:
             return [
-                dict(fact)
-                for fact in self.entries.get(key, [])
+                {**fact, "reference": dict(fact["reference"])}
+                for fact in self.entries.get(key, {}).values()
                 if fact["reference"]["source_id"] in ids
             ]
 
     def put(self, key, facts):
         with self.lock:
-            entries = self.entries.setdefault(key, [])
+            entries = self.entries.setdefault(key, {})
             for fact in facts:
-                if fact not in entries:
-                    entries.append(fact)
+                identity = hashlib.sha256(
+                    json.dumps(fact, ensure_ascii=False, sort_keys=True).encode()
+                ).digest()
+                if identity not in entries:
+                    entries[identity] = {**fact, "reference": dict(fact["reference"])}
 
 
 SYSTEM_INSTRUCTIONS = """你是文档审查系统。业务标准由检查提示词给出。
@@ -837,6 +840,13 @@ class EvidenceAgent:
 
     def _add_candidate(self, candidate):
         candidate = dict(candidate)
+        candidate["evidence"] = list(
+            {
+                (ref["source_id"], ref["quote"]): dict(ref)
+                for ref in candidate["evidence"]
+            }.values()
+        )
+        candidate["requirement_ids"] = list(dict.fromkeys(candidate["requirement_ids"]))
         if re.search(
             r"缺失|缺少|未提供|未包含|未说明|未定义|没有(?:提供|说明|定义)|\bmissing\b|\babsent\b",
             candidate["description"],
@@ -848,8 +858,18 @@ class EvidenceAgent:
             + hashlib.sha256(
                 _json(
                     [
-                        candidate["category"],
-                        candidate["description"],
+                        *[
+                            candidate[field].strip()
+                            for field in (
+                                "category",
+                                "description",
+                                "applicability",
+                                "impact",
+                                "suggestion",
+                            )
+                        ],
+                        candidate["kind"],
+                        candidate["absence_claim"],
                         sorted(
                             (r["source_id"], r["quote"]) for r in candidate["evidence"]
                         ),
@@ -858,8 +878,13 @@ class EvidenceAgent:
                 ).encode()
             ).hexdigest()[:20]
         )
-        if any(c["id"] == candidate["id"] for c in self.state["candidates"]):
-            return
+        for existing in self.state["candidates"]:
+            if existing["id"] == candidate["id"]:
+                severity = ("critical", "high", "medium", "low")
+                existing["severity"] = min(
+                    (existing["severity"], candidate["severity"]), key=severity.index
+                )
+                return
         if len(self.state["candidates"]) >= self.options.max_candidates:
             raise BudgetExceeded("候选数量达到检查预算，已保留可验证的中间结果")
         self.state["candidates"].append(candidate)
@@ -1111,29 +1136,42 @@ class EvidenceAgent:
         self._record_recovery(f"全文核查{reason}，转入分批检查并完整核对所有来源")
         self.state["next"] = "discover"
 
+    def _alignment_jobs(self):
+        if "align" not in self._cached_jobs:
+            groups = {}
+            if self._uses_strategy("consistency", "cross_document", "cross_language"):
+                for fact in self.state["facts"]:
+                    descriptor = {
+                        field: fact[field]
+                        for field in (
+                            "subject",
+                            "attribute",
+                            "unit",
+                            "conditions",
+                            "version",
+                        )
+                    }
+                    fact_id = hashlib.sha256(_json(fact).encode()).hexdigest()[:20]
+                    group = groups.setdefault(
+                        _json(descriptor),
+                        {"fact": {"fact_id": fact_id, **descriptor}, "ids": []},
+                    )
+                    group["ids"].append(fact_id)
+            self._cached_jobs["align"] = (
+                self._pack([group["fact"] for group in groups.values()]),
+                {group["fact"]["fact_id"]: group["ids"] for group in groups.values()},
+            )
+        return self._cached_jobs["align"]
+
     def _align(self):
-        facts = [
-            {
-                "fact_id": hashlib.sha256(_json(fact).encode()).hexdigest()[:20],
-                "subject": fact["subject"],
-                "attribute": fact["attribute"],
-                "conditions": fact["conditions"],
-                "version": fact["version"],
-            }
-            for fact in self.state["facts"]
-        ]
-        jobs = (
-            self._pack(facts)
-            if self._uses_strategy("consistency", "cross_document", "cross_language")
-            else []
-        )
+        jobs, members = self._alignment_jobs()
         cursor = self.state.get("align_cursor", 0)
         if cursor < len(jobs):
             job = self._stage_job("align", {"facts": jobs[cursor]})
             try:
                 result = self._ask(
                     Alignment,
-                    "把每项事实的 attribute 归一到中文属性名称。同义属性和不同语种的对应属性使用同一个 attribute_key；含义不同的属性保持不同名称。优先复用已有词汇，仅归一属性，不合并对象、条件或版本。keys 必须恰好覆盖每个 fact_id。"
+                    "把每项事实的 attribute 归一到中文属性名称。同义属性和不同语种的对应属性使用同一个 attribute_key；含义不同的属性保持不同名称。结合 unit 区分物理量，同一物理量的等价单位可使用相同属性。优先复用已有词汇，仅归一属性，不合并对象、条件或版本。相同的对象、属性、单位、条件和版本提供一个代表，归一结果用于对应的所有原始事实。keys 必须恰好覆盖每个 fact_id。"
                     + self._compact_instruction(job),
                     {
                         "facts": job["facts"],
@@ -1155,7 +1193,11 @@ class EvidenceAgent:
                 self._recover_stage_job("align", job, self._split_alignment_job, exc)
                 return
             self.state.setdefault("fact_keys", {}).update(
-                {key["fact_id"]: key["attribute_key"] for key in keys}
+                {
+                    fact_id: key["attribute_key"]
+                    for key in keys
+                    for fact_id in members[key["fact_id"]]
+                }
             )
             self._finish_stage_job("align")
         self.state["next"] = (
@@ -1184,7 +1226,7 @@ class EvidenceAgent:
                     if len(batch) > 1:
                         jobs.append({"facts": batch})
                     for other in batches[i + 1 :]:
-                        jobs.append({"facts": batch + other})
+                        jobs.append({"left_facts": batch, "right_facts": other})
         if self._uses_strategy(
             "completeness",
             "compliance",
@@ -1714,6 +1756,8 @@ class EvidenceAgent:
     def build_report(self):
         decisions = {d["candidate_id"]: d for d in self.state["decisions"]}
         items, pending, withdrawn = [], [], []
+        reported = {}
+        severity = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         for candidate in self.state["candidates"]:
             decision = decisions.get(candidate["id"])
             audit = {
@@ -1804,24 +1848,25 @@ class EvidenceAgent:
                     }
                 )
                 continue
-            duplicate = next(
-                (
-                    i
-                    for i in items
-                    if (i["status"], i["category"], i["description"], i["excerpt"])
-                    == (
-                        item["status"],
-                        item["category"],
-                        item["description"],
-                        item["excerpt"],
-                    )
-                ),
-                None,
+            identity = (
+                item["status"],
+                item["category"],
+                item["description"],
+                item["impact"],
+                item["suggestion"],
+                candidate["applicability"],
+                candidate["absence_claim"],
+                tuple(sorted(candidate["requirement_ids"])),
+                tuple(sorted({(ref["id"], ref["quote"]) for ref in refs})),
             )
-            if duplicate:
+            if identity in reported:
+                duplicate = reported[identity]
+                duplicate["severity"] = min(
+                    (duplicate["severity"], item["severity"]), key=severity.get
+                )
                 continue
+            reported[identity] = item
             items.append(item)
-        severity = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         items.sort(
             key=lambda i: (i["status"] != "issue", severity[i["severity"]], i["id"])
         )
