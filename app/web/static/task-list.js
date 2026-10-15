@@ -452,6 +452,63 @@
     if (form.matches("[data-task-filters]")) url.searchParams.set("page", "1");
     navigateTaskList(url);
   });
+
+  const taskActionFeedback = {
+    cancel: "已提交取消请求。",
+    retry: "任务已重新提交。",
+    delete: "任务已删除。",
+    "bulk-delete": "选中的任务已删除。",
+  };
+
+  function setTaskActionBusy(form, busy) {
+    form
+      .querySelectorAll('button[type="submit"], input[type="submit"]')
+      .forEach((control) => {
+        control.disabled = busy;
+      });
+    if (busy) form.setAttribute("aria-busy", "true");
+    else form.removeAttribute("aria-busy");
+  }
+
+  async function runTaskAction(form) {
+    setTaskActionBusy(form, true);
+    listFeedback("");
+    try {
+      const response = await fetch(form.action, {
+        method: "POST",
+        body: new FormData(form),
+        headers: { "X-Requested-With": "fetch" },
+      });
+      if (!response.ok) throw new Error("任务操作失败，请重试。");
+      listFeedback(
+        taskActionFeedback[form.dataset.taskAction] || "操作已完成。",
+      );
+      await runTaskListRefresh({ full: true, force: true });
+    } catch (error) {
+      listFeedback(error.message || "任务操作失败，请重试。");
+    } finally {
+      // 成功时列表区域已整体替换；仍留在页面上的表单恢复可用。
+      if (form.isConnected) setTaskActionBusy(form, false);
+    }
+  }
+
+  // 捕获阶段先于确认弹窗与防重复提交处理，任务操作改为局部刷新并保留滚动位置。
+  document.addEventListener(
+    "submit",
+    (event) => {
+      const form = event.target;
+      if (
+        !(form instanceof HTMLFormElement) ||
+        event.defaultPrevented ||
+        !form.dataset.taskAction ||
+        (form.dataset.confirm && form.dataset.confirmed !== "true")
+      )
+        return;
+      event.preventDefault();
+      runTaskAction(form);
+    },
+    true,
+  );
   document.addEventListener("click", (event) => {
     if (event.target.closest("[data-manual-task-refresh]")) {
       runTaskListRefresh({ full: true, force: true });
