@@ -915,14 +915,54 @@ body.table-column-resize-active * {
 
 .settings-concurrency-form {
   display: grid;
-  grid-template-columns: repeat(3, minmax(180px, 1fr)) 128px;
-  gap: 14px;
+  gap: 20px;
+}
+
+.settings-concurrency-group {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.settings-concurrency-group > legend {
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-concurrency-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 20px;
   align-items: end;
 }
 
-.settings-task-retention-field {
-  grid-column: 3;
-  grid-row: 2;
+.settings-concurrency-fields > * {
+  min-width: 0;
+}
+
+.settings-concurrency-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1000px) {
+  .settings-concurrency-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-concurrency-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-concurrency-actions .settings-save-button {
+    width: 100%;
+  }
 }
 
 .settings-task-cache {
@@ -1195,15 +1235,6 @@ body.table-column-resize-active * {
 .settings-save-button {
   width: 128px;
   min-width: 128px;
-}
-
-.settings-concurrency-form .settings-save-button {
-  grid-column: 4;
-  grid-row: 2;
-}
-
-.settings-concurrency-form > label:nth-of-type(n + 4) {
-  grid-row: 2;
 }
 
 .settings-new-check-form {

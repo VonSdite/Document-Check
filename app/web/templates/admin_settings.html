@@ -67,48 +67,68 @@
 <section class="panel settings-section">
   <div class="settings-section-head">
     <div>
-      <h2>任务并发度</h2>
-      <p>控制任务队列和单个任务内检查项的并行数量。</p>
+      <h2>任务执行设置</h2>
+      <p>设置任务并发、AI 检查轮数、输出上限和文件保留期限。</p>
     </div>
   </div>
   <form method="post" class="settings-concurrency-form">
     <input type="hidden" name="action" value="concurrency">
-    <label>
-      系统同时执行任务数
-      <input name="global_concurrency" type="number" min="1" max="{{ max_task_processes }}" step="1" value="{{ global_concurrency }}" required>
-    </label>
-    <label>
-      单个用户同时执行任务数
-      <input name="user_concurrency" type="number" min="1" step="1" value="{{ user_concurrency }}" required>
-    </label>
-    <label>
-      单任务检查项并发数
-      <input name="check_item_concurrency" type="number" min="1" step="1" value="{{ check_item_concurrency }}" required>
-    </label>
-    <label>
-      图片检查页面截图上限
-      <input name="image_page_check_max_pages" type="number" min="1" step="1" value="{{ image_page_check_max_pages }}" required>
-    </label>
-    <label>
-      单文档 AI 检查默认轮数
-      <input name="document_check_rounds" type="number" min="1" max="{{ max_document_check_rounds }}" step="1" value="{{ document_round_settings.default }}" required>
-    </label>
-    <label>
-      单文档 AI 检查最大轮数
-      <input name="document_check_max_rounds" type="number" min="1" max="{{ max_document_check_rounds }}" step="1" value="{{ document_round_settings.maximum }}" required>
-    </label>
-    <label>
-      每次模型回复最多问题条数（系统硬上限 {{ max_issue_output_limit }}）
-      <input name="issue_output_limit" type="number" min="1" max="{{ max_issue_output_limit }}" step="1" value="{{ issue_output_limit }}" required>
-    </label>
-    <div class="form-field settings-task-retention-field">
-      <span class="field-with-help">
-        <span class="field-label">任务数据保留天数</span>
-        <button class="help-tip" type="button" aria-label="任务数据保留说明" data-tip="0 表示不自动清理。任务结束并超过保留天数后，系统自动清理上传文件、提取图片、页面截图、视频帧和执行时提取的正文；任务历史、检查报告和人工复核结果继续保留。">?</button>
-      </span>
-      <input name="task_file_retention_days" type="number" min="0" step="1" value="{{ task_file_retention_days }}" required>
+    <fieldset class="settings-concurrency-group">
+      <legend>任务并发</legend>
+      <div class="settings-concurrency-fields">
+        <label>
+          系统同时执行任务数
+          <input name="global_concurrency" type="number" min="1" max="{{ max_task_processes }}" step="1" value="{{ global_concurrency }}" required>
+        </label>
+        <label>
+          单个用户同时执行任务数
+          <input name="user_concurrency" type="number" min="1" step="1" value="{{ user_concurrency }}" required>
+        </label>
+        <label>
+          单任务检查项并发数
+          <input name="check_item_concurrency" type="number" min="1" step="1" value="{{ check_item_concurrency }}" required>
+        </label>
+      </div>
+    </fieldset>
+    <fieldset class="settings-concurrency-group">
+      <legend>AI 检查</legend>
+      <div class="settings-concurrency-fields">
+        <label>
+          单文档 AI 检查默认轮数
+          <input name="document_check_rounds" type="number" min="1" max="{{ max_document_check_rounds }}" step="1" value="{{ document_round_settings.default }}" required>
+        </label>
+        <label>
+          单文档 AI 检查最大轮数
+          <input name="document_check_max_rounds" type="number" min="1" max="{{ max_document_check_rounds }}" step="1" value="{{ document_round_settings.maximum }}" required>
+        </label>
+        <div class="form-field">
+          <span class="field-with-help">
+            <label class="field-label" for="issue-output-limit">每次模型回复最多问题条数</label>
+            <button class="help-tip" type="button" aria-label="模型回复问题条数说明" data-tip="每次模型回复返回的问题条数上限，系统硬上限为 {{ max_issue_output_limit }} 条。">?</button>
+          </span>
+          <input id="issue-output-limit" name="issue_output_limit" type="number" min="1" max="{{ max_issue_output_limit }}" step="1" value="{{ issue_output_limit }}" required>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset class="settings-concurrency-group">
+      <legend>文件与存储</legend>
+      <div class="settings-concurrency-fields">
+        <label>
+          图片检查页面截图上限
+          <input name="image_page_check_max_pages" type="number" min="1" step="1" value="{{ image_page_check_max_pages }}" required>
+        </label>
+        <div class="form-field settings-task-retention-field">
+          <span class="field-with-help">
+            <label class="field-label" for="task-file-retention-days">任务数据保留天数</label>
+            <button class="help-tip" type="button" aria-label="任务数据保留说明" data-tip="0 表示不自动清理。任务结束并超过保留天数后，系统自动清理上传文件、提取图片、页面截图、视频帧和执行时提取的正文；任务历史、检查报告和人工复核结果继续保留。">?</button>
+          </span>
+          <input id="task-file-retention-days" name="task_file_retention_days" type="number" min="0" step="1" value="{{ task_file_retention_days }}" required>
+        </div>
+      </div>
+    </fieldset>
+    <div class="settings-concurrency-actions">
+      <button class="primary-button settings-save-button" type="submit">保存设置</button>
     </div>
-    <button class="primary-button settings-save-button" type="submit">保存设置</button>
   </form>
   <details
     class="settings-task-cache"
