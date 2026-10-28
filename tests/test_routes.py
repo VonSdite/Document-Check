@@ -112,6 +112,145 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_document_round_picker_uses_admin_default_and_maximum(self):
+        self._configure_provider()
+        for route in ("/", "/admin/tasks"):
+            response = self.client.get(route)
+            soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+            picker = _required_tag(soup.select_one('select[name="check_rounds"]'))
+            self.assertEqual(
+                [option["value"] for option in picker.select("option")],
+                ["1", "2", "3", "4", "5"],
+            )
+            self.assertEqual(picker.select_one("option[selected]")["value"], "5")
+        with self.app.app_context():
+            set_setting("document_check_rounds", 2)
+            set_setting("document_check_max_rounds", 3)
+        soup = BeautifulSoup(self.client.get("/").get_data(as_text=True), "html.parser")
+        picker = _required_tag(soup.select_one('select[name="check_rounds"]'))
+        self.assertEqual(len(picker.select("option")), 3)
+        self.assertEqual(picker.select_one("option[selected]")["value"], "2")
+
+    def test_document_round_submission_snapshots_count_and_rejects_invalid_values(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            check_id = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code='compliance'")
+                .fetchone()[0]
+            )
+            set_setting("document_check_max_rounds", 3)
+        for value in ("0", "4", "2.5", "invalid", "-1", "9" * 5000):
+            response = self.client.post(
+                "/",
+                data={
+                    "model_id": model_id,
+                    "checks": [str(check_id)],
+                    "check_rounds": value,
+                    "document": (io.BytesIO(b"document"), "doc.txt"),
+                },
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(
+                get_db().execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0
+            )
+        for route, value, expected in (
+            ("/", "2", 2),
+            ("/admin/tasks", "3", 3),
+            ("/", "", 3),
+        ):
+            self.client.post(
+                route,
+                data={
+                    "model_id": model_id,
+                    "checks": [str(check_id)],
+                    "check_rounds": value,
+                    "document": (io.BytesIO(b"document"), "doc.txt"),
+                },
+                content_type="multipart/form-data",
+            )
+            with self.app.app_context():
+                task = (
+                    get_db()
+                    .execute(
+                        "SELECT document_meta_json FROM tasks ORDER BY id DESC LIMIT 1"
+                    )
+                    .fetchone()
+                )
+                self.assertEqual(json.loads(task[0])["check_rounds"], expected)
+
+    def test_document_round_admin_settings_validate_default_and_maximum_together(self):
+        for default, maximum in ((0, 5), (4, 3), (5, 6)):
+            self.client.post(
+                "/admin/settings",
+                data={
+                    "action": "concurrency",
+                    "document_check_rounds": str(default),
+                    "document_check_max_rounds": str(maximum),
+                },
+            )
+            with self.app.app_context():
+                self.assertEqual(get_setting("document_check_rounds"), 5)
+                self.assertEqual(get_setting("document_check_max_rounds"), 5)
+        self.client.post(
+            "/admin/settings",
+            data={
+                "action": "concurrency",
+                "document_check_rounds": "2",
+                "document_check_max_rounds": "3",
+            },
+        )
+        with self.app.app_context():
+            self.assertEqual(get_setting("document_check_rounds"), 2)
+            self.assertEqual(get_setting("document_check_max_rounds"), 3)
+
+    def test_multiround_report_and_html_export_show_sources_and_raw_rounds(self):
+        from app.reporting.rounds import build_round_result
+
+        item = {
+            "status": "issue",
+            "description": "参数单位不一致",
+            "excerpt": "电压 5mV",
+            "category": "单位",
+            "location": "第 2 节",
+            "severity": "medium",
+            "confidence": "high",
+        }
+        report = {"summary": "本轮检查完成", "items": [item]}
+        result = {
+            "code": "compliance",
+            "name": "规范性",
+            **build_round_result(
+                "compliance",
+                2,
+                [
+                    {
+                        "round": number,
+                        "status": "completed",
+                        "report": report,
+                        "result": json.dumps(report, ensure_ascii=False),
+                    }
+                    for number in (1, 2)
+                ],
+            ),
+        }
+        task_id = self._insert_task()
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=? WHERE id=?",
+                (json.dumps([result]), task_id),
+            )
+            get_db().commit()
+        for route in (f"/tasks/{task_id}", f"/tasks/{task_id}/export"):
+            response = self.client.get(route)
+            self.assertEqual(response.status_code, 200)
+            text = response.get_data(as_text=True)
+            self.assertIn("查看各轮结果", text)
+            self.assertIn("发现 2/2 轮", text)
+            self.assertIn("参数单位不一致", text)
+
     def test_full_pages_include_local_frontend_injection(self):
         injection_path = (
             self.app.config["ROOT_DIR"] / "instance" / FRONTEND_INJECTION_FILENAME

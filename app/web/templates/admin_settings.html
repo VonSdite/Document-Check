@@ -90,6 +90,14 @@
       <input name="image_page_check_max_pages" type="number" min="1" step="1" value="{{ image_page_check_max_pages }}" required>
     </label>
     <label>
+      单文档 AI 检查默认轮数
+      <input name="document_check_rounds" type="number" min="1" max="{{ max_document_check_rounds }}" step="1" value="{{ document_round_settings.default }}" required>
+    </label>
+    <label>
+      单文档 AI 检查最大轮数
+      <input name="document_check_max_rounds" type="number" min="1" max="{{ max_document_check_rounds }}" step="1" value="{{ document_round_settings.maximum }}" required>
+    </label>
+    <label>
       每次模型回复最多问题条数（系统硬上限 {{ max_issue_output_limit }}）
       <input name="issue_output_limit" type="number" min="1" max="{{ max_issue_output_limit }}" step="1" value="{{ issue_output_limit }}" required>
     </label>

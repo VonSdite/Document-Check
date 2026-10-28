@@ -173,7 +173,7 @@
         <button type="button" class="small-button danger" data-cancel-check="{{ result.code }}"{% if not result.can_cancel %} hidden{% endif %}>取消执行</button>
         <button type="button" class="small-button" data-retry-check="{{ result.code }}"{% if not result.can_retry %} hidden{% endif %}>重试</button>
         {% endif %}
-        <small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{% if result.execution_label %}状态：{{ result.execution_label }}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}{% endif %}</small>
+        <small data-check-activity{% if not result.execution_label %} hidden{% endif %}>{% if result.execution_label %}状态：{{ result.execution_label }}{% if result.execution_round_total %} · 第 {{ result.execution_round }}/{{ result.execution_round_total }} 轮检查{% endif %}{% if result.execution_attempt > 1 %} · 第 {{ result.execution_attempt }}/3 次尝试{% endif %}{% endif %}</small>
       </div>
     </div>
     {% if result.uses_model %}
@@ -193,6 +193,7 @@
     {% if result.error %}
     <div class="error-box report-error">{{ "本检查项已取消：" if result.canceled else "本检查项执行失败：" }}{{ result.error }}</div>
     {% endif %}
+    {% include "_report_rounds.html" %}
     {% if result.report_items %}
     {% if result.result_summary %}
     <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
@@ -223,7 +224,7 @@
           {% for item in result.report_items %}
           {% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
           <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
-            <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span></td>
+            <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}</td>
             {% for field, label in report_item_fields %}
             {% set field_value = item[field] %}
             <td class="report-field report-field-{{ field }}">

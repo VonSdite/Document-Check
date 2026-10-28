@@ -20,7 +20,11 @@ from app.checks.catalog import (
     _next_check_item_sort_order,
     _reorder_check_items,
 )
-from app.contracts.limits import MAX_ISSUE_OUTPUT_LIMIT, normalize_issue_output_limit
+from app.contracts.limits import (
+    MAX_DOCUMENT_CHECK_ROUNDS,
+    MAX_ISSUE_OUTPUT_LIMIT,
+    normalize_issue_output_limit,
+)
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -38,6 +42,7 @@ from app.persistence.defaults import (
     reset_default_check_item_prompt,
 )
 from app.persistence.settings import (
+    document_check_round_settings,
     get_bool_setting,
     get_setting,
     set_ip_username,
@@ -185,6 +190,17 @@ def register_settings_routes(app):
                             )
                         ),
                     )
+                    round_settings = document_check_round_settings()
+                    document_check_rounds = int(
+                        request.form.get(
+                            "document_check_rounds", round_settings["default"]
+                        )
+                    )
+                    document_check_max_rounds = int(
+                        request.form.get(
+                            "document_check_max_rounds", round_settings["maximum"]
+                        )
+                    )
                 except ValueError:
                     flash(
                         "任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。",
@@ -192,6 +208,17 @@ def register_settings_routes(app):
                     )
                     return redirect(url_for(_settings_endpoint()))
                 max_task_processes = _max_task_processes()
+                if (
+                    not 1
+                    <= document_check_rounds
+                    <= document_check_max_rounds
+                    <= MAX_DOCUMENT_CHECK_ROUNDS
+                ):
+                    flash(
+                        f"单文档检查轮数需满足：1 ≤ 默认轮数 ≤ 最大轮数 ≤ {MAX_DOCUMENT_CHECK_ROUNDS}。",
+                        "error",
+                    )
+                    return redirect(url_for(_settings_endpoint()))
                 if not 1 <= global_concurrency <= max_task_processes:
                     flash(
                         f"系统同时执行任务数必须在 1 到 {max_task_processes} 之间。",
@@ -204,6 +231,8 @@ def register_settings_routes(app):
                 set_setting("image_page_check_max_pages", image_page_check_max_pages)
                 set_setting("issue_output_limit", issue_output_limit)
                 set_setting("task_file_retention_days", task_file_retention_days)
+                set_setting("document_check_rounds", document_check_rounds)
+                set_setting("document_check_max_rounds", document_check_max_rounds)
                 flash("任务设置已保存。", "success")
                 return redirect(url_for(_settings_endpoint()))
 
@@ -525,6 +554,8 @@ def register_settings_routes(app):
                 "issue_output_limit", ISSUE_OUTPUT_LIMIT_DEFAULT
             ),
             max_issue_output_limit=MAX_ISSUE_OUTPUT_LIMIT,
+            document_round_settings=document_check_round_settings(),
+            max_document_check_rounds=MAX_DOCUMENT_CHECK_ROUNDS,
             task_file_retention_days=get_setting(
                 "task_file_retention_days", TASK_FILE_RETENTION_DAYS_DEFAULT
             ),

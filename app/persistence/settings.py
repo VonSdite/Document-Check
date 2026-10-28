@@ -1,5 +1,10 @@
 import json
 
+from app.contracts.limits import (
+    DEFAULT_DOCUMENT_CHECK_ROUNDS,
+    MAX_DOCUMENT_CHECK_ROUNDS,
+    normalize_check_rounds,
+)
 from app.persistence.connection import get_db, now_text
 from app.persistence.permissions import register_subject
 
@@ -48,6 +53,22 @@ def get_bool_setting(key: str, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "off", ""}:
             return False
     return default
+
+
+def document_check_round_settings() -> dict[str, int]:
+    maximum = normalize_check_rounds(
+        get_setting("document_check_max_rounds", MAX_DOCUMENT_CHECK_ROUNDS),
+        default=MAX_DOCUMENT_CHECK_ROUNDS,
+        maximum=MAX_DOCUMENT_CHECK_ROUNDS,
+    )
+    return {
+        "maximum": maximum,
+        "default": normalize_check_rounds(
+            get_setting("document_check_rounds", DEFAULT_DOCUMENT_CHECK_ROUNDS),
+            default=min(DEFAULT_DOCUMENT_CHECK_ROUNDS, maximum),
+            maximum=maximum,
+        ),
+    }
 
 
 def sync_identity_profile(subject: str, profile: dict) -> dict:

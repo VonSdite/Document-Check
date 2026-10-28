@@ -7,7 +7,7 @@ from app.checks.guardrails import (
     guarded_report_summary,
     is_unsupported_visual_missing_item,
 )
-from app.contracts.limits import normalize_issue_output_limit
+from app.contracts.limits import MAX_DOCUMENT_CHECK_ROUNDS, normalize_issue_output_limit
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
     DOCUMENT_TASK_TYPE,
@@ -241,7 +241,13 @@ def _prepare_task_results(
             if report_item.get("type") != "non_issue"
         ]
         original_report_item_count = len(report_items)
-        report_items = _deduplicate_report_items(report_items)
+        multiround = (
+            1
+            < result.get("round_summary", {}).get("planned", 1)
+            <= MAX_DOCUMENT_CHECK_ROUNDS
+        )
+        if not multiround:
+            report_items = _deduplicate_report_items(report_items)
         report_items.sort(key=_report_item_priority_key)
         duplicate_count = original_report_item_count - len(report_items)
         report_items, suppressed_items = _apply_report_suppression(
@@ -252,12 +258,14 @@ def _prepare_task_results(
             suppression_rules=suppression_rules,
             record_hits=record_suppression_hits,
         )
-        report_items, report_limit = _limit_ranked_report_items(
-            report_items,
-            issue_output_limit=item.get("issue_output_limit"),
-            original_count=original_report_item_count,
-            duplicate_count=duplicate_count,
-        )
+        report_limit = None
+        if not multiround:
+            report_items, report_limit = _limit_ranked_report_items(
+                report_items,
+                issue_output_limit=item.get("issue_output_limit"),
+                original_count=original_report_item_count,
+                duplicate_count=duplicate_count,
+            )
         acceptances = item.get("item_acceptances")
         if not isinstance(acceptances, dict):
             acceptances = {}
@@ -859,6 +867,15 @@ def _normalize_structured_report_item(raw_item) -> dict:
     fields["evidence_refs"] = _normalize_report_evidence_refs(
         raw_item.get("evidence_refs")
     )
+    if isinstance(raw_item.get("source_rounds"), list):
+        fields["source_rounds"] = sorted(
+            {
+                number
+                for number in raw_item["source_rounds"]
+                if type(number) is int and 1 <= number <= MAX_DOCUMENT_CHECK_ROUNDS
+            }
+        )
+        fields["round_conflict"] = bool(raw_item.get("round_conflict"))
     if _looks_like_status_only(fields["category"]):
         status = status or _normalize_report_item_status(fields["category"])
         fields["category"] = ""

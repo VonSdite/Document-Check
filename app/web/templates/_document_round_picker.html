@@ -1,0 +1,12 @@
+{% set round_settings = document_check_round_settings() %}
+<label>
+  <span class="field-with-help">
+    <span>检查轮数</span>
+    <span class="help-tip" tabindex="0" data-tip="每个 AI 检查项独立检查所选轮数，结果合并为一份报告。本地规则检查执行一次。轮数越多，耗时和模型用量越高。">?</span>
+  </span>
+  <select name="check_rounds" required>
+    {% for round_number in range(1, round_settings.maximum + 1) %}
+    <option value="{{ round_number }}"{% if round_number == round_settings.default %} selected{% endif %}>{{ round_number }} 轮</option>
+    {% endfor %}
+  </select>
+</label>

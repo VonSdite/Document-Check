@@ -55,6 +55,22 @@ def build_report_workbook(task):
 
     _fill_report_items_sheet(report_sheet, task, results, document_groups)
     _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
+    if any(result.get("round_summary") for result in results):
+        sheet = workbook.create_sheet("检查轮次")
+        sheet.append(["检查项", "轮次", "状态", "摘要", "错误", "原始回复"])
+        for result in results:
+            for entry in result.get("round_results", []):
+                sheet.append(
+                    [
+                        _excel_cell_text(result.get("name")),
+                        entry["round"],
+                        "完成" if entry.get("status") == "completed" else "失败",
+                        _excel_cell_text(entry.get("report", {}).get("summary")),
+                        _excel_cell_text(entry.get("error")),
+                        _excel_cell_text(entry.get("result")),
+                    ]
+                )
+        _style_excel_sheet(sheet)
 
     output = io.BytesIO()
     workbook.save(output)
@@ -323,6 +339,11 @@ def _fill_report_items_sheet(
     sheet, task, results: list[dict], document_groups: list[dict]
 ) -> None:
     report_item_fields = _report_item_fields_for_task(task["task_type"])
+    round_headers = (
+        ["检查轮次", "发现轮次"]
+        if any(result.get("round_summary") for result in results)
+        else []
+    )
     headers = [
         "任务ID",
         "任务类型",
@@ -330,6 +351,7 @@ def _fill_report_items_sheet(
         "检查项",
         "条目",
         *[label for _, label in report_item_fields],
+        *round_headers,
         REPORT_ITEM_TYPE_LABEL,
         REPORT_ACCEPTANCE_LABEL,
         REPORT_REJECTION_REASON_LABEL,
@@ -340,6 +362,12 @@ def _fill_report_items_sheet(
     sheet.append(headers)
     context = _excel_task_context(task, document_groups)
     for result in results:
+        rounds = result.get("round_summary", {})
+        round_label = (
+            f"完成 {rounds['completed']}/{rounds['planned']} 轮，失败 {rounds['failed']} 轮"
+            if rounds
+            else ""
+        )
         report_items = result.get("report_items") or []
         if not report_items:
             sheet.append(
@@ -348,6 +376,7 @@ def _fill_report_items_sheet(
                     _excel_cell_text(result.get("name")),
                     "",
                     *["" for _ in report_item_fields],
+                    *([round_label, ""] if round_headers else []),
                     "未拆分",
                     "",
                     "",
@@ -367,6 +396,16 @@ def _fill_report_items_sheet(
                         _excel_report_item_field(item, field, task["task_type"])
                         for field, _ in report_item_fields
                     ],
+                    *(
+                        [
+                            round_label,
+                            "、".join(
+                                str(number) for number in item.get("source_rounds", [])
+                            ),
+                        ]
+                        if round_headers
+                        else []
+                    ),
                     _excel_cell_text(item.get("type_label")),
                     _excel_cell_text(item.get("acceptance_label")),
                     _excel_cell_text(item.get("rejection_reason_label"))

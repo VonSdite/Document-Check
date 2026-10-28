@@ -35,6 +35,7 @@ from app.checks.sensitive_terms import (
     load_sensitive_terms,
     sensitive_terms_file_candidates,
 )
+from app.contracts.limits import normalize_check_rounds
 from app.contracts.task_types import (
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
@@ -57,6 +58,7 @@ from app.tasks.activity import (
     take_check_retries,
     task_activities,
     update_check_activity,
+    update_check_round_activity,
 )
 from app.tasks.model_output import ModelOutputRecorder
 from app.tasks.runtime.common import (
@@ -70,6 +72,7 @@ from app.tasks.runtime.common import (
     _ordered_results,
     _task_value,
 )
+from app.tasks.runtime.document_rounds import run_document_rounds
 from app.tasks.runtime.image_checks import _run_image_check_items_concurrently
 from app.tasks.runtime.preprocessing import _prepare_task_inputs
 from app.tasks.runtime.state import (
@@ -295,7 +298,15 @@ class TaskRunner:
                 successful_results = [
                     result for result in results if not _check_result_failed(result)
                 ]
-                if failed_results and not successful_results:
+                has_successful_rounds = any(
+                    result.get("round_summary", {}).get("completed", 0)
+                    for result in results
+                )
+                if (
+                    failed_results
+                    and not successful_results
+                    and not has_successful_rounds
+                ):
                     error = _failed_check_items_error(failed_results)
                     logger.warning(
                         "任务全部检查项失败 task_id=%s error=%s", task_id, error
@@ -427,6 +438,11 @@ def _run_check_items_concurrently(
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
+    previous_by_code = {
+        result.get("code"): result
+        for result in _check_results_from_json(_task_value(task, "result_json"))
+    }
+    round_progress: dict[str, float] = {}
     base_results = list(base_results or [])
     result_lock = threading.Lock()
     save_lock = threading.Lock()
@@ -499,7 +515,7 @@ def _run_check_items_concurrently(
 
     def current_progress() -> int:
         with result_lock:
-            units = completed_units
+            units = completed_units + sum(round_progress.values())
         return 5 + int(units / total_units * 85)
 
     def mark_unit_completed() -> int:
@@ -511,11 +527,21 @@ def _run_check_items_concurrently(
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
     local_rule_document_text = _local_rule_document_text(document_text, document_meta)
+    check_rounds = (
+        normalize_check_rounds((document_meta or {}).get("check_rounds"))
+        if task_type == DOCUMENT_TASK_TYPE
+        else 1
+    )
 
     def save_failed_result(item, execution, error, *, canceled):
         progress = mark_unit_completed()
         with result_lock:
-            result = dict(partial_by_code.pop(item["code"], None) or {})
+            round_progress.pop(item["code"], None)
+            result = dict(
+                partial_by_code.pop(item["code"], None)
+                or (previous_by_code.get(item["code"]) if check_rounds > 1 else None)
+                or {}
+            )
             result.update(
                 code=item["code"],
                 name=item["name"],
@@ -610,6 +636,7 @@ def _run_check_items_concurrently(
                     item_cancel_event.set()
                 ensure_active()
                 structured_report = None
+                round_result = None
                 if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                     structured_report = _run_sensitive_terms_check(
                         app, local_rule_document_text, issue_output_limit
@@ -663,7 +690,67 @@ def _run_check_items_concurrently(
                     }
                     if task_type == DOCUMENT_TASK_TYPE:
                         run_check_kwargs["max_completion_tokens"] = None
-                    content = run_check(**run_check_kwargs)
+                    if check_rounds > 1:
+                        previous = previous_by_code.get(item["code"], {})
+
+                        def save_round_result(snapshot):
+                            with result_lock:
+                                partial_by_code[item["code"]] = {
+                                    "code": item["code"],
+                                    "name": item["name"],
+                                    "issue_output_limit": issue_output_limit,
+                                    "item_acceptances": previous.get(
+                                        "item_acceptances", {}
+                                    ),
+                                    **snapshot,
+                                    **execution_meta,
+                                }
+                                round_progress[item["code"]] = (
+                                    len(snapshot["round_results"]) / check_rounds
+                                )
+                            save_snapshot(
+                                db,
+                                f"{item['name']}：{snapshot['structured_report']['summary']}",
+                                current_progress(),
+                            )
+
+                        def start_round(number, completed):
+                            update_check_round_activity(
+                                task_id,
+                                claim_token,
+                                item["code"],
+                                number,
+                                check_rounds,
+                                completed,
+                            )
+
+                        def run_round(number):
+                            kwargs = dict(run_check_kwargs)
+                            kwargs["on_content"] = None
+                            kwargs["on_output"] = output_recorder.for_checks(
+                                [item["code"]],
+                                label=f"第 {number}/{check_rounds} 轮检查",
+                                executions={item["code"]: execution},
+                            )
+                            return run_check(**kwargs)
+
+                        round_result = run_document_rounds(
+                            code=item["code"],
+                            planned=check_rounds,
+                            previous=previous.get("round_results", []),
+                            previous_report=previous.get("structured_report"),
+                            run_round=run_round,
+                            ensure_active=ensure_active,
+                            on_update=save_round_result,
+                            on_round_start=start_round,
+                            sanitize=lambda raw: sanitize_text_check_result(
+                                raw, pdf_table_evidence=pdf_table_evidence
+                            )[0],
+                        )
+                        content = round_result["result"]
+                        structured_report = round_result["structured_report"]
+                    else:
+                        content = run_check(**run_check_kwargs)
                     content, filtered_unsupported_count = sanitize_text_check_result(
                         content,
                         pdf_table_evidence=pdf_table_evidence,
@@ -676,7 +763,12 @@ def _run_check_items_concurrently(
                             filtered_unsupported_count,
                         )
                 ensure_active()
-                if finish_check_activity(task_id, claim_token, item["code"]):
+                if finish_check_activity(
+                    task_id,
+                    claim_token,
+                    item["code"],
+                    failed=bool(round_result and round_result.get("error")),
+                ):
                     raise RuntimeError("本检查项已由用户取消。")
             except (LLMError, RuntimeError) as exc:
                 if cancel_event.is_set():
@@ -704,7 +796,11 @@ def _run_check_items_concurrently(
             }
             if structured_report is not None:
                 result["structured_report"] = structured_report
+            if round_result is not None:
+                result.update(round_result)
+                result["item_acceptances"] = previous.get("item_acceptances", {})
             with result_lock:
+                round_progress.pop(item["code"], None)
                 completed_by_code[item["code"]] = result
                 partial_by_code.pop(item["code"], None)
                 completed_count = len(completed_by_code)
@@ -758,7 +854,9 @@ def _run_check_items_concurrently(
                 code = retry["code"]
                 item = catalog[code]
                 with result_lock:
-                    if completed_by_code.pop(code, None) is not None:
+                    previous = completed_by_code.pop(code, None)
+                    if previous is not None:
+                        previous_by_code[code] = previous
                         completed_units -= 1
                     partial_by_code.pop(code, None)
                     base_results[:] = [

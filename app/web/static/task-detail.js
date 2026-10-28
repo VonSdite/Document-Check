@@ -117,7 +117,7 @@
       const outputExecution = execution + (state.retry_requested ? 1 : 0);
       const attempt = state.attempt || 0;
       if (outputExecution > Number(node.dataset.outputExecution)
-          || (attempt > 1 && attempt > Number(node.dataset.checkAttempt))) {
+          || (!state.round_total && attempt > 1 && attempt > Number(node.dataset.checkAttempt))) {
         resetCheck(node, outputExecution, attempt);
       }
       if (state.phase) node.dataset.checkAttempt = attempt;
@@ -128,7 +128,9 @@
       if (phase === "canceled") showCanceledCheck(node);
       const label = node.querySelector("[data-check-activity]");
       const text = data.active ? phaseLabels[phase] || "" : "";
-      label.textContent = text ? `状态：${text}` + (state.attempt > 1 ? ` · 第 ${state.attempt}/3 次尝试` : "") : "";
+      label.textContent = text ? `状态：${text}`
+        + (state.round_total ? ` · 第 ${state.round_number}/${state.round_total} 轮检查` : "")
+        + (state.attempt > 1 ? ` · 第 ${state.attempt}/3 次尝试` : "") : "";
       label.hidden = !text;
       const button = node.querySelector("[data-cancel-check]");
       if (button) button.hidden = !(canManage && singleCancel && ["queued", "running"].includes(data.status) && ["pending", "checking", "waiting", "thinking", "output", "retrying"].includes(phase));

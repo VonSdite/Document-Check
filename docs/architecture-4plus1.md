@@ -295,6 +295,7 @@ run.py（Uvicorn + Flask + a2wsgi）
 - Windows 和 Linux 的 Web 请求线程容量均由 `web_workers × web_threads` 决定，默认 `1 × 16`；单进程配置直接在启动进程中提供 Web 服务。
 - 任务并发容量由 `global_concurrency` 提供，并受 `max_task_processes` 约束。
 - 单任务检查项并发由 `check_item_concurrency` 提供。
+- 单文档 AI 检查轮数由 `document_check_rounds` 与 `document_check_max_rounds` 提供提交默认值和选择上限，并保存到任务文档元数据。各检查项在线程内顺序执行独立全文检查，由报告服务归并并记录来源轮次；本地规则执行一次。
 - SQLite 事务负责任务认领和状态转换，文件系统负责上传文件与提取产物。
 - 模型服务连接数量还受任务数量、检查项并发和模型服务端限流共同约束。
 

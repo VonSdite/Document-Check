@@ -122,6 +122,17 @@ def finish_check_activity(task_id, claim_token, code, *, failed=False):
     return bool(_change_activity(task_id, claim_token, change))
 
 
+def update_check_round_activity(task_id, claim_token, code, number, total, completed):
+    def change(state):
+        item = state["checks"].get(code)
+        if item and not item.get("cancel_requested"):
+            item.update(
+                round_number=number, round_total=total, completed_rounds=completed
+            )
+
+    _change_activity(task_id, claim_token, change)
+
+
 def start_check_activity(task_id, claim_token, code):
     """在检查项开始前原子确认取消意图，并进入执行阶段。"""
 

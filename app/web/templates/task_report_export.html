@@ -118,6 +118,7 @@
         {% if result.error %}
         <div class="error-box report-error">本检查项执行失败：{{ result.error }}</div>
         {% endif %}
+        {% include "_report_rounds.html" %}
         {% if result.report_items %}
         {% if result.result_summary %}
         <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
@@ -147,7 +148,7 @@
             <tbody>
               {% for item in result.report_items %}
               <tr class="report-item" data-item-type="{{ item.type }}">
-                <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span></td>
+                <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}</td>
                 {% for field, label in report_item_fields %}
                 {% set field_value = item[field] %}
                 <td class="report-field report-field-{{ field }}">

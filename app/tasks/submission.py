@@ -21,6 +21,7 @@ from app.documents.videos import allowed_video_file, video_extension_of
 from app.identity.models import UserIdentity
 from app.models.service import _find_enabled_model
 from app.persistence.connection import get_db, now_text
+from app.persistence.settings import document_check_round_settings
 from app.tasks.files import (
     _clean_upload_filename,
     _remove_uploaded_file,
@@ -40,6 +41,7 @@ class TaskSubmission:
     check_ids: list[int]
     model_id: str
     submission_token: str = ""
+    check_rounds: str | int | None = None
 
     def first_file(self, name: str):
         values = self.files.get(name, [])
@@ -139,6 +141,23 @@ def submit_document_task(
 ) -> SubmissionResult:
     messages = []
     db = get_db()
+    round_settings = document_check_round_settings()
+    rounds_value = submission.check_rounds
+    if rounds_value is None or rounds_value == "":
+        check_rounds = round_settings["default"]
+    elif (
+        isinstance(rounds_value, bool)
+        or not str(rounds_value).isascii()
+        or not str(rounds_value).isdigit()
+        or len(str(rounds_value)) > 2
+        or not 1 <= int(rounds_value) <= round_settings["maximum"]
+    ):
+        messages.append(
+            (f"检查轮数必须为 1 到 {round_settings['maximum']} 之间的整数。", "error")
+        )
+        return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
+    else:
+        check_rounds = int(rounds_value)
     uploads = submission.uploads("document")
     if not uploads:
         messages.append(("请选择要上传的文档。", "error"))
@@ -172,7 +191,13 @@ def submit_document_task(
     try:
         rows = [
             _prepare_document_task_row(
-                upload, identity, model, check_ids, check_snapshots, saved_paths
+                upload,
+                identity,
+                model,
+                check_ids,
+                check_snapshots,
+                saved_paths,
+                check_rounds=check_rounds,
             )
             for upload in uploads
         ]
@@ -213,6 +238,8 @@ def _prepare_document_task_row(
     check_ids: list[int],
     check_snapshots: list[dict],
     saved_paths: list[Path],
+    *,
+    check_rounds: int,
 ):
     file_type = extension_of(upload.filename)
     original_filename = _clean_upload_filename(upload.filename, file_type)
@@ -238,7 +265,10 @@ def _prepare_document_task_row(
         file_type,
         file_size,
         None,
-        json.dumps({"preprocessing": {"status": "pending"}}, ensure_ascii=False),
+        json.dumps(
+            {"preprocessing": {"status": "pending"}, "check_rounds": check_rounds},
+            ensure_ascii=False,
+        ),
         json.dumps(check_ids, ensure_ascii=False),
         json.dumps(check_snapshots, ensure_ascii=False),
         model["provider_id"],

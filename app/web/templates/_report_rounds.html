@@ -1,0 +1,15 @@
+{% if result.round_summary %}
+<div class="report-rounds">
+  <p class="report-limit-notice">计划 {{ result.round_summary.planned }} 轮，已完成 {{ result.round_summary.completed }} 轮，失败 {{ result.round_summary.failed }} 轮。发现轮次用于追溯结果。</p>
+  <details class="result-raw-details">
+    <summary>查看各轮结果</summary>
+    {% for round_result in result.round_results %}
+    <details>
+      <summary>第 {{ round_result.round }} 轮 · {{ "完成" if round_result.status == "completed" else "失败" }}</summary>
+      {% if round_result.error %}<p class="error-box">{{ round_result.error }}</p>{% endif %}
+      <pre class="model-output-text">{{ round_result.result or "本轮没有返回完整报告。" }}</pre>
+    </details>
+    {% endfor %}
+  </details>
+</div>
+{% endif %}
