@@ -22,6 +22,10 @@ _PDF_TABLE_MIN_TEXT_COVERAGE = 0.85
 _PDF_SCRIPT_SIZE_RATIO = 0.88
 _PDF_SCRIPT_VERTICAL_RATIO = 0.18
 _PDF_SCRIPT_NEIGHBOR_GAP_RATIO = 0.9
+_PDF_TOC_LEADER_PATTERN = re.compile(r"(?:[.．·][ \t]*){8,}|(?:…[ \t]*){4,}")
+_PDF_TOC_PAGE_PATTERN = re.compile(
+    r"(?:[0-9]{1,6}|[ivxlcdmIVXLCDM]{1,12}|[A-Z]-[0-9]{1,6})"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +90,11 @@ def _extract_pdf(
                 pypdf_text = pypdf_page.extract_text() or ""
                 text = pypdf_text
                 hyperlinks = _extract_pypdf_page_hyperlinks(pypdf_page)
+            text = _normalize_pdf_toc_leaders(text)
+            hyperlinks = [
+                (_normalize_pdf_toc_leaders(label), target, internal_target_exists)
+                for label, target, internal_target_exists in hyperlinks
+            ]
             if hyperlinks:
                 text = _append_hyperlinks(text, hyperlinks)
                 for label, target, internal_target_exists in hyperlinks:
@@ -102,6 +111,25 @@ def _extract_pdf(
     finally:
         if layout_document is not None:
             layout_document.close()
+
+
+def _normalize_pdf_toc_leaders(text: str) -> str:
+    """将目录标题与页码之间的长点线折叠为制表符。"""
+    lines = []
+    for line in text.splitlines(keepends=True):
+        for match in _PDF_TOC_LEADER_PATTERN.finditer(line):
+            title = line[: match.start()].rstrip(" \t")
+            page = line[match.end() :].strip()
+            if not title.strip() or not _PDF_TOC_PAGE_PATTERN.fullmatch(page):
+                continue
+            if "://" in title or "\\" in title:
+                continue
+            if "/" in title and not any(char.isspace() for char in title.strip()):
+                continue
+            line = f"{title}\t{line[match.end() :].lstrip(' \t')}"
+            break
+        lines.append(line)
+    return "".join(lines)
 
 
 def _pdf_should_try_pypdf(text: str) -> bool:
@@ -652,7 +680,7 @@ def _format_pdf_table_html(model: dict) -> str:
             if normalized["inherited"]:
                 attributes.append(f'data-inherited-from="{normalized["anchor"]}"')
                 if cell["text"]:
-                    value = html.escape(cell["text"])
+                    value = html.escape(_normalize_pdf_toc_leaders(cell["text"]))
                 elif cell["has_nontext_content"]:
                     value = f"[合并覆盖，继承自{normalized['anchor']}的非文本内容]"
                 else:
@@ -662,7 +690,7 @@ def _format_pdf_table_html(model: dict) -> str:
                     attributes.append(f'data-original-rowspan="{cell["rowspan"]}"')
                 if cell["colspan"] > 1:
                     attributes.append(f'data-original-colspan="{cell["colspan"]}"')
-                value = html.escape(cell["text"])
+                value = html.escape(_normalize_pdf_toc_leaders(cell["text"]))
                 if not value:
                     if cell["has_nontext_content"]:
                         attributes.append('data-non-text="true"')
