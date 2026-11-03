@@ -15,6 +15,10 @@ from app.contracts.limits import (
     DEFAULT_ISSUE_OUTPUT_LIMIT,
     normalize_issue_output_limit,
 )
+from app.models.document_input import (
+    PDF_TABLE_INPUT_INSTRUCTION,
+    compact_model_document_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +107,7 @@ _EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
 4. {text_extraction_limitation}只有原文摘录明确包含 TODO、TBD、待插入、待补充等占位内容时，才可以仅依据文本报告相应视觉对象缺失；“见图”“见表”等引用本身不能证明对象在原文中不存在。解析覆盖情况不明确时，不得把视觉对象缺失输出为问题或建议。
-5. 输入中的“PDF结构化表格”由文字坐标和矢量边框还原，并已展开成固定行列的归一化 HTML。data-cell 是归一化坐标；data-original-range 记录原始合并范围；data-inherited-from 表示该位置的值继承自同一个原始合并单元格，不代表原文重复填写，也不是独立的数据或空位。“[非文本图形或图标]”、“[合并覆盖……]”以及 data-unresolved 位置都不是数据缺失。只有没有 data-inherited-from、明确标记为 data-empty="true"、表格置信度为 high，并且能够根据行标题、列标题或原文要求证明该位置必须填写时，才允许报告表格数据缺失；location 必须包含表格 ID 和该原始单元格的锚点坐标。置信度为 medium 或 low 时不得报告数据缺失。
+5. {pdf_table_input_instruction}
 6. 输出明确问题或建议时，每条只描述一个问题或建议。
 7. {issue_output_limit_instruction}
 
@@ -152,6 +156,7 @@ def _issue_output_limit_instruction(value, subject: str) -> str:
 def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _EXECUTION_BOUNDARY_TEMPLATE.format(
         text_extraction_limitation=TEXT_EXTRACTION_LIMITATION,
+        pdf_table_input_instruction=PDF_TABLE_INPUT_INSTRUCTION,
         issue_output_limit_instruction=_issue_output_limit_instruction(
             issue_output_limit, "单次回复"
         ),
@@ -370,6 +375,7 @@ def run_check(
     on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+    document_text = compact_model_document_text(document_text)
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
 
@@ -595,6 +601,7 @@ def run_multimodal_document_check(
     on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+    document_text = compact_model_document_text(document_text)
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
 
@@ -728,9 +735,15 @@ def _multimodal_document_prompt_text(
         )
     batch_label = f"{batch_index}/{batch_count}" if batch_count > 1 else "1/1"
     issue_limit = _normalized_issue_output_limit(issue_output_limit)
+    table_instruction = (
+        f"\n\n{PDF_TABLE_INPUT_INSTRUCTION}"
+        if "[表 " in document_text or "[PDF结构化表格 " in document_text
+        else ""
+    )
     return (
         f"检查项：{check_name}\n\n"
-        f"{_multimodal_document_execution_boundary(issue_limit, output_contract)}\n\n"
+        f"{_multimodal_document_execution_boundary(issue_limit, output_contract)}"
+        f"{table_instruction}\n\n"
         f"当前图片批次：{batch_label}\n\n"
         f"本次可见图片：\n{chr(10).join(image_lines)}\n\n"
         f"检查提示词：\n{prompt}\n\n"

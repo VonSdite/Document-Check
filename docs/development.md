@@ -44,6 +44,8 @@ app = create_app()
 
 `documents/extraction/pdf_margins.py` 先扫描轻量页面文字与边框，按边缘位置、对齐和连续或隔页重复规律生成页眉页脚清理计划。每页执行时按坐标过滤对应文字行，并按原始出现次序同步清理线性文本；pypdf 回退只清理页内可唯一确认的文字。页面预扫描保留分页取消检查点，内存只保存边缘候选；表格文字、页码和超链接引用保持完整。
 
+`models/document_input.py` 从完整归一化 PDF 表格生成模型文档视图。每个原始单元格按坐标或合并范围记录一次，文字使用 JSON 字符串，空值、非文本内容和未还原位置使用独立标记；表格 ID、行列数与置信度保留，H、M、L 分别编码 high、medium、low。转换前核对网格、合并范围、继承内容及单元格状态，无法完整核对的表格保持原样。`models.client` 在文本和图文请求中使用该视图，`tasks/runtime/preprocessing.py` 使用同一函数计算文档输入长度；数据库继续保存完整提取文本，供本地规则和报告定位使用。缓存文本同样经过精简和长度校验。
+
 `web/task_lists.py` 按任务类型选择列表元数据。轮询先批量读取状态与统计缓存，仅对已结束且缓存过期的任务按主键检查报告存在性；候选 ID 来自已验证任务类型和归属的记录。`reporting/statistics.py` 优先使用统计行，报告写入由 `trg_tasks_report_stats_invalidate` 触发缓存删除。文件可用性检查在一次调用内复用已解析分组，并实时检查磁盘文件。
 
 ## 数据库索引初始化
@@ -125,6 +127,7 @@ uv run python -m unittest discover -s tests
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查认领、取消、执行权、存活过期任务防重入、进程名额及检查项执行。
 - `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可、入口与初始化超时、状态文件写入失败时终止进程，以及监督器被终止后的遗留进程恢复。`tests/test_server_runtime.py` 另验证 Windows 虚拟环境下监督器和任务进程的实际解释器命令。
 - `tests/test_document_cancellation.py` 检查 PDF 分页与表格取消、512 列 Excel 分行取消及异常传播。
+- `tests/test_model_document_input.py` 检查表格精简后的内容、坐标、横纵合并、特殊字符、独立空值状态、置信度和异常结构保留；任务与模型请求测试覆盖实际输入长度、缓存复用和完整报告证据。
 - `tests/test_logging.py` 检查日志分流、控制台级别、启动提示、Uvicorn 异常、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查；`tests/test_startup_diagnostics.py` 使用独立进程验证依赖与配置加载失败的诊断记录。
 
 项目直接导入的第三方库在 `pyproject.toml` 中显式声明，由 `uv.lock` 锁定完整依赖树。Python 标准库由解释器提供；功能扩展依赖通过 extras 声明，例如 `pypdf[image]`。`ffmpeg`、`ffprobe` 由运行环境安装并加入 `PATH`。

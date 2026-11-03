@@ -4,6 +4,7 @@ from threading import Event, Thread
 from unittest.mock import call, patch
 
 import app.models.client as llm
+from tests.fixtures.pdf_tables import normalized_pdf_table
 
 
 class FakeResponse:
@@ -255,12 +256,48 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertIn("“见图”“见表”等引用本身不能证明", user_content)
         self.assertIn("data-original-range 记录原始合并范围", user_content)
         self.assertIn("data-inherited-from 表示该位置的值继承自", user_content)
+        self.assertIn("合并内容只记录一次", user_content)
+        self.assertIn("只有未加引号的 [空单元格]", user_content)
         self.assertIn("置信度为 medium 或 low 时不得报告数据缺失", user_content)
         self.assertEqual(
             fake_session.calls[0][1]["json"]["max_completion_tokens"],
             llm._MAX_COMPLETION_TOKENS,
         )
         self.assertEqual(fake_session.calls[0][1]["json"]["reasoning_effort"], "high")
+
+    def test_multimodal_document_request_compacts_pdf_tables_and_explains_values(self):
+        source = "file: table.pdf\n\n[第75页]\n" + normalized_pdf_table()
+        with patch.object(
+            llm, "_run_payload_with_retries", return_value="检查完成"
+        ) as request:
+            result = llm.run_multimodal_document_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key=None,
+                model_name="test-model",
+                check_name="表格检查",
+                prompt="检查表格",
+                document_text=source,
+                image_items=[
+                    {
+                        "name": "page75.png",
+                        "position": "第75页",
+                        "data_url": "data:image/png;base64,aW1hZ2U=",
+                    }
+                ],
+            )
+        self.assertEqual(result, "检查完成")
+        content = request.call_args.kwargs["payload"]["messages"][1]["content"]
+        text = content[0]["text"]
+        document_text = text.split("待检查文档上下文：\n", 1)[1]
+        self.assertIn('A1:C1="组合柜"\n', document_text)
+        self.assertIn("C2=[空单元格]\n", document_text)
+        self.assertNotIn("<table", document_text)
+        self.assertIn("覆盖位置共同继承该值", text)
+        self.assertIn("JSON 字符串", text)
+        self.assertEqual(len(content), 2)
+        self.assertEqual(
+            content[1]["image_url"]["url"], "data:image/png;base64,aW1hZ2U="
+        )
 
     def test_document_check_can_omit_output_token_limit(self):
         fake_session = FakeSession(

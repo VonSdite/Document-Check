@@ -10,6 +10,7 @@ from flask import Flask
 from openpyxl import Workbook
 
 from app.checks.common_terms import COMMON_TERMS_CHECK_CODE
+from app.checks.guardrails import build_pdf_table_evidence_index
 from app.checks.hyperlinks import HYPERLINK_CHECK_CODE
 from app.checks.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.contracts.task_types import (
@@ -20,6 +21,7 @@ from app.contracts.task_types import (
     VIDEO_TASK_TYPE,
 )
 from app.models.client import LLMError
+from app.models.document_input import compact_model_document_text
 from app.persistence.connection import get_db, now_text
 from app.persistence.schema import init_db
 from app.persistence.settings import set_setting
@@ -49,6 +51,7 @@ from app.tasks.runtime.multimodal_protocol import (
 from app.tasks.runtime.state import _mark_failed, _save_intermediate_results
 from app.tasks.runtime.video_checks import _merge_video_batch_reports
 from app.tasks.supervisor import TaskSupervisor
+from tests.fixtures.pdf_tables import TABLE_ID, normalized_pdf_table
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -2310,6 +2313,63 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(updated["document_text"], "file: queued.txt\n\n后台解析正文")
         self.assertEqual(meta["preprocessing"]["status"], "completed")
         self.assertEqual(calls[0]["document_text"], updated["document_text"])
+
+    def test_pdf_task_validates_and_sends_compact_input_while_retaining_evidence(self):
+        extracted = "[第75页]\n告警属性\n" + normalized_pdf_table()
+        source = "file: table.pdf\n\n" + extracted
+        model_text = compact_model_document_text(source)
+        self.assertLess(len(model_text), len(source))
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "table.pdf"
+        upload_path.write_bytes(b"pdf-fixture")
+        check_item = {
+            "id": 1,
+            "code": "table-check",
+            "name": "表格检查",
+            "prompt": "检查表格内容",
+        }
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                task_id = self._insert_running_preprocessing_task(
+                    task_type=DOCUMENT_TASK_TYPE,
+                    original_filename="table.pdf",
+                    stored_filename="table.pdf",
+                    file_type="pdf",
+                    check_item=check_item,
+                    max_input_chars=len(model_text),
+                )
+                if cached:
+                    get_db().execute(
+                        "UPDATE tasks SET document_text = ? WHERE id = ?",
+                        (source, task_id),
+                    )
+                    get_db().commit()
+                with (
+                    patch(
+                        "app.tasks.runtime.preprocessing.extract_document",
+                        return_value=(extracted, []),
+                    ) as extract,
+                    patch(
+                        "app.models.client._run_payload_with_retries",
+                        return_value='{"summary":"检查完成","items":[]}',
+                    ) as request,
+                ):
+                    TaskRunner(self.app).run(task_id)
+                self.assertEqual(extract.call_count, 0 if cached else 1)
+                updated = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                    .fetchone()
+                )
+                self.assertEqual(updated["status"], "completed", updated["error"])
+                self.assertEqual(updated["document_text"], source)
+                request.assert_called_once()
+                content = request.call_args.kwargs["payload"]["messages"][1]["content"]
+                self.assertEqual(content.split("待检查文档：\n", 1)[1], model_text)
+                evidence = build_pdf_table_evidence_index(updated["document_text"])
+                self.assertEqual(evidence[TABLE_ID]["confidence"], "high")
+                self.assertEqual(evidence[TABLE_ID]["cells"]["B1"]["kind"], "merged")
+                self.assertEqual(evidence[TABLE_ID]["cells"]["C2"]["kind"], "empty")
+                self.assertEqual(evidence[TABLE_ID]["cells"]["B3"]["kind"], "nontext")
 
     def test_run_task_persists_hyperlinks_and_executes_rule_check(self):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "links.html"

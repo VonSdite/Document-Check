@@ -31,6 +31,7 @@ from app.documents.images import (
 from app.documents.text_semantics import strip_script_markers
 from app.documents.videos import extract_video_frames, format_video_document_text
 from app.infrastructure.files import remove_directory_tree
+from app.models.document_input import compact_model_document_text
 from app.persistence.connection import now_text
 from app.persistence.settings import get_setting
 from app.tasks.runtime.artifacts import _path_is_relative_to, _task_image_folder
@@ -500,7 +501,8 @@ def _validate_model_input(
 ):
     if not document_text:
         raise RuntimeError("未能从文档中提取到可检查文本")
-    if len(document_text) > max_input_chars:
+    model_input_chars = len(compact_model_document_text(document_text))
+    if model_input_chars > max_input_chars:
         raise RuntimeError(
-            f"{label} {len(document_text)} 字，超过当前模型文本上限 {max_input_chars} 字"
+            f"{label} {model_input_chars} 字，超过当前模型文本上限 {max_input_chars} 字"
         )
