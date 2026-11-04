@@ -1,35 +1,8 @@
 """在检查项并发额度内顺序执行独立轮次，并复用已成功的轮次。"""
 
-import json
-
-from app.models.client import LLMError
+from app.models.client import LLMError, LLMIncompleteResponseError
 from app.reporting.rounds import build_round_result
-
-
-def _parse_round_report(content: str) -> dict:
-    candidate = content.strip()
-    if candidate.startswith("```"):
-        lines = candidate.splitlines()
-        if lines[-1].strip() == "```":
-            candidate = "\n".join(lines[1:-1])
-    try:
-        report = json.loads(candidate)
-    except (TypeError, ValueError) as exc:
-        raise LLMError("本轮未返回完整的结构化报告，请重试该轮。") from exc
-    if (
-        not isinstance(report, dict)
-        or not isinstance(report.get("items"), list)
-        or any(not isinstance(item, dict) for item in report["items"])
-    ):
-        raise LLMError("本轮报告缺少有效的问题列表，请重试该轮。")
-    if any(
-        not isinstance(item.get("description"), str)
-        or not item["description"].strip()
-        or item.get("status") not in {"issue", "suggestion"}
-        for item in report["items"]
-    ):
-        raise LLMError("本轮报告的问题条目缺少描述或有效判定，请重试该轮。")
-    return report
+from app.tasks.runtime.report_validation import parse_check_report
 
 
 def run_document_rounds(
@@ -76,9 +49,11 @@ def run_document_rounds(
         content = ""
         try:
             content = run_round(number)
-            report = _parse_round_report(sanitize(content))
+            report = parse_check_report(sanitize(content))
         except (LLMError, RuntimeError) as exc:
             ensure_active()
+            if isinstance(exc, LLMIncompleteResponseError):
+                content = exc.partial_content or content
             rounds.append(
                 {
                     "round": number,

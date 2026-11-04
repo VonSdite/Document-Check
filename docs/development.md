@@ -24,6 +24,8 @@ app = create_app()
 
 单文档轮数由提交服务校验后保存到 `document_meta_json.check_rounds`，缺省任务按一轮执行。`tasks/runtime/document_rounds.py` 在检查项线程内顺序执行各轮，持续保存成功与失败状态，重试复用成功轮次。`reporting/rounds.py` 按证据、位置和相近描述归并发现，记录来源轮次与原始条目，保留重试前的条目标识。报告准备阶段对多轮合并结果保留全部条目，单轮生成条数由 `issue_output_limit` 控制。`tests/test_document_rounds.py` 覆盖独立调用、本地规则执行次数、并发额度、部分失败、取消、补跑、条目标识和完整导出。
 
+`models/client.py` 校验模型响应的结束信号，正常流式响应接受 `[DONE]` 或 `finish_reason=stop`，完整消息响应兼容省略结束标记。异常结束原因通过 `LLMIncompleteResponseError` 携带部分正文，自动重试仍失败时保留该正文。`tasks/runtime/report_validation.py` 为单轮与多轮提供完整 JSON 和条目结构校验，单轮兼容完整文本报告。单轮失败记录 `output_incomplete` 和具体错误，报告展示可恢复的完整条目；多轮失败保存原始回复，成功轮次继续参与合并。
+
 `tasks/processes.TaskWorkerProcess` 使用 `subprocess.Popen` 创建独立模块进程。入口在获得许可前仅加载标准库，通过标准输出报告进入入口；进程身份保存到 `instance/task-supervisor.json` 后，父进程通过标准输入发送包含租约令牌的 JSON 许可并关闭输入管道。子进程收到许可后导入业务模块、创建应用、报告就绪并执行任务。专用读取线程持续消费输出并记录启动阶段，错误堆栈保留在控制台。
 
 监督器从进程创建时起计时，60 秒内须收到业务就绪信号。启动超时、创建失败或就绪前异常退出会产生明确的启动错误；进程确认退出后，任务写为失败，用户可在页面重试。取消状态优先处理，业务就绪后的长任务由原有租约和取消机制管理。

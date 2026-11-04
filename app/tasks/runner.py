@@ -45,7 +45,7 @@ from app.documents.extraction.common import DocumentReadError
 from app.documents.images import image_items_from_meta
 from app.documents.text_semantics import strip_script_markers
 from app.infrastructure.network import outbound_network_config
-from app.models.client import LLMError, run_check
+from app.models.client import LLMError, LLMIncompleteResponseError, run_check
 from app.models.document_input import compact_model_document_text, validate_model_input
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
@@ -76,6 +76,7 @@ from app.tasks.runtime.common import (
 from app.tasks.runtime.document_rounds import run_document_rounds
 from app.tasks.runtime.image_checks import _run_image_check_items_concurrently
 from app.tasks.runtime.preprocessing import _prepare_task_inputs
+from app.tasks.runtime.report_validation import parse_check_report
 from app.tasks.runtime.state import (
     TaskCanceled,
     _build_summary,
@@ -535,7 +536,9 @@ def _run_check_items_concurrently(
         else 1
     )
 
-    def save_failed_result(item, execution, error, *, canceled):
+    def save_failed_result(
+        item, execution, error, *, canceled, output_incomplete=False
+    ):
         progress = mark_unit_completed()
         with result_lock:
             round_progress.pop(item["code"], None)
@@ -554,6 +557,8 @@ def _run_check_items_concurrently(
                 result["execution"] = execution
             if canceled:
                 result["canceled"] = True
+            elif output_incomplete:
+                result["output_incomplete"] = True
             result.setdefault("result", "")
             completed_by_code[item["code"]] = result
             completed_count = len(completed_by_code)
@@ -754,6 +759,7 @@ def _run_check_items_concurrently(
                         structured_report = round_result["structured_report"]
                     else:
                         content = run_check(**run_check_kwargs)
+                        parse_check_report(content, allow_plain_text=True, label="本次")
                     content, filtered_unsupported_count = sanitize_text_check_result(
                         content,
                         pdf_table_evidence=pdf_table_evidence,
@@ -776,6 +782,13 @@ def _run_check_items_concurrently(
             except (LLMError, RuntimeError) as exc:
                 if cancel_event.is_set():
                     raise TaskCanceled
+                output_incomplete = isinstance(exc, LLMIncompleteResponseError)
+                if output_incomplete and exc.partial_content:
+                    save_partial(
+                        exc.partial_content,
+                        f"{item['name']}输出不完整，已保留部分结果",
+                        force=True,
+                    )
                 canceled = finish_check_activity(
                     task_id, claim_token, item["code"], failed=True
                 )
@@ -784,6 +797,7 @@ def _run_check_items_concurrently(
                     execution,
                     str(exc).strip() or exc.__class__.__name__,
                     canceled=canceled,
+                    output_incomplete=output_incomplete,
                 )
             progress = mark_unit_completed()
 

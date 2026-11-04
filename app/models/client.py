@@ -207,6 +207,12 @@ class LLMRequestCanceled(LLMError):
     pass
 
 
+class LLMIncompleteResponseError(LLMError):
+    def __init__(self, message: str, partial_content: str = ""):
+        super().__init__(message)
+        self.partial_content = partial_content
+
+
 class _EmptyContentError(LLMError):
     pass
 
@@ -772,6 +778,7 @@ def _run_payload_with_retries(
     on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     last_error = None
+    last_incomplete_response = None
     active_payload = dict(payload)
     response_format_fallback_used = False
     output_token_fallback_used = False
@@ -840,6 +847,8 @@ def _run_payload_with_retries(
         except LLMError as exc:
             _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
             last_error = exc
+            if isinstance(exc, LLMIncompleteResponseError) and exc.partial_content:
+                last_incomplete_response = exc
             if on_content and attempt_parts:
                 on_content("")
             if isinstance(exc, _StreamOutputLimitError):
@@ -878,6 +887,13 @@ def _run_payload_with_retries(
                 )
                 continue
             if attempt > _MAX_RETRIES:
+                if last_incomplete_response is not None and not isinstance(
+                    exc, LLMIncompleteResponseError
+                ):
+                    raise LLMIncompleteResponseError(
+                        f"模型输出不完整，后续重试失败：{exc}。已保留部分输出，可重试该检查项。",
+                        last_incomplete_response.partial_content,
+                    ) from exc
                 raise
             if (
                 isinstance(exc, _ReasoningOnlyResponseError)
@@ -1645,6 +1661,24 @@ def _read_stream_lines(
             else _EmptyContentError
         )
         raise error_type(_empty_content_message(diagnostics))
+    abnormal_finish_reasons = diagnostics.finish_reasons - {"stop"}
+    if abnormal_finish_reasons:
+        reasons = ",".join(sorted(abnormal_finish_reasons))
+        raise LLMIncompleteResponseError(
+            f"模型输出不完整：服务以 finish_reason={reasons} 结束。"
+            "已保留部分输出，可重试该检查项。",
+            content,
+        )
+    if (
+        not diagnostics.done
+        and not diagnostics.finish_reasons
+        and not diagnostics.full_message
+    ):
+        raise LLMIncompleteResponseError(
+            "模型输出不完整：未收到正常结束标记，连接已结束。"
+            "已保留部分输出，可重试该检查项。",
+            content,
+        )
     return content
 
 
@@ -1785,6 +1819,7 @@ class _OpenAIChatDiagnostics:
         self.reasoning_fields = set()
         self.tool_call_chunks = 0
         self.finish_reasons = set()
+        self.full_message = False
         self.usage = None
         self.response_id = ""
         self.response_model = ""
@@ -1815,6 +1850,8 @@ class _OpenAIChatDiagnostics:
             finish_reason = choice.get("finish_reason")
             if finish_reason:
                 self.finish_reasons.add(str(finish_reason))
+            if isinstance(choice.get("message"), dict):
+                self.full_message = True
             self._observe_message(choice.get("delta"))
             self._observe_message(choice.get("message"))
 

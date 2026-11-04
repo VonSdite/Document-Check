@@ -82,6 +82,126 @@ class LLMResponseParsingTest(unittest.TestCase):
         self.assertEqual(result, "检查完成")
         self.assertEqual(phases, ["thinking", "output"])
 
+    def test_abnormal_finish_reason_rejects_even_complete_json_and_keeps_content(self):
+        content = '{"summary":"检查结束","items":[]}'
+        for reason in ("length", "content_filter", "tool_calls", "function_call"):
+            with self.subTest(reason=reason):
+                response = FakeResponse(
+                    lines=[
+                        "data: "
+                        + json.dumps({"choices": [{"delta": {"content": content}}]}),
+                        "data: "
+                        + json.dumps(
+                            {"choices": [{"delta": {}, "finish_reason": reason}]}
+                        ),
+                        "data: [DONE]",
+                    ]
+                )
+                with self.assertRaises(llm.LLMIncompleteResponseError) as caught:
+                    llm._read_stream_response(response, None)
+                self.assertEqual(caught.exception.partial_content, content)
+                self.assertIn(f"finish_reason={reason}", str(caught.exception))
+
+    def test_stream_eof_without_terminal_signal_is_incomplete(self):
+        content = '{"summary":"完整 JSON 仍需正常结束信号","items":[]}'
+        response = FakeResponse(
+            lines=[
+                "data: " + json.dumps({"choices": [{"delta": {"content": content}}]})
+            ]
+        )
+        with self.assertRaisesRegex(
+            llm.LLMIncompleteResponseError, "未收到正常结束标记"
+        ) as caught:
+            llm._read_stream_response(response, None)
+        self.assertEqual(caught.exception.partial_content, content)
+
+    def test_stop_finish_reason_accepts_stream_without_done_marker(self):
+        response = FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"content":"检查完成"}}]}',
+                'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            ]
+        )
+        self.assertEqual(llm._read_stream_response(response, None), "检查完成")
+
+    def test_full_message_with_length_finish_reason_is_incomplete(self):
+        response = FakeResponse(
+            lines=[
+                json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {"content": "部分正文"},
+                                "finish_reason": "length",
+                            }
+                        ]
+                    }
+                )
+            ]
+        )
+        with self.assertRaises(llm.LLMIncompleteResponseError) as caught:
+            llm._read_stream_response(response, None)
+        self.assertEqual(caught.exception.partial_content, "部分正文")
+
+    def test_incomplete_stream_retries_then_returns_only_complete_attempt(self):
+        session = FakeSession(
+            [
+                FakeResponse(
+                    lines=['data: {"choices":[{"delta":{"content":"部分正文"}}]}']
+                ),
+                FakeResponse(
+                    lines=[
+                        'data: {"choices":[{"delta":{"content":"完整正文"}}]}',
+                        "data: [DONE]",
+                    ]
+                ),
+            ]
+        )
+        snapshots = []
+        with (
+            patch.object(llm.requests, "Session", return_value=session),
+            patch.object(llm, "_wait_before_retry"),
+        ):
+            result = llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key=None,
+                model_name="test-model",
+                check_name="规范",
+                prompt="检查",
+                document_text="文档",
+                on_content=snapshots.append,
+            )
+        self.assertEqual(result, "完整正文")
+        self.assertEqual(snapshots, ["部分正文", "", "完整正文"])
+        self.assertEqual(len(session.calls), 2)
+
+    def test_failed_retries_keep_earlier_incomplete_response(self):
+        session = FakeSession(
+            [
+                FakeResponse(
+                    lines=['data: {"choices":[{"delta":{"content":"部分正文"}}]}']
+                ),
+                FakeResponse(lines=['data: {"error":{"message":"temporary"}}']),
+                FakeResponse(lines=['data: {"error":{"message":"unavailable"}}']),
+            ]
+        )
+        with (
+            patch.object(llm.requests, "Session", return_value=session),
+            patch.object(llm, "_wait_before_retry"),
+            self.assertRaises(llm.LLMIncompleteResponseError) as caught,
+        ):
+            llm.run_check(
+                api_base="http://example.test/v1/chat/completions",
+                api_key=None,
+                model_name="test-model",
+                check_name="规范",
+                prompt="检查",
+                document_text="文档",
+            )
+        self.assertEqual(caught.exception.partial_content, "部分正文")
+        self.assertIn("unavailable", str(caught.exception))
+        self.assertEqual(len(session.calls), 3)
+
     def test_glm_53_reasoning_only_retry_disables_thinking_and_reports_activity(self):
         session = FakeSession(
             [

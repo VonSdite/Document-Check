@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 from app.checks.common_terms import COMMON_TERMS_CHECK_CODE
 from app.checks.hyperlinks import HYPERLINK_CHECK_CODE
 from app.checks.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
+from app.models import client as llm
 from app.models.client import LLMError
 from app.persistence.connection import get_db, now_text
 from app.persistence.schema import init_db
@@ -20,6 +21,7 @@ from app.reporting.rounds import build_round_result
 from app.reporting.service import _prepare_task_results
 from app.tasks.activity import request_check_cancellation
 from app.tasks.runner import TaskRunner
+from tests.test_llm import FakeResponse, FakeSession
 
 
 def finding(description="电压单位不一致", **overrides):
@@ -203,6 +205,129 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         )
         get_db().commit()
 
+    def test_single_round_truncated_json_keeps_findings_and_can_retry(self):
+        from app.tasks.retries import retry_check_codes_for_task
+
+        task_id = self.create_task(rounds=1)
+        content = report(finding())[:-2] + ',{"status":"issue","description":"未完成'
+        with patch("app.tasks.runner.run_check", return_value=content):
+            TaskRunner(self.app).run(task_id)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "failed")
+        result = json.loads(task["result_json"])[0]
+        self.assertTrue(result["output_incomplete"])
+        self.assertEqual(result["result"], content)
+        self.assertIn("模型输出不完整", result["error"])
+        prepared = _prepare_task_results([result], suppression_rules={})[0]
+        self.assertEqual(len(prepared["report_items"]), 1)
+        self.assertEqual(prepared["report_items"][0]["description"], "电压单位不一致")
+        self.assertEqual(retry_check_codes_for_task(task), ["compliance"])
+
+        self.retry(task_id)
+        with patch("app.tasks.runner.run_check", return_value=report(finding())):
+            TaskRunner(self.app).run(task_id)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "completed")
+        result = json.loads(task["result_json"])[0]
+        self.assertNotIn("error", result)
+        self.assertNotIn("output_incomplete", result)
+
+    def test_single_round_rejects_incomplete_or_invalid_report_structure(self):
+        for content in (
+            '{"summary":"缺少问题列表"}',
+            '{"items":{}}',
+            '{"items":[null]}',
+            '{"items":[{"status":"issue"}]}',
+            '{"items":[{"status":"other","description":"问题"}]}',
+            '```json\n{"items":[]}',
+            '以下为报告：\n{"items":[{"description":"截断',
+            '以下为报告：\n```json\n{"items":[{"description":"截断',
+            "",
+        ):
+            with self.subTest(content=content):
+                task_id = self.create_task(rounds=1)
+                with patch("app.tasks.runner.run_check", return_value=content):
+                    TaskRunner(self.app).run(task_id)
+                task = self.task(task_id)
+                self.assertEqual(task["status"], "failed")
+                result = json.loads(task["result_json"])[0]
+                self.assertTrue(result["output_incomplete"])
+                self.assertIn("模型输出不完整", result["error"])
+
+    def test_single_round_accepts_complete_empty_and_fenced_reports(self):
+        for content in (report(), f"```json\n{report()}\n```", report(finding())):
+            with self.subTest(content=content):
+                task_id = self.create_task(rounds=1)
+                with patch("app.tasks.runner.run_check", return_value=content):
+                    TaskRunner(self.app).run(task_id)
+                self.assertEqual(self.task(task_id)["status"], "completed")
+
+    def test_single_round_length_stop_restores_partial_after_automatic_retries(self):
+        task_id = self.create_task(rounds=1)
+        get_db().execute(
+            "UPDATE tasks SET api_base='http://example.test/v1/chat/completions' WHERE id=?",
+            (task_id,),
+        )
+        get_db().commit()
+        content = report(finding())
+        responses = [
+            FakeResponse(
+                lines=[
+                    "data: "
+                    + json.dumps({"choices": [{"delta": {"content": content}}]}),
+                    'data: {"choices":[{"delta":{},"finish_reason":"length"}]}',
+                    "data: [DONE]",
+                ]
+            )
+            for _ in range(3)
+        ]
+        session = FakeSession(responses)
+        llm._reset_http_session_pools()
+        self.addCleanup(llm._reset_http_session_pools)
+        with (
+            patch.object(llm.requests, "Session", return_value=session),
+            patch.object(llm, "_wait_before_retry"),
+        ):
+            TaskRunner(self.app).run(task_id)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "failed")
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(result["result"], content)
+        self.assertTrue(result["output_incomplete"])
+        self.assertIn("finish_reason=length", result["error"])
+        self.assertEqual(len(session.calls), 3)
+        self.assertTrue(all(response.closed for response in responses))
+
+    def test_single_round_incomplete_output_keeps_other_check_success(self):
+        task_id = self.create_task(codes=("compliance", "clarity"), rounds=1)
+        with patch("app.tasks.runner.run_check", side_effect=['{"items":[', report()]):
+            TaskRunner(self.app).run(task_id)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "partial")
+        results = json.loads(task["result_json"])
+        self.assertTrue(results[0]["output_incomplete"])
+        self.assertNotIn("error", results[1])
+
+    def test_comparison_and_cross_language_checks_validate_single_report(self):
+        from app.contracts.task_types import (
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+        )
+
+        for task_type in (CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE):
+            with self.subTest(task_type=task_type):
+                task_id = self.create_task(rounds=1)
+                get_db().execute(
+                    "UPDATE tasks SET task_type=? WHERE id=?", (task_type, task_id)
+                )
+                get_db().commit()
+                with patch("app.tasks.runner.run_check", return_value='{"items":['):
+                    TaskRunner(self.app).run(task_id)
+                task = self.task(task_id)
+                self.assertEqual(task["status"], "failed")
+                result = json.loads(task["result_json"])[0]
+                self.assertTrue(result["output_incomplete"])
+
     def test_five_independent_requests_reuse_text_and_keep_each_raw_reply(self):
         task_id = self.create_task()
         with patch(
@@ -281,6 +406,25 @@ class DocumentRoundExecutionTest(unittest.TestCase):
             json.loads(task["result_json"])[0]["round_summary"],
             {"planned": 3, "completed": 1, "failed": 2},
         )
+
+    def test_incomplete_stream_round_keeps_raw_reply_and_other_round_success(self):
+        task_id = self.create_task(rounds=2)
+        content = report(finding())
+        with patch(
+            "app.tasks.runner.run_check",
+            side_effect=[
+                llm.LLMIncompleteResponseError("模型输出不完整：长度截断", content),
+                report(),
+            ],
+        ):
+            TaskRunner(self.app).run(task_id)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "partial")
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(result["round_results"][0]["result"], content)
+        self.assertEqual(result["round_results"][0]["status"], "failed")
+        self.assertEqual(result["round_results"][1]["status"], "completed")
+        self.assertEqual(result["structured_report"]["items"], [])
 
     def test_retrying_first_round_keeps_ids_from_later_successful_rounds(self):
         task_id = self.create_task(rounds=2)

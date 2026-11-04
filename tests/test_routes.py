@@ -6082,6 +6082,47 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertNotIn("未完成条目", rows_text)
         self.assertNotIn('"items"', rows_text)
 
+    def test_incomplete_single_report_shows_error_retained_items_and_retry(self):
+        task_id = self._insert_task(status="failed")
+        error = "模型输出不完整：服务以 finish_reason=length 结束。已保留部分输出，可重试该检查项。"
+        raw_json = (
+            '{"summary":"已生成的部分结果","items":['
+            '{"status":"issue","description":"电流参数不一致。","excerpt":"10A"},'
+            '{"status":"issue","description":"未完成条目'
+        )
+        check = {"id": 101, "code": "compliance", "name": "规范检查", "prompt": "检查"}
+        result = {
+            "code": "compliance",
+            "name": "规范检查",
+            "result": raw_json,
+            "error": error,
+            "output_incomplete": True,
+        }
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET checks_snapshot_json=?, result_json=?, error=? WHERE id=?",
+                (
+                    json.dumps([check], ensure_ascii=False),
+                    json.dumps([result], ensure_ascii=False),
+                    error,
+                    task_id,
+                ),
+            )
+            get_db().commit()
+        for route in (f"/tasks/{task_id}", f"/admin/tasks/{task_id}"):
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                self.assertIn(error, soup.select_one(".report-error").get_text())
+                rows = soup.select("tr[data-report-item]")
+                self.assertEqual(len(rows), 1)
+                self.assertIn("电流参数不一致", rows[0].get_text())
+                self.assertNotIn("未完成条目", rows[0].get_text())
+                retry = soup.select_one('[data-retry-check="compliance"]')
+                self.assertIsNotNone(retry)
+                self.assertNotIn("hidden", retry.attrs)
+
     def test_task_detail_deduplicates_ranks_and_limits_structured_items(self):
         with self.app.app_context():
             now = "2026-05-23 13:37:00"
