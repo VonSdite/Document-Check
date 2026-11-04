@@ -200,7 +200,16 @@ _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY = _multimodal_document_execution_boundar
 
 
 class LLMError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        status_code: int | None = None,
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+        self.status_code = status_code
 
 
 class LLMRequestCanceled(LLMError):
@@ -208,8 +217,10 @@ class LLMRequestCanceled(LLMError):
 
 
 class LLMIncompleteResponseError(LLMError):
-    def __init__(self, message: str, partial_content: str = ""):
-        super().__init__(message)
+    def __init__(
+        self, message: str, partial_content: str = "", *, retryable: bool = True
+    ):
+        super().__init__(message, retryable=retryable)
         self.partial_content = partial_content
 
 
@@ -497,7 +508,7 @@ def run_image_check(
 
     image_data_url = str(image_data_url or "").strip()
     if not image_data_url.startswith("data:image/"):
-        raise LLMError("图片数据格式无效，无法发送给多模态模型。")
+        raise LLMError("图片数据格式无效，无法发送给多模态模型。", retryable=False)
 
     issue_limit = _normalized_issue_output_limit(issue_output_limit)
     payload = {
@@ -616,12 +627,12 @@ def run_multimodal_document_check(
         headers["Authorization"] = f"Bearer {api_key}"
 
     if not image_items:
-        raise LLMError("未提供可发送给多模态模型的图片。")
+        raise LLMError("未提供可发送给多模态模型的图片。", retryable=False)
     normalized_images = []
     for index, image in enumerate(image_items, start=1):
         image_data_url = str(image.get("data_url") or "").strip()
         if not image_data_url.startswith("data:image/"):
-            raise LLMError("图片数据格式无效，无法发送给多模态模型。")
+            raise LLMError("图片数据格式无效，无法发送给多模态模型。", retryable=False)
         normalized_images.append(
             {
                 "index": int(image.get("index") or index),
@@ -851,10 +862,11 @@ def _run_payload_with_retries(
                 last_incomplete_response = exc
             if on_content and attempt_parts:
                 on_content("")
-            if isinstance(exc, _StreamOutputLimitError):
+            if isinstance(exc, (LLMRequestCanceled, _StreamOutputLimitError)):
                 raise
             if (
                 not response_format_fallback_used
+                and exc.status_code in (None, 400, 422)
                 and "response_format" in active_payload
                 and _is_json_response_format_unsupported_error(exc)
             ):
@@ -871,6 +883,7 @@ def _run_payload_with_retries(
                 continue
             if (
                 not output_token_fallback_used
+                and exc.status_code in (None, 400, 422)
                 and "max_completion_tokens" in active_payload
                 and _is_output_token_limit_unsupported_error(exc)
             ):
@@ -886,13 +899,22 @@ def _run_payload_with_retries(
                     exc,
                 )
                 continue
-            if attempt > _MAX_RETRIES:
+            if not exc.retryable or attempt > _MAX_RETRIES:
+                if not exc.retryable:
+                    logger.warning(
+                        "LLM 请求遇到永久性错误，停止自动重试 request_id=%s task_id=%s attempt=%s error=%s",
+                        request_id,
+                        task_id or "-",
+                        attempt,
+                        exc,
+                    )
                 if last_incomplete_response is not None and not isinstance(
                     exc, LLMIncompleteResponseError
                 ):
                     raise LLMIncompleteResponseError(
                         f"模型输出不完整，后续重试失败：{exc}。已保留部分输出，可重试该检查项。",
                         last_incomplete_response.partial_content,
+                        retryable=exc.retryable,
                     ) from exc
                 raise
             if (
@@ -970,7 +992,7 @@ def test_model_connection(
             }
             if proxy_mode == "custom":
                 if not proxy:
-                    raise LLMError("自定义代理模式需要填写代理地址")
+                    raise LLMError("自定义代理模式需要填写代理地址", retryable=False)
                 request_kwargs["proxies"] = {"http": proxy, "https": proxy}
 
             response = session.post(endpoint, json=payload, **request_kwargs)
@@ -983,14 +1005,19 @@ def test_model_connection(
                     return "模型服务已返回 200，但响应不是 JSON。"
                 service_error = _extract_service_error(data)
                 if service_error:
-                    raise LLMError(f"模型服务返回错误：{service_error}")
+                    raise LLMError(
+                        f"模型服务返回错误：{service_error}",
+                        retryable=_is_retryable_service_error(data, service_error),
+                    )
                 return "模型连通性测试通过。"
             finally:
                 _close_response(response)
     except requests.ReadTimeout as exc:
         raise LLMError(f"模型服务测试超时：{request_timeout} 秒内没有返回结果") from exc
     except requests.RequestException as exc:
-        raise LLMError(f"模型服务测试失败：{exc}") from exc
+        raise LLMError(
+            f"模型服务测试失败：{exc}", retryable=_is_retryable_request_error(exc)
+        ) from exc
 
 
 def _run_check_attempt(
@@ -1022,7 +1049,7 @@ def _run_check_attempt(
             }
             if proxy_mode == "custom":
                 if not proxy:
-                    raise LLMError("自定义代理模式需要填写代理地址")
+                    raise LLMError("自定义代理模式需要填写代理地址", retryable=False)
                 request_kwargs["proxies"] = {"http": proxy, "https": proxy}
 
             stream_payload = dict(payload)
@@ -1114,7 +1141,9 @@ def _run_check_attempt(
             attempt,
             exc,
         )
-        raise LLMError(f"模型服务请求失败：{exc}") from exc
+        raise LLMError(
+            f"模型服务请求失败：{exc}", retryable=_is_retryable_request_error(exc)
+        ) from exc
     except Exception:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         raise
@@ -1154,7 +1183,8 @@ def _chat_completions_endpoint(api_base: str) -> str:
     ):
         raise LLMError(
             "模型提供商 API 地址必须填写完整的 OpenAI Chat Completions 请求地址，"
-            "例如 https://api.example.com/v1/chat/completions"
+            "例如 https://api.example.com/v1/chat/completions",
+            retryable=False,
         )
     return endpoint
 
@@ -1548,7 +1578,10 @@ def _read_stream_lines(
                 service_error,
                 _short_text(line, 1000),
             )
-            raise LLMError(f"模型服务返回错误：{service_error}")
+            raise LLMError(
+                f"模型服务返回错误：{service_error}",
+                retryable=_is_retryable_service_error(data, service_error),
+            )
 
         if on_output:
             choices = data.get("choices") if isinstance(data, dict) else None
@@ -1741,7 +1774,8 @@ def _raise_for_http_error(
     response, *, request_id: str = "-", task_id: Optional[int] = None
 ):
     if response.status_code >= 400:
-        body = _short_text(response.text, 1500)
+        raw_body = response.text
+        body = _short_text(raw_body, 1500)
         logger.warning(
             "LLM HTTP 错误 request_id=%s task_id=%s status=%s body=%s",
             request_id,
@@ -1749,12 +1783,160 @@ def _raise_for_http_error(
             response.status_code,
             body,
         )
-        raise LLMError(_http_error_message(response.status_code, body))
+        try:
+            data = json.loads(raw_body)
+        except (TypeError, ValueError):
+            data = None
+        retryable = (
+            response.status_code in (408, 409, 425, 429)
+            or (
+                response.status_code >= 500
+                and response.status_code not in (501, 505, 511)
+            )
+        ) and _is_retryable_service_error(
+            data, _extract_http_error_detail(raw_body) or body
+        )
+        raise LLMError(
+            _http_error_message(response.status_code, body, retryable=retryable),
+            retryable=retryable,
+            status_code=response.status_code,
+        )
 
 
-def _http_error_message(status_code: int, body: str) -> str:
+def _is_retryable_request_error(error: requests.RequestException) -> bool:
+    if isinstance(
+        error,
+        (
+            requests.exceptions.InvalidURL,
+            requests.exceptions.InvalidSchema,
+            requests.exceptions.MissingSchema,
+            requests.exceptions.InvalidHeader,
+            requests.exceptions.URLRequired,
+            requests.exceptions.InvalidJSONError,
+            requests.exceptions.TooManyRedirects,
+        ),
+    ):
+        return False
+    if isinstance(error, requests.exceptions.SSLError):
+        text = str(error).lower()
+        if any(
+            marker in text
+            for marker in (
+                "certificate verify failed",
+                "certificate_verify_failed",
+                "hostname mismatch",
+            )
+        ):
+            return False
+    return True
+
+
+def _is_retryable_service_error(data, detail: str) -> bool:
+    permanent_codes = {
+        code.replace("_", "")
+        for code in (
+            "invalid_api_key",
+            "authentication_error",
+            "unauthorized",
+            "permission_denied",
+            "permission_error",
+            "forbidden",
+            "invalid_request_error",
+            "invalid_request",
+            "bad_request",
+            "invalid_parameter",
+            "invalid_argument",
+            "unsupported_parameter",
+            "model_not_found",
+            "not_found_error",
+            "unsupported_model",
+            "model_not_supported",
+            "context_length_exceeded",
+            "insufficient_quota",
+            "insufficient_balance",
+            "account_deactivated",
+            "billing_hard_limit_reached",
+            "billing_not_active",
+            "content_policy_violation",
+            "content_filter",
+            "content_filter_error",
+        )
+    }
+    if isinstance(data, dict):
+        error = data.get("error")
+        sources = [error, data] if isinstance(error, dict) else [data]
+        for source in sources:
+            for field in ("code", "errorCode", "type"):
+                code = (
+                    str(source.get(field) or "")
+                    .strip()
+                    .lower()
+                    .replace("-", "")
+                    .replace("_", "")
+                    .replace(" ", "")
+                )
+                if code in permanent_codes:
+                    return False
+    text = detail.lower()
+    if text.replace("_", "").replace("-", "").replace(" ", "") in permanent_codes:
+        return False
+    if "model" in text and "does not exist" in text:
+        return False
+    permanent_markers = (
+        "invalid api key",
+        "invalid api-key",
+        "api key is invalid",
+        "incorrect api key",
+        "authentication failed",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "access denied",
+        "model not found",
+        "model does not exist",
+        "does not exist or you do not have access",
+        "invalid model",
+        "unknown model",
+        "unsupported model",
+        "invalid parameter",
+        "invalid argument",
+        "unsupported parameter",
+        "unknown parameter",
+        "unrecognized request argument",
+        "maximum context length",
+        "context length exceeded",
+        "input too long",
+        "request too large",
+        "insufficient quota",
+        "insufficient balance",
+        "exceeded your current quota",
+        "account deactivated",
+        "content policy violation",
+        "密钥无效",
+        "无效的密钥",
+        "密钥错误",
+        "鉴权失败",
+        "认证失败",
+        "权限不足",
+        "无权限",
+        "模型不存在",
+        "模型未找到",
+        "不支持的模型",
+        "参数无效",
+        "参数错误",
+        "无效参数",
+        "上下文长度超限",
+        "输入过长",
+        "余额不足",
+        "配额不足",
+        "账户已停用",
+    )
+    return not any(marker in text for marker in permanent_markers)
+
+
+def _http_error_message(status_code: int, body: str, *, retryable: bool = True) -> str:
     detail = _extract_http_error_detail(body) or body
-    if _is_provider_capacity_error(status_code, detail):
+    if retryable and _is_provider_capacity_error(status_code, detail):
         return (
             f"模型服务繁忙或触发限流（HTTP {status_code}）：{_short_text(detail, 500)}。"
             "请稍后重试，或在系统设置中降低系统同时执行任务数、单用户同时执行任务数、单任务检查项并发数。"

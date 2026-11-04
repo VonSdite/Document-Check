@@ -308,6 +308,69 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         self.assertTrue(results[0]["output_incomplete"])
         self.assertNotIn("error", results[1])
 
+    def test_permanent_model_error_fails_task_without_repeating_rounds(self):
+        for planned in (1, 5):
+            with self.subTest(planned=planned):
+                task_id = self.create_task(rounds=planned)
+                get_db().execute(
+                    "UPDATE tasks SET api_base=? WHERE id=?",
+                    ("http://example.test/v1/chat/completions", task_id),
+                )
+                get_db().commit()
+                response = FakeResponse(
+                    status_code=401, text='{"error":{"message":"invalid API key"}}'
+                )
+                session = FakeSession([response])
+                llm._reset_http_session_pools()
+                self.addCleanup(llm._reset_http_session_pools)
+                with (
+                    patch.object(llm.requests, "Session", return_value=session),
+                    patch.object(llm, "_wait_before_retry") as wait,
+                ):
+                    TaskRunner(self.app).run(task_id)
+                task = self.task(task_id)
+                self.assertEqual(task["status"], "failed")
+                self.assertEqual(len(session.calls), 1)
+                self.assertTrue(response.closed)
+                wait.assert_not_called()
+                result = json.loads(task["result_json"])[0]
+                self.assertIn("error", result)
+                if planned == 1:
+                    self.assertIn("401", result["error"])
+                else:
+                    self.assertEqual(
+                        result["round_summary"],
+                        {"planned": 5, "completed": 0, "failed": 1},
+                    )
+                    self.assertIn("401", result["round_results"][0]["error"])
+
+    def test_permanent_round_failure_keeps_success_and_manual_retry_resumes(self):
+        task_id = self.create_task()
+        with patch(
+            "app.tasks.runner.run_check",
+            side_effect=[report(finding()), LLMError("权限不足", retryable=False)],
+        ) as model:
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(model.call_count, 2)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "partial")
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(
+            result["round_summary"], {"planned": 5, "completed": 1, "failed": 1}
+        )
+        item_id = result["structured_report"]["items"][0]["id"]
+        self.assertEqual(result["round_results"][1]["error"], "权限不足")
+
+        self.retry(task_id)
+        with patch("app.tasks.runner.run_check", return_value=report()) as model:
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(model.call_count, 4)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "completed")
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(result["round_summary"]["completed"], 5)
+        self.assertEqual(result["structured_report"]["items"][0]["id"], item_id)
+
     def test_comparison_and_cross_language_checks_validate_single_report(self):
         from app.contracts.task_types import (
             CONSISTENCY_TASK_TYPE,

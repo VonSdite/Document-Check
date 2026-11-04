@@ -62,6 +62,9 @@ def run_document_rounds(
                     "result": content,
                 }
             )
+            if isinstance(exc, LLMError) and not exc.retryable:
+                on_update(snapshot())
+                break
         else:
             rounds.append(
                 {
