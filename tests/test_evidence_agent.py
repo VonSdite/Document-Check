@@ -129,6 +129,9 @@ class EvidenceAgentTest(unittest.TestCase):
         connection=None,
         parallelism=1,
         request_gate=None,
+        shared_work=None,
+        round_number=1,
+        round_count=1,
     ):
         options = (options or AgentOptions(protocol="structured")).model_copy(
             update={"full_document": False}
@@ -157,6 +160,9 @@ class EvidenceAgentTest(unittest.TestCase):
             options=options,
             parallelism=parallelism,
             request_gate=request_gate,
+            shared_work=shared_work,
+            round_number=round_number,
+            round_count=round_count,
             store=store or MemoryCheckpointStore(),
             shared_facts=shared_facts,
             ensure_active=ensure or (lambda: None),

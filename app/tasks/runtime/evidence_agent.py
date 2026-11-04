@@ -9,6 +9,7 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import nullcontext
+from copy import deepcopy
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -27,6 +28,8 @@ from app.checks.guardrails import (
     is_unsupported_visual_missing_item,
 )
 from app.contracts.agent import (
+    MAX_BATCH_CANDIDATES,
+    MAX_BATCH_FACTS,
     WORKFLOW_VERSION,
     AgentOptions,
     Alignment,
@@ -41,10 +44,12 @@ from app.contracts.agent import (
     strict_schema,
 )
 from app.documents.index import DocumentIndex
+from app.documents.quotations import locate_quotation
 from app.documents.segmentation import split_source_text
 from app.models.agent import AgentModel, AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError, _thinking_disabled_in_payload
 from app.tasks.runtime.agent_batches import LimitedModel, run_batch_requests
+from app.tasks.runtime.agent_reuse import SharedAgentWork, round_focus
 
 logger = logging.getLogger(__name__)
 
@@ -104,13 +109,16 @@ SYSTEM_INSTRUCTIONS = """你是文档审查系统。业务标准由检查提示�
 依据提供的来源判断，不使用未经提供的外部常识。精确保留引用的原文和 source_id。
 比较前核实对象、用途、版本、条件和单位。不同对象的差异、同义表达和解析伪影不等于错误。
 图像、绘图和版式未提供时不能断言缺失。检索没有命中不能证明内容不存在。
-独立阅读原文并寻找可以解释候选的反证；允许撤回或证据不足。
+候选用于记录待验证的问题；最终复核独立检查原文、适用条件与反证。
 只返回规定的 JSON 对象或允许的工具调用，不输出推理链。"""
 
 REVIEW_INSTRUCTIONS = (
     "先独立阅读原文，核实候选的适用性并查找反证。confirmed 必须有直接证据且 applicable=yes；"
     "explained 表示原文或适用条件能够解释候选；insufficient 表示证据或覆盖不足。"
     "明确问题与表达建议沿用候选 kind，不把个人偏好作为错误。"
+    "absence_scope=excerpt 仅判断引用语句、参数或步骤自身的缺项与表达问题；"
+    "section 仅判断 scope_source_id 所在完整章节；document 才判断全文缺失。"
+    "其他章节、设备或步骤满足要求，不能自动否定当前范围的缺项。"
     "sources 提供候选的直接原文、章节条件、表格开头及相邻上下文，先核对表头、单位与适用条件。"
     "context_truncated=true 时部分原文尚未提供，缺少关键条件需补充取证，仍无法核实时返回 insufficient。证据充分时直接给出结论。"
     "仅在缺少影响判定的信息时通过 actions 请求工具，避免重复读取已有来源；arguments 为工具参数的 JSON 字符串。"
@@ -169,6 +177,9 @@ class EvidenceAgent:
         parallelism=DEFAULT_AGENT_PARALLELISM,
         request_gate=None,
         request_context=nullcontext,
+        shared_work=None,
+        round_number=1,
+        round_count=1,
     ):
         self.index = index
         self.item = item
@@ -185,6 +196,12 @@ class EvidenceAgent:
         self._batch_failures = {}
         self.strategy = strategy_for(item["code"], task_type, options.strategy)
         self.shared_facts = shared_facts or SharedFacts()
+        self.shared_work = shared_work or SharedAgentWork()
+        self.work_signature = workflow_signature(
+            index, item, connection, options, task_type
+        )
+        self.round_number = round_number
+        self.round_count = round_count
         self.fact_key = hashlib.sha256(
             _json(
                 [
@@ -238,6 +255,8 @@ class EvidenceAgent:
         }
         self.base_elapsed = self.state.get("elapsed_seconds", 0.0)
         self.state.setdefault("global_checks", [])
+        if self.state["plan_cursor"] and self.state["next"] != "plan":
+            self.shared_work.put_plan(self.work_signature, self.state)
         self.state["fact_cache_key"] = self.fact_key
         self.shared_facts.put(self.fact_key, self.state["facts"])
         model = model_factory(
@@ -522,11 +541,29 @@ class EvidenceAgent:
         ]
 
     def _verify_batch_reference(self, reference, sources):
-        return self.index.verify(reference) and any(
-            reference["source_id"] == source["id"]
-            and reference["quote"] in source["text"]
-            for source in sources
-        )
+        return self._resolve_batch_reference(reference, sources) is not None
+
+    def _resolve_batch_reference(self, reference, sources):
+        for source in sources:
+            if reference["source_id"] != source["id"]:
+                continue
+            quote = locate_quotation(source["text"], reference["quote"])
+            resolved = {"source_id": source["id"], "quote": quote}
+            if quote is not None and self.index.verify(resolved):
+                return resolved
+        return None
+
+    def _retain_facts(self, facts, sources):
+        for fact in facts:
+            Fact.model_validate(fact)
+            reference = self._resolve_batch_reference(fact["reference"], sources)
+            if reference:
+                fact = {**fact, "reference": reference}
+                if fact not in self.state["facts"]:
+                    self.state["facts"].append(fact)
+            else:
+                self.state["diagnostics"].append("已排除无法核实原文的事实")
+        self.shared_facts.put(self.fact_key, self.state["facts"])
 
     @staticmethod
     def _split_alignment_job(job):
@@ -638,6 +675,11 @@ class EvidenceAgent:
         )
 
     def _plan(self):
+        if not self.state["plan_cursor"]:
+            prepared = self.shared_work.get_plan(self.work_signature)
+            if prepared is not None:
+                self.state.update(prepared, plan_reused=True, next="discover")
+                return
         jobs = self._planning_jobs()
         cursor = self.state["plan_cursor"]
         if cursor < len(jobs):
@@ -707,6 +749,18 @@ class EvidenceAgent:
                 self.state["plans"].append(profile)
             allowed = {b["id"] for b in job["sources"]}
             for requirement in plan_dict["requirements"]:
+                if job["origin"] == requirement["origin"] == "prompt":
+                    quote = locate_quotation(
+                        job["prompt_fragment"], requirement["quote"]
+                    )
+                    if quote is not None:
+                        requirement["quote"] = quote
+                elif job["origin"] == requirement["origin"] == "standard":
+                    reference = self._resolve_batch_reference(
+                        requirement, job["sources"]
+                    )
+                    if reference:
+                        requirement.update(reference)
                 valid = (
                     job["origin"] == requirement["origin"] == "prompt"
                     and requirement["quote"] in job["prompt_fragment"]
@@ -744,6 +798,8 @@ class EvidenceAgent:
         self.state["next"] = (
             "plan" if self.state["plan_cursor"] < len(jobs) else "discover"
         )
+        if self.state["next"] == "discover":
+            self.shared_work.put_plan(self.work_signature, self.state)
 
     def _discovery_jobs(self):
         if "discover" in self._cached_jobs:
@@ -840,19 +896,16 @@ class EvidenceAgent:
 
     def _add_candidate(self, candidate):
         candidate = dict(candidate)
+        candidate.setdefault("absence_scope", "document")
+        candidate.setdefault("scope_source_id", "")
         candidate["evidence"] = list(
             {
                 (ref["source_id"], ref["quote"]): dict(ref)
-                for ref in candidate["evidence"]
+                for original in candidate["evidence"]
+                for ref in [self.index.resolve_reference(original) or original]
             }.values()
         )
         candidate["requirement_ids"] = list(dict.fromkeys(candidate["requirement_ids"]))
-        if re.search(
-            r"缺失|缺少|未提供|未包含|未说明|未定义|没有(?:提供|说明|定义)|\bmissing\b|\babsent\b",
-            candidate["description"],
-            re.I,
-        ):
-            candidate["absence_claim"] = True
         candidate["id"] = (
             "c-"
             + hashlib.sha256(
@@ -870,6 +923,12 @@ class EvidenceAgent:
                         ],
                         candidate["kind"],
                         candidate["absence_claim"],
+                        candidate["absence_scope"]
+                        if candidate["absence_claim"]
+                        else "",
+                        candidate["scope_source_id"]
+                        if candidate["absence_claim"]
+                        else "",
                         sorted(
                             (r["source_id"], r["quote"]) for r in candidate["evidence"]
                         ),
@@ -912,11 +971,14 @@ class EvidenceAgent:
                 if whole_document
                 else "逐一检查本批来源，covered_source_ids 必须完整返回 expected_source_ids，每个恰好一次，包括最后一个。extract_facts=true 时提取后续全局对照所需事实，否则 facts 为空；subject 和 attribute 使用统一中文名称，条件、版本、原值和单位分别保留，reference 必须来自本批。"
             )
-            + "仅产生具体且有引用依据的候选，保持严格证据门槛。按全部 requirements 检查，仅为 observation_requirement_ids 中的要求返回逐项观察，该列表为空时 observations 为空。not_found 仅表示本批未找到，不能表示全文缺失；不把一般行文规则解释为文档必须包含的内容。原文中的换行、HTML 和位置标记属于解析表示。说明保持简洁，引用使用足够支持判断的短原文。"
+            + "初检以发现问题为目标，逐项寻找具体的错误、缺项和矛盾；有原文线索但需要进一步核实适用条件的也保留为候选，说明待核实点，交给独立复核。不得编造原文或把个人偏好当作错误。"
+            "absence_claim 只表示内容缺项；局部措辞含糊、条件不清不等于全文缺失。"
+            "缺项必须指定 absence_scope：excerpt 为当前语句、参数或步骤，section 为当前完整章节，document 为全文；scope_source_id 指向该范围的来源，其他情况为空。"
+            "按全部 requirements 检查，仅为 observation_requirement_ids 中的要求返回逐项观察，该列表为空时 observations 为空。not_found 仅表示本批未找到，不能表示全文缺失；不把一般行文规则解释为文档必须包含的内容。原文中的换行、HTML 和位置标记属于解析表示。说明保持简洁，引用使用足够支持判断的短原文。"
             + (
                 "本批包含全部待检查文档，直接完成业务要求和 global_checks 指定的全文核查，"
                 "包括跨章节、跨文档或跨语种的对象、条件、数值及含义对照。"
-                "结合全部来源判断要求覆盖及缺失，综合已有解释与反证，只返回具体候选，不输出中间事实清单。"
+                "结合全部来源定位具体候选及可能的解释，保留需要复核的疑点，不输出中间事实清单。"
                 if whole_document
                 else "context_sources 提供章节适用条件、表格开头及前后原文，辅助理解本批 sources。"
                 "先核对这些上下文的对象、条件、表头、单位和例外，再判断本批内容。"
@@ -926,6 +988,12 @@ class EvidenceAgent:
             )
             + self._compact_instruction(job)
         )
+        if self.round_count > 1:
+            instruction += (
+                "本轮检查侧重点："
+                + round_focus(self.round_number)
+                + "侧重点用于补充观察角度，检查范围仍以全部业务要求为准，不新增无关规则。"
+            )
         context = {
             "strategy": self.strategy,
             "global_checks": self.state["global_checks"],
@@ -1023,6 +1091,33 @@ class EvidenceAgent:
                 return
             raise
         data = discovery.model_dump(mode="json")
+        if (
+            len(data["candidates"]) >= MAX_BATCH_CANDIDATES
+            or len(data.get("facts", [])) >= MAX_BATCH_FACTS
+        ):
+            acknowledged = set(data.get("covered_source_ids", []))
+            self._retain_facts(
+                data.get("facts", []),
+                [source for source in sources if source["id"] in acknowledged],
+            )
+            for candidate in data["candidates"]:
+                if set(candidate["requirement_ids"]) <= {
+                    r["id"] for r in batch_requirements
+                }:
+                    self._add_candidate(candidate)
+            self.state["saturated_batches"] = self.state.get("saturated_batches", 0) + 1
+            if context["whole_document"]:
+                self._fallback_to_chunks("候选或事实达到单批输出上限")
+            else:
+                self._recover_stage_job(
+                    "discover",
+                    job,
+                    self._split_discovery_job,
+                    CoverageMismatch(
+                        "候选或事实达到单批输出上限，需要缩小范围继续检查"
+                    ),
+                )
+            return
         if context["whole_document"]:
             if not data.pop("all_sources_checked"):
                 self._fallback_to_chunks("未确认检查完所有来源")
@@ -1055,25 +1150,17 @@ class EvidenceAgent:
         if partial:
             sources = [source for source in sources if source["id"] in covered]
             ids = covered
-        for fact in reusable + data["facts"]:
-            Fact.model_validate(fact)
-            if self._verify_batch_reference(fact["reference"], sources):
-                if fact not in self.state["facts"]:
-                    self.state["facts"].append(fact)
-            else:
-                self.state["diagnostics"].append("已排除无法核实原文的事实")
-        self.shared_facts.put(self.fact_key, self.state["facts"])
+        self._retain_facts(reusable + data["facts"], sources)
         for observation in data["observations"]:
             if observation["requirement_id"] not in requested:
                 raise LLMError("覆盖观察引用了本批未提供的要求")
-            if any(
-                not self._verify_batch_reference(
-                    ref, sources + context["context_sources"]
-                )
+            references = [
+                self._resolve_batch_reference(ref, sources + context["context_sources"])
                 for ref in observation["evidence"]
-            ):
+            ]
+            observation["evidence"] = [ref for ref in references if ref is not None]
+            if any(ref is None for ref in references):
                 observation["status"] = "uncertain"
-                observation["evidence"] = []
                 observation["rationale"] = "原文引用无法核实"
             if observation["status"] == "covered" and not observation["evidence"]:
                 observation["status"] = "uncertain"
@@ -1278,7 +1365,7 @@ class EvidenceAgent:
 
     def _comparison_request(self, job):
         return (
-            "进行全局对照，核实对象、用途、版本、条件和单位。checks 中每组是独立的对照任务，逐组完成后合并候选，不跨组拼接条件。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，只生成待审查候选。left_facts 和 right_facts 同时提供时，仅对照两组之间的事实，各组内部另行检查。缺失候选必须对应已提供的业务要求，且观察不能被其他章节已有内容解释。覆盖不完整时保持待核实。只报告具体问题，同一原因和证据的候选合并，说明保持简洁。"
+            "进行全局对照，核实对象、用途、版本、条件和单位。checks 中每组是独立的对照任务，逐组完成后合并候选，不跨组拼接条件。跨语种比较含义而非字面措辞；相同名称不自动表示相同对象。事实已引用原文，但抽取和归一化仍可能出错，保留有原文线索且需要核实条件的具体候选交给复核。left_facts 和 right_facts 同时提供时，仅对照两组之间的事实，各组内部另行检查。缺项必须对应已提供的业务要求，absence_scope 按当前语句或步骤选择 excerpt、当前完整章节选择 section、全文选择 document，scope_source_id 指向对应来源。局部表述含糊不等于全文缺失；其他章节或对象已覆盖要求不能自动否定当前步骤或章节的缺项。全文缺失需要完整覆盖且无相同适用范围的覆盖或不确定观察。同一原因和证据的候选合并，说明保持简洁。"
             + self._compact_instruction(job),
             {
                 "strategy": self.strategy,
@@ -1299,13 +1386,25 @@ class EvidenceAgent:
             except IncompleteResponse as exc:
                 self._recover_stage_job("compare", job, self._split_comparison_job, exc)
                 return
-            for candidate in result.model_dump(mode="json")["candidates"]:
+            candidates = result.model_dump(mode="json")["candidates"]
+            for candidate in candidates:
                 if any(
                     r not in {req["id"] for req in self.state["requirements"]}
                     for r in candidate["requirement_ids"]
                 ):
                     raise LLMError("全局候选引用了未提供的业务要求")
                 self._add_candidate(candidate)
+            if len(candidates) >= MAX_BATCH_CANDIDATES:
+                self.state["saturated_batches"] = (
+                    self.state.get("saturated_batches", 0) + 1
+                )
+                self._recover_stage_job(
+                    "compare",
+                    job,
+                    self._split_comparison_job,
+                    CoverageMismatch("候选达到单批输出上限，需要缩小对照范围"),
+                )
+                return
             self._finish_stage_job("compare")
         self.state["next"] = (
             "compare" if self.state["compare_cursor"] < len(jobs) else "review"
@@ -1313,11 +1412,23 @@ class EvidenceAgent:
 
     def _review_context(self, batch, recovery_sources=()):
         sources = {}
-        references = [
-            ref for c in batch for ref in c["evidence"] if self.index.verify(ref)
-        ]
+        references = [ref for c in batch for ref in c["evidence"]]
         for ref in references:
-            sources[ref["source_id"]] = self.index.by_id[ref["source_id"]].as_dict()
+            if ref["source_id"] in self.index.by_id:
+                sources[ref["source_id"]] = self.index.by_id[ref["source_id"]].as_dict()
+        scopes = {}
+        for candidate in batch:
+            if not candidate["absence_claim"]:
+                continue
+            scope = candidate.get("absence_scope", "document")
+            anchor = candidate.get("scope_source_id") or next(
+                (ref["source_id"] for ref in candidate["evidence"]), ""
+            )
+            scoped = self.index.scope_sources(anchor, scope)
+            if scope in {"excerpt", "section"}:
+                scopes[candidate["id"]] = [s["id"] for s in scoped]
+                for source in scoped:
+                    sources.setdefault(source["id"], source)
         for source_id in recovery_sources:
             if source_id in self.index.by_id:
                 sources.setdefault(source_id, self.index.by_id[source_id].as_dict())
@@ -1339,6 +1450,7 @@ class EvidenceAgent:
             "sources": selected,
             "context_truncated": len(selected) < len(sources),
             "requirements": requirements,
+            "candidate_scope_sources": scopes,
             "requirement_observations": [
                 observation_summary(self.state, r["id"]) for r in requirements
             ],
@@ -1439,6 +1551,7 @@ class EvidenceAgent:
                 self.state.update(
                     review_batch=[], review_round=0, messages=[], pending_actions=[]
                 )
+                self._clear_reference_retry()
                 self.state["review_compact_retry"] = False
                 diagnostic = f"候选复核{reason}，已缩小复核批次并保留已读取的证据"
             elif not self.state.get("review_compact_retry"):
@@ -1469,6 +1582,7 @@ class EvidenceAgent:
             self.persist()
 
     def _review_step(self):
+        self._reuse_reviews()
         if self.state["review_cursor"] >= len(self.state["candidates"]):
             self.state["next"] = "finalize"
             return
@@ -1573,16 +1687,114 @@ class EvidenceAgent:
             self.state["next"] = "tools"
             return
         ids = [d["candidate_id"] for d in data["decisions"]]
-        error = _coverage_error("复核候选", self.state["review_batch"], ids)
+        expected = self.state.get("review_pending_ids", self.state["review_batch"])
+        error = _coverage_error("复核候选", expected, ids)
         if error:
             raise error
-        for decision in data["decisions"]:
+        if not last_round and not self.state.get("review_reference_retry"):
+            invalid = [
+                d for d in data["decisions"] if self._resolve_decision_references(d)[1]
+            ]
+            if invalid:
+                self._retry_review_references(data["decisions"], invalid)
+                return
+        for decision in [
+            *self.state.get("review_settled", []),
+            *data["decisions"],
+        ]:
             self._accept_decision(decision)
         self._finish_batch()
 
+    def _reuse_reviews(self):
+        if self.state.get("review_prepared") or self.state["review_cursor"]:
+            return
+        cached, remaining = [], []
+        saved_sources = self.state["seen_sources"]
+        for candidate in self.state["candidates"]:
+            entry = self.shared_work.get_decision(self.work_signature, candidate["id"])
+            if entry is None or entry["round"] >= self.round_number:
+                remaining.append(candidate)
+                continue
+            self.state["seen_sources"] = entry["source_ids"]
+            decision = entry["decision"]
+            if self._resolve_decision_references(decision)[1] or (
+                candidate["absence_claim"]
+                and decision["outcome"] == "confirmed"
+                and not self._eligible_absence(candidate, decision)
+            ):
+                remaining.append(candidate)
+                continue
+            self._accept_decision(decision, reused_from=entry["round"])
+            cached.append(candidate)
+        self.state["seen_sources"] = saved_sources
+        self.state["candidates"] = cached + remaining
+        self.state["review_cursor"] = len(cached)
+        self.state["review_reused"] = len(cached)
+        self.state["review_prepared"] = True
+
+    def _resolve_decision_references(self, decision):
+        resolved, invalid, repairs = deepcopy(decision), [], 0
+        seen = set(self.state["seen_sources"])
+        for field in ("evidence", "counterevidence"):
+            resolved[field] = []
+            for ref in decision[field]:
+                verified = self.index.resolve_reference(ref, allowed=seen)
+                if verified is None:
+                    invalid.append({"field": field, "reference": ref})
+                else:
+                    resolved[field].append(verified)
+                    repairs += verified != ref
+        return resolved, invalid, repairs
+
+    def _retry_review_references(self, decisions, invalid):
+        """只为引用尚未定位的候选补证一次，保留同批已完成的判断。"""
+        ids = {d["candidate_id"] for d in invalid}
+        batch = [c for c in self.state["candidates"] if c["id"] in ids]
+        source_ids = {
+            ref["source_id"]
+            for d in invalid
+            for ref in d["evidence"] + d["counterevidence"]
+        }
+        context = self._review_context(batch, source_ids)
+        context["previous_decisions"] = invalid
+        instruction = REVIEW_INSTRUCTIONS + (
+            "上次判断有引用未在已读取来源中定位。仅重新核实本批候选；"
+            "从 sources 逐字复制必要的连续原文，保留其 source_id，不能把省略号、概括或拼接当作原文。"
+            "证据仍不足时返回 insufficient，并保留已核实的证据。"
+        )
+        if self._input_size(Review, instruction, context) > self.max_input:
+            context.pop("previous_decisions")
+        while (
+            context["sources"]
+            and self._input_size(Review, instruction, context) > self.max_input
+        ):
+            context["sources"].pop()
+            context["context_truncated"] = True
+        self.state["review_settled"] = [
+            d for d in decisions if d["candidate_id"] not in ids
+        ]
+        for decision in self.state["review_settled"]:
+            self._accept_decision(decision)
+        self.state["review_pending_ids"] = [c["id"] for c in batch]
+        self.state["review_reference_retry"] = True
+        self.state["reference_retry_batches"] = (
+            self.state.get("reference_retry_batches", 0) + 1
+        )
+        self.state["seen_sources"] = list(
+            dict.fromkeys(
+                [*self.state["seen_sources"], *(s["id"] for s in context["sources"])]
+            )
+        )
+        self.state["messages"] = self._messages(Review, instruction, context)
+        self.state["next"] = "review"
+
     def _abandon_batch(self, rationale):
+        settled = {d["candidate_id"]: d for d in self.state.get("review_settled", [])}
         for candidate in self.state["candidates"]:
             if candidate["id"] in self.state["review_batch"]:
+                if candidate["id"] in settled:
+                    self._accept_decision(settled[candidate["id"]])
+                    continue
                 self._accept_decision(
                     {
                         "candidate_id": candidate["id"],
@@ -1659,6 +1871,32 @@ class EvidenceAgent:
         if not candidate["requirement_ids"]:
             return False
         available = {r["id"] for r in self.state["requirements"]}
+        if not set(candidate["requirement_ids"]) <= available:
+            return False
+        scope = candidate.get("absence_scope", "document")
+        if scope in {"excerpt", "section"}:
+            anchor = candidate.get("scope_source_id") or next(
+                (ref["source_id"] for ref in decision["evidence"]), ""
+            )
+            sources = self.index.scope_sources(anchor, scope)
+            ids = {s["id"] for s in sources}
+            if not ids or not ids <= set(self.state["seen_sources"]):
+                return False
+            if not any(ref["source_id"] in ids for ref in decision["evidence"]):
+                return False
+            if scope == "excerpt":
+                return True
+            documents = [
+                d
+                for d in self.index.documents
+                if d["filename"] == sources[0]["filename"]
+                and d["role"] == sources[0]["role"]
+            ]
+            return (
+                ids <= set(self.state["checked_ids"])
+                and bool(documents)
+                and all(d["text_complete"] for d in documents)
+            )
         return all(
             rid in available
             and (summary := observation_summary(self.state, rid))["counts"].get(
@@ -1677,43 +1915,68 @@ class EvidenceAgent:
             for rid in candidate["requirement_ids"]
         )
 
-    def _accept_decision(self, decision):
+    def _accept_decision(self, decision, *, reused_from=None):
         candidate = next(
             c for c in self.state["candidates"] if c["id"] == decision["candidate_id"]
         )
-        seen = set(self.state["seen_sources"])
+        original = deepcopy(decision)
+        decision, invalid, repairs = self._resolve_decision_references(decision)
         refs = decision["evidence"] + decision["counterevidence"]
-        if any(not self.index.verify(ref, allowed=seen) for ref in refs):
+        reasons = []
+        if invalid:
+            reasons.append("unresolved_reference")
             decision.update(
                 outcome="insufficient",
-                rationale="审查引用没有在本批已读取的原文中核实",
-                evidence=[],
-                counterevidence=[],
+                rationale="部分审查引用尚未在已读取的原文中定位，已保留核实的引用",
             )
         if decision["outcome"] == "confirmed":
             if decision["applicable"] != "yes" or (
                 not decision["evidence"] and not candidate["absence_claim"]
             ):
+                reasons.append("evidence_or_applicability")
                 decision.update(
                     outcome="insufficient", rationale="候选缺少直接证据或适用性尚未建立"
                 )
             if candidate["absence_claim"] and not self._eligible_absence(
                 candidate, decision
             ):
+                reasons.append("absence_scope")
                 decision.update(
                     outcome="insufficient",
-                    rationale="缺失判断缺少适用要求或完整的解析与检查覆盖，或其他章节已覆盖该要求、存在不确定观察",
+                    rationale="缺失判断尚未建立对应范围的适用要求、原文证据或完整覆盖",
                 )
         if (
             decision["outcome"] == "explained"
             and not refs
             and decision["applicable"] != "no"
         ):
+            reasons.append("withdrawal_evidence")
             decision.update(
                 outcome="insufficient",
                 rationale="撤回结论缺少原文解释或明确的不适用条件",
             )
-        self.state["decisions"].append(decision)
+        self.state["decisions"] = [
+            d
+            for d in self.state["decisions"]
+            if d["candidate_id"] != decision["candidate_id"]
+        ] + [decision]
+        self.state.setdefault("decision_audit", {})[decision["candidate_id"]] = {
+            "model_outcome": original["outcome"],
+            "model_rationale": original["rationale"],
+            "final_outcome": decision["outcome"],
+            "validation_reasons": reasons,
+            "repaired_references": repairs,
+            "unresolved_references": invalid,
+            "reused_from_round": reused_from,
+        }
+        if not reasons and reused_from is None:
+            self.shared_work.put_decision(
+                self.work_signature,
+                candidate,
+                decision,
+                self.state["seen_sources"],
+                self.round_number,
+            )
 
     def _finish_batch(self):
         self.state["review_cursor"] += len(self.state["review_batch"])
@@ -1728,6 +1991,11 @@ class EvidenceAgent:
             review_compact_retry=False,
             next="review",
         )
+        self._clear_reference_retry()
+
+    def _clear_reference_retry(self):
+        for key in ("review_pending_ids", "review_settled", "review_reference_retry"):
+            self.state.pop(key, None)
 
     def _finalize(self):
         report = self.build_report()
@@ -1775,6 +2043,9 @@ class EvidenceAgent:
                 "evidence": decision["evidence"] if decision else candidate["evidence"],
                 "requirement_ids": candidate["requirement_ids"],
                 "counterevidence": decision["counterevidence"] if decision else [],
+                "validation": self.state.get("decision_audit", {}).get(
+                    candidate["id"], {}
+                ),
             }
             audit["evidence_refs"] = self._report_references(audit["evidence"])
             audit["counterevidence_refs"] = self._report_references(
@@ -1834,6 +2105,12 @@ class EvidenceAgent:
                                 if r["id"] in candidate["requirement_ids"]
                             ],
                             self.index.signature if candidate["absence_claim"] else "",
+                            candidate.get("absence_scope")
+                            if candidate["absence_claim"]
+                            else "",
+                            candidate.get("scope_source_id")
+                            if candidate["absence_claim"]
+                            else "",
                         ]
                     ).encode()
                 ).hexdigest(),
@@ -1841,6 +2118,17 @@ class EvidenceAgent:
             if is_unsupported_visual_missing_item(
                 item
             ) or is_unsupported_pdf_table_data_missing_item(item, self.pdf_evidence):
+                self.shared_work.discard_decision(self.work_signature, candidate["id"])
+                validation = self.state.get("decision_audit", {}).get(candidate["id"])
+                if validation is not None:
+                    validation["final_outcome"] = "insufficient"
+                    if (
+                        "visual_or_table_evidence"
+                        not in validation["validation_reasons"]
+                    ):
+                        validation["validation_reasons"].append(
+                            "visual_or_table_evidence"
+                        )
                 pending.append(
                     {
                         **audit,
@@ -2004,6 +2292,12 @@ class EvidenceAgent:
             "nodes": self.state["nodes"],
             "diagnostics": self.state["diagnostics"],
             "tool_trace": self.state.get("tool_trace", []),
+            "round_focus": round_focus(self.round_number),
+            "plan_reused": self.state.get("plan_reused", False),
+            "review_reused": self.state.get("review_reused", 0),
+            "reference_retry_batches": self.state.get("reference_retry_batches", 0),
+            "saturated_batches": self.state.get("saturated_batches", 0),
+            "decision_audit": self.state.get("decision_audit", {}),
         }
         report = dict(self.state.get("report") or self.build_report())
         if error:

@@ -24,7 +24,7 @@ ASGI 适配器在每个 WSGI 请求线程内创建独立 Flask 应用上下文�
 
 `TaskSupervisor` 负责认领、续约、取消收尾和异常恢复；`TaskRunner` 负责预处理与检查执行。监督器每 10 秒按任务主键和令牌更新 90 秒租约，任务中的监测线程只读取取消状态。文件清理与报告统计使用监督器的独立维护线程。
 
-单文档轮数由提交服务校验后保存到 `document_meta_json.check_rounds`，缺省任务按一轮执行。`tasks/runtime/document_rounds.py` 在检查项线程内顺序执行各轮，持续保存成功与失败状态，重试复用成功轮次。证据审查各轮使用独立检查点和事实缓存，第一轮按检查项编码保存，后续轮次使用 `检查项编码:round:轮次`；所有轮次继续共享任务请求并发名额。`reporting/rounds.py` 按证据、位置和相近描述归并发现，记录来源轮次与原始条目，保留重试前的条目标识。报告准备阶段对多轮合并结果保留全部条目，单轮生成条数由 `issue_output_limit` 控制。`tests/test_document_rounds.py` 覆盖独立调用、本地规则执行次数、并发额度、部分失败、取消、补跑、条目标识和完整导出。`tests/test_evidence_integration.py` 验证多轮审查的独立执行、证据与待核实项合并、检查点续跑、标注保留及永久性错误停止。
+单文档轮数由提交服务校验后保存到 `document_meta_json.check_rounds`，缺省任务按一轮执行。`tasks/runtime/document_rounds.py` 在检查项线程内顺序执行各轮，持续保存成功与失败状态，重试复用成功轮次。证据审查各轮使用独立检查点和事实缓存，第一轮按检查项编码保存，后续轮次使用 `检查项编码:round:轮次`；所有轮次继续共享任务请求并发名额。`tasks/runtime/agent_reuse.py` 提供各轮检查侧重点，并按完整工作流签名在任务内复用规划和已经核实的相同候选，保留新候选、待核实与全文缺失的复核。`reporting/rounds.py` 按证据、位置和相近描述归并发现，记录来源轮次与原始条目，保留重试前的条目标识。报告准备阶段对多轮合并结果保留全部条目，单轮生成条数由 `issue_output_limit` 控制。`tests/test_document_rounds.py` 覆盖独立调用、本地规则执行次数、并发额度、部分失败、取消、补跑、条目标识和完整导出。`tests/test_evidence_integration.py` 验证多轮审查的工作复用、证据与待核实项合并、检查点续跑、标注保留及永久性错误停止。`tests/test_agent_recall.py` 验证缺失范围、引用定位、定向补证、候选满额续查和调用量；`documents/quotations.py` 负责将排版空白匹配映射回准确原文。
 
 `models/client.py` 校验模型响应的结束信号，正常流式响应接受 `[DONE]` 或 `finish_reason=stop`，完整消息响应兼容省略结束标记。异常结束原因通过 `LLMIncompleteResponseError` 携带部分正文，自动重试仍失败时保留该正文。`tasks/runtime/report_validation.py` 为单轮与多轮提供完整 JSON 和条目结构校验，单轮兼容完整文本报告。单轮失败记录 `output_incomplete` 和具体错误，报告展示可恢复的完整条目；多轮失败保存原始回复，成功轮次继续参与合并。
 

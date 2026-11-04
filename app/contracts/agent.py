@@ -4,7 +4,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-WORKFLOW_VERSION = "evidence-review-v7"
+WORKFLOW_VERSION = "evidence-review-v8"
+MAX_BATCH_CANDIDATES = 100
+MAX_BATCH_FACTS = 200
 NonEmpty = Annotated[str, Field(min_length=1, max_length=12000)]
 
 
@@ -96,6 +98,8 @@ class Candidate(Contract):
     severity: Literal["critical", "high", "medium", "low"]
     kind: Literal["issue", "suggestion"]
     absence_claim: bool
+    absence_scope: Literal["excerpt", "section", "document"] = "document"
+    scope_source_id: str = ""
     applicability: str
     requirement_ids: list[str] = Field(max_length=80)
     evidence: list[EvidenceRef] = Field(max_length=20)
@@ -110,19 +114,19 @@ class RequirementObservation(Contract):
 
 class Discovery(Contract):
     covered_source_ids: list[str]
-    facts: list[Fact] = Field(max_length=200)
-    candidates: list[Candidate] = Field(max_length=100)
+    facts: list[Fact] = Field(max_length=MAX_BATCH_FACTS)
+    candidates: list[Candidate] = Field(max_length=MAX_BATCH_CANDIDATES)
     observations: list[RequirementObservation] = Field(max_length=80)
 
 
 class FullDocumentDiscovery(Contract):
     all_sources_checked: bool
-    candidates: list[Candidate] = Field(max_length=100)
+    candidates: list[Candidate] = Field(max_length=MAX_BATCH_CANDIDATES)
     observations: list[RequirementObservation] = Field(max_length=80)
 
 
 class Comparison(Contract):
-    candidates: list[Candidate] = Field(max_length=100)
+    candidates: list[Candidate] = Field(max_length=MAX_BATCH_CANDIDATES)
 
 
 class FactKey(Contract):

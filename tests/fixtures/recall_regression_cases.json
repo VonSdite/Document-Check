@@ -1,0 +1,30 @@
+[
+  {
+    "id": "scoped-omissions-and-parameter-conflict",
+    "task_type": "document_check",
+    "gold_complete": true,
+    "documents": [
+      {
+        "filename": "设备A检查样本.txt",
+        "text_complete": true,
+        "text": "# 1 产品参数\n设备A（V1版本、25°C、额定负载）的额定电压为220 V。\n设备B在相同环境下的额定电压为110 V。\n# 2 安装参数\n设备A（V1版本、25°C、额定负载）的额定电压为230 V。\n设备A的过压保护阈值为250 V。\n# 3 温度设置\n过温报警阈值：50。\n# 4 更换空开\n步骤1：切断设备A电源。\n步骤2：拆下旧空开，安装同型号的新空开，接通电源。\n本节步骤结束。\n# 5 电池上电\n步骤1：闭合电池空开。\n步骤2：观察电池电流，确认在0 A至10 A之间且无告警，以验证上电成功。\n本节步骤结束。\n# 6 复位条件\n必要时执行设备A复位。\n# 7 单位对照\n220 V等于0.22 kV。\n系统结构参见图1。"
+      }
+    ],
+    "check": {
+      "code": "recall-regression",
+      "name": "检查范围与证据回归",
+      "prompt": "检查以下四项规则：1. 同一型号、版本、环境和负载条件下，同一参数必须一致；允许不同型号、不同参数的数值不同，等价单位数值视为一致。2. 每一个温度阈值自身必须标注温度单位，不能用其他参数的单位代替。3. 每个含编号步骤的更换或上电章节都必须说明本操作的完成验证方法；其他章节的验证方法仅适用于对应操作。4. “必要时”应给出可执行的判断条件。只报告违反这四项规则的具体问题，保持不同型号、等价单位、正常完成验证以及无视觉证据的图示引用为非问题。",
+      "agent_options": {
+        "protocol": "structured",
+        "max_calls": 6,
+        "max_seconds": 150
+      }
+    },
+    "expected_issues": [
+      {"id": "voltage-conflict", "description": "设备A同一条件下额定电压220 V与230 V矛盾"},
+      {"id": "temperature-unit", "description": "过温报警阈值50未标明温度单位"},
+      {"id": "replacement-verification", "description": "更换空开章节未给出本操作的完成验证方法"},
+      {"id": "reset-condition", "description": "设备A复位的必要时条件含糊"}
+    ]
+  }
+]

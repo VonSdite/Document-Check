@@ -1,4 +1,4 @@
-"""按原文证据、位置和相近描述归并独立检查轮次，保留每条发现的来源。"""
+"""按原文证据、位置和相近描述归并检查轮次，保留每条发现的来源。"""
 
 import hashlib
 import json
@@ -162,9 +162,15 @@ def _merge_agent_rounds(report: dict, rounds: list[dict]) -> dict | None:
             for candidate in entry.get("report", {}).get(field, []):
                 value = {key: value for key, value in candidate.items() if key != "id"}
                 identity = hashlib.sha256(
-                    json.dumps(value, ensure_ascii=False, sort_keys=True).encode(
-                        "utf-8"
-                    )
+                    json.dumps(
+                        {
+                            key: item
+                            for key, item in value.items()
+                            if key != "validation"
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ).encode("utf-8")
                 ).hexdigest()[:24]
                 record = records.setdefault(
                     identity,
@@ -183,6 +189,18 @@ def _merge_agent_rounds(report: dict, rounds: list[dict]) -> dict | None:
         metadata[field] = sum(meta[field] for meta in metas)
     for field in ("requests", "nodes", "diagnostics", "tool_trace"):
         metadata[field] = [value for meta in metas for value in meta.get(field, [])]
+    for field in ("review_reused", "reference_retry_batches", "saturated_batches"):
+        metadata[field] = sum(meta.get(field, 0) for meta in metas)
+    metadata["plans_reused"] = sum(bool(meta.get("plan_reused")) for meta in metas)
+    metadata["round_focuses"] = [
+        {"round": entry["round"], "focus": entry["agent"].get("round_focus", "")}
+        for entry in agent_rounds
+    ]
+    metadata["decision_audit"] = {
+        f"{entry['round']}:{candidate_id}": {**audit, "round": entry["round"]}
+        for entry in agent_rounds
+        for candidate_id, audit in entry["agent"].get("decision_audit", {}).items()
+    }
     metadata["usage_complete"] = all(meta["usage_complete"] for meta in metas)
     metadata["cost"] = (
         sum(meta["cost"] for meta in metas)

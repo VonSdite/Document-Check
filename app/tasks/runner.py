@@ -66,6 +66,7 @@ from app.tasks.activity import (
     update_check_round_activity,
 )
 from app.tasks.model_output import ModelOutputRecorder
+from app.tasks.runtime.agent_reuse import SharedAgentWork
 from app.tasks.runtime.common import (
     STREAM_SNAPSHOT_INTERVAL_SECONDS,
     STREAM_SNAPSHOT_MIN_CHAR_GROWTH,
@@ -551,6 +552,7 @@ def _run_check_items_concurrently(
         number: SharedFacts() for number in range(1, check_rounds + 1)
     }
     agent_request_gate = threading.BoundedSemaphore(DEFAULT_AGENT_PARALLELISM)
+    shared_agent_work = SharedAgentWork()
     for checkpoint in get_db().execute(
         "SELECT check_code, state_json FROM task_checkpoints WHERE task_id = ?",
         (task_id,),
@@ -780,6 +782,9 @@ def _run_check_items_concurrently(
                             connection=connection,
                             options=options,
                             shared_facts=shared_facts_by_round[number],
+                            shared_work=shared_agent_work,
+                            round_number=number,
+                            round_count=check_rounds,
                             request_gate=agent_request_gate,
                             request_context=app.app_context,
                             store=CheckpointStore(

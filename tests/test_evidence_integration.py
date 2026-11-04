@@ -494,6 +494,7 @@ class EvidenceIntegrationTest(unittest.TestCase):
             ["custom-check", "custom-check:round:2"],
         )
         self.assertIsNot(agents[0]["shared_facts"], agents[1]["shared_facts"])
+        self.assertIs(agents[0]["shared_work"], agents[1]["shared_work"])
         prepared = _prepare_task_results([result], suppression_rules={})[0]
         self.assertNotIn("error", prepared)
         self.assertEqual(prepared["report_counts"]["issue"], 1)
@@ -502,8 +503,11 @@ class EvidenceIntegrationTest(unittest.TestCase):
             all(item["source_rounds"] == [1, 2] for item in prepared["report_items"])
         )
         self.assertTrue(all(item["text_evidence"] for item in prepared["report_items"]))
-        self.assertEqual(result["agent"]["model_calls"], 6)
-        self.assertEqual(result["agent"]["known_input_tokens"], 600)
+        self.assertEqual(result["agent"]["model_calls"], 5)
+        self.assertEqual(result["agent"]["known_input_tokens"], 500)
+        self.assertEqual(result["agent"]["plans_reused"], 1)
+        self.assertEqual(result["agent"]["review_reused"], 1)
+        self.assertEqual(len(result["agent"]["decision_audit"]), 4)
         workbook = load_workbook(build_report_workbook(task))
         self.assertTrue(
             {"引用原文", "执行用量", "检查轮次"}.issubset(workbook.sheetnames)

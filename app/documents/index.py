@@ -6,6 +6,7 @@ import re
 from dataclasses import asdict, dataclass
 from itertools import groupby
 
+from app.documents.quotations import locate_quotation
 from app.documents.segmentation import split_source_text
 
 INDEX_VERSION = "source-index-v3"
@@ -228,6 +229,34 @@ class DocumentIndex:
             and quote.strip()
             and quote in block.text
         )
+
+    def resolve_reference(self, reference: dict, *, allowed: set[str] | None = None):
+        """在指定且已读取的来源内定位引用，返回可逐字验证的原文。"""
+        source_id = reference.get("source_id")
+        block = self.by_id.get(source_id)
+        if block is None or (allowed is not None and source_id not in allowed):
+            return None
+        quote = locate_quotation(block.text, reference.get("quote"))
+        return {"source_id": source_id, "quote": quote} if quote is not None else None
+
+    def scope_sources(self, source_id: str, scope: str):
+        """按来源所属语句块、连续章节或文档给出完整的检查范围。"""
+        block = self.by_id.get(source_id)
+        if block is None or block.role == "standard":
+            return []
+        if scope == "excerpt":
+            return [block.as_dict()]
+        if scope == "section":
+            return (
+                [b.as_dict() for b in self._sections[source_id]]
+                if block.section
+                else []
+            )
+        if scope == "document":
+            return [
+                b.as_dict() for b in self.blocks if b.document_id == block.document_id
+            ]
+        return []
 
     def context(self, source_id: str, radius: int = 1):
         block = self.by_id.get(source_id)
