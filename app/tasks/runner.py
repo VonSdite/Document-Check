@@ -46,6 +46,7 @@ from app.documents.images import image_items_from_meta
 from app.documents.text_semantics import strip_script_markers
 from app.infrastructure.network import outbound_network_config
 from app.models.client import LLMError, run_check
+from app.models.document_input import compact_model_document_text, validate_model_input
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
 from app.tasks.activity import (
@@ -390,14 +391,14 @@ class TaskRunner:
                 logger.info("任务取消 task_id=%s", task_id)
                 _mark_canceled(db, task_id, claim_token)
             except (DocumentReadError, LLMError, RuntimeError) as exc:
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                if _cancel_requested(db, task_id, claim_token):
                     logger.info("任务取消 task_id=%s", task_id)
                     _mark_canceled(db, task_id, claim_token)
                 else:
                     logger.warning("任务失败 task_id=%s error=%s", task_id, exc)
                     _mark_failed(db, task_id, str(exc), results, claim_token)
             except Exception as exc:
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                if _cancel_requested(db, task_id, claim_token):
                     logger.info("任务取消 task_id=%s", task_id)
                     _mark_canceled(db, task_id, claim_token)
                 else:
@@ -527,6 +528,7 @@ def _run_check_items_concurrently(
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
     local_rule_document_text = _local_rule_document_text(document_text, document_meta)
+    model_document_text = compact_model_document_text(document_text)
     check_rounds = (
         normalize_check_rounds((document_meta or {}).get("check_rounds"))
         if task_type == DOCUMENT_TASK_TYPE
@@ -655,6 +657,7 @@ def _run_check_items_concurrently(
                     )
                     content = format_hyperlink_report(structured_report)
                 else:
+                    validate_model_input(model_document_text, task["max_input_chars"])
                     network = outbound_network_config()
                     run_check_kwargs = {
                         "api_base": task["api_base"],
@@ -670,7 +673,7 @@ def _run_check_items_concurrently(
                         ),
                         "check_name": item["name"],
                         "prompt": item["prompt"],
-                        "document_text": document_text,
+                        "document_text": model_document_text,
                         "issue_output_limit": issue_output_limit,
                         "on_content": lambda content: save_partial(
                             content, f"正在并发检查：{item['name']}"

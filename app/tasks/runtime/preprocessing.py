@@ -31,7 +31,6 @@ from app.documents.images import (
 from app.documents.text_semantics import strip_script_markers
 from app.documents.videos import extract_video_frames, format_video_document_text
 from app.infrastructure.files import remove_directory_tree
-from app.models.document_input import compact_model_document_text
 from app.persistence.connection import now_text
 from app.persistence.settings import get_setting
 from app.tasks.runtime.artifacts import _path_is_relative_to, _task_image_folder
@@ -113,7 +112,6 @@ def _prepare_task_inputs(
             document_meta,
             claim_token,
         )
-    _validate_model_input(document_text, task["max_input_chars"])
     return document_text, document_meta_raw
 
 
@@ -140,7 +138,6 @@ def _prepare_image_task_inputs(
                 document_meta,
                 claim_token,
             )
-        _validate_model_input(document_text, task["max_input_chars"], "图片检查上下文")
         return document_text, document_meta_raw or "{}"
 
     upload_path = _task_upload_path(app, task)
@@ -210,7 +207,6 @@ def _prepare_image_task_inputs(
             page_images=page_images,
             page_selection=page_selection,
         )
-        _validate_model_input(document_text, task["max_input_chars"], "图片检查上下文")
         document_meta.update(
             {
                 "image_extraction_error": image_error,
@@ -256,7 +252,6 @@ def _prepare_video_task_inputs(
                 document_meta,
                 claim_token,
             )
-        _validate_model_input(document_text, task["max_input_chars"], "视频帧上下文")
         return document_text, document_meta_raw or "{}"
 
     upload_path = _task_upload_path(app, task)
@@ -284,7 +279,6 @@ def _prepare_video_task_inputs(
         document_text = format_video_document_text(
             task["original_filename"], frames, frame_selection
         )
-        _validate_model_input(document_text, task["max_input_chars"], "视频帧上下文")
         document_meta.update(
             {
                 "frame_selection": frame_selection,
@@ -327,7 +321,6 @@ def _prepare_consistency_task_inputs(
             document_meta,
             claim_token,
         )
-    _validate_model_input(document_text, task["max_input_chars"])
     return document_text, document_meta_raw
 
 
@@ -462,7 +455,6 @@ def _persist_preprocessed_inputs(
     document_meta: dict,
     claim_token: str | None,
 ) -> tuple[str, str]:
-    _validate_model_input(document_text, task["max_input_chars"])
     completed_at = now_text()
     document_meta["preprocessing"] = {
         "status": "completed",
@@ -494,15 +486,3 @@ def _persist_preprocessed_inputs(
     if updated.rowcount != 1:
         raise TaskCanceled
     return document_text, document_meta_raw
-
-
-def _validate_model_input(
-    document_text: str, max_input_chars: int, label: str = "文档文本"
-):
-    if not document_text:
-        raise RuntimeError("未能从文档中提取到可检查文本")
-    model_input_chars = len(compact_model_document_text(document_text))
-    if model_input_chars > max_input_chars:
-        raise RuntimeError(
-            f"{label} {model_input_chars} 字，超过当前模型文本上限 {max_input_chars} 字"
-        )

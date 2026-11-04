@@ -74,17 +74,33 @@ def _document_text_for_image_batch(document_text: str, image_items: list[dict]) 
         position = str(image.get("position") or "未标注")
         image_lines.append(f"- {filename}（位置：{position}）")
 
-    page_text = "\n\n".join(
-        section.strip() for _, section in selected if section.strip()
-    )
     header = _document_header(text)
-    scoped = (
+    prefix = (
         f"{header}\n\n"
-        f"document_text_scope: 仅提供当前图片所在页及前后 {IMAGE_CONTEXT_NEIGHBOR_PAGES} 页的文本，避免跨页误配。\n"
+        "document_text_scope: 优先提供当前图片所在页文本，"
+        f"在长度允许时附带前后 {IMAGE_CONTEXT_NEIGHBOR_PAGES} 页，避免跨页误配。\n"
         f"current_batch_images:\n{chr(10).join(image_lines)}\n\n"
-        f"相关文档文本：\n{page_text}"
-    ).strip()
-    return _trim_document_context(scoped, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS)
+        "相关文档文本："
+    )
+    budget = IMAGE_DOCUMENT_CONTEXT_MAX_CHARS - len(prefix)
+    scoped_sections = {}
+    for target_pages in (True, False):
+        candidates = [
+            (index, section.strip())
+            for index, (page, section) in enumerate(selected)
+            if (page in pages) == target_pages and section.strip()
+        ]
+        for index, (section_index, section) in enumerate(candidates):
+            allowance = budget // (len(candidates) - index) - 2
+            if allowance <= 0:
+                break
+            value = _trim_document_context(section, allowance)
+            scoped_sections[section_index] = value
+            budget -= len(value) + 2
+    page_text = "\n\n".join(scoped_sections[index] for index in sorted(scoped_sections))
+    return _trim_document_context(
+        f"{prefix}\n\n{page_text}", IMAGE_DOCUMENT_CONTEXT_MAX_CHARS
+    )
 
 
 def _document_header(document_text: str) -> str:
@@ -100,9 +116,14 @@ def _document_header(document_text: str) -> str:
 
 def _trim_document_context(text: str, max_chars: int) -> str:
     text = str(text or "").strip()
+    if max_chars <= 0:
+        return ""
     if len(text) <= max_chars:
         return text
-    return text[:max_chars].rstrip() + "\n\n[文档上下文已按当前批次截断]"
+    notice = "\n\n[文档上下文已按当前批次截断]"
+    if max_chars <= len(notice):
+        return notice.strip()[:max_chars]
+    return text[: max_chars - len(notice)].rstrip() + notice
 
 
 def _split_checkable_image_items(

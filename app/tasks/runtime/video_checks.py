@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.infrastructure.network import outbound_network_config
 from app.models.client import MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK
+from app.models.document_input import validate_model_input
 from app.persistence.connection import get_db
 from app.tasks.activity import (
     finish_check_activity,
@@ -274,6 +275,12 @@ def _run_video_check_items_concurrently(
                         "target_label": "视频帧检查",
                         "target_kind": "video_frame",
                     }
+                    batch_document_text = _document_text_for_video_batch(
+                        document_text, batch, document_meta or {}
+                    )
+                    validate_model_input(
+                        batch_document_text, task["max_input_chars"], "视频帧批次上下文"
+                    )
                     sections = _run_combined_multimodal_check_with_repair(
                         app,
                         check_items=items,
@@ -293,9 +300,7 @@ def _run_video_check_items_concurrently(
                             "force_disable_thinking": _task_flag(
                                 task, "force_disable_thinking"
                             ),
-                            "document_text": _document_text_for_video_batch(
-                                document_text, batch, document_meta or {}
-                            ),
+                            "document_text": batch_document_text,
                             "image_items": multimodal_images,
                             "batch_index": batch_index,
                             "batch_count": len(batches),
@@ -461,9 +466,7 @@ def _combined_video_check_prompt(check_items: list[dict]) -> str:
 def _document_text_for_video_batch(
     document_text: str, frame_items: list[dict], document_meta: dict
 ) -> str:
-    text = _trim_document_context(
-        str(document_text or "").strip(), IMAGE_DOCUMENT_CONTEXT_MAX_CHARS
-    )
+    text = str(document_text or "").split("\nvideo_frames:", 1)[0].strip()
     selection = (
         document_meta.get("frame_selection") if isinstance(document_meta, dict) else {}
     )
@@ -487,15 +490,19 @@ def _document_text_for_video_batch(
             selection_lines.append(f"- 抽帧策略：{selection.get('strategy')}")
 
     parts = []
-    if text:
-        parts.append(text)
     if selection_lines:
         parts.append("video_sampling:\n" + "\n".join(selection_lines))
     parts.append(
         "current_batch_video_frames:\n"
         + ("\n".join(frame_lines) if frame_lines else "- 未记录视频帧")
     )
-    return "\n\n".join(parts).strip()
+    batch_context = _trim_document_context(
+        "\n\n".join(parts), IMAGE_DOCUMENT_CONTEXT_MAX_CHARS
+    )
+    text = _trim_document_context(
+        text, IMAGE_DOCUMENT_CONTEXT_MAX_CHARS - len(batch_context) - 2
+    )
+    return "\n\n".join(part for part in (text, batch_context) if part)
 
 
 def _merge_video_batch_reports(

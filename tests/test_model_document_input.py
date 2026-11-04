@@ -2,8 +2,7 @@ import json
 import unittest
 
 from app.documents.extraction.pdf import _format_pdf_table_html
-from app.models.document_input import compact_model_document_text
-from app.tasks.runtime.preprocessing import _validate_model_input
+from app.models.document_input import compact_model_document_text, validate_model_input
 from tests.fixtures.pdf_tables import TABLE_ID, normalized_pdf_table, pdf_table_model
 
 
@@ -128,13 +127,13 @@ class ModelDocumentInputTest(unittest.TestCase):
     def test_input_limit_counts_exact_model_view_without_truncating_text(self):
         source = "file: guide.pdf\n\n" + normalized_pdf_table()
         compact = compact_model_document_text(source)
-        _validate_model_input(source, len(compact))
+        validate_model_input(source, len(compact))
         with self.assertRaisesRegex(
             RuntimeError, f"文档文本 {len(compact)} 字，超过当前模型文本上限"
         ):
-            _validate_model_input(source, len(compact) - 1)
+            validate_model_input(source, len(compact) - 1)
         with self.assertRaisesRegex(RuntimeError, "文档文本 200 字"):
-            _validate_model_input("正文" * 100, 199)
+            validate_model_input("正文" * 100, 199)
 
 
 if __name__ == "__main__":

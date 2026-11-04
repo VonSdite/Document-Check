@@ -32,19 +32,25 @@ app = create_app()
 
 过期回收和队列选择排除 `_active` 中的任务 ID。正在退出的进程继续占用机器、全局及用户并发名额，数据库恢复成功后才移除进程记录。取消先由任务协作退出，10 秒宽限后发送终止信号，3 秒后仍存活则强制结束。数据库租约与运行数据沿用现有字段。
 
-`documents.extraction` 接受可选的 `cancel_event`，在 PDF 页、表格和表格行以及 Excel 行边界抛出 `DocumentReadCanceled`。文档模块使用自身异常类型，TaskRunner 根据取消信号更新任务状态。新增耗时解析循环时同步设置取消检查点。
+`documents.extraction` 接受可选的 `cancel_event`，在 Word 段落、表格行与单元格，PDF 页、表格和表格行以及 Excel 行边界抛出 `DocumentReadCanceled`。文档模块使用自身异常类型，TaskRunner 根据取消信号更新任务状态。新增耗时解析循环时同步设置取消检查点。
 
 ## 文档解析与列表读取
 
 `checks/text_content.py` 提供 `DocumentBodyView`，供常用词匹配与语种估计共用。正文视图保留真实段落和表格锚点文字，过滤提取器标记、重复继承值、补充链接注释及技术内容，并解码 HTML 实体。区间映射将命中范围还原到原始提取文本，常用词报告从原文读取文件、页码、行号和片段。敏感词检查使用自身规则，超链接目标由独立的超链接检查处理。
 
-`documents/extraction/spreadsheets.py` 将 openpyxl 内部流式接口限定在 Excel 解析器内，使用已锁定的 `openpyxl==3.1.5`。`_WorksheetValuesAndFormulas` 继承 `WorkSheetParser`，一次解析保留缓存值和公式，并沿用其日期、时长、共享公式及单元格类型规则。超链接元数据单独流式读取，再通过行列范围索引参与文本生成。升级 openpyxl 时运行公式、日期、链接、稀疏行列和取消回归测试。
+`documents/extraction/docx.py` 按块遍历正文和单元格中的段落与表格，保留原文阅读顺序。嵌套表格递归读取，超链接位置包含完整表格路径；合并位置按底层单元格识别，锚点正文读取一次，覆盖位置标注继承关系，独立单元格的相同文字分别保留。
+
+`documents/extraction/spreadsheets.py` 将 openpyxl 内部流式接口限定在 Excel 解析器内，使用已锁定的 `openpyxl==3.1.5`。`_WorksheetValuesAndFormulas` 继承 `WorkSheetParser`，一次解析保留缓存值和公式，并沿用其日期、时长、共享公式及单元格类型规则。提取范围由实际单元格和链接范围决定；最后一行实际数据之后的链接按需补齐。超链接元数据单独流式读取，再通过行列范围索引参与文本生成。升级 openpyxl 时运行公式、日期、链接、稀疏行列和取消回归测试。
 
 `documents/extraction/pdf.py` 使用页面 rawdict 字符边界筛选可能含文字的单元格，字符信息不完整时保留原生提取回退。同页表格共用 TextPage，图片与绘图使用中心坐标索引。索引仅缩小候选范围，文本及非文本内容仍按现有坐标容差判定。
 
 `documents/extraction/pdf_margins.py` 先扫描轻量页面文字与边框，按边缘位置、对齐和连续或隔页重复规律生成页眉页脚清理计划。每页执行时按坐标过滤对应文字行，并按原始出现次序同步清理线性文本；pypdf 回退只清理页内可唯一确认的文字。页面预扫描保留分页取消检查点，内存只保存边缘候选；表格文字、页码和超链接引用保持完整。
 
-`models/document_input.py` 从完整归一化 PDF 表格生成模型文档视图。每个原始单元格按坐标或合并范围记录一次，文字使用 JSON 字符串，空值、非文本内容和未还原位置使用独立标记；表格 ID、行列数与置信度保留，H、M、L 分别编码 high、medium、low。转换前核对网格、合并范围、继承内容及单元格状态，无法完整核对的表格保持原样。`models.client` 在文本和图文请求中使用该视图，`tasks/runtime/preprocessing.py` 使用同一函数计算文档输入长度；数据库继续保存完整提取文本，供本地规则和报告定位使用。缓存文本同样经过精简和长度校验。
+`models/document_input.py` 从完整归一化 PDF 表格生成模型文档视图。每个原始单元格按坐标或合并范围记录一次，文字使用 JSON 字符串，空值、非文本内容和未还原位置使用独立标记；表格 ID、行列数与置信度保留，H、M、L 分别编码 high、medium、low。转换前核对网格、合并范围、继承内容及单元格状态，无法完整核对的表格保持原样。`models.client` 在文本和图文请求中使用该视图，`validate_model_input` 按该视图校验实际请求的文档长度。
+
+预处理持久化完整提取内容，供本地规则、报告定位和重试复用。`tasks/runner.py` 在 AI 检查项开始时校验全文输入，超限只影响该项；本地词表与链接检查处理完整内容。图片与视频在生成批次上下文后校验长度。图片优先为本批各目标页分配上下文，再补充相邻页；视频保留采样说明和本批帧位置。批次裁剪提示计入 20000 字预算。缓存输入与首次解析使用相同的执行路径。
+
+任务异常收尾按数据库中的用户取消标记和执行令牌判断取消状态。检查线程的停止信号负责结束并发请求；模型服务错误和输入超限记录为失败，并保留错误与已有中间结果。
 
 `web/task_lists.py` 按任务类型选择列表元数据。轮询先批量读取状态与统计缓存，仅对已结束且缓存过期的任务按主键检查报告存在性；候选 ID 来自已验证任务类型和归属的记录。`reporting/statistics.py` 优先使用统计行，报告写入由 `trg_tasks_report_stats_invalidate` 触发缓存删除。文件可用性检查在一次调用内复用已解析分组，并实时检查磁盘文件。
 
@@ -123,6 +129,7 @@ uv run python -m unittest discover -s tests
 - `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
 - `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、轮询字段读取与缓存失效、列表元数据选择、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
 - `tests/test_document_performance.py` 检查 Excel 单工作簿读取、缓存与共享公式、日期类型、重叠链接、稀疏行列，以及 PDF 空单元格扫描次数和坐标索引等价性。`scripts/benchmark_documents.py` 测量合成宽表与 PDF 表格的解析耗时及输出摘要。
+- `tests/test_document_integrity.py` 检查 Word 横纵合并、独立重复内容、嵌套表格与链接顺序、取消，以及 Excel 范围声明和末尾链接的完整提取。
 - `tests/test_server_runtime.py` 检查 WSGI 请求体、代理信息、线程配置和监督器退出通知；`tests/test_server_integration.py` 使用真实 HTTP 服务检查多进程、上传下载、任务执行和退出清理。
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查认领、取消、执行权、存活过期任务防重入、进程名额及检查项执行。
 - `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可、入口与初始化超时、状态文件写入失败时终止进程，以及监督器被终止后的遗留进程恢复。`tests/test_server_runtime.py` 另验证 Windows 虚拟环境下监督器和任务进程的实际解释器命令。

@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.infrastructure.network import outbound_network_config
 from app.models.client import MULTIMODAL_OUTPUT_CONTRACT_MULTI_CHECK
+from app.models.document_input import validate_model_input
 from app.persistence.connection import get_db
 from app.tasks.activity import (
     finish_check_activity,
@@ -279,6 +280,9 @@ def _run_image_check_items_concurrently(
                 multimodal_images = _multimodal_image_inputs(image_folder, batch)
                 batch_document_text = _document_text_for_image_batch(
                     document_text, batch
+                )
+                validate_model_input(
+                    batch_document_text, task["max_input_chars"], "图片检查批次上下文"
                 )
                 current_batch = {
                     "batch_index": batch_index,

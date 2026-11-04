@@ -72,6 +72,19 @@ def compact_model_document_text(document_text: str) -> str:
     return _PDF_TABLE_PATTERN.sub(_compact_pdf_table, document_text)
 
 
+def validate_model_input(
+    document_text: str, max_input_chars: int, label: str = "文档文本"
+) -> None:
+    """按实际发送的文档视图校验当前请求的文本长度。"""
+    if not document_text.strip():
+        raise RuntimeError("未能从文档中提取到可检查文本")
+    model_input_chars = len(compact_model_document_text(document_text))
+    if model_input_chars > max_input_chars:
+        raise RuntimeError(
+            f"{label} {model_input_chars} 字，超过当前模型文本上限 {max_input_chars} 字"
+        )
+
+
 def _compact_pdf_table(match: re.Match) -> str:
     original = match.group(0)
     try:
