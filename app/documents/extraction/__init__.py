@@ -44,7 +44,9 @@ def extract_document(
     hyperlinks = []
     try:
         if file_type == "docx":
-            return _extract_docx(path, hyperlinks), hyperlinks
+            return _extract_docx(
+                path, hyperlinks, cancel_event=cancel_event
+            ), hyperlinks
         if file_type == "pdf":
             return (
                 _extract_pdf(
