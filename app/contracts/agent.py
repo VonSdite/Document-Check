@@ -175,6 +175,9 @@ class ReportItem(Contract):
     suggestion: str
     evidence_refs: list[dict]
     evidence_fingerprint: str = ""
+    source_rounds: list[int] = Field(default_factory=list)
+    source_items: list[dict] = Field(default_factory=list)
+    round_conflict: bool = False
 
 
 class CheckedReport(Contract):

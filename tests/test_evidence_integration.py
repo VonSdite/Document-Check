@@ -32,10 +32,51 @@ from app.tasks.selection import _check_items_from_snapshot
 from app.tasks.submission import _enabled_check_item_snapshots
 from tests.test_evidence_agent import (
     ScriptedModel,
+    candidate,
+    decision,
     discovery,
     empty_plan,
     input_context,
 )
+
+
+def round_model_turn(model, messages, *, schema, **kwargs):
+    context = input_context(messages)
+    title = schema["title"]
+    if title == "CheckPlan":
+        answer = empty_plan()
+    elif title == "Discovery":
+        refs = [
+            {"source_id": source["id"], "quote": source["text"]}
+            for source in context["sources"]
+        ]
+        answer = discovery(
+            context,
+            [candidate(refs), candidate(refs, description="需要核实适用条件")],
+        )
+    else:
+        answer = {
+            "actions": [],
+            "decisions": [
+                decision(
+                    item["id"],
+                    item["evidence"],
+                    description=item["description"],
+                    outcome="insufficient"
+                    if "需要核实" in item["description"]
+                    else "confirmed",
+                )
+                for item in context["candidates"]
+            ],
+        }
+    model.before_request({"messages": messages})
+    response = AgentTurn(
+        json.dumps(answer, ensure_ascii=False),
+        usage={"prompt_tokens": 100, "completion_tokens": 50},
+        finish_reason="stop",
+    )
+    model.after_request({}, response, 0.01, None)
+    return response
 
 
 class EvidenceIntegrationTest(unittest.TestCase):
@@ -399,6 +440,138 @@ class EvidenceIntegrationTest(unittest.TestCase):
         workbook = load_workbook(output)
         self.assertEqual(workbook["执行用量"].cell(2, 3).value, len(calls) * 350000)
         self.assertEqual(workbook["执行用量"].cell(2, 4).value, len(calls) * 300000)
+
+    def create_round_task(self, rounds=2):
+        item = {
+            "code": "custom-check",
+            "name": "业务检查",
+            "prompt": "检查设备参数。",
+            "agent_options": AgentOptions(
+                protocol="structured", strategy="local", full_document=False
+            ).model_dump(mode="json"),
+        }
+        text = "设备A 电压220 V\n设备A 电压110 V"
+        task_id = self.insert_task([item], text=text)
+        get_db().execute(
+            "UPDATE tasks SET document_meta_json=? WHERE id=?",
+            (
+                json.dumps(
+                    {
+                        "check_rounds": rounds,
+                        "source_documents": [
+                            {"filename": "a.txt", "text": text, "text_complete": True}
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                task_id,
+            ),
+        )
+        get_db().commit()
+        return task_id
+
+    def test_multiround_worker_keeps_independent_checkpoints_evidence_and_exports(self):
+        task_id = self.create_round_task()
+        agents = []
+
+        def make_agent(**kwargs):
+            agents.append(kwargs)
+            return EvidenceAgent(**kwargs)
+
+        with (
+            patch("app.tasks.runner.EvidenceAgent", side_effect=make_agent),
+            patch("app.models.agent.AgentModel.turn", new=round_model_turn),
+        ):
+            TaskRunner(self.app).run(task_id, "owner")
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "completed", task["error"])
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(
+            result["round_summary"], {"planned": 2, "completed": 2, "failed": 0}
+        )
+        self.assertEqual(
+            [agent["store"].code for agent in agents],
+            ["custom-check", "custom-check:round:2"],
+        )
+        self.assertIsNot(agents[0]["shared_facts"], agents[1]["shared_facts"])
+        prepared = _prepare_task_results([result], suppression_rules={})[0]
+        self.assertNotIn("error", prepared)
+        self.assertEqual(prepared["report_counts"]["issue"], 1)
+        self.assertEqual(prepared["report_counts"]["unverified"], 1)
+        self.assertTrue(
+            all(item["source_rounds"] == [1, 2] for item in prepared["report_items"])
+        )
+        self.assertTrue(all(item["text_evidence"] for item in prepared["report_items"]))
+        self.assertEqual(result["agent"]["model_calls"], 6)
+        self.assertEqual(result["agent"]["known_input_tokens"], 600)
+        workbook = load_workbook(build_report_workbook(task))
+        self.assertTrue(
+            {"引用原文", "执行用量", "检查轮次"}.issubset(workbook.sheetnames)
+        )
+        self.assertEqual(workbook["检查轮次"].max_row, 3)
+
+    def test_multiround_retry_resumes_failed_round_and_preserves_manual_review(self):
+        task_id = self.create_round_task()
+        discoveries = 0
+
+        def interrupted_turn(model, messages, *, schema, **kwargs):
+            nonlocal discoveries
+            if schema["title"] == "Discovery":
+                discoveries += 1
+                if discoveries == 2:
+                    model.before_request({"messages": messages})
+                    model.after_request({}, None, 0.01, "503 服务暂时失败")
+                    raise LLMError("503 服务暂时失败")
+            return round_model_turn(model, messages, schema=schema, **kwargs)
+
+        with patch("app.models.agent.AgentModel.turn", new=interrupted_turn):
+            TaskRunner(self.app).run(task_id, "owner")
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "partial", task["error"])
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(result["round_summary"]["completed"], 1)
+        previous_calls = result["agent"]["model_calls"]
+        item_id = result["structured_report"]["items"][0]["id"]
+        result["item_acceptances"] = {item_id: {"acceptance_status": "accepted"}}
+        get_db().execute(
+            "UPDATE tasks SET status='running', claim_token='owner', "
+            "retry_check_codes_json='[\"custom-check\"]', result_json=? WHERE id=?",
+            (json.dumps([result], ensure_ascii=False), task_id),
+        )
+        get_db().commit()
+        stages = []
+
+        def resumed_turn(model, messages, *, schema, **kwargs):
+            stages.append(schema["title"])
+            return round_model_turn(model, messages, schema=schema, **kwargs)
+
+        with patch("app.models.agent.AgentModel.turn", new=resumed_turn):
+            TaskRunner(self.app).run(task_id, "owner")
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "completed", task["error"])
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(stages, ["Discovery", "Review"])
+        self.assertEqual(result["agent"]["model_calls"], previous_calls + 2)
+        self.assertEqual(result["structured_report"]["items"][0]["id"], item_id)
+        self.assertEqual(
+            result["item_acceptances"][item_id]["acceptance_status"], "accepted"
+        )
+
+    def test_permanent_model_error_stops_later_evidence_rounds(self):
+        task_id = self.create_round_task(rounds=5)
+        with patch(
+            "app.models.agent.AgentModel._request",
+            side_effect=LLMError("余额不足，服务返回 500", retryable=False),
+        ) as request:
+            TaskRunner(self.app).run(task_id, "owner")
+        task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["status"], "failed")
+        request.assert_called_once()
+        result = json.loads(task["result_json"])[0]
+        self.assertEqual(
+            result["round_summary"], {"planned": 5, "completed": 0, "failed": 1}
+        )
+        self.assertIn("余额不足", result["round_results"][0]["error"])
 
     def test_invalid_report_is_not_recovered_as_unvalidated_text(self):
         result = {

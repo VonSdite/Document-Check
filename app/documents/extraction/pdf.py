@@ -16,12 +16,20 @@ from app.documents.extraction.common import (
     _record_hyperlink,
     check_extraction_canceled,
 )
+from app.documents.extraction.pdf_margins import (
+    filter_pdf_margins,
+    find_repeated_pdf_margins,
+)
 
 _PDF_TABLE_COORDINATE_TOLERANCE = 2.0
 _PDF_TABLE_MIN_TEXT_COVERAGE = 0.85
 _PDF_SCRIPT_SIZE_RATIO = 0.88
 _PDF_SCRIPT_VERTICAL_RATIO = 0.18
 _PDF_SCRIPT_NEIGHBOR_GAP_RATIO = 0.9
+_PDF_TOC_LEADER_PATTERN = re.compile(r"(?:[.．·][ \t]*){8,}|(?:…[ \t]*){4,}")
+_PDF_TOC_PAGE_PATTERN = re.compile(
+    r"(?:[0-9]{1,6}|[ivxlcdmIVXLCDM]{1,12}|[A-Z]-[0-9]{1,6})"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -44,6 +52,11 @@ def _extract_pdf(
     if layout_document is None:
         reader = PdfReader(str(path))
     try:
+        margin_plan = (
+            find_repeated_pdf_margins(layout_document, cancel_event=cancel_event)
+            if layout_document is not None
+            else {}
+        )
         pages = []
         page_count = (
             layout_document.page_count
@@ -53,9 +66,13 @@ def _extract_pdf(
         for index in range(1, page_count + 1):
             check_extraction_canceled(cancel_event)
             pypdf_page = None
+            text_hyperlinks = None
             if layout_document is not None and index <= layout_document.page_count:
                 layout_page = layout_document[index - 1]
                 pymupdf_text, raw_page = _extract_pymupdf_page_text(layout_page)
+                margins = filter_pdf_margins(raw_page, margin_plan.get(index - 1, []))
+                pymupdf_text = margins.clean_text(pymupdf_text)
+                raw_page = margins.raw_page
                 pymupdf_semantic_text = _pdf_page_semantic_text(raw_page)
                 pypdf_text = ""
                 if _pdf_should_try_pypdf(pymupdf_text):
@@ -63,6 +80,7 @@ def _extract_pdf(
                         reader = PdfReader(str(path))
                     pypdf_page = reader.pages[index - 1]
                     pypdf_text = pypdf_page.extract_text() or ""
+                    pypdf_text = margins.clean_text(pypdf_text, fallback=True)
                 pypdf_text = _normalize_pdf_overlapping_spaces(pypdf_text, raw_page)
                 pymupdf_text = _normalize_pdf_overlapping_spaces(pymupdf_text, raw_page)
                 selected_text = _select_pdf_page_text(pypdf_text, pymupdf_text)
@@ -81,14 +99,32 @@ def _extract_pdf(
                     )
                     if structured_text:
                         text = structured_text
-                hyperlinks = _extract_pymupdf_page_hyperlinks(layout_page)
+                text_hyperlinks = []
+                hyperlinks = _extract_pymupdf_page_hyperlinks(
+                    layout_page,
+                    excluded_rects=margins.rects,
+                    visible_hyperlinks=text_hyperlinks,
+                )
             else:
                 pypdf_page = reader.pages[index - 1]
                 pypdf_text = pypdf_page.extract_text() or ""
                 text = pypdf_text
                 hyperlinks = _extract_pypdf_page_hyperlinks(pypdf_page)
+            text = _normalize_pdf_toc_leaders(text)
+            hyperlinks = [
+                (_normalize_pdf_toc_leaders(label), target, internal_target_exists)
+                for label, target, internal_target_exists in hyperlinks
+            ]
+            if text_hyperlinks is None:
+                text_hyperlinks = hyperlinks
+            else:
+                text_hyperlinks = [
+                    (_normalize_pdf_toc_leaders(label), target, internal_target_exists)
+                    for label, target, internal_target_exists in text_hyperlinks
+                ]
+            if text_hyperlinks:
+                text = _append_hyperlinks(text, text_hyperlinks)
             if hyperlinks:
-                text = _append_hyperlinks(text, hyperlinks)
                 for label, target, internal_target_exists in hyperlinks:
                     _record_hyperlink(
                         extracted_hyperlinks,
@@ -112,6 +148,25 @@ def _extract_pdf(
     finally:
         if layout_document is not None:
             layout_document.close()
+
+
+def _normalize_pdf_toc_leaders(text: str) -> str:
+    """将目录标题与页码之间的长点线折叠为制表符。"""
+    lines = []
+    for line in text.splitlines(keepends=True):
+        for match in _PDF_TOC_LEADER_PATTERN.finditer(line):
+            title = line[: match.start()].rstrip(" \t")
+            page = line[match.end() :].strip()
+            if not title.strip() or not _PDF_TOC_PAGE_PATTERN.fullmatch(page):
+                continue
+            if "://" in title or "\\" in title:
+                continue
+            if "/" in title and not any(char.isspace() for char in title.strip()):
+                continue
+            line = f"{title}\t{line[match.end() :].lstrip(' \t')}"
+            break
+        lines.append(line)
+    return "".join(lines)
 
 
 def _pdf_should_try_pypdf(text: str) -> bool:
@@ -662,7 +717,7 @@ def _format_pdf_table_html(model: dict) -> str:
             if normalized["inherited"]:
                 attributes.append(f'data-inherited-from="{normalized["anchor"]}"')
                 if cell["text"]:
-                    value = html.escape(cell["text"])
+                    value = html.escape(_normalize_pdf_toc_leaders(cell["text"]))
                 elif cell["has_nontext_content"]:
                     value = f"[合并覆盖，继承自{normalized['anchor']}的非文本内容]"
                 else:
@@ -672,7 +727,7 @@ def _format_pdf_table_html(model: dict) -> str:
                     attributes.append(f'data-original-rowspan="{cell["rowspan"]}"')
                 if cell["colspan"] > 1:
                     attributes.append(f'data-original-colspan="{cell["colspan"]}"')
-                value = html.escape(cell["text"])
+                value = html.escape(_normalize_pdf_toc_leaders(cell["text"]))
                 if not value:
                     if cell["has_nontext_content"]:
                         attributes.append('data-non-text="true"')
@@ -714,7 +769,9 @@ def _pdf_position_reference(row: int, column: int) -> str:
     return f"{get_column_letter(column + 1)}{row + 1}"
 
 
-def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str, bool | None]]:
+def _extract_pymupdf_page_hyperlinks(
+    page, *, excluded_rects=(), visible_hyperlinks: list | None = None
+) -> list[tuple[str, str, bool | None]]:
     hyperlinks = []
     try:
         links = page.get_links()
@@ -741,6 +798,18 @@ def _extract_pymupdf_page_hyperlinks(page) -> list[tuple[str, str, bool | None]]
         item = (label, target, internal_target_exists)
         if item not in hyperlinks:
             hyperlinks.append(item)
+        if (
+            visible_hyperlinks is not None
+            and item not in visible_hyperlinks
+            and not (
+                link_rect
+                and any(
+                    _pdf_rect_contains_center(rect, tuple(link_rect))
+                    for rect in excluded_rects
+                )
+            )
+        ):
+            visible_hyperlinks.append(item)
     return hyperlinks
 
 

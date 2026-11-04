@@ -11,6 +11,7 @@ from flask import Flask
 from openpyxl import Workbook
 
 from app.checks.common_terms import COMMON_TERMS_CHECK_CODE
+from app.checks.guardrails import build_pdf_table_evidence_index
 from app.checks.hyperlinks import HYPERLINK_CHECK_CODE
 from app.checks.sensitive_terms import SENSITIVE_TERMS_CHECK_CODE
 from app.contracts.task_types import (
@@ -20,7 +21,10 @@ from app.contracts.task_types import (
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
 )
+from app.documents.images import format_image_document_text
+from app.documents.videos import format_video_document_text
 from app.models.client import LLMError
+from app.models.document_input import compact_model_document_text
 from app.persistence.connection import get_db, now_text
 from app.persistence.schema import init_db
 from app.persistence.settings import set_setting
@@ -44,6 +48,7 @@ from app.tasks.runtime.multimodal_common import (
     _check_item_groups,
     _document_text_for_image_batch,
     _format_image_check_issue_summary,
+    _trim_document_context,
 )
 from app.tasks.runtime.multimodal_protocol import (
     _run_combined_multimodal_check_with_repair,
@@ -52,10 +57,12 @@ from app.tasks.runtime.multimodal_protocol import (
 )
 from app.tasks.runtime.state import _mark_failed, _save_intermediate_results
 from app.tasks.runtime.video_checks import (
+    _document_text_for_video_batch,
     _merge_video_batch_reports,
     _run_video_check_items_concurrently,
 )
 from app.tasks.supervisor import TaskSupervisor
+from tests.fixtures.pdf_tables import TABLE_ID, normalized_pdf_table
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -2375,6 +2382,63 @@ class TaskExecutionTest(unittest.TestCase):
         self.assertEqual(meta["preprocessing"]["status"], "completed")
         self.assertEqual(calls[0]["document_text"], updated["document_text"])
 
+    def test_pdf_task_validates_and_sends_compact_input_while_retaining_evidence(self):
+        extracted = "[第75页]\n告警属性\n" + normalized_pdf_table()
+        source = "file: table.pdf\n\n" + extracted
+        model_text = compact_model_document_text(source)
+        self.assertLess(len(model_text), len(source))
+        upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "table.pdf"
+        upload_path.write_bytes(b"pdf-fixture")
+        check_item = {
+            "id": 1,
+            "code": "table-check",
+            "name": "表格检查",
+            "prompt": "检查表格内容",
+        }
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                task_id = self._insert_running_preprocessing_task(
+                    task_type=DOCUMENT_TASK_TYPE,
+                    original_filename="table.pdf",
+                    stored_filename="table.pdf",
+                    file_type="pdf",
+                    check_item=check_item,
+                    max_input_chars=len(model_text),
+                )
+                if cached:
+                    get_db().execute(
+                        "UPDATE tasks SET document_text = ? WHERE id = ?",
+                        (source, task_id),
+                    )
+                    get_db().commit()
+                with (
+                    patch(
+                        "app.tasks.runtime.preprocessing.extract_document",
+                        return_value=(extracted, []),
+                    ) as extract,
+                    patch(
+                        "app.models.client._run_payload_with_retries",
+                        return_value='{"summary":"检查完成","items":[]}',
+                    ) as request,
+                ):
+                    TaskRunner(self.app).run(task_id)
+                self.assertEqual(extract.call_count, 0 if cached else 1)
+                updated = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                    .fetchone()
+                )
+                self.assertEqual(updated["status"], "completed", updated["error"])
+                self.assertEqual(updated["document_text"], source)
+                request.assert_called_once()
+                content = request.call_args.kwargs["payload"]["messages"][1]["content"]
+                self.assertEqual(content.split("待检查文档：\n", 1)[1], model_text)
+                evidence = build_pdf_table_evidence_index(updated["document_text"])
+                self.assertEqual(evidence[TABLE_ID]["confidence"], "high")
+                self.assertEqual(evidence[TABLE_ID]["cells"]["B1"]["kind"], "merged")
+                self.assertEqual(evidence[TABLE_ID]["cells"]["C2"]["kind"], "empty")
+                self.assertEqual(evidence[TABLE_ID]["cells"]["B3"]["kind"], "nontext")
+
     def test_run_task_persists_hyperlinks_and_executes_rule_check(self):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "links.html"
         upload_path.write_text(
@@ -2451,8 +2515,483 @@ class TaskExecutionTest(unittest.TestCase):
         run_check_mock.assert_not_called()
         self.assertEqual(updated["status"], "failed")
         self.assertIn("超过当前模型文本上限", updated["error"])
-        self.assertIsNone(updated["document_text"])
+        self.assertEqual(
+            updated["document_text"], "file: long.txt\n\n" + "超长正文" * 20
+        )
         self.assertTrue(upload_path.is_file())
+
+    def test_local_rules_check_full_text_above_model_limit(self):
+        root = Path(self.temp_dir.name)
+        for key, headings in (
+            ("SENSITIVE_TERMS_PATH", ["不规范用语", "规范用语"]),
+            ("COMMON_TERMS_PATH", ["常见错误/不推荐用法", "常用词"]),
+        ):
+            book = Workbook()
+            book.active.append(headings)
+            book.active.append(["错误词", "规范词"])
+            path = root / f"{key}.xlsx"
+            book.save(path)
+            book.close()
+            self.app.config[key] = str(path)
+        source = "普通正文。" * 100 + '错误词<a href="javascript:alert(1)">末尾链接</a>'
+        (Path(self.app.config["UPLOAD_FOLDER"]) / "long.html").write_text(
+            source, encoding="utf-8"
+        )
+        for code in (
+            SENSITIVE_TERMS_CHECK_CODE,
+            COMMON_TERMS_CHECK_CODE,
+            HYPERLINK_CHECK_CODE,
+        ):
+            for cached in (False, True):
+                with self.subTest(code=code, cached=cached):
+                    task_id = self._insert_running_preprocessing_task(
+                        task_type=DOCUMENT_TASK_TYPE,
+                        original_filename="long.html",
+                        stored_filename="long.html",
+                        file_type="html",
+                        check_item={
+                            "id": 1,
+                            "code": code,
+                            "name": code,
+                            "prompt": "本地规则",
+                        },
+                        max_input_chars=20,
+                    )
+                    if cached:
+                        get_db().execute(
+                            "UPDATE tasks SET document_text = ?, document_meta_json = ? WHERE id = ?",
+                            (
+                                source,
+                                json.dumps(
+                                    {
+                                        "hyperlinks": [
+                                            {
+                                                "target": "javascript:alert(1)",
+                                                "display_text": "末尾链接",
+                                            }
+                                        ]
+                                    }
+                                ),
+                                task_id,
+                            ),
+                        )
+                        get_db().commit()
+                    with patch("app.tasks.runner.run_check") as model:
+                        TaskRunner(self.app).run(task_id)
+                    task = (
+                        get_db()
+                        .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                        .fetchone()
+                    )
+                    self.assertEqual(task["status"], "completed", task["error"])
+                    result = json.loads(task["result_json"])[0]
+                    self.assertTrue(result["structured_report"]["items"])
+                    model.assert_not_called()
+
+    def test_model_limit_failure_preserves_local_check_results(self):
+        checks = [
+            {
+                "id": 1,
+                "code": HYPERLINK_CHECK_CODE,
+                "name": "超链接检查",
+                "prompt": "本地规则",
+            },
+            {"id": 2, "code": "ai-check", "name": "AI检查", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        get_db().execute(
+            "UPDATE tasks SET max_input_chars = 20, document_meta_json = ? WHERE id = ?",
+            (json.dumps({"hyperlinks": [{"target": "javascript:alert(1)"}]}), task_id),
+        )
+        get_db().commit()
+        with patch("app.tasks.runner.run_check") as model:
+            TaskRunner(self.app).run(task_id)
+        task = (
+            get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        )
+        self.assertEqual(task["status"], "partial", task["error"])
+        results = json.loads(task["result_json"])
+        self.assertTrue(results[0]["structured_report"]["items"])
+        self.assertIn("超过当前模型文本上限", results[1]["error"])
+        model.assert_not_called()
+
+    def test_long_image_document_checks_only_batch_context(self):
+        extracted = "[第1页]\n" + "无关正文。" * 10000 + "\n[第75页]\n当前图片说明"
+        item = {
+            "id": "image-1",
+            "filename": "page075-image001.png",
+            "mime_type": "image/png",
+            "position": "page075-image001",
+            "page_number": 75,
+        }
+        upload = Path(self.app.config["UPLOAD_FOLDER"]) / "long.pdf"
+        upload.write_bytes(b"pdf-fixture")
+
+        def images(_path, _type, output_dir, **kwargs):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / item["filename"]).write_bytes(b"png-fixture")
+            return [item]
+
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                task_id = self._insert_running_preprocessing_task(
+                    task_type=IMAGE_TASK_TYPE,
+                    original_filename="long.pdf",
+                    stored_filename="long.pdf",
+                    file_type="pdf",
+                    max_input_chars=1000,
+                    check_item={
+                        "id": 1,
+                        "code": "image-small-language-text",
+                        "name": "图片检查",
+                        "prompt": "检查",
+                    },
+                )
+                source = format_image_document_text(
+                    "long.pdf", [item], document_text=extracted
+                )
+                if cached:
+                    output_dir = Path(self.app.config["IMAGE_FOLDER"]) / "long"
+                    images(upload, "pdf", output_dir)
+                    get_db().execute(
+                        "UPDATE tasks SET document_text = ?, document_meta_json = ? WHERE id = ?",
+                        (
+                            source,
+                            json.dumps(
+                                {
+                                    "images": [
+                                        {
+                                            **item,
+                                            "relative_path": f"long/{item['filename']}",
+                                        }
+                                    ]
+                                }
+                            ),
+                            task_id,
+                        ),
+                    )
+                    get_db().commit()
+                with (
+                    patch(
+                        "app.tasks.runtime.preprocessing.extract_text",
+                        return_value=extracted,
+                    ),
+                    patch(
+                        "app.tasks.runtime.preprocessing.extract_images",
+                        side_effect=images,
+                    ),
+                    patch(
+                        "app.tasks.runtime.preprocessing.render_pdf_page_images",
+                        return_value=([], {}),
+                    ),
+                    patch(
+                        "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
+                        return_value="未发现问题",
+                    ) as model,
+                ):
+                    TaskRunner(self.app).run(task_id)
+                task = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                    .fetchone()
+                )
+                self.assertEqual(task["status"], "completed", task["error"])
+                self.assertEqual(task["document_text"], source)
+                sent = model.call_args.kwargs["document_text"]
+                self.assertIn("当前图片说明", sent)
+                self.assertNotIn("无关正文", sent)
+                self.assertLessEqual(len(sent), 1000)
+
+    def test_video_inventory_is_scoped_to_current_batch_before_length_check(self):
+        frames = [
+            {
+                "id": f"frame-{i}",
+                "filename": f"{i:04d}_t0000{i:02d}000.jpg",
+                "mime_type": "image/jpeg",
+                "position": f"00:{i:02d}.000",
+                "timestamp_seconds": float(i),
+                "kind": "video_frame",
+            }
+            for i in range(16)
+        ]
+        selection = {
+            "duration_seconds": 16,
+            "frame_count": 16,
+            "strategy": "uniform-sampling",
+        }
+        source = format_video_document_text("video.mp4", frames, selection)
+        self.assertGreater(len(source), 1000)
+        upload = Path(self.app.config["UPLOAD_FOLDER"]) / "video.mp4"
+        upload.write_bytes(b"video-fixture")
+
+        def extract_frames(_path, output_dir, **kwargs):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for frame in frames:
+                (output_dir / frame["filename"]).write_bytes(b"jpeg-fixture")
+            return frames, selection
+
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                task_id = self._insert_running_preprocessing_task(
+                    task_type=VIDEO_TASK_TYPE,
+                    original_filename="video.mp4",
+                    stored_filename="video.mp4",
+                    file_type="mp4",
+                    max_input_chars=1000,
+                    check_item={
+                        "id": 1,
+                        "code": "video-check",
+                        "name": "视频检查",
+                        "prompt": "检查",
+                    },
+                )
+                if cached:
+                    extract_frames(
+                        upload, Path(self.app.config["IMAGE_FOLDER"]) / "video"
+                    )
+                    get_db().execute(
+                        "UPDATE tasks SET document_text = ?, document_meta_json = ? WHERE id = ?",
+                        (
+                            source,
+                            json.dumps(
+                                {
+                                    "frames": [
+                                        {
+                                            **frame,
+                                            "relative_path": f"video/{frame['filename']}",
+                                        }
+                                        for frame in frames
+                                    ],
+                                    "frame_selection": selection,
+                                }
+                            ),
+                            task_id,
+                        ),
+                    )
+                    get_db().commit()
+                with (
+                    patch(
+                        "app.tasks.runtime.preprocessing.extract_video_frames",
+                        side_effect=extract_frames,
+                    ),
+                    patch(
+                        "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
+                        return_value="未发现问题",
+                    ) as model,
+                ):
+                    TaskRunner(self.app).run(task_id)
+                task = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                    .fetchone()
+                )
+                self.assertEqual(task["status"], "completed", task["error"])
+                self.assertEqual(task["document_text"], source)
+                self.assertEqual(model.call_count, 4)
+                for call in model.call_args_list:
+                    self.assertLessEqual(len(call.kwargs["document_text"]), 1000)
+                    self.assertNotIn("\nvideo_frames:", call.kwargs["document_text"])
+
+    def test_video_batch_excludes_full_frame_inventory(self):
+        video = _document_text_for_video_batch(
+            "file: video.mp4\nvideo_frames:\n冗长清单" * 100,
+            [{"filename": "current.jpg", "position": "00:12.000"}],
+            {},
+        )
+        self.assertIn("current.jpg", video)
+        self.assertNotIn("冗长清单", video)
+
+    def test_multimodal_tasks_reject_actual_batch_above_limit(self):
+        image_dir = Path(self.app.config["IMAGE_FOLDER"]) / "limited"
+        image_dir.mkdir()
+        (image_dir / "page001.png").write_bytes(b"image-fixture")
+        item = {
+            "filename": "page001.png",
+            "relative_path": "limited/page001.png",
+            "mime_type": "image/png",
+            "page_number": 1,
+            "position": "00:01.000",
+        }
+        for task_type, meta_key, code in (
+            (IMAGE_TASK_TYPE, "images", "image-small-language-text"),
+            (VIDEO_TASK_TYPE, "frames", "video-check"),
+        ):
+            with self.subTest(task_type=task_type):
+                task_id = self._insert_running_preprocessing_task(
+                    task_type=task_type,
+                    original_filename="large.pdf",
+                    stored_filename="large.pdf",
+                    file_type="pdf",
+                    max_input_chars=1000,
+                    check_item={
+                        "id": 1,
+                        "code": code,
+                        "name": "多模态检查",
+                        "prompt": "检查",
+                    },
+                    document_meta={meta_key: [item]},
+                )
+                source = "file: large.pdf\n\n[第1页]\n" + "当前批次正文。" * 200
+                get_db().execute(
+                    "UPDATE tasks SET document_text = ? WHERE id = ?", (source, task_id)
+                )
+                get_db().commit()
+                with patch(
+                    "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check"
+                ) as model:
+                    TaskRunner(self.app).run(task_id)
+                task = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                    .fetchone()
+                )
+                self.assertEqual(task["status"], "failed")
+                self.assertIn("批次上下文", task["error"])
+                self.assertIn("超过当前模型文本上限", task["error"])
+                self.assertEqual(task["document_text"], source)
+                model.assert_not_called()
+
+    def test_comparison_tasks_validate_compact_pdf_input_at_request_boundary(self):
+        source = (
+            "# 文档A：a.pdf\n"
+            + normalized_pdf_table()
+            + "\n# 文档B：b.pdf\n"
+            + normalized_pdf_table()
+        )
+        compact = compact_model_document_text(source)
+        for task_type in (CONSISTENCY_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE):
+            for limit, expected in (
+                (len(compact), "completed"),
+                (len(compact) - 1, "failed"),
+            ):
+                with self.subTest(task_type=task_type, limit=limit):
+                    task_id = self._insert_running_preprocessing_task(
+                        task_type=task_type,
+                        original_filename="对照检查",
+                        stored_filename="a.pdf",
+                        file_type="pdf",
+                        max_input_chars=limit,
+                        check_item={
+                            "id": 1,
+                            "code": "comparison-check",
+                            "name": "对照检查",
+                            "prompt": "检查",
+                        },
+                    )
+                    get_db().execute(
+                        "UPDATE tasks SET document_text = ? WHERE id = ?",
+                        (source, task_id),
+                    )
+                    get_db().commit()
+                    with patch(
+                        "app.models.client._run_payload_with_retries",
+                        return_value='{"summary":"检查完成","items":[]}',
+                    ) as request:
+                        TaskRunner(self.app).run(task_id)
+                    task = (
+                        get_db()
+                        .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                        .fetchone()
+                    )
+                    self.assertEqual(task["status"], expected, task["error"])
+                    self.assertEqual(task["document_text"], source)
+                    if expected == "completed":
+                        sent = request.call_args.kwargs["payload"]["messages"][1][
+                            "content"
+                        ]
+                        self.assertEqual(sent.split("待检查文档：\n", 1)[1], compact)
+                    else:
+                        request.assert_not_called()
+
+    def test_multimodal_errors_use_persisted_user_cancellation_state(self):
+        image_dir = Path(self.app.config["IMAGE_FOLDER"]) / "errors"
+        image_dir.mkdir()
+        (image_dir / "image.png").write_bytes(b"image-fixture")
+        item = {
+            "filename": "image.png",
+            "relative_path": "errors/image.png",
+            "mime_type": "image/png",
+            "page_number": 1,
+            "position": "00:01.000",
+        }
+        for task_type, meta_key, code in (
+            (IMAGE_TASK_TYPE, "images", "image-small-language-text"),
+            (VIDEO_TASK_TYPE, "frames", "video-check"),
+        ):
+            for user_cancel in (False, True):
+                with self.subTest(task_type=task_type, user_cancel=user_cancel):
+                    task_id = self._insert_running_preprocessing_task(
+                        task_type=task_type,
+                        original_filename="source.pdf",
+                        stored_filename="source.pdf",
+                        file_type="pdf",
+                        check_item={
+                            "id": 1,
+                            "code": code,
+                            "name": "检查",
+                            "prompt": "检查",
+                        },
+                        document_meta={meta_key: [item]},
+                    )
+                    get_db().execute(
+                        "UPDATE tasks SET document_text = 'file: source.pdf\n[第1页]\n正文' WHERE id = ?",
+                        (task_id,),
+                    )
+                    get_db().commit()
+
+                    def fail(**kwargs):
+                        if user_cancel:
+                            get_db().execute(
+                                "UPDATE tasks SET status = 'canceling', cancel_requested = 1 WHERE id = ?",
+                                (task_id,),
+                            )
+                            get_db().commit()
+                        raise LLMError("模型服务不可用")
+
+                    with patch(
+                        "app.tasks.runtime.multimodal_protocol.run_multimodal_document_check",
+                        side_effect=fail,
+                    ):
+                        TaskRunner(self.app).run(task_id)
+                    task = (
+                        get_db()
+                        .execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                        .fetchone()
+                    )
+                    self.assertEqual(
+                        task["status"], "canceled" if user_cancel else "failed"
+                    )
+                    if not user_cancel:
+                        self.assertIn("模型服务不可用", task["error"])
+                    self.assertIsNone(task["api_key"])
+
+    def test_image_batch_keeps_target_pages_when_neighbors_exceed_context_budget(self):
+        source = "\n\n".join(
+            [
+                "file: long.pdf",
+                "[第74页]\n" + "相邻页正文。" * 5000,
+                "[第75页]\n当前页75正文。" + "当前页长正文。" * 4000,
+                "[第76页]\n" + "其他页正文。" * 5000,
+                "[第80页]\n当前页80正文。",
+            ]
+        )
+        scoped = _document_text_for_image_batch(
+            source,
+            [
+                {"filename": "page075.png", "page_number": 75},
+                {"filename": "page080.png", "page_number": 80},
+            ],
+        )
+        self.assertTrue("当前页75正文" in scoped)
+        self.assertTrue("当前页80正文" in scoped)
+        self.assertLessEqual(len(scoped), 20000)
+        self.assertIn("截断", scoped)
+
+    def test_trimmed_context_includes_notice_within_budget(self):
+        trimmed = _trim_document_context("正文" * 100, 50)
+        self.assertLessEqual(len(trimmed), 50)
+        self.assertTrue(trimmed.startswith("正文"))
+        self.assertIn("文档上下文已按当前批次截断", trimmed)
 
     def test_run_image_task_extracts_images_and_persists_metadata_in_worker(self):
         upload_path = Path(self.app.config["UPLOAD_FOLDER"]) / "diagram.pdf"

@@ -37,6 +37,7 @@ from app.checks.sensitive_terms import (
     sensitive_terms_file_candidates,
 )
 from app.contracts.agent import AgentOptions
+from app.contracts.limits import normalize_check_rounds
 from app.contracts.task_types import (
     DOCUMENT_TASK_TYPE,
     IMAGE_TASK_TYPE,
@@ -47,7 +48,8 @@ from app.documents.images import image_items_from_meta
 from app.documents.index import DocumentIndex
 from app.documents.text_semantics import strip_script_markers
 from app.infrastructure.network import outbound_network_config
-from app.models.client import LLMError, run_check
+from app.models.client import LLMError, LLMIncompleteResponseError, run_check
+from app.models.document_input import compact_model_document_text, validate_model_input
 from app.persistence.checkpoints import CheckpointStore
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
@@ -61,6 +63,7 @@ from app.tasks.activity import (
     take_check_retries,
     task_activities,
     update_check_activity,
+    update_check_round_activity,
 )
 from app.tasks.model_output import ModelOutputRecorder
 from app.tasks.runtime.common import (
@@ -74,6 +77,7 @@ from app.tasks.runtime.common import (
     _ordered_results,
     _task_value,
 )
+from app.tasks.runtime.document_rounds import run_document_rounds
 from app.tasks.runtime.evidence_agent import (
     EvidenceAgent,
     SharedFacts,
@@ -81,6 +85,7 @@ from app.tasks.runtime.evidence_agent import (
 )
 from app.tasks.runtime.image_checks import _run_image_check_items_concurrently
 from app.tasks.runtime.preprocessing import _prepare_task_inputs
+from app.tasks.runtime.report_validation import parse_check_report
 from app.tasks.runtime.state import (
     TaskCanceled,
     _build_summary,
@@ -304,7 +309,15 @@ class TaskRunner:
                 successful_results = [
                     result for result in results if not _check_result_failed(result)
                 ]
-                if failed_results and not successful_results:
+                has_successful_rounds = any(
+                    result.get("round_summary", {}).get("completed", 0)
+                    for result in results
+                )
+                if (
+                    failed_results
+                    and not successful_results
+                    and not has_successful_rounds
+                ):
                     error = _failed_check_items_error(failed_results)
                     logger.warning(
                         "任务全部检查项失败 task_id=%s error=%s", task_id, error
@@ -388,14 +401,14 @@ class TaskRunner:
                 logger.info("任务取消 task_id=%s", task_id)
                 _mark_canceled(db, task_id, claim_token)
             except (DocumentReadError, LLMError, RuntimeError) as exc:
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                if _cancel_requested(db, task_id, claim_token):
                     logger.info("任务取消 task_id=%s", task_id)
                     _mark_canceled(db, task_id, claim_token)
                 else:
                     logger.warning("任务失败 task_id=%s error=%s", task_id, exc)
                     _mark_failed(db, task_id, str(exc), results, claim_token)
             except Exception as exc:
-                if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
+                if _cancel_requested(db, task_id, claim_token):
                     logger.info("任务取消 task_id=%s", task_id)
                     _mark_canceled(db, task_id, claim_token)
                 else:
@@ -436,6 +449,11 @@ def _run_check_items_concurrently(
     completed_units = 0
     completed_by_code: dict[str, dict] = {}
     partial_by_code: dict[str, dict] = {}
+    previous_by_code = {
+        result.get("code"): result
+        for result in _check_results_from_json(_task_value(task, "result_json"))
+    }
+    round_progress: dict[str, float] = {}
     base_results = list(base_results or [])
     result_lock = threading.Lock()
     save_lock = threading.Lock()
@@ -508,7 +526,7 @@ def _run_check_items_concurrently(
 
     def current_progress() -> int:
         with result_lock:
-            units = completed_units
+            units = completed_units + sum(round_progress.values())
         return 5 + int(units / total_units * 85)
 
     def mark_unit_completed() -> int:
@@ -520,22 +538,42 @@ def _run_check_items_concurrently(
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
     local_rule_document_text = _local_rule_document_text(document_text, document_meta)
+    model_document_text = compact_model_document_text(document_text)
+    check_rounds = (
+        normalize_check_rounds((document_meta or {}).get("check_rounds"))
+        if task_type == DOCUMENT_TASK_TYPE
+        else 1
+    )
     source_index = DocumentIndex.from_task(
         document_text, document_meta or {}, task["original_filename"]
     )
-    shared_facts = SharedFacts()
+    shared_facts_by_round = {
+        number: SharedFacts() for number in range(1, check_rounds + 1)
+    }
     agent_request_gate = threading.BoundedSemaphore(DEFAULT_AGENT_PARALLELISM)
     for checkpoint in get_db().execute(
-        "SELECT state_json FROM task_checkpoints WHERE task_id = ?", (task_id,)
+        "SELECT check_code, state_json FROM task_checkpoints WHERE task_id = ?",
+        (task_id,),
     ):
         cached = json.loads(checkpoint["state_json"])
-        if cached.get("fact_cache_key"):
-            shared_facts.put(cached["fact_cache_key"], cached.get("facts", []))
+        _, separator, suffix = checkpoint["check_code"].rpartition(":round:")
+        number = int(suffix) if separator and suffix.isdecimal() else 1
+        if cached.get("fact_cache_key") and number in shared_facts_by_round:
+            shared_facts_by_round[number].put(
+                cached["fact_cache_key"], cached.get("facts", [])
+            )
 
-    def save_failed_result(item, execution, error, *, canceled):
+    def save_failed_result(
+        item, execution, error, *, canceled, output_incomplete=False
+    ):
         progress = mark_unit_completed()
         with result_lock:
-            result = dict(partial_by_code.pop(item["code"], None) or {})
+            round_progress.pop(item["code"], None)
+            result = dict(
+                partial_by_code.pop(item["code"], None)
+                or (previous_by_code.get(item["code"]) if check_rounds > 1 else None)
+                or {}
+            )
             result.update(
                 code=item["code"],
                 name=item["name"],
@@ -546,6 +584,8 @@ def _run_check_items_concurrently(
                 result["execution"] = execution
             if canceled:
                 result["canceled"] = True
+            elif output_incomplete:
+                result["output_incomplete"] = True
             result.setdefault("result", "")
             completed_by_code[item["code"]] = result
             completed_count = len(completed_by_code)
@@ -576,6 +616,7 @@ def _run_check_items_concurrently(
             item_cancel_event = check_events[item["code"]]
             execution = item_cancel_event.execution
             execution_meta = {"execution": execution} if execution else {}
+            previous = previous_by_code.get(item["code"], {})
 
             def ensure_active():
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
@@ -625,6 +666,50 @@ def _run_check_items_concurrently(
                     return
                 save_snapshot(db, summary, current_progress())
 
+            def save_round_result(snapshot):
+                with result_lock:
+                    partial_by_code[item["code"]] = {
+                        "code": item["code"],
+                        "name": item["name"],
+                        "issue_output_limit": issue_output_limit,
+                        "item_acceptances": previous.get("item_acceptances", {}),
+                        **snapshot,
+                        **execution_meta,
+                    }
+                    round_progress[item["code"]] = (
+                        len(snapshot["round_results"]) / check_rounds
+                    )
+                save_snapshot(
+                    db,
+                    f"{item['name']}：{snapshot['structured_report']['summary']}",
+                    current_progress(),
+                )
+
+            def start_round(number, completed):
+                update_check_round_activity(
+                    task_id,
+                    claim_token,
+                    item["code"],
+                    number,
+                    check_rounds,
+                    completed,
+                )
+
+            def run_rounds(run_round):
+                return run_document_rounds(
+                    code=item["code"],
+                    planned=check_rounds,
+                    previous=previous.get("round_results", []),
+                    previous_report=previous.get("structured_report"),
+                    run_round=run_round,
+                    ensure_active=ensure_active,
+                    on_update=save_round_result,
+                    on_round_start=start_round,
+                    sanitize=lambda raw: sanitize_text_check_result(
+                        raw, pdf_table_evidence=pdf_table_evidence
+                    )[0],
+                )
+
             try:
                 if not start_check_activity(task_id, claim_token, item["code"]):
                     item_cancel_event.set()
@@ -632,6 +717,7 @@ def _run_check_items_concurrently(
                 structured_report = None
                 agent_metadata = None
                 agent_error = ""
+                round_result = None
                 if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
                     structured_report = _run_sensitive_terms_check(
                         app, local_rule_document_text, issue_output_limit
@@ -685,41 +771,51 @@ def _run_check_items_concurrently(
                         task_type,
                         include_execution_limits=True,
                     )
-                    agent_result = EvidenceAgent(
-                        index=index,
-                        item=item,
-                        task_type=task_type,
-                        connection=connection,
-                        options=options,
-                        shared_facts=shared_facts,
-                        request_gate=agent_request_gate,
-                        request_context=app.app_context,
-                        store=CheckpointStore(
-                            task_id,
-                            item["code"],
-                            signature,
-                            claim_token,
-                            compatible_signatures=(compatible_signature,),
-                        ),
-                        ensure_active=ensure_active,
-                        on_output=output_recorder.for_checks(
-                            [item["code"]],
-                            label="证据审查",
-                            executions={item["code"]: execution},
-                        ),
-                        on_activity=lambda phase, attempt: update_check_activity(
-                            task_id, claim_token, [item["code"]], phase, attempt
-                        ),
-                    ).run()
-                    structured_report = agent_result["report"]
-                    agent_metadata = agent_result["metadata"]
-                    agent_error = agent_result["error"]
-                    content = json.dumps(structured_report, ensure_ascii=False)
+
+                    def run_agent_round(number):
+                        return EvidenceAgent(
+                            index=index,
+                            item=item,
+                            task_type=task_type,
+                            connection=connection,
+                            options=options,
+                            shared_facts=shared_facts_by_round[number],
+                            request_gate=agent_request_gate,
+                            request_context=app.app_context,
+                            store=CheckpointStore(
+                                task_id,
+                                item["code"]
+                                if number == 1
+                                else f"{item['code']}:round:{number}",
+                                signature,
+                                claim_token,
+                                compatible_signatures=(compatible_signature,),
+                            ),
+                            ensure_active=ensure_active,
+                            on_output=output_recorder.for_checks(
+                                [item["code"]],
+                                label=f"第 {number}/{check_rounds} 轮证据审查"
+                                if check_rounds > 1
+                                else "证据审查",
+                                executions={item["code"]: execution},
+                            ),
+                            on_activity=lambda phase, attempt: update_check_activity(
+                                task_id, claim_token, [item["code"]], phase, attempt
+                            ),
+                        ).run()
+
+                    if check_rounds > 1:
+                        round_result = run_rounds(run_agent_round)
+                        content = round_result["result"]
+                        structured_report = round_result["structured_report"]
+                    else:
+                        agent_result = run_agent_round(1)
+                        structured_report = agent_result["report"]
+                        agent_metadata = agent_result["metadata"]
+                        agent_error = agent_result["error"]
+                        content = json.dumps(structured_report, ensure_ascii=False)
                 else:
-                    if len(document_text) > task["max_input_chars"]:
-                        raise RuntimeError(
-                            "当前检查项采用整文调用，文档超过模型输入上限；请选择分段证据审查策略"
-                        )
+                    validate_model_input(model_document_text, task["max_input_chars"])
                     network = outbound_network_config()
                     run_check_kwargs = {
                         "api_base": task["api_base"],
@@ -735,7 +831,7 @@ def _run_check_items_concurrently(
                         ),
                         "check_name": item["name"],
                         "prompt": item["prompt"],
-                        "document_text": document_text,
+                        "document_text": model_document_text,
                         "issue_output_limit": issue_output_limit,
                         "on_content": lambda content: save_partial(
                             content, f"正在并发检查：{item['name']}"
@@ -753,7 +849,24 @@ def _run_check_items_concurrently(
                         "cancel_event": item_cancel_event,
                         "check_canceled": ensure_active,
                     }
-                    content = run_check(**run_check_kwargs)
+                    if check_rounds > 1:
+
+                        def run_round(number):
+                            kwargs = dict(run_check_kwargs)
+                            kwargs["on_content"] = None
+                            kwargs["on_output"] = output_recorder.for_checks(
+                                [item["code"]],
+                                label=f"第 {number}/{check_rounds} 轮检查",
+                                executions={item["code"]: execution},
+                            )
+                            return run_check(**kwargs)
+
+                        round_result = run_rounds(run_round)
+                        content = round_result["result"]
+                        structured_report = round_result["structured_report"]
+                    else:
+                        content = run_check(**run_check_kwargs)
+                        parse_check_report(content, allow_plain_text=True, label="本次")
                     content, filtered_unsupported_count = sanitize_text_check_result(
                         content,
                         pdf_table_evidence=pdf_table_evidence,
@@ -767,12 +880,24 @@ def _run_check_items_concurrently(
                         )
                 ensure_active()
                 if finish_check_activity(
-                    task_id, claim_token, item["code"], failed=bool(agent_error)
+                    task_id,
+                    claim_token,
+                    item["code"],
+                    failed=bool(
+                        agent_error or (round_result and round_result.get("error"))
+                    ),
                 ):
                     raise RuntimeError("本检查项已由用户取消。")
             except (LLMError, RuntimeError) as exc:
                 if cancel_event.is_set():
                     raise TaskCanceled
+                output_incomplete = isinstance(exc, LLMIncompleteResponseError)
+                if output_incomplete and exc.partial_content:
+                    save_partial(
+                        exc.partial_content,
+                        f"{item['name']}输出不完整，已保留部分结果",
+                        force=True,
+                    )
                 canceled = finish_check_activity(
                     task_id, claim_token, item["code"], failed=True
                 )
@@ -781,6 +906,7 @@ def _run_check_items_concurrently(
                     execution,
                     str(exc).strip() or exc.__class__.__name__,
                     canceled=canceled,
+                    output_incomplete=output_incomplete,
                 )
             progress = mark_unit_completed()
 
@@ -800,7 +926,11 @@ def _run_check_items_concurrently(
                 result["agent"] = agent_metadata
             if agent_error:
                 result["error"] = agent_error
+            if round_result is not None:
+                result.update(round_result)
+                result["item_acceptances"] = previous.get("item_acceptances", {})
             with result_lock:
+                round_progress.pop(item["code"], None)
                 completed_by_code[item["code"]] = result
                 partial_by_code.pop(item["code"], None)
                 completed_count = len(completed_by_code)
@@ -857,7 +987,9 @@ def _run_check_items_concurrently(
                 code = retry["code"]
                 item = catalog[code]
                 with result_lock:
-                    if completed_by_code.pop(code, None) is not None:
+                    previous = completed_by_code.pop(code, None)
+                    if previous is not None:
+                        previous_by_code[code] = previous
                         completed_units -= 1
                     partial_by_code.pop(code, None)
                     base_results[:] = [

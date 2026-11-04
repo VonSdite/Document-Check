@@ -21,7 +21,7 @@
     <h2>新建任务</h2>
   </div>
 
-  <div class="quick-form-grid">
+  <div class="quick-form-grid document-check-grid">
     <div class="form-field multi-file-field">
       <span class="field-label">文档</span>
       <span class="field-with-help">
@@ -52,6 +52,7 @@
         {% endif %}
       </select>
     </label>
+    {% include "_document_round_picker.html" %}
     <div class="submit-slot">
       <button class="primary-button" type="submit">提交检查</button>
       <span class="submit-progress" data-submit-progress hidden>正在上传并读取文档，请勿重复提交。</span>

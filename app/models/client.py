@@ -15,6 +15,10 @@ from app.contracts.limits import (
     DEFAULT_ISSUE_OUTPUT_LIMIT,
     normalize_issue_output_limit,
 )
+from app.models.document_input import (
+    PDF_TABLE_INPUT_INSTRUCTION,
+    compact_model_document_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +106,7 @@ _EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 2. 不输出思考过程、推理链、草稿或分析计划。
 3. 文档文本由解析器抽取得到，换行、分页、表格分隔符、行首行尾空白可能与原版版式不同；除非同一原文行内明确可见连续空格或异常空格，不要把解析换行/分页造成的空白判为“多余空格”。
 4. {text_extraction_limitation}只有原文摘录明确包含 TODO、TBD、待插入、待补充等占位内容时，才可以仅依据文本报告相应视觉对象缺失；“见图”“见表”等引用本身不能证明对象在原文中不存在。解析覆盖情况不明确时，不得把视觉对象缺失输出为问题或建议。
-5. 输入中的“PDF结构化表格”由文字坐标和矢量边框还原，并已展开成固定行列的归一化 HTML。data-cell 是归一化坐标；data-original-range 记录原始合并范围；data-inherited-from 表示该位置的值继承自同一个原始合并单元格，不代表原文重复填写，也不是独立的数据或空位。“[非文本图形或图标]”、“[合并覆盖……]”以及 data-unresolved 位置都不是数据缺失。只有没有 data-inherited-from、明确标记为 data-empty="true"、表格置信度为 high，并且能够根据行标题、列标题或原文要求证明该位置必须填写时，才允许报告表格数据缺失；location 必须包含表格 ID 和该原始单元格的锚点坐标。置信度为 medium 或 low 时不得报告数据缺失。
+5. {pdf_table_input_instruction}
 6. 输出明确问题或建议时，每条只描述一个问题或建议。
 7. {issue_output_limit_instruction}
 
@@ -151,6 +155,7 @@ def _issue_output_limit_instruction(value, subject: str) -> str:
 def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _EXECUTION_BOUNDARY_TEMPLATE.format(
         text_extraction_limitation=TEXT_EXTRACTION_LIMITATION,
+        pdf_table_input_instruction=PDF_TABLE_INPUT_INSTRUCTION,
         issue_output_limit_instruction=_issue_output_limit_instruction(
             issue_output_limit, "单次回复"
         ),
@@ -194,11 +199,28 @@ _MULTIMODAL_DOCUMENT_EXECUTION_BOUNDARY = _multimodal_document_execution_boundar
 
 
 class LLMError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        status_code: int | None = None,
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+        self.status_code = status_code
 
 
 class LLMRequestCanceled(LLMError):
     pass
+
+
+class LLMIncompleteResponseError(LLMError):
+    def __init__(
+        self, message: str, partial_content: str = "", *, retryable: bool = True
+    ):
+        super().__init__(message, retryable=retryable)
+        self.partial_content = partial_content
 
 
 class _EmptyContentError(LLMError):
@@ -358,6 +380,7 @@ def run_check(
     prompt: str,
     document_text: str,
     issue_output_limit: int | None = DEFAULT_ISSUE_OUTPUT_LIMIT,
+    max_completion_tokens: int | None = None,
     on_delta: Optional[Callable[[str], None]] = None,
     on_content: Optional[Callable[[str], None]] = None,
     task_id: Optional[int] = None,
@@ -369,6 +392,7 @@ def run_check(
     on_usage: Optional[Callable[[dict, str, int | None], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+    document_text = compact_model_document_text(document_text)
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
 
@@ -399,6 +423,8 @@ def run_check(
         ],
         "temperature": 0,
     }
+    if max_completion_tokens is not None:
+        payload["max_completion_tokens"] = max_completion_tokens
     _apply_reasoning_effort(payload, reasoning_effort)
     _apply_json_object_response_format(
         payload, api_base=api_base, model_name=model_name
@@ -479,7 +505,7 @@ def run_image_check(
 
     image_data_url = str(image_data_url or "").strip()
     if not image_data_url.startswith("data:image/"):
-        raise LLMError("图片数据格式无效，无法发送给多模态模型。")
+        raise LLMError("图片数据格式无效，无法发送给多模态模型。", retryable=False)
 
     issue_limit = _normalized_issue_output_limit(issue_output_limit)
     payload = {
@@ -587,6 +613,7 @@ def run_multimodal_document_check(
     on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
     _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+    document_text = compact_model_document_text(document_text)
     request_id = uuid.uuid4().hex[:12]
     endpoint = _chat_completions_endpoint(api_base)
 
@@ -595,12 +622,12 @@ def run_multimodal_document_check(
         headers["Authorization"] = f"Bearer {api_key}"
 
     if not image_items:
-        raise LLMError("未提供可发送给多模态模型的图片。")
+        raise LLMError("未提供可发送给多模态模型的图片。", retryable=False)
     normalized_images = []
     for index, image in enumerate(image_items, start=1):
         image_data_url = str(image.get("data_url") or "").strip()
         if not image_data_url.startswith("data:image/"):
-            raise LLMError("图片数据格式无效，无法发送给多模态模型。")
+            raise LLMError("图片数据格式无效，无法发送给多模态模型。", retryable=False)
         normalized_images.append(
             {
                 "index": int(image.get("index") or index),
@@ -718,9 +745,15 @@ def _multimodal_document_prompt_text(
         )
     batch_label = f"{batch_index}/{batch_count}" if batch_count > 1 else "1/1"
     issue_limit = _normalized_issue_output_limit(issue_output_limit)
+    table_instruction = (
+        f"\n\n{PDF_TABLE_INPUT_INSTRUCTION}"
+        if "[表 " in document_text or "[PDF结构化表格 " in document_text
+        else ""
+    )
     return (
         f"检查项：{check_name}\n\n"
-        f"{_multimodal_document_execution_boundary(issue_limit, output_contract)}\n\n"
+        f"{_multimodal_document_execution_boundary(issue_limit, output_contract)}"
+        f"{table_instruction}\n\n"
         f"当前图片批次：{batch_label}\n\n"
         f"本次可见图片：\n{chr(10).join(image_lines)}\n\n"
         f"检查提示词：\n{prompt}\n\n"
@@ -750,8 +783,10 @@ def _run_payload_with_retries(
     on_usage: Optional[Callable[[dict, str, int | None], None]] = None,
 ) -> str:
     last_error = None
+    last_incomplete_response = None
     active_payload = dict(payload)
     response_format_fallback_used = False
+    output_token_fallback_used = False
     attempt = 1
     while attempt <= _MAX_RETRIES + 1:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
@@ -818,12 +853,15 @@ def _run_payload_with_retries(
         except LLMError as exc:
             _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
             last_error = exc
+            if isinstance(exc, LLMIncompleteResponseError) and exc.partial_content:
+                last_incomplete_response = exc
             if on_content and attempt_parts:
                 on_content("")
-            if isinstance(exc, _StreamOutputLimitError):
+            if isinstance(exc, (LLMRequestCanceled, _StreamOutputLimitError)):
                 raise
             if (
                 not response_format_fallback_used
+                and exc.status_code in (None, 400, 422)
                 and "response_format" in active_payload
                 and _is_json_response_format_unsupported_error(exc)
             ):
@@ -838,7 +876,41 @@ def _run_payload_with_retries(
                     exc,
                 )
                 continue
-            if attempt > _MAX_RETRIES:
+            if (
+                not output_token_fallback_used
+                and exc.status_code in (None, 400, 422)
+                and "max_completion_tokens" in active_payload
+                and _is_output_token_limit_unsupported_error(exc)
+            ):
+                active_payload = dict(active_payload)
+                fallback_token_limit = active_payload.pop("max_completion_tokens")
+                active_payload["max_tokens"] = fallback_token_limit
+                output_token_fallback_used = True
+                logger.warning(
+                    "LLM 服务不支持 max_completion_tokens，已降级为 max_tokens request_id=%s task_id=%s attempt=%s error=%s",
+                    request_id,
+                    task_id or "-",
+                    attempt,
+                    exc,
+                )
+                continue
+            if not exc.retryable or attempt > _MAX_RETRIES:
+                if not exc.retryable:
+                    logger.warning(
+                        "LLM 请求遇到永久性错误，停止自动重试 request_id=%s task_id=%s attempt=%s error=%s",
+                        request_id,
+                        task_id or "-",
+                        attempt,
+                        exc,
+                    )
+                if last_incomplete_response is not None and not isinstance(
+                    exc, LLMIncompleteResponseError
+                ):
+                    raise LLMIncompleteResponseError(
+                        f"模型输出不完整，后续重试失败：{exc}。已保留部分输出，可重试该检查项。",
+                        last_incomplete_response.partial_content,
+                        retryable=exc.retryable,
+                    ) from exc
                 raise
             if (
                 isinstance(exc, _ReasoningOnlyResponseError)
@@ -914,7 +986,7 @@ def test_model_connection(
             }
             if proxy_mode == "custom":
                 if not proxy:
-                    raise LLMError("自定义代理模式需要填写代理地址")
+                    raise LLMError("自定义代理模式需要填写代理地址", retryable=False)
                 request_kwargs["proxies"] = {"http": proxy, "https": proxy}
 
             response = session.post(endpoint, json=payload, **request_kwargs)
@@ -927,14 +999,19 @@ def test_model_connection(
                     return "模型服务已返回 200，但响应不是 JSON。"
                 service_error = _extract_service_error(data)
                 if service_error:
-                    raise LLMError(f"模型服务返回错误：{service_error}")
+                    raise LLMError(
+                        f"模型服务返回错误：{service_error}",
+                        retryable=_is_retryable_service_error(data, service_error),
+                    )
                 return "模型连通性测试通过。"
             finally:
                 _close_response(response)
     except requests.ReadTimeout as exc:
         raise LLMError(f"模型服务测试超时：{request_timeout} 秒内没有返回结果") from exc
     except requests.RequestException as exc:
-        raise LLMError(f"模型服务测试失败：{exc}") from exc
+        raise LLMError(
+            f"模型服务测试失败：{exc}", retryable=_is_retryable_request_error(exc)
+        ) from exc
 
 
 def _run_check_attempt(
@@ -967,7 +1044,7 @@ def _run_check_attempt(
             }
             if proxy_mode == "custom":
                 if not proxy:
-                    raise LLMError("自定义代理模式需要填写代理地址")
+                    raise LLMError("自定义代理模式需要填写代理地址", retryable=False)
                 request_kwargs["proxies"] = {"http": proxy, "https": proxy}
 
             stream_payload = dict(payload)
@@ -1060,7 +1137,9 @@ def _run_check_attempt(
             attempt,
             exc,
         )
-        raise LLMError(f"模型服务请求失败：{exc}") from exc
+        raise LLMError(
+            f"模型服务请求失败：{exc}", retryable=_is_retryable_request_error(exc)
+        ) from exc
     except Exception:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         raise
@@ -1100,7 +1179,8 @@ def _chat_completions_endpoint(api_base: str) -> str:
     ):
         raise LLMError(
             "模型提供商 API 地址必须填写完整的 OpenAI Chat Completions 请求地址，"
-            "例如 https://api.example.com/v1/chat/completions"
+            "例如 https://api.example.com/v1/chat/completions",
+            retryable=False,
         )
     return endpoint
 
@@ -1465,7 +1545,10 @@ def _read_stream_lines(
                 service_error,
                 _short_text(line, 1000),
             )
-            raise LLMError(f"模型服务返回错误：{service_error}")
+            raise LLMError(
+                f"模型服务返回错误：{service_error}",
+                retryable=_is_retryable_service_error(data, service_error),
+            )
 
         if on_output:
             choices = data.get("choices") if isinstance(data, dict) else None
@@ -1580,6 +1663,24 @@ def _read_stream_lines(
             else _EmptyContentError
         )
         raise error_type(_empty_content_message(diagnostics))
+    abnormal_finish_reasons = diagnostics.finish_reasons - {"stop"}
+    if abnormal_finish_reasons:
+        reasons = ",".join(sorted(abnormal_finish_reasons))
+        raise LLMIncompleteResponseError(
+            f"模型输出不完整：服务以 finish_reason={reasons} 结束。"
+            "已保留部分输出，可重试该检查项。",
+            content,
+        )
+    if (
+        not diagnostics.done
+        and not diagnostics.finish_reasons
+        and not diagnostics.full_message
+    ):
+        raise LLMIncompleteResponseError(
+            "模型输出不完整：未收到正常结束标记，连接已结束。"
+            "已保留部分输出，可重试该检查项。",
+            content,
+        )
     return content
 
 
@@ -1642,7 +1743,8 @@ def _raise_for_http_error(
     response, *, request_id: str = "-", task_id: Optional[int] = None
 ):
     if response.status_code >= 400:
-        body = _short_text(response.text, 1500)
+        raw_body = response.text
+        body = _short_text(raw_body, 1500)
         logger.warning(
             "LLM HTTP 错误 request_id=%s task_id=%s status=%s body=%s",
             request_id,
@@ -1650,12 +1752,160 @@ def _raise_for_http_error(
             response.status_code,
             body,
         )
-        raise LLMError(_http_error_message(response.status_code, body))
+        try:
+            data = json.loads(raw_body)
+        except (TypeError, ValueError):
+            data = None
+        retryable = (
+            response.status_code in (408, 409, 425, 429)
+            or (
+                response.status_code >= 500
+                and response.status_code not in (501, 505, 511)
+            )
+        ) and _is_retryable_service_error(
+            data, _extract_http_error_detail(raw_body) or body
+        )
+        raise LLMError(
+            _http_error_message(response.status_code, body, retryable=retryable),
+            retryable=retryable,
+            status_code=response.status_code,
+        )
 
 
-def _http_error_message(status_code: int, body: str) -> str:
+def _is_retryable_request_error(error: requests.RequestException) -> bool:
+    if isinstance(
+        error,
+        (
+            requests.exceptions.InvalidURL,
+            requests.exceptions.InvalidSchema,
+            requests.exceptions.MissingSchema,
+            requests.exceptions.InvalidHeader,
+            requests.exceptions.URLRequired,
+            requests.exceptions.InvalidJSONError,
+            requests.exceptions.TooManyRedirects,
+        ),
+    ):
+        return False
+    if isinstance(error, requests.exceptions.SSLError):
+        text = str(error).lower()
+        if any(
+            marker in text
+            for marker in (
+                "certificate verify failed",
+                "certificate_verify_failed",
+                "hostname mismatch",
+            )
+        ):
+            return False
+    return True
+
+
+def _is_retryable_service_error(data, detail: str) -> bool:
+    permanent_codes = {
+        code.replace("_", "")
+        for code in (
+            "invalid_api_key",
+            "authentication_error",
+            "unauthorized",
+            "permission_denied",
+            "permission_error",
+            "forbidden",
+            "invalid_request_error",
+            "invalid_request",
+            "bad_request",
+            "invalid_parameter",
+            "invalid_argument",
+            "unsupported_parameter",
+            "model_not_found",
+            "not_found_error",
+            "unsupported_model",
+            "model_not_supported",
+            "context_length_exceeded",
+            "insufficient_quota",
+            "insufficient_balance",
+            "account_deactivated",
+            "billing_hard_limit_reached",
+            "billing_not_active",
+            "content_policy_violation",
+            "content_filter",
+            "content_filter_error",
+        )
+    }
+    if isinstance(data, dict):
+        error = data.get("error")
+        sources = [error, data] if isinstance(error, dict) else [data]
+        for source in sources:
+            for field in ("code", "errorCode", "type"):
+                code = (
+                    str(source.get(field) or "")
+                    .strip()
+                    .lower()
+                    .replace("-", "")
+                    .replace("_", "")
+                    .replace(" ", "")
+                )
+                if code in permanent_codes:
+                    return False
+    text = detail.lower()
+    if text.replace("_", "").replace("-", "").replace(" ", "") in permanent_codes:
+        return False
+    if "model" in text and "does not exist" in text:
+        return False
+    permanent_markers = (
+        "invalid api key",
+        "invalid api-key",
+        "api key is invalid",
+        "incorrect api key",
+        "authentication failed",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "access denied",
+        "model not found",
+        "model does not exist",
+        "does not exist or you do not have access",
+        "invalid model",
+        "unknown model",
+        "unsupported model",
+        "invalid parameter",
+        "invalid argument",
+        "unsupported parameter",
+        "unknown parameter",
+        "unrecognized request argument",
+        "maximum context length",
+        "context length exceeded",
+        "input too long",
+        "request too large",
+        "insufficient quota",
+        "insufficient balance",
+        "exceeded your current quota",
+        "account deactivated",
+        "content policy violation",
+        "密钥无效",
+        "无效的密钥",
+        "密钥错误",
+        "鉴权失败",
+        "认证失败",
+        "权限不足",
+        "无权限",
+        "模型不存在",
+        "模型未找到",
+        "不支持的模型",
+        "参数无效",
+        "参数错误",
+        "无效参数",
+        "上下文长度超限",
+        "输入过长",
+        "余额不足",
+        "配额不足",
+        "账户已停用",
+    )
+    return not any(marker in text for marker in permanent_markers)
+
+
+def _http_error_message(status_code: int, body: str, *, retryable: bool = True) -> str:
     detail = _extract_http_error_detail(body) or body
-    if _is_provider_capacity_error(status_code, detail):
+    if retryable and _is_provider_capacity_error(status_code, detail):
         return (
             f"模型服务繁忙或触发限流（HTTP {status_code}）：{_short_text(detail, 500)}。"
             "请稍后重试，或在系统设置中降低系统同时执行任务数、单用户同时执行任务数、单任务检查项并发数。"
@@ -1720,6 +1970,7 @@ class _OpenAIChatDiagnostics:
         self.reasoning_fields = set()
         self.tool_call_chunks = 0
         self.finish_reasons = set()
+        self.full_message = False
         self.usage = None
         self.response_id = ""
         self.response_model = ""
@@ -1750,6 +2001,8 @@ class _OpenAIChatDiagnostics:
             finish_reason = choice.get("finish_reason")
             if finish_reason:
                 self.finish_reasons.add(str(finish_reason))
+            if isinstance(choice.get("message"), dict):
+                self.full_message = True
             self._observe_message(choice.get("delta"))
             self._observe_message(choice.get("message"))
 
@@ -1940,3 +2193,35 @@ def _short_text(value, limit: int = 300) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}..."
+
+
+def _is_output_token_limit_unsupported_error(error: Exception) -> bool:
+    text = str(error or "").lower()
+    if not any(
+        marker in text
+        for marker in (
+            "max_completion_tokens",
+            "max completion tokens",
+            "max_tokens",
+            "max tokens",
+        )
+    ):
+        return False
+    unsupported_markers = (
+        "not support",
+        "not supported",
+        "unsupported",
+        "invalid",
+        "unrecognized",
+        "unknown",
+        "not permitted",
+        "not allowed",
+        "extra inputs are not permitted",
+        "不支持",
+        "无效",
+        "非法",
+        "不允许",
+        "未识别",
+        "未知",
+    )
+    return any(marker in text for marker in unsupported_markers)

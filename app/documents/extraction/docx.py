@@ -45,35 +45,31 @@ def _extract_docx(
                 )
 
     def cell_text(cell, location):
-        values = []
-        for content in cell.iter_inner_content():
-            check_extraction_canceled(cancel_event)
-            if isinstance(content, Paragraph):
-                values.append(
-                    _docx_paragraph_text(
-                        content,
-                        hyperlinks,
-                        location=location,
-                        internal_targets=internal_targets,
-                    )
-                )
-            else:
-                for nested_row in content.rows:
-                    values.append(
-                        " | ".join(cell_text(c, location) for c in nested_row.cells)
-                    )
-        return "\n".join(value for value in values if value).strip()
+        return _docx_blocks_text(
+            cell,
+            hyperlinks,
+            internal_targets,
+            location=location,
+            cancel_event=cancel_event,
+        )
 
     def append_table(table, prefix=""):
         nonlocal table_index
         table_index += 1
+        anchors = {}
         for row_index, row in enumerate(table.rows, start=1):
             check_extraction_canceled(cancel_event)
             location = f"{prefix}表格{table_index} > 第{row_index}行"
-            cells = [
-                cell_text(cell, f"{location} > 第{column_index}列")
-                for column_index, cell in enumerate(row.cells, start=1)
-            ]
+            cells = [""] * row.grid_cols_before
+            for column_index, cell in enumerate(
+                row.cells, start=row.grid_cols_before + 1
+            ):
+                check_extraction_canceled(cancel_event)
+                if cell._tc in anchors:
+                    cells.append(f"[合并覆盖，继承自{anchors[cell._tc]}]")
+                    continue
+                anchors[cell._tc] = f"第{row_index}行第{column_index}列"
+                cells.append(cell_text(cell, f"{location} > 第{column_index}列"))
             if any(cells):
                 append(" | ".join(cells), "table", location)
 
@@ -147,6 +143,74 @@ def _extract_docx(
                 }
             )
     return "\n".join(parts)
+
+
+def _docx_blocks_text(
+    container,
+    hyperlinks: list[dict] | None,
+    internal_targets: set[str],
+    *,
+    location: str = "",
+    cancel_event=None,
+) -> str:
+    parts = []
+    paragraph_index = table_index = 0
+    for block in container.iter_inner_content():
+        check_extraction_canceled(cancel_event)
+        if isinstance(block, Paragraph):
+            paragraph_index += 1
+            text = _docx_paragraph_text(
+                block,
+                hyperlinks,
+                location=location or f"第{paragraph_index}段",
+                internal_targets=internal_targets,
+            )
+        else:
+            table_index += 1
+            table_location = f"{location} > " if location else ""
+            text = _docx_table_text(
+                block,
+                hyperlinks,
+                internal_targets,
+                location=f"{table_location}表格{table_index}",
+                cancel_event=cancel_event,
+            )
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _docx_table_text(
+    table,
+    hyperlinks: list[dict] | None,
+    internal_targets: set[str],
+    *,
+    location: str,
+    cancel_event=None,
+) -> str:
+    rows = []
+    anchors = {}
+    for row_index, row in enumerate(table.rows, start=1):
+        check_extraction_canceled(cancel_event)
+        cells = [""] * row.grid_cols_before
+        for column_index, cell in enumerate(row.cells, start=row.grid_cols_before + 1):
+            check_extraction_canceled(cancel_event)
+            if cell._tc in anchors:
+                cells.append(f"[合并覆盖，继承自{anchors[cell._tc]}]")
+                continue
+            anchors[cell._tc] = f"第{row_index}行第{column_index}列"
+            cells.append(
+                _docx_blocks_text(
+                    cell,
+                    hyperlinks,
+                    internal_targets,
+                    location=f"{location} > 第{row_index}行 > 第{column_index}列",
+                    cancel_event=cancel_event,
+                )
+            )
+        if any(cells):
+            rows.append(" | ".join(cells))
+    return "\n".join(rows)
 
 
 def _docx_paragraph_text(

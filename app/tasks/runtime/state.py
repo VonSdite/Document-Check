@@ -242,6 +242,12 @@ def _mark_canceled(db, task_id: int, claim_token: str | None = None):
         UPDATE tasks
         SET status = 'canceled',
             progress = 0,
+            result_json = COALESCE(
+                (SELECT result_json FROM task_live_results WHERE task_id = tasks.id), result_json
+            ),
+            summary = COALESCE(
+                (SELECT summary FROM task_live_results WHERE task_id = tasks.id), summary
+            ),
             api_key = NULL,
             retry_check_codes_json = NULL,
             claim_token = NULL,
@@ -321,6 +327,16 @@ def _build_summary(results: list[dict]) -> str:
     failed = _failed_check_results(results)
     succeeded = [result for result in results if not _check_result_failed(result)]
     canceled = [result for result in results if result.get("canceled")]
+    partial_rounds = [
+        result
+        for result in failed
+        if result.get("round_summary", {}).get("completed", 0)
+    ]
+    if partial_rounds:
+        return (
+            f"已完整完成 {len(succeeded)}/{len(results)} 个检查项，"
+            f"{len(partial_rounds)} 项保留了成功轮次的结果，可重试未完成轮次。"
+        )
     if canceled:
         return f"已完成 {len(succeeded)}/{len(results)} 个检查项，失败 {len(failed)} 项，已取消 {len(canceled)} 项。"
     if failed and succeeded:
@@ -340,7 +356,10 @@ def _build_summary(results: list[dict]) -> str:
 
 
 def _check_result_failed(result: dict) -> bool:
-    return bool(str(result.get("error") or "").strip())
+    rounds = result.get("round_summary", {})
+    return bool(str(result.get("error") or "").strip()) or (
+        bool(rounds) and rounds.get("completed", 0) < rounds.get("planned", 0)
+    )
 
 
 def _failed_check_results(results: list[dict]) -> list[dict]:

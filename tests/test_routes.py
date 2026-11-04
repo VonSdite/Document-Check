@@ -15,6 +15,7 @@ from bs4.element import Tag
 from flask import Flask
 from openpyxl import Workbook, load_workbook
 from werkzeug.datastructures import FileStorage
+from werkzeug.http import parse_options_header
 
 from app.contracts.agent import AgentOptions
 from app.contracts.task_types import (
@@ -116,6 +117,145 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def test_document_round_picker_uses_admin_default_and_maximum(self):
+        self._configure_provider()
+        for route in ("/", "/admin/tasks"):
+            response = self.client.get(route)
+            soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+            picker = _required_tag(soup.select_one('select[name="check_rounds"]'))
+            self.assertEqual(
+                [option["value"] for option in picker.select("option")],
+                ["1", "2", "3", "4", "5"],
+            )
+            self.assertEqual(picker.select_one("option[selected]")["value"], "5")
+        with self.app.app_context():
+            set_setting("document_check_rounds", 2)
+            set_setting("document_check_max_rounds", 3)
+        soup = BeautifulSoup(self.client.get("/").get_data(as_text=True), "html.parser")
+        picker = _required_tag(soup.select_one('select[name="check_rounds"]'))
+        self.assertEqual(len(picker.select("option")), 3)
+        self.assertEqual(picker.select_one("option[selected]")["value"], "2")
+
+    def test_document_round_submission_snapshots_count_and_rejects_invalid_values(self):
+        model_id = self._configure_provider()
+        with self.app.app_context():
+            check_id = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code='compliance'")
+                .fetchone()[0]
+            )
+            set_setting("document_check_max_rounds", 3)
+        for value in ("0", "4", "2.5", "invalid", "-1", "9" * 5000):
+            response = self.client.post(
+                "/",
+                data={
+                    "model_id": model_id,
+                    "checks": [str(check_id)],
+                    "check_rounds": value,
+                    "document": (io.BytesIO(b"document"), "doc.txt"),
+                },
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(
+                get_db().execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0
+            )
+        for route, value, expected in (
+            ("/", "2", 2),
+            ("/admin/tasks", "3", 3),
+            ("/", "", 3),
+        ):
+            self.client.post(
+                route,
+                data={
+                    "model_id": model_id,
+                    "checks": [str(check_id)],
+                    "check_rounds": value,
+                    "document": (io.BytesIO(b"document"), "doc.txt"),
+                },
+                content_type="multipart/form-data",
+            )
+            with self.app.app_context():
+                task = (
+                    get_db()
+                    .execute(
+                        "SELECT document_meta_json FROM tasks ORDER BY id DESC LIMIT 1"
+                    )
+                    .fetchone()
+                )
+                self.assertEqual(json.loads(task[0])["check_rounds"], expected)
+
+    def test_document_round_admin_settings_validate_default_and_maximum_together(self):
+        for default, maximum in ((0, 5), (4, 3), (5, 6)):
+            self.client.post(
+                "/admin/settings",
+                data={
+                    "action": "concurrency",
+                    "document_check_rounds": str(default),
+                    "document_check_max_rounds": str(maximum),
+                },
+            )
+            with self.app.app_context():
+                self.assertEqual(get_setting("document_check_rounds"), 5)
+                self.assertEqual(get_setting("document_check_max_rounds"), 5)
+        self.client.post(
+            "/admin/settings",
+            data={
+                "action": "concurrency",
+                "document_check_rounds": "2",
+                "document_check_max_rounds": "3",
+            },
+        )
+        with self.app.app_context():
+            self.assertEqual(get_setting("document_check_rounds"), 2)
+            self.assertEqual(get_setting("document_check_max_rounds"), 3)
+
+    def test_multiround_report_and_html_export_show_sources_and_raw_rounds(self):
+        from app.reporting.rounds import build_round_result
+
+        item = {
+            "status": "issue",
+            "description": "参数单位不一致",
+            "excerpt": "电压 5mV",
+            "category": "单位",
+            "location": "第 2 节",
+            "severity": "medium",
+            "confidence": "high",
+        }
+        report = {"summary": "本轮检查完成", "items": [item]}
+        result = {
+            "code": "compliance",
+            "name": "规范性",
+            **build_round_result(
+                "compliance",
+                2,
+                [
+                    {
+                        "round": number,
+                        "status": "completed",
+                        "report": report,
+                        "result": json.dumps(report, ensure_ascii=False),
+                    }
+                    for number in (1, 2)
+                ],
+            ),
+        }
+        task_id = self._insert_task()
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=? WHERE id=?",
+                (json.dumps([result]), task_id),
+            )
+            get_db().commit()
+        for route in (f"/tasks/{task_id}", f"/tasks/{task_id}/export"):
+            response = self.client.get(route)
+            self.assertEqual(response.status_code, 200)
+            text = response.get_data(as_text=True)
+            self.assertIn("查看各轮结果", text)
+            self.assertIn("发现 2/2 轮", text)
+            self.assertIn("参数单位不一致", text)
 
     def test_full_pages_include_local_frontend_injection(self):
         injection_path = (
@@ -5242,6 +5382,89 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "1",
         )
 
+    def test_report_download_names_identify_document_and_task(self):
+        cases = [
+            (DOCUMENT_TASK_TYPE, "产品 说明.v2.docx", "产品 说明.v2"),
+            (DOCUMENT_TASK_TYPE, "release.notes.txt", "release.notes"),
+            (IMAGE_TASK_TYPE, "图纸.pdf", "图纸"),
+            (VIDEO_TASK_TYPE, "演示视频.mp4", "演示视频"),
+            (
+                CONSISTENCY_TASK_TYPE,
+                "素材文档：master.xlsx / 资料：related.txt",
+                "素材文档：master.xlsx _ 资料：related.txt",
+            ),
+            (
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "跨语种检查：zh.txt / en.txt",
+                "跨语种检查：zh.txt _ en.txt",
+            ),
+        ]
+        for task_type, original_filename, name in cases:
+            task_id = self._insert_task(
+                task_type=task_type, original_filename=original_filename
+            )
+            for prefix in ("", "/admin"):
+                for route, extension in (("export", "html"), ("export.xlsx", "xlsx")):
+                    with self.subTest(task_type=task_type, prefix=prefix, route=route):
+                        response = self.client.get(f"{prefix}/tasks/{task_id}/{route}")
+                        self.assertEqual(response.status_code, 200)
+                        header = response.headers["Content-Disposition"]
+                        disposition, options = parse_options_header(header)
+                        self.assertEqual(disposition, "attachment")
+                        self.assertEqual(
+                            options["filename"], f"{name}_报告_{task_id}.{extension}"
+                        )
+                        self.assertIn("filename*=UTF-8''", header)
+                        self.assertTrue(header.isascii())
+                        response.close()
+
+    def test_report_download_names_are_stable_and_distinguish_same_named_tasks(self):
+        task_ids = [
+            self._insert_task(original_filename="产品说明.pdf") for _ in range(2)
+        ]
+        for task_id in task_ids:
+            for route, extension in (("export", "html"), ("export.xlsx", "xlsx")):
+                for _ in range(2):
+                    with self.subTest(task_id=task_id, route=route):
+                        response = self.client.get(f"/tasks/{task_id}/{route}")
+                        self.assertEqual(response.status_code, 200)
+                        _, options = parse_options_header(
+                            response.headers["Content-Disposition"]
+                        )
+                        self.assertEqual(
+                            options["filename"],
+                            f"产品说明_报告_{task_id}.{extension}",
+                        )
+                        response.close()
+
+    def test_report_download_names_handle_special_empty_and_long_names(self):
+        cases = [
+            ('产品:说明?"<>|*\r\n.txt', "产品_说明"),
+            (" ... .txt", "文档"),
+            ("说明😀" * 100 + ".txt", None),
+        ]
+        for original_filename, name in cases:
+            task_id = self._insert_task(original_filename=original_filename)
+            for route, extension in (("export", "html"), ("export.xlsx", "xlsx")):
+                with self.subTest(original_filename=original_filename, route=route):
+                    response = self.client.get(f"/tasks/{task_id}/{route}")
+                    self.assertEqual(response.status_code, 200)
+                    _, options = parse_options_header(
+                        response.headers["Content-Disposition"]
+                    )
+                    filename = options["filename"]
+                    if name is not None:
+                        self.assertEqual(filename, f"{name}_报告_{task_id}.{extension}")
+                    else:
+                        self.assertTrue(filename.startswith("说明😀"))
+                        self.assertTrue(
+                            filename.endswith(f"_报告_{task_id}.{extension}")
+                        )
+                    self.assertLessEqual(len(filename.encode("utf-8")), 255)
+                    self.assertNotRegex(filename, r'[<>:"/\\|?*\x00-\x1f\x7f]')
+                    self.assertNotIn("\ufffd", filename)
+                    response.close()
+
     def test_task_report_exports_excel_for_statistics(self):
         with self.app.app_context():
             now = "2026-05-23 12:10:00"
@@ -5330,9 +5553,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
             response.mimetype,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        self.assertIn(
-            f"document-check-report-{task_id}.xlsx",
-            response.headers["Content-Disposition"],
+        self.assertEqual(
+            parse_options_header(response.headers["Content-Disposition"])[1][
+                "filename"
+            ],
+            f"report_报告_{task_id}.xlsx",
         )
         workbook = load_workbook(
             io.BytesIO(response.data), read_only=True, data_only=True
@@ -6338,6 +6563,47 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("名称表述不统一", rows_text)
         self.assertNotIn("未完成条目", rows_text)
         self.assertNotIn('"items"', rows_text)
+
+    def test_incomplete_single_report_shows_error_retained_items_and_retry(self):
+        task_id = self._insert_task(status="failed")
+        error = "模型输出不完整：服务以 finish_reason=length 结束。已保留部分输出，可重试该检查项。"
+        raw_json = (
+            '{"summary":"已生成的部分结果","items":['
+            '{"status":"issue","description":"电流参数不一致。","excerpt":"10A"},'
+            '{"status":"issue","description":"未完成条目'
+        )
+        check = {"id": 101, "code": "compliance", "name": "规范检查", "prompt": "检查"}
+        result = {
+            "code": "compliance",
+            "name": "规范检查",
+            "result": raw_json,
+            "error": error,
+            "output_incomplete": True,
+        }
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET checks_snapshot_json=?, result_json=?, error=? WHERE id=?",
+                (
+                    json.dumps([check], ensure_ascii=False),
+                    json.dumps([result], ensure_ascii=False),
+                    error,
+                    task_id,
+                ),
+            )
+            get_db().commit()
+        for route in (f"/tasks/{task_id}", f"/admin/tasks/{task_id}"):
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                self.assertIn(error, soup.select_one(".report-error").get_text())
+                rows = soup.select("tr[data-report-item]")
+                self.assertEqual(len(rows), 1)
+                self.assertIn("电流参数不一致", rows[0].get_text())
+                self.assertNotIn("未完成条目", rows[0].get_text())
+                retry = soup.select_one('[data-retry-check="compliance"]')
+                self.assertIsNotNone(retry)
+                self.assertNotIn("hidden", retry.attrs)
 
     def test_task_detail_deduplicates_ranks_and_limits_structured_items(self):
         with self.app.app_context():

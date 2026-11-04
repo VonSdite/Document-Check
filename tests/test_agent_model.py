@@ -8,6 +8,35 @@ from tests.test_llm import FakeResponse, FakeSession
 
 
 class AgentModelTest(unittest.TestCase):
+    def test_permanent_service_errors_stop_without_retry_or_schema_fallback(self):
+        for status in (200, 401, 429, 500):
+            with self.subTest(status=status):
+                model = self.make_model()
+                error = {
+                    "error": {
+                        "code": "invalid_api_key",
+                        "message": "response_format timeout 503",
+                    }
+                }
+                response = FakeResponse(
+                    status_code=status,
+                    text=json.dumps(error),
+                    lines=["data: " + json.dumps(error)],
+                )
+                session = FakeSession([response])
+                with (
+                    patch(
+                        "app.models.agent._pooled_http_session", return_value=session
+                    ),
+                    patch("app.models.agent._wait_before_retry") as wait,
+                    self.assertRaises(LLMError) as raised,
+                ):
+                    model.turn([], schema={"type": "object", "properties": {}})
+                self.assertFalse(raised.exception.retryable)
+                self.assertEqual(len(session.calls), 1)
+                self.assertTrue(response.closed)
+                wait.assert_not_called()
+
     def test_stream_activity_reports_thinking_and_output_only_on_phase_changes(self):
         model = self.make_model()
         phases = []

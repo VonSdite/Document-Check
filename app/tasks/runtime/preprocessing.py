@@ -123,7 +123,6 @@ def _prepare_task_inputs(
             document_meta,
             claim_token,
         )
-    _validate_task_text(task, document_text)
     return document_text, document_meta_raw
 
 
@@ -150,7 +149,6 @@ def _prepare_image_task_inputs(
                 document_meta,
                 claim_token,
             )
-        _validate_model_input(document_text, task["max_input_chars"], "图片检查上下文")
         return document_text, document_meta_raw or "{}"
 
     upload_path = _task_upload_path(app, task)
@@ -220,7 +218,6 @@ def _prepare_image_task_inputs(
             page_images=page_images,
             page_selection=page_selection,
         )
-        _validate_model_input(document_text, task["max_input_chars"], "图片检查上下文")
         document_meta.update(
             {
                 "image_extraction_error": image_error,
@@ -266,7 +263,6 @@ def _prepare_video_task_inputs(
                 document_meta,
                 claim_token,
             )
-        _validate_model_input(document_text, task["max_input_chars"], "视频帧上下文")
         return document_text, document_meta_raw or "{}"
 
     upload_path = _task_upload_path(app, task)
@@ -294,7 +290,6 @@ def _prepare_video_task_inputs(
         document_text = format_video_document_text(
             task["original_filename"], frames, frame_selection
         )
-        _validate_model_input(document_text, task["max_input_chars"], "视频帧上下文")
         document_meta.update(
             {
                 "frame_selection": frame_selection,
@@ -337,7 +332,6 @@ def _prepare_consistency_task_inputs(
             document_meta,
             claim_token,
         )
-    _validate_task_text(task, document_text)
     return document_text, document_meta_raw
 
 
@@ -493,7 +487,6 @@ def _persist_preprocessed_inputs(
     document_meta: dict,
     claim_token: str | None,
 ) -> tuple[str, str]:
-    _validate_task_text(task, document_text)
     completed_at = now_text()
     document_meta["preprocessing"] = {
         "status": "completed",
@@ -525,35 +518,6 @@ def _persist_preprocessed_inputs(
     if updated.rowcount != 1:
         raise TaskCanceled
     return document_text, document_meta_raw
-
-
-def _validate_model_input(
-    document_text: str, max_input_chars: int, label: str = "文档文本"
-):
-    if not document_text:
-        raise RuntimeError("未能从文档中提取到可检查文本")
-    if len(document_text) > max_input_chars:
-        raise RuntimeError(
-            f"{label} {len(document_text)} 字，超过当前模型文本上限 {max_input_chars} 字"
-        )
-
-
-def _validate_task_text(task, text):
-    raw = _task_value(task, "checks_snapshot_json")
-    try:
-        checks = json.loads(raw) if raw else []
-    except (TypeError, ValueError):
-        checks = []
-    chunked = any(
-        isinstance(check, dict)
-        and isinstance(check.get("agent_options"), dict)
-        and check["agent_options"].get("enabled", True)
-        for check in checks
-    )
-    if not text:
-        raise RuntimeError("未能从文档中提取到可检查文本")
-    if not chunked:
-        _validate_model_input(text, task["max_input_chars"])
 
 
 def _source_document(filename, file_type, text, blocks, role="document"):

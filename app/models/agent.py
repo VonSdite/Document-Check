@@ -18,6 +18,8 @@ from app.models.client import (
     _extract_reasoning,
     _extract_service_error,
     _force_utf8_response,
+    _is_retryable_request_error,
+    _is_retryable_service_error,
     _pooled_http_session,
     _raise_for_http_error,
     _raise_if_request_canceled,
@@ -151,7 +153,7 @@ class AgentModel:
                 last_error = exc
                 self.after_request(payload, None, time.monotonic() - started, str(exc))
                 lower = str(exc).lower()
-                incompatible = any(
+                incompatible = exc.status_code in (None, 400, 422) and any(
                     word in lower
                     for word in (
                         "unsupported",
@@ -216,18 +218,22 @@ class AgentModel:
                 ):
                     self.capabilities["stream_usage"] = False
                     continue
-                if retries >= 2 or not any(
-                    word in lower
-                    for word in (
-                        "429",
-                        "500",
-                        "502",
-                        "503",
-                        "504",
-                        "超时",
-                        "timeout",
-                        "连接",
-                        "connection",
+                if (
+                    not exc.retryable
+                    or retries >= 2
+                    or not any(
+                        word in lower
+                        for word in (
+                            "429",
+                            "500",
+                            "502",
+                            "503",
+                            "504",
+                            "超时",
+                            "timeout",
+                            "连接",
+                            "connection",
+                        )
                     )
                 ):
                     raise
@@ -323,7 +329,9 @@ class AgentModel:
             _raise_if_request_canceled(
                 connection.get("cancel_event"), self.ensure_active, poll=True
             )
-            raise LLMError(f"模型服务请求失败：{exc}") from exc
+            raise LLMError(
+                f"模型服务请求失败：{exc}", retryable=_is_retryable_request_error(exc)
+            ) from exc
         finally:
             if done:
                 done.set()
@@ -342,7 +350,10 @@ class AgentModel:
                 raise LLMError("模型响应不是 JSON 对象")
             error = _extract_service_error(frame)
             if error:
-                raise LLMError(f"模型服务返回错误：{error}")
+                raise LLMError(
+                    f"模型服务返回错误：{error}",
+                    retryable=_is_retryable_service_error(frame, error),
+                )
             if isinstance(frame.get("usage"), dict):
                 turn.usage = frame["usage"]
             for choice in frame.get("choices", []):

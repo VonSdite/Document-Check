@@ -24,6 +24,12 @@ ASGI 适配器在每个 WSGI 请求线程内创建独立 Flask 应用上下文�
 
 `TaskSupervisor` 负责认领、续约、取消收尾和异常恢复；`TaskRunner` 负责预处理与检查执行。监督器每 10 秒按任务主键和令牌更新 90 秒租约，任务中的监测线程只读取取消状态。文件清理与报告统计使用监督器的独立维护线程。
 
+单文档轮数由提交服务校验后保存到 `document_meta_json.check_rounds`，缺省任务按一轮执行。`tasks/runtime/document_rounds.py` 在检查项线程内顺序执行各轮，持续保存成功与失败状态，重试复用成功轮次。证据审查各轮使用独立检查点和事实缓存，第一轮按检查项编码保存，后续轮次使用 `检查项编码:round:轮次`；所有轮次继续共享任务请求并发名额。`reporting/rounds.py` 按证据、位置和相近描述归并发现，记录来源轮次与原始条目，保留重试前的条目标识。报告准备阶段对多轮合并结果保留全部条目，单轮生成条数由 `issue_output_limit` 控制。`tests/test_document_rounds.py` 覆盖独立调用、本地规则执行次数、并发额度、部分失败、取消、补跑、条目标识和完整导出。`tests/test_evidence_integration.py` 验证多轮审查的独立执行、证据与待核实项合并、检查点续跑、标注保留及永久性错误停止。
+
+`models/client.py` 校验模型响应的结束信号，正常流式响应接受 `[DONE]` 或 `finish_reason=stop`，完整消息响应兼容省略结束标记。异常结束原因通过 `LLMIncompleteResponseError` 携带部分正文，自动重试仍失败时保留该正文。`tasks/runtime/report_validation.py` 为单轮与多轮提供完整 JSON 和条目结构校验，单轮兼容完整文本报告。单轮失败记录 `output_incomplete` 和具体错误，报告展示可恢复的完整条目；多轮失败保存原始回复，成功轮次继续参与合并。
+
+`LLMError.retryable` 标识模型错误是否可自动重试。HTTP 408、409、425、429 和临时 5xx 错误、连接中断及超时最多重试两次；HTTP 501、505、511、其他 4xx、确定的请求配置错误及证书校验失败直接返回。HTTP 错误体和 HTTP 200 服务错误中的类型、错误码及明确错误消息共同识别鉴权、模型、参数、上下文及余额或配额等永久性错误；业务包装层的数字 `code` 保持业务含义。参数兼容回退先调整请求，永久性错误再停止原请求的自动重试及当前检查项的后续轮次。部分正文随错误保留，手动重试补跑失败和未执行轮次。`tests/test_llm_retries.py` 覆盖请求次数、等待、兼容回退、临时错误恢复及多模态入口，轮次测试验证任务状态和手动补跑。
+
 `tasks/processes.TaskWorkerProcess` 使用 `subprocess.Popen` 创建独立模块进程。入口在获得许可前仅加载标准库，通过标准输出报告进入入口；进程身份保存到 `instance/task-supervisor.json` 后，父进程通过标准输入发送包含租约令牌的 JSON 许可并关闭输入管道。子进程收到许可后导入业务模块、创建应用、报告就绪并执行任务。专用读取线程持续消费输出并记录启动阶段，错误堆栈保留在控制台。
 
 监督器从进程创建时起计时，60 秒内须收到业务就绪信号。启动超时、创建失败或就绪前异常退出会产生明确的启动错误；进程确认退出后，任务写为失败，用户可在页面重试。取消状态优先处理，业务就绪后的长任务由原有租约和取消机制管理。
@@ -32,15 +38,25 @@ ASGI 适配器在每个 WSGI 请求线程内创建独立 Flask 应用上下文�
 
 过期回收和队列选择排除 `_active` 中的任务 ID。正在退出的进程继续占用机器、全局及用户并发名额，数据库恢复成功后才移除进程记录。取消先由任务协作退出，10 秒宽限后发送终止信号，3 秒后仍存活则强制结束。数据库租约与运行数据沿用现有字段。
 
-`documents.extraction` 接受可选的 `cancel_event`，在 PDF 页、表格和表格行以及 Excel 行边界抛出 `DocumentReadCanceled`。文档模块使用自身异常类型，TaskRunner 根据取消信号更新任务状态。新增耗时解析循环时同步设置取消检查点。
+`documents.extraction` 接受可选的 `cancel_event`，在 Word 段落、表格行与单元格，PDF 页、表格和表格行以及 Excel 行边界抛出 `DocumentReadCanceled`。文档模块使用自身异常类型，TaskRunner 根据取消信号更新任务状态。新增耗时解析循环时同步设置取消检查点。
 
 ## 文档解析与列表读取
 
 `checks/text_content.py` 提供 `DocumentBodyView`，供常用词匹配与语种估计共用。正文视图保留真实段落和表格锚点文字，过滤提取器标记、重复继承值、补充链接注释及技术内容，并解码 HTML 实体。区间映射将命中范围还原到原始提取文本，常用词报告从原文读取文件、页码、行号和片段。敏感词检查使用自身规则，超链接目标由独立的超链接检查处理。
 
-`documents/extraction/spreadsheets.py` 将 openpyxl 内部流式接口限定在 Excel 解析器内，使用已锁定的 `openpyxl==3.1.5`。`_WorksheetValuesAndFormulas` 继承 `WorkSheetParser`，一次解析保留缓存值和公式，并沿用其日期、时长、共享公式及单元格类型规则。超链接元数据单独流式读取，再通过行列范围索引参与文本生成。升级 openpyxl 时运行公式、日期、链接、稀疏行列和取消回归测试。
+`documents/extraction/docx.py` 按块遍历正文和单元格中的段落与表格，保留原文阅读顺序。嵌套表格递归读取，超链接位置包含完整表格路径；合并位置按底层单元格识别，锚点正文读取一次，覆盖位置标注继承关系，独立单元格的相同文字分别保留。
+
+`documents/extraction/spreadsheets.py` 将 openpyxl 内部流式接口限定在 Excel 解析器内，使用已锁定的 `openpyxl==3.1.5`。`_WorksheetValuesAndFormulas` 继承 `WorkSheetParser`，一次解析保留缓存值和公式，并沿用其日期、时长、共享公式及单元格类型规则。提取范围由实际单元格和链接范围决定；最后一行实际数据之后的链接按需补齐。超链接元数据单独流式读取，再通过行列范围索引参与文本生成。升级 openpyxl 时运行公式、日期、链接、稀疏行列和取消回归测试。
 
 `documents/extraction/pdf.py` 使用页面 rawdict 字符边界筛选可能含文字的单元格，字符信息不完整时保留原生提取回退。同页表格共用 TextPage，图片与绘图使用中心坐标索引。索引仅缩小候选范围，文本及非文本内容仍按现有坐标容差判定。
+
+`documents/extraction/pdf_margins.py` 先扫描轻量页面文字与边框，按边缘位置、对齐和连续或隔页重复规律生成页眉页脚清理计划。每页执行时按坐标过滤对应文字行，并按原始出现次序同步清理线性文本；pypdf 回退只清理页内可唯一确认的文字。页面预扫描保留分页取消检查点，内存只保存边缘候选；表格文字、页码和超链接引用保持完整。
+
+`models/document_input.py` 从完整归一化 PDF 表格生成模型文档视图。每个原始单元格按坐标或合并范围记录一次，文字使用 JSON 字符串，空值、非文本内容和未还原位置使用独立标记；表格 ID、行列数与置信度保留，H、M、L 分别编码 high、medium、low。转换前核对网格、合并范围、继承内容及单元格状态，无法完整核对的表格保持原样。`models.client` 在文本和图文请求中使用该视图，`validate_model_input` 按该视图校验实际请求的文档长度。
+
+预处理持久化完整提取内容，供本地规则、报告定位和重试复用。`tasks/runner.py` 在 AI 检查项开始时校验全文输入，超限只影响该项；本地词表与链接检查处理完整内容。图片与视频在生成批次上下文后校验长度。图片优先为本批各目标页分配上下文，再补充相邻页；视频保留采样说明和本批帧位置。批次裁剪提示计入 20000 字预算。缓存输入与首次解析使用相同的执行路径。
+
+任务异常收尾按数据库中的用户取消标记和执行令牌判断取消状态。检查线程的停止信号负责结束并发请求；模型服务错误和输入超限记录为失败，并保留错误与已有中间结果。
 
 `web/task_lists.py` 按任务类型选择列表元数据。轮询先批量读取状态与统计缓存，仅对已结束且缓存过期的任务按主键检查报告存在性；候选 ID 来自已验证任务类型和归属的记录。`reporting/statistics.py` 优先使用统计行，报告写入由 `trg_tasks_report_stats_invalidate` 触发缓存删除。文件可用性检查在一次调用内复用已解析分组，并实时检查磁盘文件。
 
@@ -141,10 +157,12 @@ uv run python -m unittest discover -s tests
 - `tests/test_database_indexes.py` 检查新库索引初始化、已有库补齐、记录和表定义保持、重复与并发初始化及失败重试。
 - `tests/test_performance.py` 检查用户状态统计与文件清理的索引使用、轮询字段读取与缓存失效、列表元数据选择、队列和统计刷新计算量、模型批量查询、文档定位及独立提交服务。
 - `tests/test_document_performance.py` 检查 Excel 单工作簿读取、缓存与共享公式、日期类型、重叠链接、稀疏行列，以及 PDF 空单元格扫描次数和坐标索引等价性。`scripts/benchmark_documents.py` 测量合成宽表与 PDF 表格的解析耗时及输出摘要。
+- `tests/test_document_integrity.py` 检查 Word 横纵合并、独立重复内容、嵌套表格与链接顺序、取消，以及 Excel 范围声明和末尾链接的完整提取。
 - `tests/test_server_runtime.py` 检查 WSGI 请求体、代理信息、线程配置和监督器退出通知；`tests/test_server_integration.py` 使用真实 HTTP 服务检查多进程、上传下载、任务执行和退出清理。
 - `tests/test_tasks.py` 和 `tests/test_task_supervisor.py` 检查认领、取消、执行权、存活过期任务防重入、进程名额及检查项执行。
 - `tests/test_task_process_lifecycle.py` 使用真实子进程检查 GIL 阻塞期间续约、满负载、强制取消、启动许可、入口与初始化超时、状态文件写入失败时终止进程，以及监督器被终止后的遗留进程恢复。`tests/test_server_runtime.py` 另验证 Windows 虚拟环境下监督器和任务进程的实际解释器命令。
 - `tests/test_document_cancellation.py` 检查 PDF 分页与表格取消、512 列 Excel 分行取消及异常传播。
+- `tests/test_model_document_input.py` 检查表格精简后的内容、坐标、横纵合并、特殊字符、独立空值状态、置信度和异常结构保留；任务与模型请求测试覆盖实际输入长度、缓存复用和完整报告证据。
 - `tests/test_logging.py` 检查日志分流、控制台级别、启动提示、Uvicorn 异常、重复初始化和独立轮转；`tests/test_observability.py` 检查访问日志及健康检查；`tests/test_startup_diagnostics.py` 使用独立进程验证依赖与配置加载失败的诊断记录。
 
 项目直接导入的第三方库在 `pyproject.toml` 中显式声明，由 `uv.lock` 锁定完整依赖树。Python 标准库由解释器提供；功能扩展依赖通过 extras 声明，例如 `pypdf[image]`。`ffmpeg`、`ffprobe` 由运行环境安装并加入 `PATH`。

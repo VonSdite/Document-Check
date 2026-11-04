@@ -1,7 +1,9 @@
 import json
 
 from app.contracts.limits import (
+    DEFAULT_DOCUMENT_CHECK_ROUNDS,
     DEFAULT_ISSUE_OUTPUT_LIMIT,
+    MAX_DOCUMENT_CHECK_ROUNDS,
     normalize_issue_output_limit,
 )
 from app.contracts.task_types import (
@@ -682,6 +684,8 @@ def seed_defaults():
 
     defaults = {
         "global_concurrency": 3,
+        "document_check_rounds": DEFAULT_DOCUMENT_CHECK_ROUNDS,
+        "document_check_max_rounds": MAX_DOCUMENT_CHECK_ROUNDS,
         "user_concurrency": 1,
         "check_item_concurrency": 1,
         "image_check_batch_size": 4,

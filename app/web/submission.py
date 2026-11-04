@@ -28,6 +28,7 @@ def _submission_input() -> TaskSubmission:
         ],
         model_id=request.form.get("model_id", ""),
         submission_token=request.form.get("submission_token", ""),
+        check_rounds=request.form.get("check_rounds"),
     )
 
 

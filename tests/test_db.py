@@ -1,3 +1,5 @@
+import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,6 +86,165 @@ class CheckItemDefaultsTest(unittest.TestCase):
             "SELECT prompt FROM check_items WHERE id = ?", (item["id"],)
         ).fetchone()
         self.assertEqual(updated["prompt"], item["prompt"])
+
+    def _extend_check_item_schema(self):
+        db = get_db()
+        db.executescript(
+            """
+            ALTER TABLE check_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'general';
+            ALTER TABLE check_items ADD COLUMN definition_json TEXT;
+            ALTER TABLE check_items ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            CREATE TABLE skill_cases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                check_item_id INTEGER NOT NULL REFERENCES check_items(id) ON DELETE CASCADE,
+                case_json TEXT NOT NULL,
+                validation_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+                validation_version INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX idx_skill_cases_check ON skill_cases(check_item_id, id);
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO check_items(code, name, prompt, kind, created_at, updated_at)
+            VALUES ('skill-example', '规则案例', '规则提示词', 'specialist', ?, ?)
+            """,
+            (now_text(), now_text()),
+        )
+        db.execute(
+            """
+            INSERT INTO skill_cases(check_item_id, case_json, created_at, updated_at)
+            SELECT id, '{"evidence":"案例原文"}', created_at, updated_at
+            FROM check_items WHERE code = 'skill-example'
+            """
+        )
+        set_setting("task_report_limit", 20)
+        db.commit()
+
+    def test_init_db_normalizes_check_items_and_preserves_task_history(self):
+        db = get_db()
+        self._extend_check_item_schema()
+        now = now_text()
+        db.execute(
+            """
+            INSERT INTO check_items(code, name, prompt, created_at, updated_at)
+            VALUES ('skill-custom', '自定义检查', '保留自定义提示词', ?, ?)
+            """,
+            (now, now),
+        )
+        checks_before = [
+            dict(row)
+            for row in db.execute(
+                "SELECT id, code, name, prompt, enabled, sort_order FROM check_items "
+                "WHERE kind = 'general' ORDER BY id"
+            )
+        ]
+        snapshot = json.dumps(
+            [{"code": "skill-example", "name": "规则案例", "prompt": "规则提示词"}]
+        )
+        report = json.dumps(
+            [
+                {
+                    "code": "skill-example",
+                    "output": "检查结果",
+                    "feedback": {"1": "accepted"},
+                }
+            ]
+        )
+        task_id = db.execute(
+            """
+            INSERT INTO tasks(
+                ip, owner_subject, owner_name_snapshot, owner_source,
+                original_filename, stored_filename, file_type, file_size,
+                checks_json, checks_snapshot_json, result_json, model_name,
+                api_base, status, progress, created_at, updated_at
+            )
+            VALUES ('127.0.0.1', 'ip:127.0.0.1', '测试用户', 'ip',
+                    '文档.txt', 'document.txt', 'txt', 1,
+                    '[]', ?, ?, 'model-a', 'https://example.test', 'completed', 100, ?, ?)
+            """,
+            (snapshot, report, now, now),
+        ).lastrowid
+        db.execute("UPDATE skill_cases SET validation_task_id = ?", (task_id,))
+        db.execute(
+            """
+            INSERT INTO task_report_stats(task_id, source_updated_at, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (task_id, now, now),
+        )
+        set_setting("task_file_retention_days", 30)
+        db.commit()
+        task_before = dict(
+            db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        )
+
+        for _ in range(2):
+            init_db()
+            checks_after = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT id, code, name, prompt, enabled, sort_order FROM check_items ORDER BY id"
+                )
+            ]
+            self.assertEqual(checks_after, checks_before)
+            self.assertEqual(
+                dict(
+                    db.execute(
+                        "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                    ).fetchone()
+                ),
+                task_before,
+            )
+            self.assertIsNone(
+                db.execute(
+                    "SELECT name FROM sqlite_master WHERE name IN ('skill_cases', 'idx_skill_cases_check')"
+                ).fetchone()
+            )
+            columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(check_items)")
+            }
+            self.assertFalse(columns & {"kind", "definition_json", "version"})
+            self.assertIsNone(get_setting("task_report_limit"))
+            self.assertEqual(get_setting("task_file_retention_days"), 30)
+            self.assertEqual(
+                db.execute("SELECT * FROM task_report_stats").fetchall(), []
+            )
+            self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_check_item_schema_failure_preserves_data_for_retry(self):
+        db = get_db()
+        self._extend_check_item_schema()
+
+        def deny_alter_table(action, _first, second, _database, _trigger):
+            if action == sqlite3.SQLITE_ALTER_TABLE and second == "check_items":
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        db.set_authorizer(deny_alter_table)
+        try:
+            with self.assertRaises(sqlite3.DatabaseError):
+                init_db()
+        finally:
+            db.set_authorizer(None)
+
+        self.assertEqual(get_setting("task_report_limit"), 20)
+        self.assertEqual(
+            db.execute("SELECT COUNT(*) FROM skill_cases").fetchone()[0], 1
+        )
+        self.assertIsNotNone(
+            db.execute(
+                "SELECT id FROM check_items WHERE code = 'skill-example'"
+            ).fetchone()
+        )
+        init_db()
+        self.assertIsNone(
+            db.execute(
+                "SELECT id FROM check_items WHERE code = 'skill-example'"
+            ).fetchone()
+        )
 
     def test_tasks_table_does_not_store_network_config(self):
         db = get_db()

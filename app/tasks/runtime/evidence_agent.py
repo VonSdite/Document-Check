@@ -1946,6 +1946,7 @@ class EvidenceAgent:
                 name, lambda state: state["data"]["next"], routes
             )
         error = ""
+        retryable = True
         try:
             with tracing_context(enabled=False):
                 graph.compile().invoke(
@@ -1960,6 +1961,7 @@ class EvidenceAgent:
         except LLMError as exc:
             self.external_ensure_active()
             error = str(exc)
+            retryable = exc.retryable
             logger.warning(
                 "证据审查未完成 task_id=%s item=%s stage=%s error=%s",
                 self.connection.get("task_id"),
@@ -2012,4 +2014,5 @@ class EvidenceAgent:
             "report": report,
             "metadata": metadata,
             "error": error,
+            "retryable": retryable,
         }

@@ -1,0 +1,4 @@
+{% if item.source_rounds and result.round_summary %}
+<small class="report-round-source" title="发现轮次仅表示该问题在哪些轮次出现。">发现 {{ item.source_rounds|length }}/{{ result.round_summary.completed }} 轮<br>第 {{ item.source_rounds|join("、") }} 轮</small>
+{% if item.round_conflict %}<small class="report-round-source">各轮判定存在分歧，请复核原文。</small>{% endif %}
+{% endif %}

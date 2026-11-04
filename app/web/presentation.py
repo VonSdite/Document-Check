@@ -13,6 +13,7 @@ from app.identity.service import (
     current_identity,
     subject_label,
 )
+from app.persistence.settings import document_check_round_settings
 from app.reporting.constants import (
     REPORT_ACCEPTANCE_STATUSES,
     REPORT_ITEM_FIELDS,
@@ -44,6 +45,9 @@ FRONTEND_INJECTION_FILENAME = "frontend-injection.html"
 
 
 def register_presentation_routes(app):
+    app.add_template_global(
+        document_check_round_settings, "document_check_round_settings"
+    )
     app.add_template_global(has_permission, "has_permission")
     app.add_template_global(can_manage_task, "can_manage_task")
     app.add_template_global(task_permission_signature, "task_permission_signature")

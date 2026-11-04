@@ -2,6 +2,7 @@ import heapq
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from itertools import chain
 from pathlib import Path
 
 import xlrd
@@ -194,7 +195,6 @@ def _openpyxl_sheet_rows_text(
 ) -> list[str]:
     rows = []
     links = _WorksheetHyperlinks(hyperlinks)
-    max_row, max_column = sheet.max_row, sheet.max_column
     with sheet._get_source() as source:
         parser = _WorksheetValuesAndFormulas(
             source,
@@ -205,11 +205,10 @@ def _openpyxl_sheet_rows_text(
             timedelta_formats=sheet.parent._timedelta_formats,
         )
         previous_row = 0
-        for row_index, cells in parser.parse():
+        last_link_row = max((item[3] for item in hyperlinks), default=0)
+        for row_index, cells in chain(parser.parse(), [(last_link_row, [])]):
             if row_index <= previous_row:
                 continue
-            if max_row and row_index > max_row:
-                break
             # 缺省行只处理其链接，单元格按实际内容与链接范围展开。
             for index, row_links in links.rows_through(previous_row + 1, row_index):
                 check_extraction_canceled(cancel_event)
@@ -218,8 +217,6 @@ def _openpyxl_sheet_rows_text(
                 if index == row_index:
                     for cell in cells:
                         column = cell["column"]
-                        if max_column and column > max_column:
-                            continue
                         value = cell["value"]
                         formula = cell.get("formula")
                         if (
@@ -237,8 +234,6 @@ def _openpyxl_sheet_rows_text(
                         else:
                             formulas.pop(column, None)
                 last_column = max(max(values, default=0), row_links.last_column)
-                if max_column:
-                    last_column = min(max_column, last_column)
                 if not last_column:
                     continue
                 output = []

@@ -148,7 +148,11 @@ def present_check_activity(task, results, progress):
             )
             if (
                 not progress["active"]
-                and not result.get("result")
+                and (
+                    not result.get("result")
+                    or result.get("round_summary", {}).get("completed", 0)
+                    < result.get("round_summary", {}).get("planned", 0)
+                )
                 and task["status"] in {"failed", "canceled"}
             ):
                 phase = task["status"]
@@ -163,6 +167,8 @@ def present_check_activity(task, results, progress):
             else ""
         )
         result["execution_attempt"] = state.get("attempt", 0)
+        result["execution_round"] = state.get("round_number", 0)
+        result["execution_round_total"] = state.get("round_total", 0)
         result["can_cancel"] = (
             task["status"] in {"queued", "running"}
             and task["task_type"] in SINGLE_CANCEL_TASK_TYPES
