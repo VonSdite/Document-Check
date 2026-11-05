@@ -1,11 +1,11 @@
-{% macro render(endpoint, pagination, status=none, keyword=none, review_status=none, filters=none, aria_label='任务分页') -%}
+{% macro render(endpoint, pagination, status=none, keyword=none, review_status=none, filters=none, aria_label='任务分页', anchor=none) -%}
 {% if filters is none %}
 {% set filters = {'status': status, 'keyword': keyword, 'review_status': review_status} if status is not none or keyword is not none or review_status is not none else {} %}
 {% endif %}
 <nav class="pagination" aria-label="{{ aria_label }}">
   <div class="pagination-summary">
     <span>共 {{ pagination.total }} 条</span>
-    <form class="page-size-form" method="get" action="{{ url_for(endpoint) }}">
+    <form class="page-size-form" method="get" action="{{ url_for(endpoint, _anchor=anchor) }}">
       {% for name, value in filters.items() %}
       <input type="hidden" name="{{ name }}" value="{{ value }}">
       {% endfor %}
@@ -21,9 +21,9 @@
     </form>
   </div>
   <div class="pagination-controls">
-    <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for(endpoint, page=pagination.prev_page, per_page=pagination.per_page, **filters) }}">上一页</a>
+    <a class="page-link {{ 'disabled' if not pagination.has_prev else '' }}" href="{{ url_for(endpoint, page=pagination.prev_page, per_page=pagination.per_page, _anchor=anchor, **filters) }}">上一页</a>
     <strong>{{ pagination.page }} / {{ pagination.pages }}</strong>
-    <form class="page-jump-form" method="get" action="{{ url_for(endpoint) }}">
+    <form class="page-jump-form" method="get" action="{{ url_for(endpoint, _anchor=anchor) }}">
       {% for name, value in filters.items() %}
       <input type="hidden" name="{{ name }}" value="{{ value }}">
       {% endfor %}
@@ -34,7 +34,7 @@
       </label>
       <button class="page-link" type="submit">跳转</button>
     </form>
-    <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for(endpoint, page=pagination.next_page, per_page=pagination.per_page, **filters) }}">下一页</a>
+    <a class="page-link {{ 'disabled' if not pagination.has_next else '' }}" href="{{ url_for(endpoint, page=pagination.next_page, per_page=pagination.per_page, _anchor=anchor, **filters) }}">下一页</a>
   </div>
 </nav>
 {%- endmacro %}
