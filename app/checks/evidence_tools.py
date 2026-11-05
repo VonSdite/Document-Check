@@ -3,6 +3,7 @@
 import re
 from collections import Counter
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import Field
 
@@ -32,6 +33,12 @@ class CoverageArguments(Contract):
     requirement_id: str
 
 
+class StateArguments(Contract):
+    kind: Literal["sources", "requirements", "candidates"]
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=8, ge=1, le=20)
+
+
 TOOLS = {
     "search_document": (
         SearchArguments,
@@ -50,7 +57,34 @@ TOOLS = {
         CoverageArguments,
         "查看解析和检查覆盖、逐项要求的观察记录，核实缺失判断的适用性。",
     ),
+    "read_check_state": (
+        StateArguments,
+        "分页读取来源目录、业务要求或候选及其最新复核结果；目录不计入原文读取。",
+    ),
 }
+
+
+def check_state_entries(kind, index, state):
+    if kind == "sources":
+        return [
+            {
+                key: value
+                for key, value in block.as_dict().items()
+                if key in {"id", "filename", "role", "section", "location", "ordinal"}
+            }
+            for block in index.blocks
+        ]
+    if kind == "requirements":
+        return state.get("requirements", [])
+    decisions = {d["candidate_id"]: d for d in state.get("decisions", [])}
+    return [
+        {
+            **candidate,
+            "decision": decisions.get(candidate["id"]),
+            "validation": state.get("decision_audit", {}).get(candidate["id"], {}),
+        }
+        for candidate in state.get("candidates", [])
+    ]
 
 
 def tool_definitions():
@@ -106,6 +140,16 @@ def execute_tool(name: str, arguments: dict, index, state: dict) -> dict:
     if name not in TOOLS:
         raise ValueError("工具名称不在允许范围内")
     args = TOOLS[name][0].model_validate(arguments)
+    if name == "read_check_state":
+        entries = check_state_entries(args.kind, index, state)
+        end = min(len(entries), args.offset + args.limit)
+        return {
+            "kind": args.kind,
+            "entries": entries[args.offset : end],
+            "total": len(entries),
+            "next_offset": end if end < len(entries) else None,
+            "sources": [],
+        }
     if name == "search_document":
         return {
             "sources": index.search(args.query, args.limit),

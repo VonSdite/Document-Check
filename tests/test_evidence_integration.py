@@ -30,6 +30,7 @@ from app.tasks.runner import TaskRunner
 from app.tasks.runtime.evidence_agent import EvidenceAgent, workflow_signature
 from app.tasks.selection import _check_items_from_snapshot
 from app.tasks.submission import _enabled_check_item_snapshots
+from tests.test_agent_followup import followup
 from tests.test_evidence_agent import (
     ScriptedModel,
     candidate,
@@ -45,6 +46,8 @@ def round_model_turn(model, messages, *, schema, **kwargs):
     title = schema["title"]
     if title == "CheckPlan":
         answer = empty_plan()
+    elif title == "Followup":
+        answer = followup(complete=True)
     elif title == "Discovery":
         refs = [
             {"source_id": source["id"], "quote": source["text"]}
@@ -232,7 +235,7 @@ class EvidenceIntegrationTest(unittest.TestCase):
                 store.save({"next": "done"})
             self.assertEqual(store.load(), {"next": "review"})
 
-    def test_worker_resumes_legacy_checkpoint_beyond_elapsed_and_call_limits(self):
+    def test_worker_preserves_checkpoint_and_enforces_elapsed_budget(self):
         text = "\n".join(f"来源{n}：" + "设备参数。" * 120 for n in range(3))
         meta = {
             "source_documents": [
@@ -318,23 +321,8 @@ class EvidenceIntegrationTest(unittest.TestCase):
                 checked = []
 
                 def turn(model, messages, *, schema, **kwargs):
-                    self.assertEqual(model.connection["task_id"], task_id)
-                    self.assertEqual(schema["title"], "Discovery")
                     calls.append(schema["title"])
-                    model.before_request({"messages": messages})
-                    self.assertEqual(
-                        model.connection["remaining_seconds"],
-                        connection["request_timeout"],
-                    )
-                    context = input_context(messages)
-                    checked.extend(s["id"] for s in context["sources"])
-                    response = AgentTurn(
-                        json.dumps(discovery(context), ensure_ascii=False),
-                        usage={"prompt_tokens": 100, "completion_tokens": 50},
-                        finish_reason="stop",
-                    )
-                    model.after_request({}, response, 0.01, None)
-                    return response
+                    self.fail("耗尽时间预算后不应发送模型请求")
 
                 with patch("app.models.agent.AgentModel.turn", new=turn):
                     TaskRunner(self.app).run(task_id, "owner")
@@ -343,16 +331,15 @@ class EvidenceIntegrationTest(unittest.TestCase):
                     .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
                     .fetchone()
                 )
-                self.assertEqual(task["status"], "completed", task["error"])
+                self.assertEqual(task["status"], "failed")
+                self.assertIn("执行时间预算", task["error"])
                 result = json.loads(task["result_json"])[0]
-                self.assertTrue(result["agent"]["coverage"]["all_checked"])
-                self.assertEqual(len(calls), 2)
-                self.assertEqual(len(set(checked)), 2)
+                self.assertFalse(result["agent"]["coverage"]["all_checked"])
+                self.assertEqual(calls, [])
+                self.assertEqual(checked, [])
                 self.assertFalse(set(checked) & set(state["checked_ids"]))
-                self.assertEqual(result["agent"]["model_calls"], 98)
-                self.assertEqual(
-                    result["agent"]["known_input_tokens"], known_input + 200
-                )
+                self.assertEqual(result["agent"]["model_calls"], 96)
+                self.assertEqual(result["agent"]["known_input_tokens"], known_input)
                 self.assertGreaterEqual(result["agent"]["elapsed_seconds"], 3601.0)
                 current_signature = workflow_signature(
                     index,
@@ -368,7 +355,7 @@ class EvidenceIntegrationTest(unittest.TestCase):
                     CheckpointStore(
                         task_id, item["code"], current_signature, "owner"
                     ).load()["next"],
-                    "done",
+                    "discover",
                 )
                 self.assertIsNone(
                     CheckpointStore(
@@ -407,6 +394,8 @@ class EvidenceIntegrationTest(unittest.TestCase):
             answer = (
                 empty_plan()
                 if schema["title"] == "CheckPlan"
+                else followup(complete=True)
+                if schema["title"] == "Followup"
                 else discovery(input_context(messages))
             )
             response = AgentTurn(
@@ -503,8 +492,9 @@ class EvidenceIntegrationTest(unittest.TestCase):
             all(item["source_rounds"] == [1, 2] for item in prepared["report_items"])
         )
         self.assertTrue(all(item["text_evidence"] for item in prepared["report_items"]))
-        self.assertEqual(result["agent"]["model_calls"], 5)
-        self.assertEqual(result["agent"]["known_input_tokens"], 500)
+        self.assertEqual(result["agent"]["model_calls"], 7)
+        self.assertEqual(result["agent"]["known_input_tokens"], 700)
+        self.assertEqual(len(result["agent"]["followup_rounds"]), 2)
         self.assertEqual(result["agent"]["plans_reused"], 1)
         self.assertEqual(result["agent"]["review_reused"], 1)
         self.assertEqual(len(result["agent"]["decision_audit"]), 4)
@@ -554,12 +544,61 @@ class EvidenceIntegrationTest(unittest.TestCase):
         task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         self.assertEqual(task["status"], "completed", task["error"])
         result = json.loads(task["result_json"])[0]
-        self.assertEqual(stages, ["Discovery", "Review"])
-        self.assertEqual(result["agent"]["model_calls"], previous_calls + 2)
+        self.assertEqual(stages, ["Discovery", "Review", "Followup"])
+        self.assertEqual(result["agent"]["model_calls"], previous_calls + 3)
         self.assertEqual(result["structured_report"]["items"][0]["id"], item_id)
         self.assertEqual(
             result["item_acceptances"][item_id]["acceptance_status"], "accepted"
         )
+
+    def test_worker_applies_call_budget_to_followup_and_stops_later_rounds(self):
+        task_id = self.create_round_task()
+        task = (
+            get_db()
+            .execute("SELECT checks_snapshot_json FROM tasks WHERE id=?", (task_id,))
+            .fetchone()
+        )
+        snapshots = json.loads(task[0])
+        snapshots[0]["agent_options"]["max_calls"] = 4
+        get_db().execute(
+            "UPDATE tasks SET checks_snapshot_json=? WHERE id=?",
+            (json.dumps(snapshots), task_id),
+        )
+        get_db().commit()
+
+        def turn(model, messages, *, schema, **kwargs):
+            if schema["title"] != "Followup":
+                return round_model_turn(model, messages, schema=schema, **kwargs)
+            model.before_request({"messages": messages})
+            response = AgentTurn(
+                json.dumps(
+                    followup(
+                        actions=[
+                            {
+                                "name": "search_document",
+                                "arguments": json.dumps({"query": "电压"}),
+                            }
+                        ]
+                    )
+                ),
+                usage={"prompt_tokens": 100, "completion_tokens": 50},
+                finish_reason="stop",
+            )
+            model.after_request({}, response, 0.01, None)
+            return response
+
+        with patch("app.models.agent.AgentModel.turn", new=turn):
+            TaskRunner(self.app).run(task_id, "owner")
+        task = (
+            get_db()
+            .execute("SELECT result_json FROM tasks WHERE id=?", (task_id,))
+            .fetchone()
+        )
+        result = json.loads(task[0])[0]
+        self.assertIn("调用次数预算", result["round_results"][0]["error"])
+        self.assertEqual(result["agent"]["model_calls"], 4)
+        self.assertEqual(len(result["round_results"]), 1)
+        self.assertEqual(result["agent"]["followup_rounds"][0]["status"], "incomplete")
 
     def test_permanent_model_error_stops_later_evidence_rounds(self):
         task_id = self.create_round_task(rounds=5)

@@ -132,10 +132,14 @@ class EvidenceAgentTest(unittest.TestCase):
         shared_work=None,
         round_number=1,
         round_count=1,
+        followup=False,
     ):
+        """阶段测试独立验证扫描与复核，闭环测试显式启用自主补查。"""
         options = (options or AgentOptions(protocol="structured")).model_copy(
             update={"full_document": False}
         )
+        if not followup:
+            options = options.model_copy(update={"max_followup_steps": 0})
         index = DocumentIndex(
             documents
             or [
@@ -1552,7 +1556,7 @@ class EvidenceAgentTest(unittest.TestCase):
         self.assertEqual(result["metadata"]["coverage"]["checked_blocks"], 30)
         self.assertLess(max(sizes), 80000)
 
-    def test_default_execution_covers_long_document_beyond_elapsed_and_call_thresholds(
+    def test_explicit_unlimited_execution_covers_long_document(
         self,
     ):
         clock = [0.0]
@@ -1582,7 +1586,12 @@ class EvidenceAgentTest(unittest.TestCase):
                         "text_complete": True,
                     }
                 ],
-                options=AgentOptions(protocol="structured", chunk_chars=1000),
+                options=AgentOptions(
+                    protocol="structured",
+                    chunk_chars=1000,
+                    max_calls=None,
+                    max_seconds=None,
+                ),
                 connection={"request_timeout": 37},
             )
             result = agent.run()
@@ -1663,7 +1672,12 @@ class EvidenceAgentTest(unittest.TestCase):
             agent = self.make_agent(
                 handler,
                 documents=documents,
-                options=AgentOptions(protocol="structured", chunk_chars=1000),
+                options=AgentOptions(
+                    protocol="structured",
+                    chunk_chars=1000,
+                    max_calls=None,
+                    max_seconds=None,
+                ),
                 store=store,
             )
             resumed = agent.run()

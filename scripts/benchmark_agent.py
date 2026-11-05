@@ -102,6 +102,7 @@ def measure(
             protocol="structured",
             chunk_chars=20000 if source_index else 1000,
             full_document=full_document,
+            max_followup_steps=0,
         ),
         store=MemoryCheckpointStore(),
         ensure_active=lambda: None,

@@ -29,6 +29,7 @@ class AgentHTTPTest(unittest.TestCase):
             "long_thinking": False,
             "per_source_candidates": False,
             "omit_last_source": False,
+            "followup_search": False,
         }
         behavior = self.behavior
 
@@ -95,6 +96,8 @@ class AgentHTTPTest(unittest.TestCase):
                                 for group in groups
                             ],
                         )
+                        if behavior["followup_search"]:
+                            data["candidates"] = []
                         if behavior["truncate_discovery"] and len(sources) > 1:
                             reason = "length"
                         if behavior["omit_last_source"] and len(sources) > 1:
@@ -105,6 +108,37 @@ class AgentHTTPTest(unittest.TestCase):
                                 "candidates": data["candidates"],
                                 "observations": data["observations"],
                             }
+                    elif title == "Followup":
+                        data = {
+                            "status": "complete",
+                            "rationale": "检查范围已覆盖，候选已复核。",
+                            "actions": [],
+                            "candidates": [],
+                            "rechecks": [],
+                        }
+                        if (
+                            behavior["followup_search"]
+                            and not context["counts"]["candidates"]
+                        ):
+                            data["status"] = "continue"
+                            if not context["tool_results"]:
+                                data["actions"] = [
+                                    {
+                                        "name": "search_document",
+                                        "arguments": json.dumps(
+                                            {"query": "电压", "limit": 8}
+                                        ),
+                                    }
+                                ]
+                            else:
+                                data["candidates"] = [
+                                    candidate(
+                                        [
+                                            {"source_id": s["id"], "quote": s["text"]}
+                                            for s in context["sources"]
+                                        ]
+                                    )
+                                ]
                     elif context.get("candidates"):
                         data = {
                             "actions": [],
@@ -202,18 +236,54 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertEqual(len(result["report"]["items"]), 1)
         self.assertTrue(result["metadata"]["capabilities"]["native_tools"])
         self.assertTrue(
-            any(message["role"] == "tool" for message in self.payloads[-1]["messages"])
+            any(
+                message["role"] == "tool"
+                for payload in self.payloads
+                for message in payload["messages"]
+            )
         )
-        self.assertEqual(result["metadata"]["model_calls"], 4)
+        self.assertEqual(result["metadata"]["model_calls"], 5)
         self.assertTrue(result["metadata"]["usage_complete"])
-        self.assertAlmostEqual(result["metadata"]["cost"], 0.00056)
+        self.assertAlmostEqual(result["metadata"]["cost"], 0.00070)
         self.assertEqual(
             [p.get("reasoning_effort") for p in self.payloads],
-            ["max"] * 4,
+            ["max"] * 5,
         )
         self.assertEqual(
             [r["reasoning_effort"] for r in result["metadata"]["requests"]],
-            ["max"] * 4,
+            ["max"] * 5,
+        )
+
+    def test_autonomous_followup_finds_missed_issue_over_http(self):
+        self.behavior["followup_search"] = True
+        result = EvidenceAgent(
+            index=DocumentIndex(
+                [
+                    {
+                        "filename": "a.txt",
+                        "text": "设备A 电压220 V\n设备A 电压110 V",
+                        "text_complete": True,
+                    }
+                ]
+            ),
+            item={
+                "code": "consistency",
+                "name": "参数检查",
+                "prompt": "核对同一设备的电压。",
+            },
+            task_type="document_check",
+            connection=self.connection,
+            options=AgentOptions(),
+            store=MemoryCheckpointStore(),
+            ensure_active=lambda: None,
+        ).run()
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["report"]["items"]), 1)
+        self.assertEqual(result["metadata"]["model_calls"], 6)
+        self.assertEqual(result["metadata"]["known_input_tokens"], 600)
+        self.assertEqual(result["metadata"]["followup"]["status"], "completed")
+        self.assertEqual(
+            [t["name"] for t in result["metadata"]["tool_trace"]], ["search_document"]
         )
 
     def test_default_workflow_keeps_all_requests_at_selected_effort(self):
@@ -240,11 +310,11 @@ class AgentHTTPTest(unittest.TestCase):
                 ).run()
                 self.assertEqual(result["error"], "")
                 self.assertEqual(
-                    [p.get("reasoning_effort") for p in self.payloads], [effort] * 3
+                    [p.get("reasoning_effort") for p in self.payloads], [effort] * 4
                 )
                 self.assertEqual(
                     [r["reasoning_effort"] for r in result["metadata"]["requests"]],
-                    [effort] * 3,
+                    [effort] * 4,
                 )
                 self.assertFalse(
                     any(r["thinking_disabled"] for r in result["metadata"]["requests"])
@@ -278,7 +348,7 @@ class AgentHTTPTest(unittest.TestCase):
                     ensure_active=lambda: None,
                 ).run()
                 self.assertEqual(result["error"], "")
-                self.assertEqual(len(self.payloads), 3)
+                self.assertEqual(len(self.payloads), 4)
                 for payload in self.payloads:
                     if disabled:
                         self.assertEqual(payload["thinking"], {"type": "disabled"})
@@ -294,11 +364,11 @@ class AgentHTTPTest(unittest.TestCase):
                             self.assertNotIn(key, payload)
                 self.assertEqual(
                     [r["thinking_disabled"] for r in result["metadata"]["requests"]],
-                    [disabled] * 3,
+                    [disabled] * 4,
                 )
                 self.assertEqual(
                     [r["reasoning_effort"] for r in result["metadata"]["requests"]],
-                    [None if disabled else "max"] * 3,
+                    [None if disabled else "max"] * 4,
                 )
 
     def test_baseline_evaluation_records_real_api_usage(self):
@@ -344,9 +414,9 @@ class AgentHTTPTest(unittest.TestCase):
             self.assertEqual(payload["reasoning_effort"], "max")
         self.assertTrue(result["metadata"]["coverage"]["all_checked"])
         self.assertEqual(len(result["report"]["items"]), 3)
-        self.assertEqual(result["metadata"]["model_calls"], 5)
-        self.assertEqual(result["metadata"]["known_input_tokens"], 500)
-        self.assertEqual(result["metadata"]["known_output_tokens"], 100)
+        self.assertEqual(result["metadata"]["model_calls"], 6)
+        self.assertEqual(result["metadata"]["known_input_tokens"], 600)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 120)
         self.assertTrue(result["metadata"]["usage_complete"])
 
     def test_plan_length_retry_over_http_preserves_usage_and_output_cap(self):
@@ -378,9 +448,9 @@ class AgentHTTPTest(unittest.TestCase):
         result = agent.run()
         self.assertEqual(result["error"], "")
         self.assertEqual(len(result["report"]["items"]), 1)
-        self.assertEqual(result["metadata"]["model_calls"], 4)
+        self.assertEqual(result["metadata"]["model_calls"], 5)
         self.assertTrue(result["metadata"]["usage_complete"])
-        self.assertEqual(result["metadata"]["known_output_tokens"], 80)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 100)
         self.assertIn("length", result["metadata"]["requests"][0]["error"])
         for payload in self.payloads:
             self.assertNotIn("max_completion_tokens", payload)
@@ -403,8 +473,8 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertEqual(result["error"], "")
         self.assertEqual(len(result["report"]["items"]), 1)
         self.assertTrue(result["metadata"]["usage_complete"])
-        self.assertEqual(result["metadata"]["model_calls"], 3)
-        self.assertEqual(result["metadata"]["known_output_tokens"], 60)
+        self.assertEqual(result["metadata"]["model_calls"], 4)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 80)
 
     def test_missing_last_source_recovers_over_http_and_preserves_usage(self):
         self.behavior["omit_last_source"] = True
@@ -430,8 +500,8 @@ class AgentHTTPTest(unittest.TestCase):
         self.assertEqual(result["error"], "")
         self.assertEqual(len(result["report"]["items"]), 2)
         self.assertTrue(result["metadata"]["coverage"]["all_checked"])
-        self.assertEqual(result["metadata"]["model_calls"], 4)
-        self.assertEqual(result["metadata"]["known_output_tokens"], 80)
+        self.assertEqual(result["metadata"]["model_calls"], 5)
+        self.assertEqual(result["metadata"]["known_output_tokens"], 100)
         self.assertTrue(result["metadata"]["usage_complete"])
         batches = [
             input_context(p["messages"])["sources"]
@@ -472,8 +542,8 @@ class AgentHTTPTest(unittest.TestCase):
                 self.assertEqual(result["error"], "")
                 self.assertTrue(result["metadata"]["coverage"]["all_checked"])
                 self.assertEqual(len(result["report"]["items"]), 2)
-                self.assertEqual(result["metadata"]["model_calls"], 5)
-                self.assertEqual(result["metadata"]["known_output_tokens"], 100)
+                self.assertEqual(result["metadata"]["model_calls"], 6)
+                self.assertEqual(result["metadata"]["known_output_tokens"], 120)
                 self.assertTrue(result["metadata"]["usage_complete"])
                 self.assertEqual(
                     sum(

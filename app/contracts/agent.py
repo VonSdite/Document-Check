@@ -4,9 +4,11 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-WORKFLOW_VERSION = "evidence-review-v8"
+WORKFLOW_VERSION = "evidence-review-v9"
 MAX_BATCH_CANDIDATES = 100
 MAX_BATCH_FACTS = 200
+DEFAULT_MAX_CALLS = 512
+DEFAULT_MAX_SECONDS = 3600
 NonEmpty = Annotated[str, Field(min_length=1, max_length=12000)]
 
 
@@ -34,8 +36,9 @@ class AgentOptions(Contract):
     protocol: Literal["auto", "native", "structured"] = "auto"
     chunk_chars: int = Field(default=20000, ge=1000, le=50000)
     full_document: bool = True
-    max_calls: int | None = Field(default=None, ge=4, le=1000)
-    max_seconds: int | None = Field(default=None, ge=30, le=14400)
+    max_calls: int | None = Field(default=DEFAULT_MAX_CALLS, ge=4, le=1000)
+    max_seconds: int | None = Field(default=DEFAULT_MAX_SECONDS, ge=30, le=14400)
+    max_followup_steps: int = Field(default=8, ge=0, le=32)
     max_review_rounds: int = Field(default=3, ge=1, le=6)
     review_batch_size: int = Field(default=8, ge=1, le=12)
     max_candidates: int = Field(default=200, ge=1, le=1000)
@@ -157,6 +160,7 @@ class ToolAction(Contract):
         "read_table",
         "compare_numbers",
         "coverage_status",
+        "read_check_state",
     ]
     arguments: str
 
@@ -164,6 +168,27 @@ class ToolAction(Contract):
 class Review(Contract):
     actions: list[ToolAction] = Field(max_length=6)
     decisions: list[Decision] = Field(max_length=12)
+
+
+class Recheck(Contract):
+    candidate_id: NonEmpty
+    evidence: list[EvidenceRef] = Field(min_length=1, max_length=8)
+
+
+class Followup(Contract):
+    status: Literal["continue", "complete"]
+    rationale: Annotated[str, Field(min_length=1, max_length=1000)]
+    actions: list[ToolAction] = Field(max_length=6)
+    candidates: list[Candidate] = Field(max_length=12)
+    rechecks: list[Recheck] = Field(max_length=8)
+
+    @model_validator(mode="after")
+    def finish_without_pending_actions(self):
+        if self.status == "complete" and (
+            self.actions or self.candidates or self.rechecks
+        ):
+            raise ValueError("结束前先执行工具、提交候选并完成复核")
+        return self
 
 
 class ReportItem(Contract):

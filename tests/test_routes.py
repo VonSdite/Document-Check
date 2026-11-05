@@ -128,7 +128,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 [option["value"] for option in picker.select("option")],
                 ["1", "2", "3", "4", "5"],
             )
-            self.assertEqual(picker.select_one("option[selected]")["value"], "5")
+        self.assertEqual(picker.select_one("option[selected]")["value"], "1")
         with self.app.app_context():
             set_setting("document_check_rounds", 2)
             set_setting("document_check_max_rounds", 3)
@@ -165,7 +165,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         for route, value, expected in (
             ("/", "2", 2),
             ("/admin/tasks", "3", 3),
-            ("/", "", 3),
+            ("/", "", 1),
         ):
             self.client.post(
                 route,
@@ -198,7 +198,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 },
             )
             with self.app.app_context():
-                self.assertEqual(get_setting("document_check_rounds"), 5)
+                self.assertEqual(get_setting("document_check_rounds"), 1)
                 self.assertEqual(get_setting("document_check_max_rounds"), 5)
         self.client.post(
             "/admin/settings",

@@ -743,8 +743,14 @@ def _run_check_items_concurrently(
                     snapshot_options = AgentOptions.model_validate(
                         item["agent_options"]
                     )
+                    defaults = AgentOptions()
                     options = snapshot_options.model_copy(
-                        update={"max_calls": None, "max_seconds": None}
+                        update={
+                            "max_calls": snapshot_options.max_calls
+                            or defaults.max_calls,
+                            "max_seconds": snapshot_options.max_seconds
+                            or defaults.max_seconds,
+                        }
                     )
                     index = source_index.with_standards(
                         [s.model_dump(mode="json") for s in options.standards]

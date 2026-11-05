@@ -201,6 +201,11 @@ def _merge_agent_rounds(report: dict, rounds: list[dict]) -> dict | None:
         for entry in agent_rounds
         for candidate_id, audit in entry["agent"].get("decision_audit", {}).items()
     }
+    metadata["followup_rounds"] = [
+        {"round": entry["round"], **entry["agent"]["followup"]}
+        for entry in agent_rounds
+        if entry["agent"].get("followup")
+    ]
     metadata["usage_complete"] = all(meta["usage_complete"] for meta in metas)
     metadata["cost"] = (
         sum(meta["cost"] for meta in metas)

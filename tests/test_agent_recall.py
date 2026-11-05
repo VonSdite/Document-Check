@@ -348,13 +348,21 @@ class ComplementaryRoundsTest(unittest.TestCase):
             ],
         }
 
-    def test_five_rounds_keep_every_detection_pass_with_seven_instead_of_fifteen_calls(
+    def test_five_rounds_keep_adaptive_checks_with_twelve_instead_of_twenty_calls(
         self,
     ):
         pool = SharedAgentWork()
         discovery_instructions = []
 
         def handler(messages, title, tools, force):
+            if title == "Followup":
+                return {
+                    "status": "complete",
+                    "rationale": "已检查全部要求，重复候选已复核。",
+                    "actions": [],
+                    "candidates": [],
+                    "rechecks": [],
+                }
             if title == "Discovery":
                 discovery_instructions.append(
                     messages[-1]["content"].split("输出 JSON schema")[0]
@@ -369,12 +377,16 @@ class ComplementaryRoundsTest(unittest.TestCase):
                 shared_work=pool,
                 round_number=n,
                 round_count=5,
+                followup=True,
             )
             .run()
             for n in range(1, 6)
         ]
         self.assertTrue(all(r["error"] == "" for r in results))
-        self.assertEqual(sum(r["metadata"]["model_calls"] for r in results), 7)
+        self.assertEqual(sum(r["metadata"]["model_calls"] for r in results), 12)
+        self.assertTrue(
+            all(r["metadata"]["followup"]["status"] == "completed" for r in results)
+        )
         self.assertEqual(sum(r["metadata"]["plan_reused"] for r in results), 4)
         self.assertEqual(sum(r["metadata"]["review_reused"] for r in results), 4)
         self.assertEqual(len({r["metadata"]["round_focus"] for r in results}), 5)

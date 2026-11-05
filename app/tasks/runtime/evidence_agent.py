@@ -49,13 +49,15 @@ from app.documents.segmentation import split_source_text
 from app.models.agent import AgentModel, AgentTurn, IncompleteResponse, ToolsUnsupported
 from app.models.client import LLMError, _thinking_disabled_in_payload
 from app.tasks.runtime.agent_batches import LimitedModel, run_batch_requests
+from app.tasks.runtime.agent_followup import FollowupLoop
 from app.tasks.runtime.agent_reuse import SharedAgentWork, round_focus
 
 logger = logging.getLogger(__name__)
 
 
 class BudgetExceeded(LLMError):
-    pass
+    def __init__(self, message):
+        super().__init__(message, retryable=False)
 
 
 class CoverageMismatch(LLMError):
@@ -1412,7 +1414,11 @@ class EvidenceAgent:
 
     def _review_context(self, batch, recovery_sources=()):
         sources = {}
-        references = [ref for c in batch for ref in c["evidence"]]
+        additional = {
+            c["id"]: self.state.get("supplemental_evidence", {}).get(c["id"], [])
+            for c in batch
+        }
+        references = [ref for c in batch for ref in additional[c["id"]] + c["evidence"]]
         for ref in references:
             if ref["source_id"] in self.index.by_id:
                 sources[ref["source_id"]] = self.index.by_id[ref["source_id"]].as_dict()
@@ -1446,6 +1452,7 @@ class EvidenceAgent:
         ]
         context = {
             "candidates": batch,
+            "additional_evidence": additional,
             "expected_candidate_ids": [candidate["id"] for candidate in batch],
             "sources": selected,
             "context_truncated": len(selected) < len(sources),
@@ -1584,7 +1591,9 @@ class EvidenceAgent:
     def _review_step(self):
         self._reuse_reviews()
         if self.state["review_cursor"] >= len(self.state["candidates"]):
-            self.state["next"] = "finalize"
+            self.state["next"] = (
+                "followup" if self.options.max_followup_steps else "finalize"
+            )
             return
         if not self.state["review_batch"]:
             self._review_initial()
@@ -1810,42 +1819,56 @@ class EvidenceAgent:
                 )
         self._finish_batch()
 
+    def _tool_result(self, action):
+        self.ensure_active()
+        try:
+            arguments = json.loads(action["arguments"])
+            result = execute_tool(action["name"], arguments, self.index, self.state)
+            maximum = max(4000, min(12000, self.max_input // 6))
+            sources = result.get("sources", [])
+            kept = []
+            for source in sources:
+                if len(_json(kept + [source])) <= maximum:
+                    kept.append(source)
+            result["sources"] = kept
+            result["truncated"] = result.get("truncated", False) or len(kept) != len(
+                sources
+            )
+            if "entries" in result:
+                while result["entries"] and len(_json(result)) > maximum:
+                    result["entries"].pop()
+                    result["next_offset"] = arguments.get("offset", 0) + len(
+                        result["entries"]
+                    )
+                    result["truncated"] = True
+                if not result["entries"] and result.get("next_offset") is not None:
+                    result["error"] = "当前单条状态记录超过工具返回预算"
+        except (ValueError, ValidationError) as exc:
+            result = {"error": str(exc)[:1000], "sources": []}
+        self.state.setdefault("tool_trace", []).append(
+            {
+                "stage": self.state["next"],
+                "name": action["name"],
+                "arguments": action["arguments"],
+                "source_ids": [source["id"] for source in result.get("sources", [])],
+                "error": result.get("error", ""),
+                "truncated": result.get("truncated", False),
+            }
+        )
+        return result
+
     def _tools(self):
         results = []
         for action in self.state["pending_actions"]:
-            self.ensure_active()
-            try:
-                arguments = json.loads(action["arguments"])
-                result = execute_tool(action["name"], arguments, self.index, self.state)
-                maximum = max(4000, min(12000, self.max_input // 6))
-                sources = result.get("sources", [])
-                kept = []
-                for source in sources:
-                    if len(_json(kept + [source])) <= maximum:
-                        kept.append(source)
-                result["sources"] = kept
-                result["truncated"] = result.get("truncated", False) or len(
-                    kept
-                ) != len(sources)
-                self.state["seen_sources"].extend(
-                    s["id"] for s in kept if s["id"] not in self.state["seen_sources"]
-                )
-                if action["call_id"]:
-                    self.state["capabilities"]["native_tools"] = True
-            except (ValueError, ValidationError) as exc:
-                result = {"error": str(exc)[:1000], "sources": []}
-            results.append({"tool": action["name"], "result": result})
-            self.state.setdefault("tool_trace", []).append(
-                {
-                    "name": action["name"],
-                    "arguments": action["arguments"],
-                    "source_ids": [
-                        source["id"] for source in result.get("sources", [])
-                    ],
-                    "error": result.get("error", ""),
-                    "truncated": result.get("truncated", False),
-                }
+            result = self._tool_result(action)
+            self.state["seen_sources"].extend(
+                s["id"]
+                for s in result.get("sources", [])
+                if s["id"] not in self.state["seen_sources"]
             )
+            if action["call_id"] and not result.get("error"):
+                self.state["capabilities"]["native_tools"] = True
+            results.append({"tool": action["name"], "result": result})
             if action["call_id"]:
                 self.state["messages"].append(
                     {
@@ -2193,6 +2216,8 @@ class EvidenceAgent:
             "compare": self._compare,
             "review": self._review,
             "tools": self._tools,
+            "followup": lambda: FollowupLoop(self).step(),
+            "followup_tools": lambda: FollowupLoop(self).tools(),
             "finalize": self._finalize,
         }
 
@@ -2209,6 +2234,8 @@ class EvidenceAgent:
                             "align": "comparing",
                             "review": "reviewing",
                             "tools": "tools",
+                            "followup": "investigating",
+                            "followup_tools": "tools",
                             "finalize": "finalizing",
                         }[name],
                         None,
@@ -2250,6 +2277,8 @@ class EvidenceAgent:
             self.external_ensure_active()
             error = str(exc)
             retryable = exc.retryable
+            if self.state.get("followup", {}).get("status") == "running":
+                self.state["followup"].update(status="incomplete", stop_reason=error)
             logger.warning(
                 "证据审查未完成 task_id=%s item=%s stage=%s error=%s",
                 self.connection.get("task_id"),
@@ -2298,6 +2327,11 @@ class EvidenceAgent:
             "reference_retry_batches": self.state.get("reference_retry_batches", 0),
             "saturated_batches": self.state.get("saturated_batches", 0),
             "decision_audit": self.state.get("decision_audit", {}),
+            "followup": {
+                key: value
+                for key, value in self.state.get("followup", {}).items()
+                if key in {"status", "stop_reason", "steps", "feedback"}
+            },
         }
         report = dict(self.state.get("report") or self.build_report())
         if error:
