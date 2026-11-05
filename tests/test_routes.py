@@ -2115,17 +2115,15 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "candidate",
         )
         rows = section.select("[data-report-suppression-row]")
-        self.assertEqual(len(rows), 2)
-        self.assertEqual(
-            {row.get("data-rule-status") for row in rows}, {"candidate", "enabled"}
-        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual({row.get("data-rule-status") for row in rows}, {"candidate"})
         searchable_text = " ".join(
             part.get_text(" ", strip=True)
             for row in rows
             for part in row.select("[data-report-suppression-search-part]")
         )
         self.assertIn("功率参数前后不一致", searchable_text)
-        self.assertIn("格式问题", searchable_text)
+        self.assertNotIn("格式问题", searchable_text)
         self.assertIsNotNone(section.select_one("[data-report-suppression-empty]"))
         self.assertTrue(
             all(
@@ -2168,6 +2166,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "operation": "enable",
                 "rule_keyword": "保留 搜索",
                 "rule_status": "candidate",
+                "page": "2",
+                "per_page": "20",
             },
         )
 
@@ -2175,7 +2175,12 @@ class AdminSettingsRouteTest(unittest.TestCase):
         location = urlparse(response.headers["Location"])
         self.assertEqual(
             parse_qs(location.query),
-            {"rule_keyword": ["保留 搜索"], "rule_status": ["candidate"]},
+            {
+                "rule_keyword": ["保留 搜索"],
+                "rule_status": ["candidate"],
+                "page": ["2"],
+                "per_page": ["20"],
+            },
         )
         self.assertEqual(location.fragment, "report-suppression-rules")
         with self.app.app_context():
@@ -2188,6 +2193,175 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()
             )
             self.assertEqual(rule["enabled"], 1)
+
+    def _insert_suppression_rules(self, count):
+        with self.app.app_context():
+            db = get_db()
+            ids = []
+            for number in range(1, count + 1):
+                cursor = db.execute(
+                    """INSERT INTO report_suppression_rules(
+                        task_type, check_code, fingerprint, item_json, reason,
+                        enabled, created_at, updated_at
+                    ) VALUES (?, 'consistency', ?, ?, '模型误报', 0, ?, ?)""",
+                    (
+                        DOCUMENT_TASK_TYPE,
+                        f"paged-rule-{number}",
+                        json.dumps({"description": f"问题 {number:03d}"}),
+                        "2026-11-05 10:00:00",
+                        "2026-11-05 10:00:00",
+                    ),
+                )
+                ids.append(cursor.lastrowid)
+            db.commit()
+        return ids
+
+    def test_report_suppression_rules_default_to_twenty_rows_with_stable_pages(self):
+        ids = self._insert_suppression_rules(43)
+        found = []
+        for page, expected_count in ((1, 20), (2, 20), (3, 3)):
+            response = self.client.get("/admin/settings", query_string={"page": page})
+            self.assertEqual(response.status_code, 200)
+            soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+            section = _required_tag(soup.select_one("[data-report-suppression-rules]"))
+            rows = section.select("[data-report-suppression-row]")
+            self.assertEqual(len(rows), expected_count)
+            found.extend(
+                int(row.select_one('input[name="rule_id"]')["value"]) for row in rows
+            )
+            nav = _required_tag(
+                section.select_one('nav[aria-label="误报忽略规则分页"]')
+            )
+            self.assertEqual(
+                nav.select_one('select[name="per_page"] option[selected]')["value"],
+                "20",
+            )
+            self.assertEqual(
+                nav.select_one("strong").get_text(strip=True), f"{page} / 3"
+            )
+            self.assertIn("共 43 条", nav.get_text(" ", strip=True))
+            for link in nav.select("a[href]"):
+                self.assertEqual(
+                    urlparse(link["href"]).fragment, "report-suppression-rules"
+                )
+            for form in section.select('tr form[method="post"]'):
+                self.assertEqual(
+                    form.select_one('input[name="page"]')["value"], str(page)
+                )
+        self.assertEqual(found, list(reversed(ids)))
+
+    def test_report_suppression_filters_search_all_pages_and_normalize_text(self):
+        ids = self._insert_suppression_rules(43)
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE report_suppression_rules SET enabled=1, item_json=? WHERE id=?",
+                (json.dumps({"description": "ＡＢＣ\n参数 50%_"}), ids[0]),
+            )
+            get_db().commit()
+        for keyword, status, expected in (
+            ("abc 50%_", "enabled", 1),
+            ("问题 002", "candidate", 1),
+            ("abc", "candidate", 0),
+            ("' OR 1=1 --", "", 0),
+        ):
+            with self.subTest(keyword=keyword, status=status):
+                response = self.client.get(
+                    "/admin/settings",
+                    query_string={
+                        "rule_keyword": keyword,
+                        "rule_status": status,
+                        "page": 99,
+                    },
+                )
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                section = _required_tag(
+                    soup.select_one("[data-report-suppression-rules]")
+                )
+                self.assertEqual(
+                    len(section.select("[data-report-suppression-row]")), expected
+                )
+                form = _required_tag(
+                    section.select_one("form.report-suppression-toolbar")
+                )
+                self.assertEqual(form["method"], "get")
+                self.assertEqual(form.select_one('input[name="page"]')["value"], "1")
+                self.assertEqual(
+                    form.select_one('input[name="rule_keyword"]')["value"], keyword
+                )
+                next_link = section.select('nav[aria-label="误报忽略规则分页"] a')[-1]
+                self.assertEqual(
+                    parse_qs(urlparse(next_link["href"]).query).get("rule_keyword"),
+                    [keyword],
+                )
+                if not expected:
+                    self.assertNotIn(
+                        "hidden",
+                        section.select_one("[data-report-suppression-empty]").attrs,
+                    )
+
+    def test_report_suppression_pages_bound_invalid_values_and_allow_page_size(self):
+        self._insert_suppression_rules(43)
+        for page, size, expected_page, expected_count in (
+            ("invalid", "20", "1", 20),
+            ("-1", "20", "1", 20),
+            ("999", "20", "3", 3),
+            ("9" * 5000, "20", "1", 20),
+            ("1", "999", "1", 20),
+            ("1", "50", "1", 43),
+        ):
+            with self.subTest(page=page[:20], size=size):
+                response = self.client.get(
+                    "/admin/rules", query_string={"page": page, "per_page": size}
+                )
+                self.assertEqual(response.status_code, 200)
+                soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                section = _required_tag(
+                    soup.select_one("[data-report-suppression-rules]")
+                )
+                self.assertEqual(
+                    len(section.select("[data-report-suppression-row]")), expected_count
+                )
+                self.assertEqual(
+                    section.select_one('input[aria-label="跳转页码"]')["value"],
+                    expected_page,
+                )
+                self.assertTrue(
+                    all(
+                        urlparse(link["href"]).path == "/admin/rules"
+                        for link in section.select("nav a")
+                    )
+                )
+
+    def test_deleting_last_rule_on_page_returns_to_last_available_page(self):
+        ids = self._insert_suppression_rules(21)
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "report_suppression_rule",
+                "operation": "delete",
+                "rule_id": ids[0],
+                "rule_keyword": "问题",
+                "rule_status": "candidate",
+                "page": 2,
+                "per_page": 20,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        location = urlparse(response.headers["Location"])
+        self.assertEqual(parse_qs(location.query)["page"], ["2"])
+        self.assertEqual(location.fragment, "report-suppression-rules")
+        soup = BeautifulSoup(
+            self.client.get(response.headers["Location"]).get_data(as_text=True),
+            "html.parser",
+        )
+        section = _required_tag(soup.select_one("[data-report-suppression-rules]"))
+        self.assertEqual(len(section.select("[data-report-suppression-row]")), 20)
+        self.assertEqual(
+            section.select_one('input[aria-label="跳转页码"]')["value"], "1"
+        )
+        self.assertEqual(
+            section.select_one('input[name="rule_keyword"]')["value"], "问题"
+        )
 
     def test_admin_settings_puts_network_and_diagnostics_last(self):
         response = self.client.get("/admin/settings")

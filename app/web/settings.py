@@ -1,4 +1,5 @@
 import json
+import unicodedata
 import uuid
 from ipaddress import ip_address
 
@@ -66,6 +67,7 @@ from app.web.constants import (
     ISSUE_OUTPUT_LIMIT_DEFAULT,
     TASK_FILE_RETENTION_DAYS_DEFAULT,
 )
+from app.web.task_lists import _bounded_page, _page_arg, _pagination, _per_page_arg
 
 
 def register_settings_routes(app):
@@ -468,6 +470,11 @@ def register_settings_routes(app):
         report_suppression_keyword, report_suppression_status = (
             _report_suppression_filter_values(request.args)
         )
+        report_suppression_rules, report_suppression_pagination = (
+            _report_suppression_rule_rows(
+                report_suppression_keyword, report_suppression_status
+            )
+        )
         return render_template(
             "admin_settings.html",
             rules_only=rules_only,
@@ -569,7 +576,8 @@ def register_settings_routes(app):
             ip_username_rows=_ip_username_rows()
             if not rules_only and _ip_username_management_enabled()
             else [],
-            report_suppression_rules=_report_suppression_rule_rows(),
+            report_suppression_rules=report_suppression_rules,
+            report_suppression_pagination=report_suppression_pagination,
             report_suppression_keyword=report_suppression_keyword,
             report_suppression_status=report_suppression_status,
         )
@@ -590,22 +598,57 @@ def _report_suppression_rules_redirect():
         url_values["rule_keyword"] = keyword
     if status:
         url_values["rule_status"] = status
+    for field in ("page", "per_page"):
+        value = request.form.get(field, type=int)
+        if value and value > 0:
+            url_values[field] = value
     return redirect(url_for(_settings_endpoint(), **url_values))
 
 
-def _report_suppression_rule_rows() -> list[dict]:
-    rows = (
-        get_db()
-        .execute(
-            """
-        SELECT r.*, c.name AS check_name
-        FROM report_suppression_rules r
-        LEFT JOIN check_items c ON c.code = r.check_code
-        ORDER BY r.enabled ASC, r.updated_at DESC, r.id DESC
-        """
+def _report_suppression_rule_rows(keyword: str, status: str) -> tuple[list[dict], dict]:
+    db = get_db()
+    clauses, params = [], []
+    if status:
+        clauses.append("r.enabled = ?")
+        params.append(int(status == "enabled"))
+    if keyword:
+        terms = unicodedata.normalize("NFKC", keyword).lower().split()
+
+        def matches(check_name, task_type, item_json, reason):
+            item = _parse_report_suppression_item_json(item_json)
+            text = " ".join(
+                str(value or "-")
+                for value in (
+                    check_name,
+                    task_type_label(task_type),
+                    item.get("category"),
+                    item.get("location"),
+                    item.get("description") or item.get("text"),
+                    reason,
+                )
+            )
+            text = " ".join(unicodedata.normalize("NFKC", text).lower().split())
+            return all(term in text for term in terms)
+
+        db.create_function("report_rule_matches", 4, matches, deterministic=True)
+        clauses.append(
+            "report_rule_matches(COALESCE(NULLIF(c.name, ''), r.check_code), "
+            "r.task_type, r.item_json, r.reason)"
         )
-        .fetchall()
-    )
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    source = "FROM report_suppression_rules r LEFT JOIN check_items c ON c.code = r.check_code"
+    total = db.execute(f"SELECT COUNT(*) {source} {where}", params).fetchone()[0]
+    per_page = _per_page_arg()
+    page = _bounded_page(_page_arg(), total, per_page)
+    rows = db.execute(
+        f"""
+        SELECT r.*, c.name AS check_name
+        {source} {where}
+        ORDER BY r.enabled ASC, r.updated_at DESC, r.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        [*params, per_page, (page - 1) * per_page],
+    ).fetchall()
     result = []
     for row in rows:
         snapshot = _parse_report_suppression_item_json(row["item_json"])
@@ -626,7 +669,7 @@ def _report_suppression_rule_rows() -> list[dict]:
                 "item": snapshot,
             }
         )
-    return result
+    return result, _pagination(page, total, per_page)
 
 
 def _parse_report_suppression_item_json(raw: str | None) -> dict:
