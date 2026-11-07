@@ -77,6 +77,8 @@ http://127.0.0.1:31945/
 - `server.proxy_fix`：启用可信网关提供的协议、域名和路径前缀。
 - `auth.mode`：只允许 `ip`、`cookie_session`；未填写时默认 `ip`，填写其他值会阻止启动。
 
+任务提交和管理写操作使用浏览器的 `Sec-Fetch-Site` 判断同源关系。`same-origin` 支持外部 HTTPS、内部 HTTP 的反向代理部署；`same-site` 和 `cross-site` 返回 403。请求缺少明确的同源标记时，携带的 `Origin` 与后端识别的来源精确比较。网关应透传浏览器的这些请求头。
+
 ## 本地前端注入
 
 需要接入前端采集器时，请在运行目录创建 `instance/frontend-injection.html`，写入完整的 `<script>` 片段。完整页面渲染时会把该片段原样插入页面 `<head>`；任务列表局部刷新响应只返回列表内容，不注入该片段。

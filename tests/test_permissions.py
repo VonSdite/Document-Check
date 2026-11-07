@@ -1320,6 +1320,90 @@ class UserPermissionTest(unittest.TestCase):
             302,
         )
 
+    def test_same_origin_metadata_allows_task_submission_through_http_proxy(self):
+        self.app.config["APPLICATION_ROOT"] = "/infoCheck"
+        self.app.wsgi_app = ProxyFix(
+            self.app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
+        )
+        model_id = self.fixture._configure_provider(self.subject)
+        with self.app.app_context():
+            check_id = (
+                get_db()
+                .execute("SELECT id FROM check_items WHERE code = 'compliance'")
+                .fetchone()[0]
+            )
+
+        for route, upstream in (
+            ("/", "http://example.test"),
+            ("/tasks/new", "http://127.0.0.1:31945"),
+        ):
+            with self.subTest(route=route, upstream=upstream):
+                response = self.client.post(
+                    route,
+                    base_url=upstream,
+                    environ_overrides={"SCRIPT_NAME": "/infoCheck"},
+                    headers={
+                        "Origin": "https://example.test",
+                        "Sec-Fetch-Site": "same-origin",
+                    },
+                    data={
+                        "document": (io.BytesIO(b"document"), "proxy.txt"),
+                        "checks": [str(check_id)],
+                        "model_id": model_id,
+                    },
+                )
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response.location, "/infoCheck/")
+
+        with self.app.app_context():
+            tasks = get_db().execute("SELECT * FROM tasks ORDER BY id").fetchall()
+            self.assertEqual(len(tasks), 2)
+            for task in tasks:
+                self.assertEqual(task["owner_subject"], self.subject)
+                self.assertEqual(task["status"], "queued")
+                self.assertEqual(task["original_filename"], "proxy.txt")
+
+    def test_write_origin_metadata_and_origin_fallback_protect_mutations(self):
+        self.grant("tasks.manage_all")
+        for origin, fetch_site, expected in (
+            ("https://example.test", "same-origin", 302),
+            (None, "same-origin", 302),
+            ("null", "same-origin", 403),
+            ("https://other.example.test", "same-site", 403),
+            ("http://127.0.0.1:31945", "same-site", 403),
+            ("http://127.0.0.1:31945", "cross-site", 403),
+            (None, "cross-site", 403),
+            (None, "same-site", 403),
+            ("https://example.test", None, 403),
+            ("https://127.0.0.1:31945", None, 403),
+            ("http://127.0.0.1:31946", None, 403),
+            ("null", None, 403),
+            ("http://127.0.0.1:31945", None, 302),
+            (None, None, 302),
+            ("https://example.test", "none", 403),
+            ("https://example.test", "invalid", 403),
+        ):
+            with self.subTest(origin=origin, fetch_site=fetch_site):
+                task = self.fixture._insert_task(ip="10.0.0.9", status="queued")
+                headers = {}
+                if origin is not None:
+                    headers["Origin"] = origin
+                if fetch_site is not None:
+                    headers["Sec-Fetch-Site"] = fetch_site
+                response = self.client.post(
+                    f"/tasks/{task}/cancel",
+                    base_url="http://127.0.0.1:31945",
+                    headers=headers,
+                )
+                self.assertEqual(response.status_code, expected)
+                with self.app.app_context():
+                    self.assertEqual(
+                        get_db()
+                        .execute("SELECT status FROM tasks WHERE id = ?", (task,))
+                        .fetchone()[0],
+                        "canceled" if expected == 302 else "queued",
+                    )
+
     def test_stats_grant_changes_list_metrics_and_polling_permissions(self):
         self.grant("tasks.view_all")
         task = self.fixture._insert_task(ip="10.0.0.9")

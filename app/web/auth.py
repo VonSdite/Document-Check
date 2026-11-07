@@ -267,7 +267,11 @@ def task_permission_signature() -> str:
 def _check_write_origin():
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("Origin")
-        if request.headers.get("Sec-Fetch-Site") == "cross-site" or (
+        fetch_site = request.headers.get("Sec-Fetch-Site")
+        # 浏览器提供的同源关系覆盖代理前后的协议与主机差异。
+        if fetch_site == "same-origin" and origin != "null":
+            return
+        if fetch_site in {"cross-site", "same-site"} or (
             origin and origin.rstrip("/") != request.host_url.rstrip("/")
         ):
             abort(403, description="管理操作需要从本站页面发起。")
