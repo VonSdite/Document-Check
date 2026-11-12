@@ -28,7 +28,7 @@
         <a href="{{ url_for('admin_dashboard' if is_superadmin else 'user_overview') }}" class="{{ 'active' if active_nav|default('') == 'overview' or request.endpoint in ['admin_dashboard', 'admin_overview', 'user_overview'] else '' }}" title="统计概览">概览</a>
         {% endif %}
         <a href="{{ url_for(task_nav_prefix ~ 'tasks') }}" class="{{ 'active' if active_nav|default('') == 'document_check' or request.endpoint in ['admin_tasks', 'admin_new_task', 'user_tasks', 'user_new_task'] else '' }}" title="单文档检查">单文档</a>
-        <a href="{{ url_for(task_nav_prefix ~ 'consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档对照</a>
+        <a href="{{ url_for(task_nav_prefix ~ 'consistency') }}" class="{{ 'active' if active_nav|default('') == 'consistency_check' or request.endpoint in ['admin_consistency', 'user_consistency'] else '' }}" title="多文档对照检查">多文档</a>
         <a href="{{ url_for(task_nav_prefix ~ 'language_consistency') }}" class="{{ 'active' if active_nav|default('') == 'language_consistency_check' or request.endpoint in ['admin_language_consistency', 'user_language_consistency'] else '' }}" title="跨语种文档一致性检查">跨语种</a>
         <a href="{{ url_for(task_nav_prefix ~ 'images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}" title="图片检查">图片</a>
         <a href="{{ url_for(task_nav_prefix ~ 'videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_videos'] else '' }}" title="视频检查">视频</a>
