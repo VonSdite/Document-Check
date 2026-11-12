@@ -55,6 +55,141 @@ def completed(number, *items):
 
 
 class RoundAggregationTest(unittest.TestCase):
+    def test_reworded_typo_across_categories_and_locations_merges(self):
+        excerpt = "将输入端子均匀的分布在各通道上。"
+        sources = [
+            finding(
+                "“均匀的分布”中“的”应作状语标志“地”，属同音字误用。",
+                category="错别字",
+                location="第5章 > 5.5 连接输入线 > 端子选择原则",
+                excerpt=excerpt,
+                suggestion="改为“均匀地分布在各通道上”。",
+            ),
+            finding(
+                "“均匀的分布”中“的”应使用“地”。“均匀”作状语修饰动词“分布”时，应使用助词“地”。",
+                category="用字不规范",
+                location="5 电气连接 > 5.5 连接输入线 > 端子选择原则",
+                excerpt=excerpt,
+                suggestion="改为“将输入端子均匀地分布在各通道上”。",
+            ),
+            finding(
+                "“均匀的分布”中“的”应作状语标记“地”，属于“的/地”误用。",
+                category="错别字",
+                location="第5章 > 5.5节 > 连接输入线",
+                excerpt=excerpt,
+                suggestion="改为“均匀地分布”。",
+            ),
+        ]
+        rounds = [completed(number, item) for number, item in enumerate(sources, 1)]
+        result = build_round_result("check", 3, rounds)
+        items = result["structured_report"]["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["source_rounds"], [1, 2, 3])
+        self.assertEqual(
+            items[0]["source_items"],
+            [{"round": number, "item": 1} for number in (1, 2, 3)],
+        )
+        self.assertEqual(result["round_results"], rounds)
+        for source in sources:
+            self.assertIn(source["location"], items[0]["location"])
+            self.assertIn(source["description"], items[0]["description"])
+
+    def test_evidence_format_and_quote_length_variations_merge(self):
+        variants = [
+            {"excerpt": "“输入电压 5mV”。"},
+            {"excerpt": "设备参数：输入电压 5mV，额定功率见下表。"},
+            {"category": "单位规范"},
+            {
+                "description": "文中电压单位不一致",
+                "location": "第2节（输入参数）",
+            },
+            {"description": "电压单位的标注不一致"},
+        ]
+        for variant in variants:
+            with self.subTest(variant=variant):
+                result = build_round_result(
+                    "check",
+                    2,
+                    [completed(1, finding()), completed(2, finding(**variant))],
+                )
+                items = result["structured_report"]["items"]
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["source_rounds"], [1, 2])
+                self.assertIn(
+                    variant.get("excerpt", "输入电压 5mV"), items[0]["excerpt"]
+                )
+
+    def test_matching_original_sources_survives_merged_locations_and_excerpts(self):
+        rounds = [
+            completed(1, finding(location="第2节")),
+            completed(2, finding(location="第3节", excerpt="设备参数：输入电压 5mV。")),
+            completed(3, finding("文中电压单位不一致", location="第3节")),
+        ]
+        partial = build_round_result("check", 3, rounds[:2])
+        result = build_round_result(
+            "check", 3, rounds, previous_items=partial["structured_report"]["items"]
+        )
+        items = result["structured_report"]["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["source_rounds"], [1, 2, 3])
+        self.assertEqual(items[0]["id"], partial["structured_report"]["items"][0]["id"])
+
+    def test_similar_wording_with_different_claims_stays_separate(self):
+        descriptions = [
+            ("输入电压应为5V", "输入电压应为12V"),
+            ("输入电压应为1.2V", "输入电压应为12V"),
+            ("输入电压应为-5V", "输入电压应为5V"),
+            ("输入电压设置过高", "输入电压设置过低"),
+            ("输入电压单位标注错误", "输入电流单位标注错误"),
+            ("输入电压单位标注错误", "输出电流单位标注错误"),
+            ("输入电压单位标注错误", "文中输入电流单位标注错误"),
+            ("输入电压应从5V改为12V", "输入电压应从12V改为5V"),
+            ("输入电压应为5mV", "输入电压应为5MV"),
+            ("输入电压应>5V", "输入电压应<5V"),
+            ("单位应为mV", "单位应为MV"),
+        ]
+        for left, right in descriptions:
+            with self.subTest(left=left, right=right):
+                result = build_round_result(
+                    "check",
+                    2,
+                    [completed(1, finding(left)), completed(2, finding(right))],
+                )
+                self.assertEqual(len(result["structured_report"]["items"]), 2)
+
+    def test_similar_descriptions_require_shared_evidence(self):
+        for excerpt in (
+            "",
+            "输出电流 5mA",
+            "输入电压 12mV",
+            "输入电压 5mA",
+            "输入电压 5MV",
+        ):
+            with self.subTest(excerpt=excerpt):
+                result = build_round_result(
+                    "check",
+                    2,
+                    [completed(1, finding()), completed(2, finding(excerpt=excerpt))],
+                )
+                self.assertEqual(len(result["structured_report"]["items"]), 2)
+
+    def test_context_numbers_can_be_added_without_changing_the_claim(self):
+        result = build_round_result(
+            "check",
+            2,
+            [
+                completed(1, finding("电压单位“KV”应为“kV”", excerpt="高压161KV")),
+                completed(
+                    2,
+                    finding(
+                        "电压单位“KV”应为“kV”，同表其他行写为1500V、1600V。",
+                        excerpt="参数列表：高压161KV",
+                    ),
+                ),
+            ],
+        )
+        self.assertEqual(len(result["structured_report"]["items"]), 1)
+
     def test_merge_paraphrases_keep_single_round_findings_and_count_distinct_rounds(
         self,
     ):
@@ -108,20 +243,31 @@ class RoundAggregationTest(unittest.TestCase):
         self.assertEqual(item["confidence"], "low")
 
     def test_conflicting_numeric_fixes_require_confirmation(self):
-        result = build_round_result(
-            "check",
-            2,
-            [
-                completed(1, finding(suggestion="将电压改为5V。")),
-                completed(2, finding(suggestion="将电压改为12V。", severity="high")),
-            ],
-        )
-        item = result["structured_report"]["items"][0]
-        self.assertTrue(item["round_conflict"])
-        self.assertEqual(item["status"], "suggestion")
-        self.assertEqual(item["severity"], "high")
-        self.assertIn("5V", item["suggestion"])
-        self.assertIn("12V", item["suggestion"])
+        for left, right in (
+            ("5V", "12V"),
+            ("1.2V", "12V"),
+            ("-5V", "5V"),
+            ("5mV", "5MV"),
+        ):
+            with self.subTest(left=left, right=right):
+                result = build_round_result(
+                    "check",
+                    2,
+                    [
+                        completed(1, finding(suggestion=f"将电压改为{left}。")),
+                        completed(
+                            2,
+                            finding(suggestion=f"将电压改为{right}。", severity="high"),
+                        ),
+                    ],
+                )
+                items = result["structured_report"]["items"]
+                self.assertEqual(len(items), 1)
+                self.assertTrue(items[0]["round_conflict"])
+                self.assertEqual(items[0]["status"], "suggestion")
+                self.assertEqual(items[0]["severity"], "high")
+                self.assertIn(left, items[0]["suggestion"])
+                self.assertIn(right, items[0]["suggestion"])
 
     def test_merged_report_preserves_more_than_thirty_findings_and_sources(self):
         result = build_round_result(
@@ -438,7 +584,15 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         self.retry(task_id)
         set_setting("document_check_rounds", 1)
         with patch(
-            "app.tasks.runner.run_check", return_value=report(finding())
+            "app.tasks.runner.run_check",
+            return_value=report(
+                finding(
+                    "文中电压单位不一致",
+                    category="单位规范",
+                    location="第2节（输入参数）",
+                    excerpt="设备参数：输入电压 5mV。",
+                )
+            ),
         ) as model:
             TaskRunner(self.app).run(task_id)
         final = self.task(task_id)
@@ -446,11 +600,21 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         model.assert_called_once()
         result = json.loads(final["result_json"])[0]
         self.assertEqual(result["round_summary"]["completed"], 5)
+        self.assertEqual(len(result["structured_report"]["items"]), 1)
         self.assertEqual(result["structured_report"]["items"][0]["id"], item_id)
         self.assertIn(item_id, result["item_acceptances"])
         self.assertEqual(
             result["structured_report"]["items"][0]["source_rounds"], [1, 2]
         )
+        prepared = _prepare_task_results([result], suppression_rules={})[0]
+        self.assertEqual(len(prepared["report_items"]), 1)
+        self.assertEqual(prepared["report_items"][0]["acceptance_status"], "accepted")
+        workbook = load_workbook(build_report_workbook(final))
+        self.addCleanup(workbook.close)
+        sheet = workbook["报告条目"]
+        headers = [cell.value for cell in sheet[1]]
+        self.assertEqual(sheet.max_row, 2)
+        self.assertEqual(sheet.cell(2, headers.index("发现轮次") + 1).value, "1、2")
 
     def test_invalid_or_truncated_round_is_failure_and_other_rounds_continue(self):
         task_id = self.create_task(rounds=3)

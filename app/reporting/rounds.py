@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import unicodedata
 from copy import deepcopy
 from difflib import SequenceMatcher
 
@@ -17,7 +18,93 @@ from app.reporting.service import (
 
 
 def _normalized(value) -> str:
-    return re.sub(r"\s+", "", str(value or "")).casefold()
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    return re.sub(r"\s+", "", text).replace("−", "-")
+
+
+def _compatible_numbers(left, right) -> bool:
+    # 数值保留小数点、正负号与单位大小写；上下文可以补充编号或例子。
+    numbers = []
+    for value in (left, right):
+        text = _normalized(value)
+        tokens = set()
+        for match in re.finditer(r"([+-]?\d+(?:\.\d+)*)([a-zA-ZµΩ%]+)?", text):
+            # 字母开头的标识符按编号处理，例如设备型号和标准编号。
+            in_identifier = match.start() > 0 and re.fullmatch(
+                r"[a-zA-Z]", text[match.start() - 1]
+            )
+            tokens.add(match.group(1) if in_identifier else match.group())
+        numbers.append(tokens)
+    return numbers[0] <= numbers[1] or numbers[1] <= numbers[0]
+
+
+def _compatible_claims(left: dict, right: dict) -> bool:
+    if not _compatible_numbers(left.get("description"), right.get("description")):
+        return False
+    raw_descriptions = [_normalized(item.get("description")) for item in (left, right)]
+    if re.findall(
+        r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", raw_descriptions[0]
+    ) != re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", raw_descriptions[1]):
+        return False
+    if (
+        raw_descriptions[0] != raw_descriptions[1]
+        and raw_descriptions[0].casefold() == raw_descriptions[1].casefold()
+    ):
+        return False
+    descriptions = [
+        _normalize_report_description(item.get("description")) for item in (left, right)
+    ]
+    edits = [
+        (
+            operation,
+            descriptions[0][left_start:left_end],
+            descriptions[1][right_start:right_end],
+        )
+        for operation, left_start, left_end, right_start, right_end in SequenceMatcher(
+            None, *descriptions, autojunk=False
+        ).get_opcodes()
+        if operation != "equal"
+    ]
+    # 仅替换关键短语的近似句分别保留，覆盖对象、方向和单位差异。
+    replaced_length = sum(
+        max(len(left_text), len(right_text))
+        for operation, left_text, right_text in edits
+        if operation == "replace"
+    )
+    if 0 < replaced_length <= 3:
+        return False
+    return not any(
+        operation == "replace" and left_text.isdecimal() and right_text.isdecimal()
+        for operation, left_text, right_text in edits
+    )
+
+
+def _shared_evidence(left, right) -> bool:
+    if not _compatible_numbers(left, right):
+        return False
+    excerpts = [
+        re.sub(r"[^\w.+%/<>=×*-]+", "", _normalized(value)) for value in (left, right)
+    ]
+    shorter, longer = sorted(excerpts, key=len)
+    if not shorter:
+        return False
+    if shorter == longer:
+        return True
+    if len(shorter) < 6:
+        return False
+    if shorter in longer:
+        return True
+    matcher = SequenceMatcher(None, *excerpts, autojunk=False)
+    longest = matcher.find_longest_match().size
+    # 同一句证据可以带不同上下文，也可以按不同顺序引用多个片段。
+    if longest >= max(6, len(shorter) * 0.6):
+        return True
+    bigrams = [
+        {excerpt[index : index + 2] for index in range(len(excerpt) - 1)}
+        for excerpt in excerpts
+    ]
+    overlap = 2 * len(bigrams[0] & bigrams[1]) / sum(map(len, bigrams))
+    return longest >= 6 and (matcher.ratio() >= 0.85 or overlap >= 0.85)
 
 
 def _same_finding(left: dict, right: dict) -> bool:
@@ -26,36 +113,27 @@ def _same_finding(left: dict, right: dict) -> bool:
         for field in ("category", "location", "excerpt", "description")
     ) and _normalized(left.get("description")):
         return True
-    excerpt = _normalized(left.get("excerpt"))
-    if not excerpt or excerpt != _normalized(right.get("excerpt")):
-        return False
-    if _normalized(left.get("category")) != _normalized(right.get("category")):
+    if not _shared_evidence(left.get("excerpt"), right.get("excerpt")):
         return False
     left_description = _normalize_report_description(left.get("description"))
     right_description = _normalize_report_description(right.get("description"))
     if not left_description or not right_description:
         return False
-    if left_description == right_description:
-        return True
-    location = _normalized(left.get("location"))
-    if not location or location != _normalized(right.get("location")):
+    if not _compatible_claims(left, right):
         return False
-    if re.findall(r"\d+(?:\.\d+)?", left_description) != re.findall(
-        r"\d+(?:\.\d+)?", right_description
-    ):
-        return False
-    if any(
-        operation == "replace"
-        for operation, *_ in SequenceMatcher(
-            None, left_description, right_description
-        ).get_opcodes()
-    ):
-        return False
-    return _report_description_similarity(left_description, right_description) >= 0.78
+    # 描述改写较多时，以相近的修改建议补充判定。
+    similarity = _report_description_similarity(left_description, right_description)
+    return similarity >= 0.6 or (
+        similarity >= 0.45
+        and _report_description_similarity(
+            left.get("suggestion"), right.get("suggestion")
+        )
+        >= 0.65
+    )
 
 
 def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
-    findings = []
+    groups = []
     for round_result in rounds:
         if round_result.get("status") != "completed":
             continue
@@ -65,11 +143,16 @@ def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
         ):
             if item.get("type") == "non_issue":
                 continue
-            existing = next(
-                (finding for finding in findings if _same_finding(finding, item)),
+            group = next(
+                (
+                    (finding, sources)
+                    for finding, sources in groups
+                    if any(_same_finding(source, item) for source in sources)
+                    and all(_compatible_claims(source, item) for source in sources)
+                ),
                 None,
             )
-            if existing is None:
+            if group is None:
                 identity = json.dumps(
                     [
                         code,
@@ -107,26 +190,25 @@ def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
                     "source_items": [],
                     "round_conflict": False,
                 }
-                findings.append(existing)
-            elif existing["status"] != item["type"]:
-                existing["round_conflict"] = True
-            previous_numbers = set(
-                re.findall(r"\d+(?:\.\d+)?", existing.get("suggestion", ""))
-            )
-            current_numbers = set(
-                re.findall(r"\d+(?:\.\d+)?", item.get("suggestion", ""))
-            )
-            if (
-                previous_numbers
-                and current_numbers
-                and previous_numbers != current_numbers
+                sources = []
+                groups.append((existing, sources))
+            else:
+                existing, sources = group
+                if existing["status"] != item["type"]:
+                    existing["round_conflict"] = True
+            if any(
+                not _compatible_numbers(
+                    source.get("suggestion"), item.get("suggestion")
+                )
+                for source in sources
             ):
                 existing["round_conflict"] = True
+            sources.append(item)
             if REPORT_SEVERITY_ORDER.get(
                 item.get("severity"), 99
             ) < REPORT_SEVERITY_ORDER.get(existing.get("severity"), 99):
                 existing["severity"] = item["severity"]
-            for field in ("location", "impact", "suggestion"):
+            for field in ("location", "excerpt", "description", "impact", "suggestion"):
                 existing[field] = _merge_report_field_values(
                     existing.get(field), item.get(field)
                 )
@@ -138,11 +220,11 @@ def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
             existing["source_items"].append(
                 {"round": round_number, "item": item["index"]}
             )
-    for finding in findings:
+    for finding, _ in groups:
         if finding["round_conflict"]:
             finding["status"] = "suggestion"
             finding["confidence"] = "low"
-    return findings
+    return [finding for finding, _ in groups]
 
 
 def build_round_result(
