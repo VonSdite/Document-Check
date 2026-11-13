@@ -19,7 +19,140 @@ from app.reporting.service import (
 
 def _normalized(value) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
-    return re.sub(r"\s+", "", text).replace("−", "-")
+    return re.sub(r"\s+", "", text).replace("−", "-").replace("–", "-")
+
+
+_REFERENCE_NUMBER = r"\d+(?:[.-]\d+)*"
+_REFERENCE_LIST = rf"{_REFERENCE_NUMBER}(?:(?:、|和|与|及|/){_REFERENCE_NUMBER})*"
+_SECTION_NUMBER = r"\d+(?:\.\d+)+"
+_SECTION_LIST = rf"{_SECTION_NUMBER}(?:(?:、|和|与|及|/){_SECTION_NUMBER})*"
+_REFERENCE_BOUNDARY = r"(?<![\da-zA-Z.+<>=≤≥为是至达于-])"
+_QUOTE = r'[“"‘`]([^”"’`\n]+)[”"’`]'
+_CHANGE_TO = r"(?:统一)?(?:更正|修正|修改|替换|调整|改)为"
+_COUNTS = str.maketrans("零一二两三四五六七八九", "01223456789")
+
+
+def _without_references(value, location="") -> str:
+    text = _normalized(value)
+    # 根据引用标记、章节语境和条目位置识别编号，保留参数陈述中的数值。
+    text = re.sub(
+        rf"(?:表|图|步骤){_REFERENCE_LIST}(?![\d.a-zA-Z%µΩ])"
+        rf"|第?{_REFERENCE_LIST}(?:章|节|页)",
+        "",
+        text,
+    )
+    text = re.sub(
+        rf"{_REFERENCE_BOUNDARY}{_SECTION_LIST}"
+        r"(?=规定|要求|未|写|说明|须知|步骤|标题|正文|同类表述|均使用)",
+        "",
+        text,
+    )
+    text = re.sub(rf"(?:同章|正文|参见|见){_SECTION_LIST}(?![\d.a-zA-Z%µΩ])", "", text)
+    location = _normalized(location)
+    for number in set(re.findall(r"\d+(?:\.\d+)+", location)):
+        text = re.sub(
+            rf"{_REFERENCE_BOUNDARY}{re.escape(number)}(?=中|的|、|和|与|及|/)",
+            "",
+            text,
+        )
+        for heading in re.findall(
+            re.escape(number) + r"([\u4e00-\u9fff]{2,})", location
+        ):
+            text = re.sub(
+                rf"{_REFERENCE_BOUNDARY}{re.escape(number)}(?={re.escape(heading)})",
+                "",
+                text,
+            )
+    return text
+
+
+def _corrections(item: dict) -> list[tuple[str, str]]:
+    """提取能在原文中定位的明确替换或补字指令。"""
+    suggestion = _normalized(item.get("suggestion"))
+    excerpt = _normalized(item.get("excerpt"))
+    corrections = re.findall(_QUOTE + _CHANGE_TO + _QUOTE, suggestion)
+    for anchor, side, addition in re.findall(
+        _QUOTE + r"(前|后)(?:补充|补上|添加|加上|插入)" + _QUOTE, suggestion
+    ):
+        corrections.append(
+            (anchor, anchor + addition if side == "后" else addition + anchor)
+        )
+    return [
+        (before, after)
+        for before, after in corrections
+        if before != after and before in excerpt
+    ]
+
+
+def _correction_edits(item: dict) -> list[tuple[str, str, str, str]]:
+    corrections = _corrections(item)
+    explicit = bool(corrections)
+    if not explicit:
+        excerpt = _normalized(item.get("excerpt"))
+        for target in re.findall(
+            _CHANGE_TO + _QUOTE, _normalized(item.get("suggestion"))
+        ):
+            if SequenceMatcher(None, excerpt, target, autojunk=False).ratio() >= 0.6:
+                corrections.append((excerpt, target))
+    edits = []
+    quoted_description = re.findall(_QUOTE, _normalized(item.get("description")))
+    for before, after in corrections:
+        for operation, start, end, new_start, new_end in SequenceMatcher(
+            None, before, after, autojunk=False
+        ).get_opcodes():
+            if operation == "equal":
+                continue
+            removed, added = before[start:end], after[new_start:new_end]
+            if not explicit and not any(
+                part and part in quote
+                for part in (removed, added)
+                for quote in quoted_description
+            ):
+                continue
+            edits.append(
+                (
+                    removed,
+                    added,
+                    before[max(0, start - 6) : start],
+                    before[end : end + 6],
+                )
+            )
+    return edits
+
+
+def _same_correction(left: dict, right: dict) -> bool:
+    for removed, added, prefix, suffix in _correction_edits(left):
+        for other_removed, other_added, other_prefix, other_suffix in _correction_edits(
+            right
+        ):
+            if (removed, added) != (other_removed, other_added):
+                continue
+            shared_prefix = min(len(prefix), len(other_prefix))
+            shared_suffix = min(len(suffix), len(other_suffix))
+            if (
+                len(removed) + shared_prefix + shared_suffix >= 2
+                and (
+                    not shared_prefix
+                    or prefix[-shared_prefix:] == other_prefix[-shared_prefix:]
+                )
+                and suffix[:shared_suffix] == other_suffix[:shared_suffix]
+            ):
+                return True
+    return False
+
+
+def _claim_text(item: dict, *, same_correction=False) -> str:
+    text = _without_references(item.get("description"), item.get("location"))
+    text = re.sub(
+        r"(?<![零一二两三四五六七八九十百千万])([零一二两三四五六七八九])(?=根|个|条|台|倍)",
+        lambda match: match[1].translate(_COUNTS),
+        text,
+    )
+    if same_correction:
+        # 明确的相同修改允许使用不同举例，实际参数陈述继续参与校验。
+        text = re.sub(r"\((?:如|例如|比如)[^()]*\)", "", text)
+        text = re.sub(r'(?:[“"]\d+[×*]\d+[”"])+等', "", text)
+    return text
 
 
 def _compatible_numbers(left, right) -> bool:
@@ -27,21 +160,24 @@ def _compatible_numbers(left, right) -> bool:
     numbers = []
     for value in (left, right):
         text = _normalized(value)
-        tokens = set()
+        values, identifiers = set(), set()
         for match in re.finditer(r"([+-]?\d+(?:\.\d+)*)([a-zA-ZµΩ%]+)?", text):
             # 字母开头的标识符按编号处理，例如设备型号和标准编号。
             in_identifier = match.start() > 0 and re.fullmatch(
                 r"[a-zA-Z]", text[match.start() - 1]
             )
-            tokens.add(match.group(1) if in_identifier else match.group())
-        numbers.append(tokens)
-    return numbers[0] <= numbers[1] or numbers[1] <= numbers[0]
+            (identifiers if in_identifier else values).add(match.group())
+        numbers.append((values, identifiers))
+    return all(a <= b or b <= a for a, b in zip(*numbers))
 
 
 def _compatible_claims(left: dict, right: dict) -> bool:
-    if not _compatible_numbers(left.get("description"), right.get("description")):
+    same_correction = _same_correction(left, right)
+    raw_descriptions = [
+        _claim_text(item, same_correction=same_correction) for item in (left, right)
+    ]
+    if not _compatible_numbers(*raw_descriptions):
         return False
-    raw_descriptions = [_normalized(item.get("description")) for item in (left, right)]
     if re.findall(
         r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", raw_descriptions[0]
     ) != re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", raw_descriptions[1]):
@@ -51,9 +187,7 @@ def _compatible_claims(left: dict, right: dict) -> bool:
         and raw_descriptions[0].casefold() == raw_descriptions[1].casefold()
     ):
         return False
-    descriptions = [
-        _normalize_report_description(item.get("description")) for item in (left, right)
-    ]
+    descriptions = [_normalize_report_description(text) for text in raw_descriptions]
     edits = [
         (
             operation,
@@ -65,13 +199,13 @@ def _compatible_claims(left: dict, right: dict) -> bool:
         ).get_opcodes()
         if operation != "equal"
     ]
-    # 仅替换关键短语的近似句分别保留，覆盖对象、方向和单位差异。
+    # 缺少明确修改依据时，关键短语替换按不同对象、方向或单位分别保留。
     replaced_length = sum(
         max(len(left_text), len(right_text))
         for operation, left_text, right_text in edits
         if operation == "replace"
     )
-    if 0 < replaced_length <= 3:
+    if 0 < replaced_length <= 3 and not same_correction:
         return False
     return not any(
         operation == "replace" and left_text.isdecimal() and right_text.isdecimal()
@@ -113,7 +247,11 @@ def _same_finding(left: dict, right: dict) -> bool:
         for field in ("category", "location", "excerpt", "description")
     ) and _normalized(left.get("description")):
         return True
-    if not _shared_evidence(left.get("excerpt"), right.get("excerpt")):
+    location = f"{left.get('location', '')}；{right.get('location', '')}"
+    if not _shared_evidence(
+        _without_references(left.get("excerpt"), location),
+        _without_references(right.get("excerpt"), location),
+    ):
         return False
     left_description = _normalize_report_description(left.get("description"))
     right_description = _normalize_report_description(right.get("description"))
@@ -121,6 +259,8 @@ def _same_finding(left: dict, right: dict) -> bool:
         return False
     if not _compatible_claims(left, right):
         return False
+    if _same_correction(left, right):
+        return True
     # 描述改写较多时，以相近的修改建议补充判定。
     similarity = _report_description_similarity(left_description, right_description)
     return similarity >= 0.6 or (
@@ -129,6 +269,25 @@ def _same_finding(left: dict, right: dict) -> bool:
             left.get("suggestion"), right.get("suggestion")
         )
         >= 0.65
+    )
+
+
+def _compatible_suggestions(left: dict, right: dict) -> bool:
+    targets = []
+    for item in (left, right):
+        text = _without_references(item.get("suggestion"), item.get("location"))
+        # 同时保留带引号与不带引号的各个修改目标，避免原值影响冲突判定。
+        changes = re.findall(_CHANGE_TO + rf"(?:{_QUOTE}|([^,;。]+))", text)
+        if changes:
+            text = "；".join(quoted or unquoted for quoted, unquoted in changes)
+        targets.append(text)
+    return (
+        _compatible_numbers(*targets)
+        and set(re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", targets[0]))
+        == set(re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", targets[1]))
+        and not (
+            targets[0] != targets[1] and targets[0].casefold() == targets[1].casefold()
+        )
     )
 
 
@@ -196,12 +355,7 @@ def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
                 existing, sources = group
                 if existing["status"] != item["type"]:
                     existing["round_conflict"] = True
-            if any(
-                not _compatible_numbers(
-                    source.get("suggestion"), item.get("suggestion")
-                )
-                for source in sources
-            ):
+            if any(not _compatible_suggestions(source, item) for source in sources):
                 existing["round_conflict"] = True
             sources.append(item)
             if REPORT_SEVERITY_ORDER.get(
