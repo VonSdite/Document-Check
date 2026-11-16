@@ -1,7 +1,12 @@
 import unittest
 from itertools import permutations
+from unittest.mock import patch
 
-from app.reporting.rounds import build_round_result
+from app.reporting.rounds import (
+    _correction_edits,
+    _same_spacing_consistency,
+    build_round_result,
+)
 from tests.test_document_rounds import completed, finding
 
 
@@ -112,6 +117,132 @@ class RoundMatchingRegressionTest(unittest.TestCase):
         self.assert_merged(*sources)
         self.assert_merged(*reversed(sources))
 
+    def test_missing_preposition_matches_ellipsis_rewrite_by_anchor(self):
+        excerpt = "将信号线一端安装控制器接口。"
+        description = "“安装”后缺少介词“到”，谓语不完整。"
+        sources = [
+            finding(
+                description,
+                excerpt=excerpt,
+                suggestion=("在“安装”后增加介词“到”，改为“将信号线一端安装到……接口”。"),
+            ),
+            finding(
+                description,
+                excerpt=excerpt,
+                suggestion="改为“将信号线一端安装到……接口”。",
+            ),
+        ]
+        items = self.aggregate(*sources)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(
+            items[0]["source_items"], [{"round": 1, "item": 1}, {"round": 2, "item": 1}]
+        )
+        self.assertTrue(
+            all(
+                "……" not in part
+                for edit in _correction_edits(sources[1])
+                for part in edit
+            )
+        )
+
+    def test_insertions_at_different_anchors_remain_separate(self):
+        excerpt = "将线缆安装控制器接口。"
+        items = self.aggregate(
+            finding(
+                "“安装”后缺少介词“到”。",
+                excerpt=excerpt,
+                suggestion="在“安装”后增加介词“到”。",
+            ),
+            finding(
+                "“线缆”后缺少介词“到”。",
+                excerpt=excerpt,
+                suggestion="在“线缆”后增加介词“到”。",
+            ),
+        )
+        self.assertEqual(len(items), 2)
+
+    def test_later_bridge_reconciles_compatible_groups_across_orderings(self):
+        sources = [
+            finding(
+                label,
+                status=status,
+                severity=severity,
+                excerpt="同一处足够明确的原文证据。",
+                suggestion=f"采用修订方案{label}。",
+                evidence_refs=[{"id": label}],
+            )
+            for label, status, severity in (
+                ("A", "issue", "medium"),
+                ("B", "issue", "low"),
+                ("C", "suggestion", "high"),
+            )
+        ]
+        connected = {frozenset(("A", "C")), frozenset(("B", "C"))}
+
+        def same_finding(left, right):
+            pair = frozenset((left["description"], right["description"]))
+            return left["description"] == right["description"] or pair in connected
+
+        for order in permutations(sources):
+            round_of_a = order.index(sources[0]) + 1
+            previous = [
+                {"id": "saved-A", "source_items": [{"round": round_of_a, "item": 1}]}
+            ]
+            with (
+                patch("app.reporting.rounds._same_finding", side_effect=same_finding),
+                patch("app.reporting.rounds._compatible_claims", return_value=True),
+            ):
+                items = build_round_result(
+                    "check",
+                    len(order),
+                    [completed(number, item) for number, item in enumerate(order, 1)],
+                    previous_items=previous,
+                )["structured_report"]["items"]
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["id"], "saved-A")
+            self.assertEqual(
+                items[0]["source_items"], [{"round": n, "item": 1} for n in range(1, 4)]
+            )
+            self.assertEqual(
+                {ref["id"] for ref in items[0]["evidence_refs"]}, {"A", "B", "C"}
+            )
+            self.assertEqual(items[0]["severity"], "high")
+            self.assertTrue(items[0]["round_conflict"])
+            self.assertEqual(items[0]["status"], "suggestion")
+            self.assertEqual(items[0]["confidence"], "low")
+
+    def test_later_bridge_does_not_merge_conflicting_claim_groups(self):
+        sources = [
+            finding(label, excerpt="同一处足够明确的原文证据。")
+            for label in ("A", "B", "C")
+        ]
+        connected = {frozenset(("A", "C")), frozenset(("B", "C"))}
+
+        def same_finding(left, right):
+            pair = frozenset((left["description"], right["description"]))
+            return left["description"] == right["description"] or pair in connected
+
+        def compatible_claims(left, right):
+            return frozenset((left["description"], right["description"])) != frozenset(
+                ("A", "B")
+            )
+
+        for order in permutations(sources):
+            with (
+                patch("app.reporting.rounds._same_finding", side_effect=same_finding),
+                patch(
+                    "app.reporting.rounds._compatible_claims",
+                    side_effect=compatible_claims,
+                ),
+            ):
+                items = self.aggregate(*order)
+            self.assertEqual(len(items), 2)
+            memberships = [
+                {source["round"] for source in item["source_items"]} for item in items
+            ]
+            self.assertEqual(sum(map(len, memberships)), 3)
+            self.assertFalse(any(len(group) == 3 for group in memberships))
+
     def test_same_symbol_fix_can_use_different_numeric_examples(self):
         sources = [
             finding(
@@ -126,6 +257,81 @@ class RoundMatchingRegressionTest(unittest.TestCase):
             )
         ]
         self.assert_merged(*sources)
+
+    def test_webui_spacing_variants_merge_with_status_disagreement(self):
+        sources = [
+            finding(
+                description,
+                status=status,
+                category="术语或命名书写不规范",
+                location=location,
+                excerpt=excerpt,
+                suggestion=suggestion,
+            )
+            for description, status, location, excerpt, suggestion in (
+                (
+                    "文档中“WebUI”与“Web UI”两种写法并存，需核对后统一写法。",
+                    "suggestion",
+                    "5.1 使用WebUI；8.3 登录Web UI",
+                    "当使用Web UI管理时需参照本章节设置",
+                    "核对术语规范后统一为“WebUI”或“Web UI”。",
+                ),
+                (
+                    "同一对象在文中同时存在“WebUI”和“Web UI”两种写法。",
+                    "issue",
+                    "第5章 > 5.1；第8章 > 8.3",
+                    "使用WebUI管理；登录Web UI",
+                    "统一为“Web UI”或按企业规范统一为“WebUI”。",
+                ),
+                (
+                    "管理界面名称在标题和正文混用“WebUI”与“Web UI”，应统一写法。",
+                    "issue",
+                    "5.1 使用WebUI；8.3 登录Web UI",
+                    "使用WebUI管理",
+                    "全文统一为“WebUI”或“Web UI”，并与界面实际名称一致。",
+                ),
+                (
+                    "同一界面/功能在文档中同时写作“WebUI”和“Web UI”，标题与正文即不一致。",
+                    "issue",
+                    "5.1 使用WebUI；8.3 登录Web UI",
+                    "使用WebUI管理前的设置；当使用Web UI管理时参照本章节",
+                    "统一采用一种写法，如“WebUI”或“Web UI”。",
+                ),
+            )
+        ]
+        items = self.aggregate(*sources)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(
+            items[0]["source_items"], [{"round": n, "item": 1} for n in range(1, 5)]
+        )
+        self.assertTrue(items[0]["round_conflict"])
+        self.assertEqual(items[0]["status"], "suggestion")
+
+    def test_different_spacing_variant_pairs_do_not_match(self):
+        items = self.aggregate(
+            finding(
+                "“WebUI”与“Web UI”在文档中混用，界面术语写法不统一。",
+                excerpt="关于管理界面的说明。",
+                suggestion="统一为“WebUI”或“Web UI”。",
+            ),
+            finding(
+                "参数区域需要确认“CANBus”与“CAN Bus”的适用范围。",
+                excerpt="关于管理界面的说明。",
+                suggestion="核实CANBus支持的通信方式。",
+            ),
+        )
+        self.assertEqual(len(items), 2)
+
+    def test_spacing_variant_requires_term_in_original_evidence(self):
+        left = finding(
+            "界面名称“WebUI”和“Web UI”两种写法不一致。",
+            excerpt="电源模块连接状态异常。",
+        )
+        right = finding(
+            "“WebUI”与“Web UI”混用，需核实操作界面名称。",
+            excerpt="电源模块连接状态异常。",
+        )
+        self.assertFalse(_same_spacing_consistency(left, right))
 
     def test_equivalent_unit_fixes_do_not_conflict_with_original_values_or_references(
         self,

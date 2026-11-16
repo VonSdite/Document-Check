@@ -29,6 +29,7 @@ _SECTION_LIST = rf"{_SECTION_NUMBER}(?:(?:、|和|与|及|/){_SECTION_NUMBER})*"
 _REFERENCE_BOUNDARY = r"(?<![\da-zA-Z.+<>=≤≥为是至达于-])"
 _QUOTE = r'[“"‘`]([^”"’`\n]+)[”"’`]'
 _CHANGE_TO = r"(?:统一)?(?:更正|修正|修改|替换|调整|改)为"
+_SPACING_INTENT = re.compile(r"(?:写法|混用|并存|统一|不一致|不统一)")
 _COUNTS = str.maketrans("零一二两三四五六七八九", "01223456789")
 
 
@@ -71,12 +72,17 @@ def _corrections(item: dict) -> list[tuple[str, str]]:
     suggestion = _normalized(item.get("suggestion"))
     excerpt = _normalized(item.get("excerpt"))
     corrections = re.findall(_QUOTE + _CHANGE_TO + _QUOTE, suggestion)
-    for anchor, side, addition in re.findall(
-        _QUOTE + r"(前|后)(?:补充|补上|添加|加上|插入)" + _QUOTE, suggestion
-    ):
-        corrections.append(
-            (anchor, anchor + addition if side == "后" else addition + anchor)
-        )
+    anchored_action = (
+        _QUOTE
+        + r"(前|后)(?:(?:补充|补上|添加|加上|插入|增加)(?:介词|助词|文字|词语|字)?"
+        + r"|(?:缺少|漏写|漏掉)(?:介词|助词|文字|词语|字)?)"
+        + _QUOTE
+    )
+    for text in (suggestion, _normalized(item.get("description"))):
+        for anchor, side, addition in re.findall(anchored_action, text):
+            corrections.append(
+                (anchor, anchor + addition if side == "后" else addition + anchor)
+            )
     return [
         (before, after)
         for before, after in corrections
@@ -187,6 +193,8 @@ def _compatible_claims(left: dict, right: dict) -> bool:
         and raw_descriptions[0].casefold() == raw_descriptions[1].casefold()
     ):
         return False
+    if _same_spacing_consistency(left, right):
+        return True
     descriptions = [_normalize_report_description(text) for text in raw_descriptions]
     edits = [
         (
@@ -211,6 +219,33 @@ def _compatible_claims(left: dict, right: dict) -> bool:
         operation == "replace" and left_text.isdecimal() and right_text.isdecimal()
         for operation, left_text, right_text in edits
     )
+
+
+def _spacing_consistency_terms(item: dict) -> set[str]:
+    description = str(item.get("description") or "")
+    if not _SPACING_INTENT.search(_normalized(description)):
+        return set()
+    excerpt = _normalized(item.get("excerpt"))
+    variants = {}
+    for value in re.findall(_QUOTE, description):
+        value = unicodedata.normalize("NFKC", value)
+        compact = re.sub(r"\s+", "", value)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", compact):
+            continue
+        spaced, unspaced = variants.setdefault(compact, [False, False])
+        variants[compact] = [
+            spaced or bool(re.search(r"\s", value)),
+            unspaced or not bool(re.search(r"\s", value)),
+        ]
+    return {
+        term
+        for term, (spaced, unspaced) in variants.items()
+        if spaced and unspaced and term in excerpt
+    }
+
+
+def _same_spacing_consistency(left: dict, right: dict) -> bool:
+    return bool(_spacing_consistency_terms(left) & _spacing_consistency_terms(right))
 
 
 def _shared_evidence(left, right) -> bool:
@@ -261,6 +296,8 @@ def _same_finding(left: dict, right: dict) -> bool:
         return False
     if _same_correction(left, right):
         return True
+    if _same_spacing_consistency(left, right):
+        return True
     # 描述改写较多时，以相近的修改建议补充判定。
     similarity = _report_description_similarity(left_description, right_description)
     return similarity >= 0.6 or (
@@ -291,6 +328,77 @@ def _compatible_suggestions(left: dict, right: dict) -> bool:
     )
 
 
+def _new_group(code: str, item: dict) -> dict:
+    identity = json.dumps(
+        [
+            code,
+            *[
+                item.get(field, "")
+                for field in ("category", "location", "excerpt", "description")
+            ],
+        ],
+        ensure_ascii=False,
+    )
+    return {
+        **{
+            field: item.get(field, "")
+            for field in (
+                "category",
+                "location",
+                "excerpt",
+                "description",
+                "impact",
+                "suggestion",
+                "severity",
+                "confidence",
+            )
+        },
+        "id": "round-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24],
+        "status": item["type"],
+        "evidence_refs": item.get("evidence_refs", []),
+        "source_rounds": [],
+        "source_items": [],
+        "round_conflict": False,
+    }
+
+
+def _append_source(existing: dict, sources: list[dict], item: dict) -> None:
+    if existing["status"] != item["type"]:
+        existing["round_conflict"] = True
+    if any(not _compatible_suggestions(source, item) for source in sources):
+        existing["round_conflict"] = True
+    sources.append(item)
+    if REPORT_SEVERITY_ORDER.get(item.get("severity"), 99) < REPORT_SEVERITY_ORDER.get(
+        existing.get("severity"), 99
+    ):
+        existing["severity"] = item["severity"]
+    for field in ("location", "excerpt", "description", "impact", "suggestion"):
+        existing[field] = _merge_report_field_values(
+            existing.get(field), item.get(field)
+        )
+    existing["evidence_refs"] = _merge_report_evidence_refs(
+        existing.get("evidence_refs"), item.get("evidence_refs")
+    )
+    round_number = item["_round_number"]
+    if round_number not in existing["source_rounds"]:
+        existing["source_rounds"].append(round_number)
+    existing["source_items"].append({"round": round_number, "item": item["index"]})
+
+
+def _rebuild_group(
+    code: str, sources: list[dict], group_id: str
+) -> tuple[dict, list[dict]]:
+    ordered_sources = sorted(
+        sources, key=lambda item: (item["_round_number"], item["index"])
+    )
+    finding = _new_group(code, ordered_sources[0])
+    finding["id"] = group_id
+    rebuilt_sources = []
+    for source in ordered_sources:
+        _append_source(finding, rebuilt_sources, source)
+    return finding, rebuilt_sources
+
+
 def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
     groups = []
     for round_result in rounds:
@@ -302,78 +410,42 @@ def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
         ):
             if item.get("type") == "non_issue":
                 continue
-            group = next(
-                (
-                    (finding, sources)
-                    for finding, sources in groups
-                    if any(_same_finding(source, item) for source in sources)
-                    and all(_compatible_claims(source, item) for source in sources)
-                ),
-                None,
-            )
-            if group is None:
-                identity = json.dumps(
-                    [
-                        code,
-                        *[
-                            item.get(field, "")
-                            for field in (
-                                "category",
-                                "location",
-                                "excerpt",
-                                "description",
-                            )
-                        ],
-                    ],
-                    ensure_ascii=False,
-                )
-                existing = {
-                    **{
-                        field: item.get(field, "")
-                        for field in (
-                            "category",
-                            "location",
-                            "excerpt",
-                            "description",
-                            "impact",
-                            "suggestion",
-                            "severity",
-                            "confidence",
-                        )
-                    },
-                    "id": "round-"
-                    + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24],
-                    "status": item["type"],
-                    "evidence_refs": item.get("evidence_refs", []),
-                    "source_rounds": [],
-                    "source_items": [],
-                    "round_conflict": False,
-                }
+            item["_round_number"] = round_number
+            matching = [
+                index
+                for index, (_, sources) in enumerate(groups)
+                if any(_same_finding(source, item) for source in sources)
+                and all(_compatible_claims(source, item) for source in sources)
+            ]
+            if not matching:
+                existing = _new_group(code, item)
                 sources = []
+                _append_source(existing, sources, item)
                 groups.append((existing, sources))
-            else:
-                existing, sources = group
-                if existing["status"] != item["type"]:
-                    existing["round_conflict"] = True
-            if any(not _compatible_suggestions(source, item) for source in sources):
-                existing["round_conflict"] = True
-            sources.append(item)
-            if REPORT_SEVERITY_ORDER.get(
-                item.get("severity"), 99
-            ) < REPORT_SEVERITY_ORDER.get(existing.get("severity"), 99):
-                existing["severity"] = item["severity"]
-            for field in ("location", "excerpt", "description", "impact", "suggestion"):
-                existing[field] = _merge_report_field_values(
-                    existing.get(field), item.get(field)
+                continue
+
+            primary_index = matching[0]
+            existing, sources = groups[primary_index]
+            merged_sources = list(sources)
+            merged_group_indexes = []
+            for index in matching[1:]:
+                _, candidate_sources = groups[index]
+                if all(
+                    _compatible_claims(source, candidate)
+                    for source in merged_sources
+                    for candidate in candidate_sources
+                ):
+                    merged_sources.extend(candidate_sources)
+                    merged_group_indexes.append(index)
+            if merged_group_indexes:
+                merged_sources.append(item)
+                groups[primary_index] = _rebuild_group(
+                    code, merged_sources, existing["id"]
                 )
-            existing["evidence_refs"] = _merge_report_evidence_refs(
-                existing.get("evidence_refs"), item.get("evidence_refs")
-            )
-            if round_number not in existing["source_rounds"]:
-                existing["source_rounds"].append(round_number)
-            existing["source_items"].append(
-                {"round": round_number, "item": item["index"]}
-            )
+                for index in reversed(merged_group_indexes):
+                    del groups[index]
+            else:
+                _append_source(existing, sources, item)
     for finding, _ in groups:
         if finding["round_conflict"]:
             finding["status"] = "suggestion"
