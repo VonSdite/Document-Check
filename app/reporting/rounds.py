@@ -337,6 +337,48 @@ def _shared_suggestion_target(left: dict, right: dict) -> bool:
     return False
 
 
+def _same_named_object_conflict(left: dict, right: dict) -> bool:
+    descriptions = [_normalized(item.get("description")) for item in (left, right)]
+    for description in descriptions:
+        has_identity = any(
+            marker in description for marker in ("同一", "相同", "等同", "即指")
+        )
+        has_naming = any(
+            marker in description
+            for marker in ("称", "写作", "叫法", "命名", "名称", "术语")
+        )
+        has_conflict = any(
+            marker in description
+            for marker in (
+                "不一致",
+                "不统一",
+                "两种",
+                "多称",
+                "混用",
+                "混淆",
+                "是否即指",
+            )
+        )
+        if not (has_identity and has_naming and has_conflict):
+            return False
+
+    quoted_terms = [
+        {term for term in re.findall(_QUOTE, description) if len(term.strip()) >= 2}
+        for description in descriptions
+    ]
+    shared_terms = quoted_terms[0] & quoted_terms[1]
+    if len(shared_terms) < 2:
+        return False
+
+    section_refs = [
+        set(
+            re.findall(r"(?<!\d)\d+(?:\.\d+)+(?!\d)", _normalized(item.get("location")))
+        )
+        for item in (left, right)
+    ]
+    return bool(section_refs[0] & section_refs[1])
+
+
 def group_cross_check_report_items(results: list[dict]) -> list[dict]:
     """关联不同检查项中证据和问题目标均相符的报告条目。"""
     candidates = []
@@ -369,9 +411,12 @@ def group_cross_check_report_items(results: list[dict]) -> list[dict]:
             return False
         if _same_finding(left["item"], right["item"]):
             return True
-        return _shared_evidence_text(
-            left["item"].get("excerpt"), right["item"].get("excerpt")
-        ) and _shared_suggestion_target(left["item"], right["item"])
+        return (
+            _shared_evidence_text(
+                left["item"].get("excerpt"), right["item"].get("excerpt")
+            )
+            and _shared_suggestion_target(left["item"], right["item"])
+        ) or _same_named_object_conflict(left["item"], right["item"])
 
     links = [set() for _ in candidates]
     for left_index, left in enumerate(candidates):

@@ -96,6 +96,99 @@ class CrossCheckGroupingTest(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["item_count"], 2)
 
+    def test_same_named_cabinet_conflict_groups_with_shared_sections(self):
+        normative = report_item(
+            "normative-cabinet",
+            category="术语或命名书写不规范",
+            location="第3章 3.2 多柜管理原则；第5章 5.1.2；第8章 8.2.5",
+            excerpt=(
+                "需设置一个整流柜的SMU02C为主机 / 将CAN通信线缆分别安装到组合柜的监控模块SMU02C的CAN口"
+            ),
+            description=(
+                "同一“主机”对象在3.2中写作“整流柜”，在5.1.2、8.2.5中写作“组合柜”，"
+                "全文未对“组合柜”进行定义，存在命名不一致。"
+            ),
+            suggestion="若为同一对象，应将“组合柜”统一改为“整流柜”。",
+        )
+        consistency = report_item(
+            "consistency-cabinet",
+            category="名称或术语不一致",
+            location="第3章 > 3.2 多柜管理原则；第5章 > 5.1.2；第8章 > 8.2.5 设置主从机参数",
+            excerpt=(
+                "A：多个整流柜时，需设置一个整流柜的SMU02C为主机；"
+                "B：将CAN通信线缆安装到组合柜的监控模块SMU02C的CAN口，需设置一个组合柜为主机。"
+            ),
+            description=(
+                "A将具有SMU02C的主机柜称为“整流柜”，B在相同场景下称为“组合柜”；"
+                "文档未对“组合柜”进行定义，两种叫法指向同一对象，导致对象混淆。"
+            ),
+            suggestion=(
+                "全文统一使用“整流柜”或“主整流柜”表述，删除未定义的“组合柜”，"
+                "或首次出现时明确其与“整流柜”的对应关系。"
+            ),
+        )
+        consistency_uncertain = report_item(
+            "consistency-cabinet-uncertain",
+            category="名称或术语不一致",
+            location="5.1.1 > 步骤1；5.1.2 > 步骤2",
+            excerpt=(
+                "A将CAN通信线缆安装到整流柜的监控模块SMU02C；"
+                "B将CAN通信线缆安装到组合柜的监控模块SMU02C。"
+            ),
+            description=(
+                "A将SMU02C所在机柜称为“整流柜”，B称为“组合柜”；全文未定义“组合柜”。"
+                "待确认“组合柜”是否即指整流柜或整流柜与直流柜的组合。"
+            ),
+            suggestion=(
+                "统一使用已定义的机柜名称；如“组合柜”确为特定对象，"
+                "应明确其与“整流柜”的关系。"
+            ),
+        )
+
+        groups = group_cross_check_report_items(
+            [
+                check_result("normative", "规范性检查", normative),
+                check_result(
+                    "consistency",
+                    "一致性检查",
+                    consistency,
+                    consistency_uncertain,
+                ),
+            ]
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["item_count"], 3)
+        self.assertEqual(
+            [member["code"] for member in groups[0]["members"]],
+            ["normative", "consistency", "consistency"],
+        )
+
+    def test_different_cabinet_roles_are_not_grouped_by_shared_terms(self):
+        first = report_item(
+            "first-role",
+            location="5.1.2",
+            excerpt="整流柜与组合柜分别接入不同的CAN接口。",
+            description="“整流柜”和“组合柜”分别作为不同机柜类型接入CAN网络。",
+            suggestion="在操作步骤中区分“整流柜”和“组合柜”的连接方式。",
+        )
+        second = report_item(
+            "second-role",
+            location="5.1.2",
+            excerpt="整流柜与组合柜需要配置不同的主从机参数。",
+            description="“整流柜”和“组合柜”是两个不同的机柜对象，应分别设置参数。",
+            suggestion="在参数说明中区分“整流柜”和“组合柜”的设置要求。",
+        )
+
+        groups = group_cross_check_report_items(
+            [
+                check_result("first-check", "检查一", first),
+                check_result("second-check", "检查二", second),
+            ]
+        )
+
+        self.assertEqual(groups, [])
+
     def test_different_check_items_are_required(self):
         excerpt = "额定电压为24 V。"
         first = report_item("first", excerpt=excerpt)
