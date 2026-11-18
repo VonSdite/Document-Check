@@ -16,6 +16,7 @@ from app.web.auth import (
 )
 from app.web.common import _safe_next_path, _task_endpoint
 from app.web.reports import (
+    _cross_check_group_context,
     _export_task_report,
     _export_task_report_excel,
     _import_task_report_excel,
@@ -150,6 +151,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
         if polling:
             task = _get_task_or_404(task_id)
         results = present_check_activity(task, _task_results(task), progress)
+        cross_check_group_context = _cross_check_group_context(results)
         _attach_report_media_urls(results, task, _task_endpoint("task_media"))
         back_endpoint = _task_list_endpoint(True, task["task_type"])
         html = render_template(
@@ -163,6 +165,7 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             model_output_url=url_for(_task_endpoint("model_output"), task_id=task_id),
             task=task,
             results=results,
+            **cross_check_group_context,
             report_totals=_report_item_totals(results),
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
             media_report=_uses_compact_media_report(task["task_type"]),

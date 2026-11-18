@@ -105,6 +105,7 @@
         <span>已忽略误报<strong>{{ report_totals.suppressed or 0 }}</strong></span>
         <span>合计<strong>{{ report_totals.total }}</strong></span>
       </div>
+      {% include "_report_cross_check_groups.html" %}
     </section>
 
     <section class="result-stack">
@@ -147,8 +148,8 @@
             </thead>
             <tbody>
               {% for item in result.report_items %}
-              <tr class="report-item" data-item-type="{{ item.type }}">
-                <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}</td>
+              <tr{% if item.cross_check_anchor_id %} id="{{ item.cross_check_anchor_id }}"{% endif %} class="report-item" data-item-type="{{ item.type }}">
+                <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}{% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}</td>
                 {% for field, label in report_item_fields %}
                 {% set field_value = item[field] %}
                 <td class="report-field report-field-{{ field }}">

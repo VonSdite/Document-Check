@@ -24,6 +24,7 @@ from app.reporting.constants import (
     ReportExcelImportError,
 )
 from app.reporting.excel import _load_report_excel_reviews, build_report_workbook
+from app.reporting.rounds import group_cross_check_report_items
 from app.reporting.service import (
     _report_item_fields_for_task,
     _report_item_totals,
@@ -46,6 +47,20 @@ def _report_download_name(task, extension: str) -> str:
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]+', "_", name).strip(" ._")
     name = name.encode("utf-8")[:180].decode("utf-8", errors="ignore").rstrip(" ._")
     return f"{name or '文档'}_报告_{task['id']}.{extension}"
+
+
+def _cross_check_group_context(results):
+    groups = group_cross_check_report_items(results)
+    item_count = sum(group["item_count"] for group in groups)
+    duplicate_count = sum(group["item_count"] - 1 for group in groups)
+    return {
+        "cross_check_groups": groups,
+        "cross_check_group_item_count": item_count,
+        "cross_check_group_duplicate_count": duplicate_count,
+        "cross_check_grouped_total": max(
+            0, _report_item_totals(results)["total"] - duplicate_count
+        ),
+    }
 
 
 def _import_task_report_excel(task, detail_endpoint: str):
@@ -91,6 +106,7 @@ def _export_task_report(task):
         "task_report_export.html",
         task=task,
         results=results,
+        **_cross_check_group_context(results),
         report_totals=_report_item_totals(results),
         report_item_fields=_report_item_fields_for_task(task["task_type"]),
         media_report=_uses_compact_media_report(task["task_type"]),

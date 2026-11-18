@@ -248,9 +248,7 @@ def _same_spacing_consistency(left: dict, right: dict) -> bool:
     return bool(_spacing_consistency_terms(left) & _spacing_consistency_terms(right))
 
 
-def _shared_evidence(left, right) -> bool:
-    if not _compatible_numbers(left, right):
-        return False
+def _shared_evidence_text(left, right) -> bool:
     excerpts = [
         re.sub(r"[^\w.+%/<>=×*-]+", "", _normalized(value)) for value in (left, right)
     ]
@@ -274,6 +272,10 @@ def _shared_evidence(left, right) -> bool:
     ]
     overlap = 2 * len(bigrams[0] & bigrams[1]) / sum(map(len, bigrams))
     return longest >= 6 and (matcher.ratio() >= 0.85 or overlap >= 0.85)
+
+
+def _shared_evidence(left, right) -> bool:
+    return _compatible_numbers(left, right) and _shared_evidence_text(left, right)
 
 
 def _same_finding(left: dict, right: dict) -> bool:
@@ -307,6 +309,138 @@ def _same_finding(left: dict, right: dict) -> bool:
         )
         >= 0.65
     )
+
+
+def _suggestion_targets(item: dict) -> set[str]:
+    suggestion = _normalized(item.get("suggestion"))
+    targets = set(re.findall(_CHANGE_TO + _QUOTE, suggestion))
+    targets.update(
+        re.findall(r"(?:全文|全篇)?统一(?:为|使用|写作)" + _QUOTE, suggestion)
+    )
+    return {target.strip("，。；、：: ") for target in targets if target.strip()}
+
+
+def _shared_suggestion_target(left: dict, right: dict) -> bool:
+    targets = [_suggestion_targets(item) for item in (left, right)]
+    descriptions = [_normalized(item.get("description")) for item in (left, right)]
+    for first in targets[0]:
+        for second in targets[1]:
+            shorter, longer = sorted((first, second), key=len)
+            if len(shorter) < 4 or not (
+                shorter == longer
+                or shorter in longer
+                or SequenceMatcher(None, first, second, autojunk=False).ratio() >= 0.9
+            ):
+                continue
+            if all(shorter in description for description in descriptions):
+                return True
+    return False
+
+
+def group_cross_check_report_items(results: list[dict]) -> list[dict]:
+    """关联不同检查项中证据和问题目标均相符的报告条目。"""
+    candidates = []
+    order = 0
+    for result in results:
+        code = str(result.get("code") or "")
+        if not code:
+            continue
+        for item in result.get("report_items") or []:
+            item.pop("cross_check_group_id", None)
+            item.pop("cross_check_anchor_id", None)
+            candidates.append(
+                {
+                    "code": code,
+                    "name": str(result.get("name") or code),
+                    "item": item,
+                    "order": order,
+                }
+            )
+            order += 1
+
+    def same_group_candidate(left: dict, right: dict) -> bool:
+        if not _normalized(left["item"].get("excerpt")) or not _normalized(
+            right["item"].get("excerpt")
+        ):
+            return False
+        if not _compatible_claims(left["item"], right["item"]):
+            return False
+        if not _compatible_suggestions(left["item"], right["item"]):
+            return False
+        if _same_finding(left["item"], right["item"]):
+            return True
+        return _shared_evidence_text(
+            left["item"].get("excerpt"), right["item"].get("excerpt")
+        ) and _shared_suggestion_target(left["item"], right["item"])
+
+    links = [set() for _ in candidates]
+    for left_index, left in enumerate(candidates):
+        for right_index in range(left_index + 1, len(candidates)):
+            right = candidates[right_index]
+            if same_group_candidate(left, right):
+                links[left_index].add(right_index)
+                links[right_index].add(left_index)
+
+    components = []
+    visited = set()
+    for start in range(len(candidates)):
+        if start in visited or not links[start]:
+            continue
+        component = []
+        pending = [start]
+        visited.add(start)
+        while pending:
+            index = pending.pop()
+            component.append(candidates[index])
+            for linked_index in links[index]:
+                if linked_index not in visited:
+                    visited.add(linked_index)
+                    pending.append(linked_index)
+        remaining = {member["order"] for member in component}
+        while remaining:
+            cliques = []
+            for start in sorted(remaining):
+                clique = [start]
+                for candidate in sorted(remaining):
+                    if candidate == start:
+                        continue
+                    if all(candidate in links[member] for member in clique):
+                        clique.append(candidate)
+                if len({candidates[index]["code"] for index in clique}) >= 2:
+                    cliques.append(clique)
+            if not cliques:
+                break
+            clique = max(
+                cliques,
+                key=lambda indexes: (
+                    len(indexes),
+                    -min(candidates[index]["order"] for index in indexes),
+                ),
+            )
+            components.append([candidates[index] for index in clique])
+            remaining.difference_update(clique)
+
+    components.sort(key=lambda members: min(member["order"] for member in members))
+    cross_check_groups = []
+    for members in components:
+        members.sort(key=lambda member: member["order"])
+        group_id = len(cross_check_groups) + 1
+        for member in members:
+            member["item"]["cross_check_group_id"] = group_id
+            identity = f"{member['code']}\0{member['item'].get('id', '')}"
+            member["anchor_id"] = (
+                "report-item-"
+                + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+            )
+            member["item"]["cross_check_anchor_id"] = member["anchor_id"]
+        cross_check_groups.append(
+            {
+                "id": group_id,
+                "item_count": len(members),
+                "members": members,
+            }
+        )
+    return cross_check_groups
 
 
 def _compatible_suggestions(left: dict, right: dict) -> bool:

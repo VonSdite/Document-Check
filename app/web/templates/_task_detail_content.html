@@ -161,6 +161,7 @@
     <span>已忽略误报<strong data-report-count="suppressed">{{ report_totals.suppressed or 0 }}</strong></span>
     <span>合计<strong data-report-count="total">{{ report_totals.total }}</strong></span>
   </div>
+  {% include "_report_cross_check_groups.html" %}
 </section>
 
 <section class="result-stack" data-report-results data-report-classification-url="{{ report_classification_url }}">
@@ -223,8 +224,8 @@
         <tbody>
           {% for item in result.report_items %}
           {% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
-          <tr class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
-            <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}</td>
+          <tr{% if item.cross_check_anchor_id %} id="{{ item.cross_check_anchor_id }}"{% endif %} class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
+            <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}{% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}</td>
             {% for field, label in report_item_fields %}
             {% set field_value = item[field] %}
             <td class="report-field report-field-{{ field }}">
@@ -239,7 +240,7 @@
               <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">
                 {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
                 <label class="report-radio-option report-radio-option-{{ status }}">
-                  <input type="radio" name="report-acceptance-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ '认可' if status == 'accepted' else '不认可' if status == 'rejected' else label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <input type="radio" name="report-acceptance-{{ result.code }}-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ '认可' if status == 'accepted' else '不认可' if status == 'rejected' else label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
                   <span>{{ "认可" if status == "accepted" else "不认可" if status == "rejected" else label }}</span>
                 </label>
                 {% if status == "rejected" %}

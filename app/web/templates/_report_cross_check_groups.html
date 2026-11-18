@@ -1,0 +1,37 @@
+{% if cross_check_groups %}
+<div class="cross-check-groups">
+  <div>
+    <h3>跨检查项重复归组</h3>
+    <p>识别 {{ cross_check_groups|length }} 组，覆盖 {{ cross_check_group_item_count }} 条报告条目，含 {{ cross_check_group_duplicate_count }} 条重复关联；<span class="cross-check-group-count-summary">归组折算后 {{ cross_check_grouped_total }} 条</span>。原始条目和复核状态分别保留。</p>
+  </div>
+  <ol class="cross-check-group-list">
+    {% for group in cross_check_groups %}
+    <li>
+      <details id="cross-check-group-{{ group.id }}">
+        <summary>
+          <span class="cross-check-group-title">重复组 {{ group.id }}</span>
+          <span class="cross-check-group-count">{{ group.item_count }} 条</span>
+          <span class="cross-check-group-summary">{{ group.members[0].item.description }}</span>
+        </summary>
+        <ul class="cross-check-group-members">
+          {% for member in group.members %}
+          <li>
+            <div class="cross-check-member-heading">
+              <strong>{{ member.name }}</strong>
+              <span>第 {{ member.item.index }} 条 · {{ member.item.type_label }} · {{ member.item.acceptance_label }}</span>
+            </div>
+            <p class="cross-check-member-description">{{ member.item.description }}</p>
+            {% if member.item.location %}<p class="cross-check-member-detail"><strong>位置：</strong>{{ member.item.location }}</p>{% endif %}
+            {% if member.item.excerpt %}<p class="cross-check-member-detail"><strong>原文：</strong>{{ member.item.excerpt }}</p>{% endif %}
+            {% if member.item.suggestion %}<p class="cross-check-member-detail"><strong>建议：</strong>{{ member.item.suggestion }}</p>{% endif %}
+            {% if member.item.rejection_reason_label or member.item.rejection_note %}<p class="cross-check-member-detail"><strong>不认可原因：</strong>{{ member.item.rejection_reason_label }}{% if member.item.rejection_reason_label and member.item.rejection_note %}：{% endif %}{{ member.item.rejection_note }}</p>{% endif %}
+            <a class="cross-check-member-link" href="#{{ member.anchor_id }}">查看原报告条目</a>
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+{% endif %}

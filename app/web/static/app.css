@@ -2917,6 +2917,128 @@ body.table-column-resize-active * {
   line-height: 1.2;
 }
 
+.cross-check-groups {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.cross-check-groups h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.cross-check-groups > div > p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cross-check-group-list,
+.cross-check-group-members {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cross-check-group-list > li {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+
+.cross-check-group-list details {
+  min-width: 0;
+}
+
+.cross-check-group-list summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 2px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.cross-check-group-title {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.cross-check-group-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cross-check-group-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cross-check-group-members {
+  padding: 0 0 8px 20px;
+}
+
+.cross-check-group-members > li {
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.cross-check-member-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.cross-check-member-heading span {
+  color: var(--muted);
+}
+
+.cross-check-member-description,
+.cross-check-member-detail {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.cross-check-member-detail strong {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.cross-check-member-link {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--primary-strong);
+  font-size: 12px;
+}
+
+.cross-check-group-badge {
+  display: block;
+  width: fit-content;
+  margin: 4px auto 0;
+  color: var(--primary-strong);
+  font-size: 11px;
+  line-height: 1.3;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.cross-check-group-badge:hover {
+  text-decoration: underline;
+}
+
 @container report-summary (min-width: 1200px) {
   .report-counts {
     grid-template-columns: repeat(10, minmax(0, 1fr));

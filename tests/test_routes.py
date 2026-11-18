@@ -31,7 +31,12 @@ from app.persistence.connection import get_db
 from app.persistence.defaults import seed_defaults
 from app.persistence.schema import init_db
 from app.persistence.settings import get_ip_username, get_setting, set_setting
-from app.reporting.constants import REPORT_STATS_PREPARATION_VERSION
+from app.reporting.constants import (
+    REPORT_EXPORT_ITEM_ID_HEADER,
+    REPORT_EXPORT_RESULT_CODE_HEADER,
+    REPORT_EXPORT_SHEET_NAME,
+    REPORT_STATS_PREPARATION_VERSION,
+)
 from app.reporting.service import (
     _parse_result_json,
     _prepare_task_results,
@@ -5201,6 +5206,141 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ).get_text(strip=True),
             "1",
         )
+
+    def test_cross_check_groups_keep_item_reviews_and_exports_independent(self):
+        shared_item = {
+            "id": "same-item-id",
+            "status": "issue",
+            "category": "术语一致性",
+            "location": "第1章",
+            "excerpt": "使用WebUI管理，并在Web UI页面查看状态。",
+            "description": "同一界面名称存在WebUI和Web UI两种写法，应统一。",
+            "suggestion": "全文统一使用“WebUI”。",
+        }
+        result_json = [
+            {
+                "code": "normative",
+                "name": "文档规范性检查",
+                "result": json.dumps(
+                    {"summary": "检查完成。", "items": [shared_item]},
+                    ensure_ascii=False,
+                ),
+                "item_acceptances": {"same-item-id": {"status": "accepted"}},
+            },
+            {
+                "code": "consistency",
+                "name": "全文一致性检查",
+                "result": json.dumps(
+                    {"summary": "检查完成。", "items": [shared_item]},
+                    ensure_ascii=False,
+                ),
+                "item_acceptances": {
+                    "same-item-id": {
+                        "status": "rejected",
+                        "rejection_reason": "false_positive",
+                        "rejection_note": "仅记录独立复核意见",
+                    }
+                },
+            },
+        ]
+        with self.app.app_context():
+            now = "2026-05-23 12:00:00"
+            cursor = get_db().execute(
+                """
+                INSERT INTO tasks(
+                    task_type, ip, owner_subject, original_filename, stored_filename, file_type,
+                    file_size, result_json, checks_json, model_name, api_base,
+                    status, progress, created_at, updated_at
+                )
+                VALUES (?, '127.0.0.1', 'ip:127.0.0.1', 'cross-check.txt', 'stored.txt', 'txt',
+                        1024, ?, '[]', 'model-a', 'https://example.test/v1/chat/completions',
+                        'completed', 100, ?, ?)
+                """,
+                (
+                    DOCUMENT_TASK_TYPE,
+                    json.dumps(result_json, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            get_db().commit()
+            task_id = cursor.lastrowid
+
+        for prefix in ("", "/admin"):
+            detail = self.client.get(f"{prefix}/tasks/{task_id}")
+            exported = self.client.get(f"{prefix}/tasks/{task_id}/export")
+            self.assertEqual(detail.status_code, 200)
+            self.assertEqual(exported.status_code, 200)
+            soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
+            group = _required_tag(soup.select_one(".cross-check-group-list details"))
+            self.assertEqual(
+                _required_tag(
+                    soup.select_one(".cross-check-group-count-summary")
+                ).get_text(" ", strip=True),
+                "归组折算后 1 条",
+            )
+            self.assertEqual(len(soup.select("[data-report-item]")), 2)
+            rows = {
+                row["data-result-code"]: row
+                for row in soup.select("[data-report-item]")
+            }
+            self.assertNotEqual(
+                rows["normative"].select_one("input[type=radio]")["name"],
+                rows["consistency"].select_one("input[type=radio]")["name"],
+            )
+            for member_link in group.select(".cross-check-member-link"):
+                self.assertIsNotNone(soup.select_one(member_link["href"]))
+            group_text = group.get_text(" ", strip=True)
+            self.assertIn("认可", group_text)
+            self.assertIn("不认可", group_text)
+            self.assertIn("仅记录独立复核意见", group_text)
+
+            exported_soup = BeautifulSoup(
+                exported.get_data(as_text=True), "html.parser"
+            )
+            self.assertEqual(
+                len(exported_soup.select(".cross-check-group-list details")), 1
+            )
+            self.assertEqual(len(exported_soup.select(".report-table tbody tr")), 2)
+
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "normative",
+                "item_id": "same-item-id",
+                "item_type": "issue",
+                "acceptance_status": "rejected",
+                "rejection_reason": "classification_inaccurate",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        updated_soup = BeautifulSoup(
+            self.client.get(f"/admin/tasks/{task_id}").get_data(as_text=True),
+            "html.parser",
+        )
+        updated_rows = {
+            row["data-result-code"]: row
+            for row in updated_soup.select("[data-report-item]")
+        }
+        self.assertIn("分类不准确", updated_rows["normative"].get_text(" ", strip=True))
+        self.assertIn("模型误报", updated_rows["consistency"].get_text(" ", strip=True))
+
+        workbook_response = self.client.get(f"/admin/tasks/{task_id}/export.xlsx")
+        workbook = load_workbook(io.BytesIO(workbook_response.data), data_only=True)
+        sheet = workbook[REPORT_EXPORT_SHEET_NAME]
+        headers = [cell.value for cell in sheet[1]]
+        result_code_column = headers.index(REPORT_EXPORT_RESULT_CODE_HEADER) + 1
+        item_id_column = headers.index(REPORT_EXPORT_ITEM_ID_HEADER) + 1
+        self.assertEqual(sheet.max_row, 3)
+        self.assertEqual(
+            {sheet.cell(row=row, column=result_code_column).value for row in (2, 3)},
+            {"normative", "consistency"},
+        )
+        self.assertEqual(
+            {sheet.cell(row=row, column=item_id_column).value for row in (2, 3)},
+            {"same-item-id"},
+        )
+        workbook.close()
 
     def test_report_download_names_identify_document_and_task(self):
         cases = [

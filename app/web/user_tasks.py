@@ -24,6 +24,7 @@ from app.web.auth import (
 )
 from app.web.common import _safe_next_path
 from app.web.reports import (
+    _cross_check_group_context,
     _export_task_report,
     _export_task_report_excel,
     _import_task_report_excel,
@@ -174,6 +175,7 @@ def register_user_tasks_routes(app):
             model_output_url=url_for("user_model_output", task_id=task_id),
             task=task,
             results=results,
+            **_cross_check_group_context(results),
             report_totals=_report_item_totals(results),
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
             media_report=_uses_compact_media_report(task["task_type"]),
