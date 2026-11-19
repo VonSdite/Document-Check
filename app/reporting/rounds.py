@@ -28,7 +28,7 @@ _SECTION_NUMBER = r"\d+(?:\.\d+)+"
 _SECTION_LIST = rf"{_SECTION_NUMBER}(?:(?:、|和|与|及|/){_SECTION_NUMBER})*"
 _REFERENCE_BOUNDARY = r"(?<![\da-zA-Z.+<>=≤≥为是至达于-])"
 _QUOTE = r'[“"‘`]([^”"’`\n]+)[”"’`]'
-_CHANGE_TO = r"(?:统一)?(?:更正|修正|修改|替换|调整|改)为"
+_CHANGE_TO = r"(?:统一)?(?:更正|修正|修改|替换|调整|改|补充)为"
 _SPACING_INTENT = re.compile(r"(?:写法|混用|并存|统一|不一致|不统一)")
 _COUNTS = str.maketrans("零一二两三四五六七八九", "01223456789")
 
@@ -37,14 +37,14 @@ def _without_references(value, location="") -> str:
     text = _normalized(value)
     # 根据引用标记、章节语境和条目位置识别编号，保留参数陈述中的数值。
     text = re.sub(
-        rf"(?:表|图|步骤){_REFERENCE_LIST}(?![\d.a-zA-Z%µΩ])"
-        rf"|第?{_REFERENCE_LIST}(?:章|节|页)",
+        rf"{_REFERENCE_BOUNDARY}{_SECTION_LIST}"
+        r"(?=规定|要求|未|写|说明|须知|步骤|标题|正文|同类表述|均使用)",
         "",
         text,
     )
     text = re.sub(
-        rf"{_REFERENCE_BOUNDARY}{_SECTION_LIST}"
-        r"(?=规定|要求|未|写|说明|须知|步骤|标题|正文|同类表述|均使用)",
+        rf"(?:表|图|步骤){_REFERENCE_LIST}(?![\d.a-zA-Z%µΩ])"
+        rf"|第?{_REFERENCE_LIST}(?:章|节|页)",
         "",
         text,
     )
@@ -74,11 +74,19 @@ def _corrections(item: dict) -> list[tuple[str, str]]:
     corrections = re.findall(_QUOTE + _CHANGE_TO + _QUOTE, suggestion)
     anchored_action = (
         _QUOTE
-        + r"(前|后)(?:(?:补充|补上|添加|加上|插入|增加)(?:介词|助词|文字|词语|字)?"
-        + r"|(?:缺少|漏写|漏掉)(?:介词|助词|文字|词语|字)?)"
+        + r"(前|后)(?:(?:补充|补上|补出|添加|加上|插入|增加)(?:介词|助词|文字|词语|字)?"
+        + r"|(?:缺少|漏写|漏掉|漏)(?:介词|助词|文字|词语|字)?)"
         + _QUOTE
     )
     for text in (suggestion, _normalized(item.get("description"))):
+        corrections.extend(
+            re.findall(_QUOTE + r"(?:应为|应改为|应写作)" + _QUOTE, text)
+        )
+        corrections.extend(
+            re.findall(
+                _QUOTE + r"(?:为|是)" + _QUOTE + r"的(?:错误(?:语序|写法)|误写)", text
+            )
+        )
         for anchor, side, addition in re.findall(anchored_action, text):
             corrections.append(
                 (anchor, anchor + addition if side == "后" else addition + anchor)
@@ -98,8 +106,22 @@ def _correction_edits(item: dict) -> list[tuple[str, str, str, str]]:
         for target in re.findall(
             _CHANGE_TO + _QUOTE, _normalized(item.get("suggestion"))
         ):
-            if SequenceMatcher(None, excerpt, target, autojunk=False).ratio() >= 0.6:
-                corrections.append((excerpt, target))
+            blocks = SequenceMatcher(
+                None, excerpt, target, autojunk=False
+            ).get_matching_blocks()[:-1]
+            if not blocks:
+                continue
+            # 短修改目标以首尾相同文字定位到原句片段，保留片段内的实际修改。
+            start = blocks[0].a if blocks[0].b == 0 else 0
+            last = blocks[-1]
+            end = (
+                last.a + last.size
+                if last.b + last.size == len(target)
+                else len(excerpt)
+            )
+            before = excerpt[start:end]
+            if SequenceMatcher(None, before, target, autojunk=False).ratio() >= 0.6:
+                corrections.append((before, target))
     edits = []
     quoted_description = re.findall(_QUOTE, _normalized(item.get("description")))
     for before, after in corrections:
@@ -294,12 +316,19 @@ def _same_finding(left: dict, right: dict) -> bool:
     right_description = _normalize_report_description(right.get("description"))
     if not left_description or not right_description:
         return False
+    same_correction = _same_correction(left, right)
     if not _compatible_claims(left, right):
         return False
-    if _same_correction(left, right):
+    if same_correction:
         return True
     if _same_spacing_consistency(left, right):
         return True
+    repeated_terms = [_repeated_character_terms(item) for item in (left, right)]
+    if all(repeated_terms):
+        return bool(repeated_terms[0] & repeated_terms[1])
+    caption_match = _duplicate_caption_match(left, right)
+    if caption_match is not None:
+        return caption_match
     # 描述改写较多时，以相近的修改建议补充判定。
     similarity = _report_description_similarity(left_description, right_description)
     return similarity >= 0.6 or (
@@ -318,6 +347,35 @@ def _suggestion_targets(item: dict) -> set[str]:
         re.findall(r"(?:全文|全篇)?统一(?:为|使用|写作)" + _QUOTE, suggestion)
     )
     return {target.strip("，。；、：: ") for target in targets if target.strip()}
+
+
+def _repeated_character_terms(item: dict) -> set[str]:
+    description = _normalized(item.get("description"))
+    if not re.search(r"字符重复|重复字|多写.{0,12}字", description):
+        return set()
+    excerpt = _normalized(item.get("excerpt"))
+    return {
+        term
+        for term in re.findall(_QUOTE, description)
+        if re.search(r"([\u4e00-\u9fff])\1", term) and term in excerpt
+    }
+
+
+def _duplicate_caption_match(left: dict, right: dict) -> bool | None:
+    """已识别的图表题重复按引用范围匹配，其余描述继续常规匹配。"""
+    descriptions = [_normalized(item.get("description")) for item in (left, right)]
+    for kind in ("图", "表"):
+        intent = rf"{kind}题.{{0,6}}(?:相同|重复)|(?:相同|重复).{{0,6}}{kind}题"
+        if not all(re.search(intent, description) for description in descriptions):
+            continue
+        references = [
+            set(re.findall(kind + rf"({_REFERENCE_NUMBER})(?![\d.-])", description))
+            for description in descriptions
+        ]
+        first, second = references
+        if min(len(first), len(second)) >= 2:
+            return len(first & second) >= 2 and (first <= second or second <= first)
+    return None
 
 
 def _shared_suggestion_target(left: dict, right: dict) -> bool:
@@ -358,6 +416,9 @@ def _same_named_object_conflict(left: dict, right: dict) -> bool:
                 "混淆",
                 "是否即指",
             )
+        )
+        has_conflict = has_conflict or bool(
+            re.search(r"是否与.{0,24}为同一对象", description)
         )
         if not (has_identity and has_naming and has_conflict):
             return False

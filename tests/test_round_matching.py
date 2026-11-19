@@ -393,6 +393,151 @@ class RoundMatchingRegressionTest(unittest.TestCase):
         self.assertEqual(items[0]["status"], "suggestion")
         self.assertEqual(items[0]["confidence"], "low")
 
+    def test_short_correction_targets_match_the_relevant_original_fragment(self):
+        for excerpt, description, suggestion, other_description, other_suggestion in (
+            (
+                "测量直流输出RTN+母排和直流输出–48母排之间的电压",
+                "“直流输出–48母排”缺少电压单位“V”，应为“直流输出–48V母排”。",
+                "将“直流输出–48母排”改为“直流输出–48V母排”。",
+                "母排名称漏“V”，其他位置均写作“–48V母排”。",
+                "改为“直流输出–48V母排”。",
+            ),
+            (
+                "交流柜与整流之间的交流线缆连接方式相同，下图以一种机柜接线示意。",
+                "“交流柜与整流之间”缺少“柜”字，应为“交流柜与整流柜之间”。",
+                "补充为“交流柜与整流柜之间”。",
+                "“整流”后漏“柜”字，其他位置均使用机柜全称“整流柜”。",
+                "改为“交流柜与整流柜之间的交流线缆连接方式相同”。",
+            ),
+            (
+                "在运输、存储、安装、操作、使用或/和维护设备前",
+                "固定表达“和/或”被误写为“或/和”，例如“使用或/和维护设备前”。",
+                "将“或/和”统一改为“和/或”。",
+                "“或/和”为“和/或”的错误语序，文中多处出现“或/和”。",
+                "统一改为“和/或”。",
+            ),
+        ):
+            with self.subTest(excerpt=excerpt):
+                sources = [
+                    finding(description, excerpt=excerpt, suggestion=suggestion),
+                    finding(
+                        other_description,
+                        excerpt=excerpt,
+                        suggestion=other_suggestion,
+                    ),
+                ]
+                for order in permutations(sources):
+                    self.assert_merged(*order)
+
+    def test_preposition_fix_ignores_section_reference_before_a_step(self):
+        excerpt = "将线缆一端，安装整流柜的监控模块SMU02C的其中一个CAN接口。"
+        self.assert_merged(
+            finding(
+                "句中“安装”后缺少介词“到”；同类表述在5.1.2 步骤2 中写作"
+                "“安装到组合柜的监控模块SMU02C的CAN口”。",
+                location="5.1.1 安装柜间通信线缆 > 步骤1",
+                excerpt=excerpt,
+                suggestion="在“安装”后补出“到”。",
+            ),
+            finding(
+                "“安装……其中一个CAN接口”缺少介词“到”，动宾搭配不完整。",
+                location="5.1.1 安装柜间通信线缆 > 步骤1",
+                excerpt=excerpt,
+                suggestion="在“安装”后补充“到”。",
+            ),
+        )
+
+    def test_duplicate_captions_keep_uncertain_judgment_after_merging(self):
+        for kind in ("图", "表"):
+            with self.subTest(kind=kind):
+                sources = [
+                    finding(
+                        f"同一小节内{kind}3-1与{kind}3-2{kind}题完全相同，"
+                        f"{kind}3-5与{kind}3-6{kind}题也完全相同，无法区分内容。",
+                        excerpt=f"{kind}3-1 120kW/180kW 系统",
+                        suggestion=f"结合实际内容补充区分性说明，使{kind}题互不相同。",
+                    ),
+                    finding(
+                        f"{kind}3-1与{kind}3-2的{kind}题完全相同（“120kW/180kW 系统”），"
+                        f"{kind}3-5与{kind}3-6亦完全相同；待核对这些内容是否表达不同配置，"
+                        f"需要在{kind}题中加以区分。",
+                        status="suggestion",
+                        excerpt=f"{kind}3-1 120kW/180kW 系统",
+                        suggestion=f"核对实际内容后，在{kind}题中补充区分信息。",
+                    ),
+                ]
+                for order in permutations(sources):
+                    items = self.aggregate(*order)
+                    self.assertEqual(len(items), 1)
+                    self.assertEqual(items[0]["source_rounds"], [1, 2])
+                    self.assertTrue(items[0]["round_conflict"])
+                    self.assertEqual(items[0]["status"], "suggestion")
+                    self.assertEqual(items[0]["confidence"], "low")
+
+    def test_suspected_character_repetition_keeps_parameter_name_confirmation(self):
+        sources = [
+            finding(
+                "表中出现“直流过过压告警点”，“过过压”疑似字符重复；"
+                "待核对条件是产品实际参数名是否为“直流过压告警点”。",
+                status="suggestion",
+                excerpt="直流过过压告警点",
+                suggestion="核对实际参数名，若为“直流过压告警点”则统一修改。",
+            ),
+            finding(
+                "“直流过过压告警点”“直流欠欠压告警点”疑似多写一个“过/欠”字，"
+                "但可能是监控界面实际参数名，需核实。",
+                status="suggestion",
+                excerpt="直流过过压告警点；直流欠欠压告警点",
+                suggestion="核对监控界面实际参数名后再确定。",
+            ),
+            finding(
+                "同表中“直流过压点”和“直流过过压告警点”并存，“过过”为重复字。",
+                excerpt="直流过过压告警点",
+                suggestion="核对监控界面实际参数名，以界面名称为准。",
+            ),
+        ]
+        for order in permutations(sources):
+            items = self.aggregate(*order)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["source_rounds"], [1, 2, 3])
+            self.assertTrue(items[0]["round_conflict"])
+            self.assertEqual(items[0]["status"], "suggestion")
+            self.assertEqual(items[0]["confidence"], "low")
+
+    def test_common_targets_and_repetition_context_do_not_merge_different_issues(self):
+        for excerpt, left, right, suggestions in (
+            (
+                "将线缆安装模块的的接口。",
+                "“安装”后缺少介词“到”。",
+                "“的的”中出现重复字。",
+                ("改为“安装到模块的接口”。", "改为“模块的接口”。"),
+            ),
+            (
+                "图3-1 120kW系统；图3-2 120kW系统；图3-3 120kW系统",
+                "图3-1与图3-2图题完全相同，需要区分这两个配置。",
+                "图3-2与图3-3图题相同，后者的内容还缺少机柜类型说明。",
+                ("补充各图对应配置。", "补充机柜类型说明。"),
+            ),
+            (
+                "图3-1 120kW系统；图3-2 120kW系统；图3-3 120kW系统",
+                "同一小节内图3-1与图3-2图题完全相同，图题无法区分内容。",
+                "同一小节内图3-2与图3-3图题完全相同，图题无法区分内容。",
+                ("核对并补充图题说明。", "核对并补充图题说明。"),
+            ),
+            (
+                "直流过过压告警点；直流欠欠压告警点",
+                "“直流过过压告警点”疑似字符重复，需要核对名称。",
+                "“直流欠欠压告警点”疑似多写一个“欠”字，参数名需确认。",
+                ("核对过压参数名称。", "核对欠压参数名称。"),
+            ),
+        ):
+            with self.subTest(excerpt=excerpt):
+                items = self.aggregate(
+                    finding(left, excerpt=excerpt, suggestion=suggestions[0]),
+                    finding(right, excerpt=excerpt, suggestion=suggestions[1]),
+                )
+                self.assertEqual(len(items), 2)
+
     def test_same_correction_does_not_hide_different_parameter_claims(self):
         for left, right in (
             ("3.2V", "3.3V"),

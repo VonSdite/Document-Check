@@ -189,6 +189,52 @@ class CrossCheckGroupingTest(unittest.TestCase):
 
         self.assertEqual(groups, [])
 
+    def test_uncertain_same_object_name_links_with_shared_names_and_sections(self):
+        for location, name, expected_count in (
+            ("3.2；8.2.5；8.3.4；5.1.2", "整流柜", 1),
+            ("3.2；8.2.6；8.3.5；5.1.3", "整流柜", 0),
+            ("3.2；8.2.5；8.3.4；5.1.2", "动力柜", 0),
+        ):
+            with self.subTest(location=location, name=name):
+                normative = report_item(
+                    "normative-uncertain",
+                    status="suggestion",
+                    location="第5章 > 5.1.2 > 步骤2；第8章 > 8.2.5 > 须知",
+                    excerpt="将CAN通信线缆分别安装到组合柜的监控模块SMU02C的CAN口",
+                    description=(
+                        "已确认线索：5.1.1中相同操作写作“整流柜的监控模块SMU02C”，"
+                        "而5.1.2与8.2.5使用“组合柜”，3.1节说明系统由交流柜、整流柜、直流柜组成"
+                        "且未定义“组合柜”；待确认条件：需核对企业术语规范中"
+                        "“组合柜”是否与“整流柜”为同一对象的正式名称。"
+                    ),
+                    suggestion="依据术语规范统一使用“整流柜”或“组合柜”，明确其对应关系。",
+                )
+                consistency = report_item(
+                    "consistency-names",
+                    location=location,
+                    excerpt=(
+                        f"证据A：“多个{name}时，需设置一个{name}的SMU02C为主机”；"
+                        "证据B：“需设置一个组合柜为主机，其他机柜为从机”。"
+                    ),
+                    description=(
+                        f"同一对象（装有SMU02C的主机柜）在前文称为“{name}”，"
+                        "在后文称为“组合柜”，文档未定义“组合柜”，二者指向同一对象，"
+                        "导致名称/术语前后不一致。"
+                    ),
+                    suggestion="核对名称定义后全文统一使用。",
+                )
+
+                groups = group_cross_check_report_items(
+                    [
+                        check_result("normative", "规范性检查", normative),
+                        check_result("consistency", "一致性检查", consistency),
+                    ]
+                )
+
+                self.assertEqual(len(groups), expected_count)
+                self.assertEqual(normative["status"], "suggestion")
+                self.assertEqual(consistency["status"], "issue")
+
     def test_different_check_items_are_required(self):
         excerpt = "额定电压为24 V。"
         first = report_item("first", excerpt=excerpt)
