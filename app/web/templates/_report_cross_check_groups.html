@@ -11,7 +11,7 @@
         <summary>
           <span class="cross-check-group-title">重复组 {{ group.id }}</span>
           <span class="cross-check-group-count">{{ group.item_count }} 条</span>
-          <span class="cross-check-group-summary">{{ group.members[0].item.description }}</span>
+          <span class="cross-check-group-summary">{{ group.members[0].item.get("summary_fields", {}).get("description", group.members[0].item.description) }}</span>
         </summary>
         <ul class="cross-check-group-members">
           {% for member in group.members %}
@@ -20,10 +20,10 @@
               <strong>{{ member.name }}</strong>
               <span>第 {{ member.item.index }} 条 · {{ member.item.type_label }} · {{ member.item.acceptance_label }}</span>
             </div>
-            <p class="cross-check-member-description">{{ member.item.description }}</p>
+            <p class="cross-check-member-description">{{ member.item.get("summary_fields", {}).get("description", member.item.description) }}</p>
             {% if member.item.location %}<p class="cross-check-member-detail"><strong>位置：</strong>{{ member.item.location }}</p>{% endif %}
             {% if member.item.excerpt %}<p class="cross-check-member-detail"><strong>原文：</strong>{{ member.item.excerpt }}</p>{% endif %}
-            {% if member.item.suggestion %}<p class="cross-check-member-detail"><strong>建议：</strong>{{ member.item.suggestion }}</p>{% endif %}
+            {% if member.item.suggestion %}<p class="cross-check-member-detail"><strong>建议：</strong>{{ member.item.get("summary_fields", {}).get("suggestion", member.item.suggestion) }}</p>{% endif %}
             {% if member.item.rejection_reason_label or member.item.rejection_note %}<p class="cross-check-member-detail"><strong>不认可原因：</strong>{{ member.item.rejection_reason_label }}{% if member.item.rejection_reason_label and member.item.rejection_note %}：{% endif %}{{ member.item.rejection_note }}</p>{% endif %}
             <a class="cross-check-member-link" href="#{{ member.anchor_id }}">查看原报告条目</a>
           </li>

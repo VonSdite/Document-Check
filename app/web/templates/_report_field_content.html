@@ -1,7 +1,20 @@
 {% set evidence_refs = item.evidence_refs or [] %}
 {% set has_video_evidence = video_report and evidence_refs %}
+{% set field_value = item.get("summary_fields", {}).get(field, field_value) %}
 {% if field_value %}
 <div class="markdown-body report-cell-text">{{ field_value|markdown }}</div>
+{% endif %}
+{% set field_variants = item.get("round_field_variants", {}).get(field, []) %}
+{% if field_variants %}
+<details class="report-field-variants">
+  <summary>各轮表述（{{ field_variants|length }} 种）</summary>
+  {% for variant in field_variants %}
+  <div class="report-field-variant">
+    <small>{% for source in variant.sources %}第 {{ source.round }} 轮第 {{ source.item }} 条{% if not loop.last %}、{% endif %}{% endfor %}</small>
+    <div class="markdown-body report-cell-text">{{ variant.text|markdown }}</div>
+  </div>
+  {% endfor %}
+</details>
 {% endif %}
 {% if has_video_evidence and field == "location" %}
 <div class="video-evidence-times" aria-label="视频证据时间点">

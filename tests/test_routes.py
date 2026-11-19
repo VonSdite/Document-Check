@@ -261,6 +261,114 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertIn("发现 2/2 轮", text)
             self.assertIn("参数单位不一致", text)
 
+    def test_multiround_concise_fields_and_expandable_versions_in_pages_and_exports(
+        self,
+    ):
+        from app.reporting.rounds import build_round_result
+        from tests.test_document_rounds import completed, finding
+
+        long = finding(
+            "电压单位不一致；<script>原始补充说明</script>",
+            impact="单位写法不同会影响操作准确性，读者可能误解参数含义。",
+            suggestion="请按参数定义核对单位，并将单位写法统一。",
+        )
+        short = finding()
+        results = [
+            {
+                "code": code,
+                "name": name,
+                **build_round_result(
+                    code, 2, [completed(1, long), completed(2, short)]
+                ),
+            }
+            for code, name in (("compliance", "规范性"), ("consistency", "一致性"))
+        ]
+        self.assertTrue(
+            all(len(result["structured_report"]["items"]) == 1 for result in results)
+        )
+        task_id = self._insert_task()
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=? WHERE id=?",
+                (json.dumps(results), task_id),
+            )
+            get_db().commit()
+
+        for prefix in ("", "/admin"):
+            for suffix in ("", "/export"):
+                with self.subTest(prefix=prefix, suffix=suffix):
+                    response = self.client.get(f"{prefix}/tasks/{task_id}{suffix}")
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+                    rows = soup.select(".report-table tbody tr")
+                    self.assertEqual(len(rows), 2)
+                    for row in rows:
+                        for field in ("description", "impact", "suggestion"):
+                            cell = _required_tag(
+                                row.select_one(f".report-field-{field}")
+                            )
+                            summary = _required_tag(
+                                cell.select_one(":scope > .report-cell-text")
+                            )
+                            self.assertEqual(summary.get_text(strip=True), short[field])
+                            versions = _required_tag(
+                                cell.select_one("details.report-field-variants")
+                            )
+                            self.assertFalse(versions.has_attr("open"))
+                            self.assertIn(
+                                long[field], versions.get_text(" ", strip=True)
+                            )
+                            self.assertIn(
+                                "第 1 轮第 1 条", versions.get_text(" ", strip=True)
+                            )
+                            self.assertIsNone(versions.select_one("script"))
+                    self.assertEqual(
+                        _required_tag(
+                            soup.select_one(".cross-check-group-summary")
+                        ).get_text(strip=True),
+                        short["description"],
+                    )
+                    self.assertEqual(
+                        [
+                            node.get_text(strip=True)
+                            for node in soup.select(".cross-check-member-description")
+                        ],
+                        [short["description"]] * 2,
+                    )
+
+            response = self.client.get(f"{prefix}/tasks/{task_id}/export.xlsx")
+            self.assertEqual(response.status_code, 200)
+            workbook = load_workbook(io.BytesIO(response.data))
+            try:
+                sheet = workbook[REPORT_EXPORT_SHEET_NAME]
+                headers = [cell.value for cell in sheet[1]]
+                for row in range(2, 4):
+                    self.assertEqual(
+                        sheet.cell(row, headers.index("问题描述") + 1).value,
+                        short["description"],
+                    )
+                    self.assertEqual(
+                        sheet.cell(row, headers.index("修改建议") + 1).value,
+                        short["suggestion"],
+                    )
+                    self.assertEqual(
+                        sheet.cell(
+                            row, headers.index(REPORT_EXPORT_ITEM_ID_HEADER) + 1
+                        ).value,
+                        results[row - 2]["structured_report"]["items"][0]["id"],
+                    )
+                raw_replies = [
+                    row[-1]
+                    for row in workbook["检查轮次"].iter_rows(
+                        min_row=2, values_only=True
+                    )
+                ]
+                self.assertEqual(len(raw_replies), 4)
+                self.assertIn(long["description"], raw_replies[0])
+                self.assertIn(short["description"], raw_replies[1])
+            finally:
+                workbook.close()
+
     def test_full_pages_include_local_frontend_injection(self):
         injection_path = (
             self.app.config["ROOT_DIR"] / "instance" / FRONTEND_INJECTION_FILENAME

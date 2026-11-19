@@ -423,7 +423,7 @@ def _fill_report_items_sheet(
 
 
 def _excel_report_item_field(item: dict, field: str, task_type: str | None):
-    value = _excel_cell_text(item.get(field))
+    value = _excel_cell_text(item.get("summary_fields", {}).get(field, item.get(field)))
     if (task_type or DOCUMENT_TASK_TYPE) != VIDEO_TASK_TYPE or field != "excerpt":
         return value
     evidence_lines = []

@@ -3552,6 +3552,26 @@ body.table-column-resize-active * {
   color: var(--muted);
 }
 
+.report-field-variants {
+  margin-top: 10px;
+}
+
+.report-field-variants summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.report-field-variant {
+  margin-top: 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+
+.report-field-variant small {
+  color: var(--muted);
+}
+
 .report-item-type-badge {
   display: inline-block;
   min-width: 76px;

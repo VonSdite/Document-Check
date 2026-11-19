@@ -568,6 +568,91 @@ def _compatible_suggestions(left: dict, right: dict) -> bool:
     )
 
 
+def prepare_round_report_items(result: dict, report_items: list[dict]) -> None:
+    """主报告选用完整简洁的来源表述，各轮版本保留为可展开详情。"""
+    sources_by_origin = {}
+    for entry in result.get("round_results", []):
+        if not isinstance(entry, dict) or entry.get("status") != "completed":
+            continue
+        number = entry.get("round")
+        if type(number) is not int:
+            continue
+        for source in _result_report_items(
+            {"code": result.get("code"), "structured_report": entry.get("report")}
+        ):
+            sources_by_origin[number, source["index"]] = source
+
+    for item in report_items:
+        origins = item.get("source_items") or []
+        if len(origins) < 2:
+            continue
+        sources = [
+            sources_by_origin.get((origin["round"], origin["item"]))
+            for origin in origins
+        ]
+        if any(source is None for source in sources) or set(
+            item.get("source_rounds", [])
+        ) != {origin["round"] for origin in origins}:
+            continue
+        _prepare_round_item_summary(item, origins, sources)
+
+
+def _prepare_round_item_summary(item: dict, origins: list[dict], sources: list[dict]):
+    fields = ("description", "impact", "suggestion")
+    candidates = [
+        source
+        for source in sources
+        if all(
+            source.get(field)
+            for field in ("description", "suggestion")
+            if item.get(field)
+        )
+    ]
+    if not candidates:
+        return
+    if item.get("round_conflict"):
+        tentative = [source for source in candidates if source["type"] == "suggestion"]
+        candidates = tentative or candidates
+    specific = [source for source in candidates if _suggestion_targets(source)]
+    candidates = specific or candidates
+    representative = min(
+        candidates,
+        key=lambda source: (
+            sum(bool(item.get(field)) and not source.get(field) for field in fields),
+            sum(len(source.get(field) or "") for field in fields),
+        ),
+    )
+    suggestion_conflict = any(
+        not _compatible_suggestions(left, right)
+        for index, left in enumerate(sources)
+        for right in sources[index + 1 :]
+    )
+    summaries, variants = {}, {}
+    for field in fields:
+        merged = ""
+        field_variants = {}
+        for origin, source in zip(origins, sources):
+            value = source.get(field) or ""
+            merged = _merge_report_field_values(merged, value)
+            if value:
+                field_variants.setdefault(value, []).append(dict(origin))
+        # 可核对完整来源的字段使用代表表述，额外保存的内容继续完整展示。
+        if merged != item.get(field, "") or not representative.get(field):
+            continue
+        summary = representative[field]
+        if field == "description" and item.get("round_conflict"):
+            summary = "待确认：" + summary
+        if field == "suggestion" and suggestion_conflict:
+            summary = "各轮修改方案存在分歧，请核对原文及实际参数后确定修改方案，详见各轮表述。"
+        summaries[field] = summary
+        if summary != merged:
+            variants[field] = [
+                {"text": text, "sources": refs} for text, refs in field_variants.items()
+            ]
+    item["summary_fields"] = summaries
+    item["round_field_variants"] = variants
+
+
 def _new_group(code: str, item: dict) -> dict:
     identity = json.dumps(
         [

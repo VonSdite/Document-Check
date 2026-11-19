@@ -290,6 +290,10 @@ def _prepare_task_results(
             )
             report_item.update(acceptance)
             report_item["media_summary"] = _media_report_item_text(report_item)
+        if multiround:
+            from app.reporting.rounds import prepare_round_report_items
+
+            prepare_round_report_items(item, report_items + suppressed_items)
         for display_index, report_item in enumerate(report_items, start=1):
             report_item["index"] = display_index
         item["result_summary"] = (
@@ -924,6 +928,19 @@ def _normalize_structured_report_item(raw_item) -> dict:
             }
         )
         fields["round_conflict"] = bool(raw_item.get("round_conflict"))
+    source_items = raw_item.get("source_items")
+    if isinstance(source_items, list) and all(
+        isinstance(source, dict)
+        and type(source.get("round")) is int
+        and 1 <= source["round"] <= MAX_DOCUMENT_CHECK_ROUNDS
+        and type(source.get("item")) is int
+        and source["item"] >= 1
+        for source in source_items
+    ):
+        fields["source_items"] = [
+            {"round": source["round"], "item": source["item"]}
+            for source in source_items
+        ]
     if _looks_like_status_only(fields["category"]):
         status = status or _normalize_report_item_status(fields["category"])
         fields["category"] = ""
