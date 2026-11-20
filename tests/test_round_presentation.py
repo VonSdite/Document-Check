@@ -16,6 +16,37 @@ class RoundPresentationTest(unittest.TestCase):
             [result], task_type="document_check", suppression_rules={}, **kwargs
         )[0]
 
+    def test_saved_round_failure_shows_cause_without_mutating_stored_result(self):
+        result = self.result(
+            completed(1, finding()),
+            {"round": 2, "status": "failed", "error": "模型返回401：API KEY已过期"},
+        )
+        result["error"] = "1/3 轮检查失败，已保留 1 轮成功结果，可重试未完成轮次。"
+        before = deepcopy(result)
+        prepared = self.prepare(result)
+        self.assertIn("第 2 轮：模型返回401：API KEY已过期", prepared["error"])
+        self.assertEqual(len(prepared["report_items"]), 1)
+        self.assertEqual(result, before)
+        self.assertEqual(self.prepare(prepared)["error"], prepared["error"])
+
+    def test_round_failure_preserves_cancellation_and_other_execution_errors(self):
+        for canceled, error in (
+            (True, "本检查项已由用户取消。"),
+            (False, "任务执行进程已退出。"),
+        ):
+            with self.subTest(canceled=canceled):
+                result = self.result(
+                    {"round": 1, "status": "failed", "error": "模型读取超时"}
+                )
+                result.update(canceled=canceled, error=error)
+                prepared = self.prepare(result)
+                self.assertEqual(prepared["error"], error)
+                self.assertEqual(prepared["canceled"], canceled)
+
+    def test_successful_round_result_has_no_failure_message(self):
+        prepared = self.prepare(self.result(*(completed(i) for i in (1, 2, 3))))
+        self.assertNotIn("error", prepared)
+
     def test_saved_concatenation_displays_one_complete_source_without_mutation(self):
         long = finding(
             "文中电压单位不一致，同一参数的单位写法不同，需按参数定义统一。",

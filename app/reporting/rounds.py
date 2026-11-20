@@ -778,6 +778,37 @@ def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
     return [finding for finding, _ in groups]
 
 
+def prepare_round_error(result: dict) -> None:
+    """在检查项提示中展示轮次失败原因，并保留取消或其他执行错误。"""
+    summary = result.get("round_summary", {})
+    if not summary.get("failed") or result.get("canceled"):
+        return
+    counts = (
+        f"{summary['failed']}/{summary['planned']} 轮检查失败，"
+        f"已保留 {summary['completed']} 轮成功结果，"
+    )
+    retry_hint = "可重试未完成轮次。"
+    if result.get("error") not in (None, "", counts + retry_hint):
+        return
+
+    reasons = {}
+    authentication_failed = False
+    for entry in result.get("round_results", []):
+        if entry.get("status") != "failed":
+            continue
+        reason = str(entry.get("error") or "").strip() or "本轮未返回具体错误原因"
+        reasons.setdefault(reason, []).append(str(entry["round"]))
+        authentication_failed |= bool(entry.get("authentication_failed"))
+    if authentication_failed:
+        retry_hint = "模型鉴权失败，请在“模型管理”中更新 API Key 或检查访问权限后重试未完成轮次。"
+    details = "；".join(
+        f"第 {'、'.join(numbers)} 轮：{reason}" for reason, numbers in reasons.items()
+    )
+    result["error"] = counts + retry_hint
+    if details:
+        result["error"] += f"失败原因：{details}"
+
+
 def build_round_result(
     code: str, planned: int, rounds: list[dict], *, previous_items=()
 ) -> dict:
@@ -808,8 +839,5 @@ def build_round_result(
         "round_results": rounds,
         "round_summary": {"planned": planned, "completed": completed, "failed": failed},
     }
-    if failed:
-        result["error"] = (
-            f"{failed}/{planned} 轮检查失败，已保留 {completed} 轮成功结果，可重试未完成轮次。"
-        )
+    prepare_round_error(result)
     return result

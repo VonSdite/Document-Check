@@ -291,8 +291,12 @@ def _prepare_task_results(
             report_item.update(acceptance)
             report_item["media_summary"] = _media_report_item_text(report_item)
         if multiround:
-            from app.reporting.rounds import prepare_round_report_items
+            from app.reporting.rounds import (
+                prepare_round_error,
+                prepare_round_report_items,
+            )
 
+            prepare_round_error(item)
             prepare_round_report_items(item, report_items + suppressed_items)
         for display_index, report_item in enumerate(report_items, start=1):
             report_item["index"] = display_index

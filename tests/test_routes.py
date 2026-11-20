@@ -261,6 +261,68 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertIn("发现 2/2 轮", text)
             self.assertIn("参数单位不一致", text)
 
+    def test_multiround_error_is_visible_in_pages_polling_and_html_exports(self):
+        from app.reporting.rounds import build_round_result
+        from tests.test_document_rounds import completed, finding
+
+        cause = "模型返回401：API KEY已过期<script>alert('error')</script>"
+        for saved_generic_error in (False, True):
+            failure = {"round": 2, "status": "failed", "error": cause}
+            if not saved_generic_error:
+                failure["authentication_failed"] = True
+            result = {
+                "code": "compliance",
+                "name": "规范性",
+                **build_round_result(
+                    "compliance", 3, [completed(1, finding()), failure]
+                ),
+            }
+            if saved_generic_error:
+                result["error"] = (
+                    "1/3 轮检查失败，已保留 1 轮成功结果，可重试未完成轮次。"
+                )
+            task_id = self._insert_task(status="partial")
+            stored_result = json.dumps([result], ensure_ascii=False)
+            with self.app.app_context():
+                get_db().execute(
+                    "UPDATE tasks SET result_json=? WHERE id=?",
+                    (stored_result, task_id),
+                )
+                get_db().commit()
+            for prefix in ("", "/admin"):
+                for suffix in ("", "?_poll=1", "/export"):
+                    with self.subTest(
+                        saved_generic_error=saved_generic_error,
+                        prefix=prefix,
+                        suffix=suffix,
+                    ):
+                        response = self.client.get(f"{prefix}/tasks/{task_id}{suffix}")
+                        self.assertEqual(response.status_code, 200)
+                        html = (
+                            response.get_json()["html"]
+                            if suffix == "?_poll=1"
+                            else response.get_data(as_text=True)
+                        )
+                        soup = BeautifulSoup(html, "html.parser")
+                        error_box = _required_tag(
+                            soup.select_one(".result-panel > .report-error")
+                        )
+                        message = error_box.get_text()
+                        self.assertIn(f"第 2 轮：{cause}", message)
+                        self.assertIn("已保留 1 轮成功结果", message)
+                        self.assertIsNone(error_box.find_parent("details"))
+                        self.assertIsNone(error_box.select_one("script"))
+                        if not saved_generic_error:
+                            self.assertIn("更新 API Key 或检查访问权限", message)
+                        self.assertIn("电压单位不一致", soup.get_text())
+            with self.app.app_context():
+                self.assertEqual(
+                    get_db()
+                    .execute("SELECT result_json FROM tasks WHERE id=?", (task_id,))
+                    .fetchone()[0],
+                    stored_result,
+                )
+
     def test_multiround_concise_fields_and_expandable_versions_in_pages_and_exports(
         self,
     ):

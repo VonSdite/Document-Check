@@ -54,14 +54,15 @@ def run_document_rounds(
             ensure_active()
             if isinstance(exc, LLMIncompleteResponseError):
                 content = exc.partial_content or content
-            rounds.append(
-                {
-                    "round": number,
-                    "status": "failed",
-                    "error": str(exc),
-                    "result": content,
-                }
-            )
+            failure = {
+                "round": number,
+                "status": "failed",
+                "error": str(exc),
+                "result": content,
+            }
+            if isinstance(exc, LLMError) and exc.authentication_failed:
+                failure["authentication_failed"] = True
+            rounds.append(failure)
             if isinstance(exc, LLMError) and not exc.retryable:
                 on_update(snapshot())
                 break

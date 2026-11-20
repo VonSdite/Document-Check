@@ -56,6 +56,37 @@ def completed(number, *items):
 
 
 class RoundAggregationTest(unittest.TestCase):
+    def test_failed_rounds_show_causes_and_group_identical_errors(self):
+        result = build_round_result(
+            "check",
+            5,
+            [
+                completed(1, finding()),
+                *[
+                    {
+                        "round": number,
+                        "status": "failed",
+                        "error": "模型读取超时",
+                    }
+                    for number in (2, 3)
+                ],
+                {"round": 4, "status": "failed", "error": "模型返回无效 JSON"},
+            ],
+        )
+        self.assertIn("3/5 轮检查失败，已保留 1 轮成功结果", result["error"])
+        self.assertIn("第 2、3 轮：模型读取超时", result["error"])
+        self.assertEqual(result["error"].count("模型读取超时"), 1)
+        self.assertIn("第 4 轮：模型返回无效 JSON", result["error"])
+        self.assertIn("可重试未完成轮次", result["error"])
+        self.assertNotIn("API Key", result["error"])
+        self.assertEqual(len(result["structured_report"]["items"]), 1)
+
+    def test_failed_round_without_error_text_has_explicit_fallback(self):
+        result = build_round_result(
+            "check", 3, [{"round": 1, "status": "failed", "error": "  "}]
+        )
+        self.assertIn("第 1 轮：本轮未返回具体错误原因", result["error"])
+
     def test_reworded_typo_across_categories_and_locations_merges(self):
         excerpt = "将输入端子均匀的分布在各通道上。"
         sources = [
@@ -481,15 +512,35 @@ class DocumentRoundExecutionTest(unittest.TestCase):
                 self.assertTrue(response.closed)
                 wait.assert_not_called()
                 result = json.loads(task["result_json"])[0]
-                self.assertIn("error", result)
-                if planned == 1:
-                    self.assertIn("401", result["error"])
-                else:
+                self.assertIn("401", result["error"])
+                self.assertIn("invalid API key", result["error"])
+                self.assertIn("401", task["error"])
+                self.assertIn("invalid API key", task["error"])
+                if planned > 1:
                     self.assertEqual(
                         result["round_summary"],
                         {"planned": 5, "completed": 0, "failed": 1},
                     )
                     self.assertIn("401", result["round_results"][0]["error"])
+                    self.assertTrue(result["round_results"][0]["authentication_failed"])
+                    self.assertIn("模型鉴权失败", result["error"])
+                    self.assertIn("更新 API Key 或检查访问权限", result["error"])
+
+    def test_authentication_error_without_http_status_shows_action_and_cause(self):
+        task_id = self.create_task()
+        with patch(
+            "app.tasks.runner.run_check",
+            side_effect=LLMError("API KEY已过期", authentication_failed=True),
+        ) as model:
+            TaskRunner(self.app).run(task_id)
+        model.assert_called_once()
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "failed")
+        result = json.loads(task["result_json"])[0]
+        self.assertIn("模型鉴权失败", result["error"])
+        self.assertIn("更新 API Key 或检查访问权限", result["error"])
+        self.assertIn("第 1 轮：API KEY已过期", result["error"])
+        self.assertIn("API KEY已过期", task["error"])
 
     def test_permanent_round_failure_keeps_success_and_manual_retry_resumes(self):
         task_id = self.create_task()
@@ -507,6 +558,10 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         )
         item_id = result["structured_report"]["items"][0]["id"]
         self.assertEqual(result["round_results"][1]["error"], "API KEY已过期")
+        self.assertIn("已保留 1 轮成功结果", result["error"])
+        self.assertIn("第 2 轮：API KEY已过期", result["error"])
+        self.assertIn("更新 API Key 或检查访问权限", result["error"])
+        self.assertIn("API KEY已过期", task["error"])
 
         self.retry(task_id)
         with patch("app.tasks.runner.run_check", return_value=report()) as model:
@@ -517,6 +572,8 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         result = json.loads(task["result_json"])[0]
         self.assertEqual(result["round_summary"]["completed"], 5)
         self.assertEqual(result["structured_report"]["items"][0]["id"], item_id)
+        self.assertNotIn("error", result)
+        self.assertFalse(task["error"])
 
     def test_auth_failure_stops_other_text_checks(self):
         from app.contracts.task_types import (
