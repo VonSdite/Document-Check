@@ -71,6 +71,37 @@ class ModelDiscoveryTest(unittest.TestCase):
         self.assertTrue(fake_session.calls[0][1]["verify"])
         self.assertFalse(fake_session.calls[0][2])
 
+    def test_endpoint_fallback_uses_short_connections_and_bounded_reads(self):
+        for supplied_timeout, expected in (
+            (None, (10, 30)),
+            (3600, (10, 60)),
+            (8, (8, 8)),
+            (1, (5, 5)),
+        ):
+            with self.subTest(timeout=supplied_timeout):
+                responses = [
+                    FakeResponse({}, status_code=404),
+                    FakeResponse({"data": [{"id": "model-a"}]}),
+                ]
+                session = FakeSession(responses)
+                timeout_kwargs = (
+                    {}
+                    if supplied_timeout is None
+                    else {"request_timeout": supplied_timeout}
+                )
+                with patch.object(
+                    model_discovery.requests, "Session", return_value=session
+                ):
+                    models = model_discovery.fetch_models(
+                        api_base="https://example.test/v1/chat/completions",
+                        **timeout_kwargs,
+                    )
+                self.assertEqual(models, ["model-a"])
+                self.assertEqual(len(session.calls), 2)
+                for _, kwargs, _ in session.calls:
+                    self.assertEqual(kwargs["timeout"], expected)
+                self.assertTrue(all(response.closed for response in responses))
+
 
 if __name__ == "__main__":
     unittest.main()

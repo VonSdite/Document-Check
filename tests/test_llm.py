@@ -258,6 +258,49 @@ class LLMResponseParsingTest(unittest.TestCase):
             "http://example.test/v1/chat/completions",
         )
 
+    def test_model_connection_uses_separate_connection_and_read_timeouts(self):
+        for supplied_timeout, expected in (
+            (None, (10, 30)),
+            (60, (10, 60)),
+            (3, (3, 3)),
+        ):
+            with self.subTest(timeout=supplied_timeout):
+                llm._reset_http_session_pools()
+                session = FakeSession([FakeResponse(data={"choices": []})])
+                timeout_kwargs = (
+                    {}
+                    if supplied_timeout is None
+                    else {"request_timeout": supplied_timeout}
+                )
+                with patch.object(llm.requests, "Session", return_value=session):
+                    result = llm.test_model_connection(
+                        api_base="https://example.test/v1/chat/completions",
+                        api_key="key",
+                        model_name="test-model",
+                        **timeout_kwargs,
+                    )
+                self.assertEqual(result, "模型连通性测试通过。")
+                self.assertEqual(session.calls[0][1]["timeout"], expected)
+
+    def test_model_connection_timeout_errors_identify_stage(self):
+        session = FakeSession([])
+        for error, message in (
+            (llm.requests.ConnectTimeout(), "连接超时：10 秒内未建立连接"),
+            (llm.requests.ReadTimeout(), "读取超时：连续 30 秒未收到响应数据"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                with (
+                    patch.object(llm.requests, "Session", return_value=session),
+                    patch.object(session, "post", side_effect=error) as post,
+                ):
+                    with self.assertRaisesRegex(llm.LLMError, message):
+                        llm.test_model_connection(
+                            api_base="https://example.test/v1/chat/completions",
+                            api_key="key",
+                            model_name="test-model",
+                        )
+                post.assert_called_once()
+
     def test_model_connection_omits_reasoning_effort_by_default(self):
         fake_session = FakeSession(
             [

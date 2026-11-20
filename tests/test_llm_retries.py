@@ -342,6 +342,77 @@ class LLMRetryPolicyTest(unittest.TestCase):
                 self.assertTrue(response.closed)
                 self.wait.assert_called_once_with(2, None, None)
 
+    def test_generation_requests_keep_separate_timeouts_across_retries(self):
+        common = {
+            "api_base": "https://example.test/v1/chat/completions",
+            "api_key": "key",
+            "model_name": "test-model",
+            "check_name": "检查项",
+            "prompt": "检查",
+        }
+        entries = (
+            (llm.run_check, {"document_text": "文档"}),
+            (
+                llm.run_image_check,
+                {
+                    "image_name": "test.png",
+                    "image_position": "第1页",
+                    "image_data_url": "data:image/png;base64,AA==",
+                },
+            ),
+            (
+                llm.run_multimodal_document_check,
+                {
+                    "document_text": "文档",
+                    "image_items": [{"data_url": "data:image/png;base64,AA=="}],
+                },
+            ),
+        )
+        for run, kwargs in entries:
+            for supplied_timeout, expected in (
+                (None, (10, 3600)),
+                (77, (10, 77)),
+                (3, (3, 3)),
+            ):
+                with self.subTest(entry=run.__name__, timeout=supplied_timeout):
+                    self.wait.reset_mock()
+                    timeout_kwargs = (
+                        {}
+                        if supplied_timeout is None
+                        else {"request_timeout": supplied_timeout}
+                    )
+                    with patch.object(
+                        self.session,
+                        "post",
+                        side_effect=[
+                            llm.requests.ConnectTimeout("connect timeout"),
+                            completed_response(),
+                        ],
+                    ) as post:
+                        result = run(**common, **kwargs, **timeout_kwargs)
+                    self.assertEqual(result, "检查完成")
+                    self.assertEqual(post.call_count, 2)
+                    for sent in post.call_args_list:
+                        self.assertEqual(sent.kwargs["timeout"], expected)
+                    self.wait.assert_called_once_with(2, None, None)
+
+    def test_timeout_errors_identify_stage_and_keep_bounded_retries(self):
+        for error, message in (
+            (llm.requests.ConnectTimeout(), "连接超时：10 秒内未建立连接"),
+            (llm.requests.ReadTimeout(), "读取超时：连续 77 秒未收到响应数据"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.wait.reset_mock()
+                with patch.object(self.session, "post", side_effect=error) as post:
+                    with self.assertRaisesRegex(llm.LLMError, message) as caught:
+                        self.run_check(request_timeout=77)
+                self.assertTrue(caught.exception.retryable)
+                self.assertEqual(post.call_count, 3)
+                self.assertEqual(
+                    self.wait.call_args_list,
+                    [call(2, None, None), call(4, None, None)],
+                )
+
     def test_missing_proxy_configuration_stops_before_sending(self):
         with self.assertRaisesRegex(llm.LLMError, "需要填写代理地址") as caught:
             self.run_check(proxy_mode="custom", proxy=None)

@@ -43,7 +43,7 @@ def _normalize_provider_input(value: dict, *, require_models: bool) -> dict | st
     try:
         request_timeout = int(value.get("request_timeout") or PROVIDER_TIMEOUT_DEFAULT)
     except (TypeError, ValueError):
-        return "超时时间必须是整数秒。"
+        return "读取超时必须是整数秒。"
     try:
         max_input_chars = int(
             value.get("max_input_chars") or PROVIDER_INPUT_LIMIT_DEFAULT
@@ -51,7 +51,7 @@ def _normalize_provider_input(value: dict, *, require_models: bool) -> dict | st
     except (TypeError, ValueError):
         return "文本上限必须是整数。"
     if request_timeout < PROVIDER_TIMEOUT_MIN or request_timeout > PROVIDER_TIMEOUT_MAX:
-        return f"超时时间需在 {PROVIDER_TIMEOUT_MIN}-{PROVIDER_TIMEOUT_MAX} 秒之间。"
+        return f"读取超时需在 {PROVIDER_TIMEOUT_MIN}-{PROVIDER_TIMEOUT_MAX} 秒之间。"
     if (
         max_input_chars < PROVIDER_INPUT_LIMIT_MIN
         or max_input_chars > PROVIDER_INPUT_LIMIT_MAX

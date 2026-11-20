@@ -3,6 +3,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from app.models.timeouts import model_request_timeout
+
 
 class ModelDiscoveryError(Exception):
     pass
@@ -27,7 +29,7 @@ def fetch_models(
         session.trust_env = proxy_mode == "system"
         request_kwargs = {
             "headers": headers,
-            "timeout": _fetch_timeout(request_timeout),
+            "timeout": model_request_timeout(_fetch_timeout(request_timeout)),
             "verify": ssl_verify,
             "allow_redirects": False,
         }

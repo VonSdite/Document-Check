@@ -20,6 +20,7 @@ from app.models.service import (
     _save_user_model_provider,
     _user_provider_exists,
 )
+from app.models.timeouts import MODEL_CONNECT_TIMEOUT
 from app.web.auth import (
     _current_user_identity,
     admin_required,
@@ -131,6 +132,7 @@ def _model_management_response(identity: UserIdentity, redirect_endpoint: str):
         "user_models.html",
         providers=providers,
         models_by_provider=models_by_provider,
+        model_connect_timeout=MODEL_CONNECT_TIMEOUT,
         active_nav="models",
     )
 

@@ -21,6 +21,7 @@ from app.models.document_input import (
     PDF_TABLE_INPUT_INSTRUCTION,
     compact_model_document_text,
 )
+from app.models.timeouts import model_request_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +452,7 @@ def run_check(
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
-        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s",
+        "LLM 请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s proxy_mode=%s ssl_verify=%s connect_timeout=%s read_timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -459,7 +460,7 @@ def run_check(
         check_name,
         proxy_mode,
         ssl_verify,
-        request_timeout,
+        *model_request_timeout(request_timeout),
         force_disable_thinking,
         output_token_limit if output_token_limit is not None else "-",
         _MAX_STREAM_CONTENT_CHARS,
@@ -566,7 +567,7 @@ def run_image_check(
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
 
     logger.info(
-        "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s data_url_chars=%s",
+        "LLM 图片请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s image=%s position=%s proxy_mode=%s ssl_verify=%s connect_timeout=%s read_timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s data_url_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -576,7 +577,7 @@ def run_image_check(
         image_position or "-",
         proxy_mode,
         ssl_verify,
-        request_timeout,
+        *model_request_timeout(request_timeout),
         force_disable_thinking,
         _MAX_COMPLETION_TOKENS,
         _MAX_STREAM_CONTENT_CHARS,
@@ -709,7 +710,7 @@ def run_multimodal_document_check(
 
     data_url_chars = sum(len(image["data_url"]) for image in normalized_images)
     logger.info(
-        "LLM 图文联合请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s batch=%s/%s images=%s proxy_mode=%s ssl_verify=%s timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s data_url_chars=%s",
+        "LLM 图文联合请求开始 request_id=%s task_id=%s endpoint=%s model=%s check=%s batch=%s/%s images=%s proxy_mode=%s ssl_verify=%s connect_timeout=%s read_timeout=%s force_disable_thinking=%s max_completion_tokens=%s stream_char_limit=%s prompt_chars=%s document_chars=%s data_url_chars=%s",
         request_id,
         task_id or "-",
         endpoint,
@@ -720,7 +721,7 @@ def run_multimodal_document_check(
         len(normalized_images),
         proxy_mode,
         ssl_verify,
-        request_timeout,
+        *model_request_timeout(request_timeout),
         force_disable_thinking,
         _MAX_COMPLETION_TOKENS,
         _MAX_STREAM_CONTENT_CHARS,
@@ -988,6 +989,7 @@ def test_model_connection(
     reasoning_effort: str | None = None,
     force_disable_thinking: bool = False,
 ) -> str:
+    connect_timeout, read_timeout = model_request_timeout(request_timeout)
     endpoint = _chat_completions_endpoint(api_base)
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -1006,7 +1008,7 @@ def test_model_connection(
         with _pooled_http_session(endpoint, proxy_mode, proxy) as session:
             request_kwargs = {
                 "headers": headers,
-                "timeout": request_timeout,
+                "timeout": (connect_timeout, read_timeout),
                 "verify": ssl_verify,
             }
             if proxy_mode == "custom":
@@ -1034,8 +1036,12 @@ def test_model_connection(
                 return "模型连通性测试通过。"
             finally:
                 _close_response(response)
+    except requests.ConnectTimeout as exc:
+        raise LLMError(f"模型服务连接超时：{connect_timeout} 秒内未建立连接") from exc
     except requests.ReadTimeout as exc:
-        raise LLMError(f"模型服务测试超时：{request_timeout} 秒内没有返回结果") from exc
+        raise LLMError(
+            f"模型服务测试读取超时：连续 {read_timeout} 秒未收到响应数据"
+        ) from exc
     except requests.RequestException as exc:
         raise LLMError(
             f"模型服务测试失败：{exc}", retryable=_is_retryable_request_error(exc)
@@ -1061,12 +1067,13 @@ def _run_check_attempt(
     on_activity: Optional[Callable[[str, int | None], None]] = None,
     on_output: Optional[Callable[[dict], None]] = None,
 ) -> str:
+    connect_timeout, read_timeout = model_request_timeout(request_timeout)
     try:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         with _pooled_http_session(endpoint, proxy_mode, proxy) as session:
             request_kwargs = {
                 "headers": headers,
-                "timeout": request_timeout,
+                "timeout": (connect_timeout, read_timeout),
                 "verify": ssl_verify,
             }
             if proxy_mode == "custom":
@@ -1083,12 +1090,13 @@ def _run_check_attempt(
             try:
                 if stream_trace_enabled:
                     logger.info(
-                        "LLM 流式定位请求发送 request_id=%s task_id=%s attempt=%s endpoint=%s timeout=%s proxy_mode=%s ssl_verify=%s",
+                        "LLM 流式定位请求发送 request_id=%s task_id=%s attempt=%s endpoint=%s connect_timeout=%s read_timeout=%s proxy_mode=%s ssl_verify=%s",
                         request_id,
                         task_id or "-",
                         attempt,
                         endpoint,
-                        request_timeout,
+                        connect_timeout,
+                        read_timeout,
                         proxy_mode,
                         ssl_verify,
                     )
@@ -1143,17 +1151,27 @@ def _run_check_attempt(
                 _close_response(response)
                 if cancel_watcher is not None:
                     cancel_watcher.join(timeout=0.2)
-    except requests.ReadTimeout as exc:
+    except requests.ConnectTimeout as exc:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
         logger.warning(
-            "LLM 请求超时 request_id=%s task_id=%s attempt=%s timeout=%s",
+            "LLM 连接超时 request_id=%s task_id=%s attempt=%s connect_timeout=%s",
             request_id,
             task_id or "-",
             attempt,
-            request_timeout,
+            connect_timeout,
+        )
+        raise LLMError(f"模型服务连接超时：{connect_timeout} 秒内未建立连接") from exc
+    except requests.ReadTimeout as exc:
+        _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
+        logger.warning(
+            "LLM 读取超时 request_id=%s task_id=%s attempt=%s read_timeout=%s",
+            request_id,
+            task_id or "-",
+            attempt,
+            read_timeout,
         )
         raise LLMError(
-            f"模型服务处理超时：已连接到服务，但 {request_timeout} 秒内没有返回结果"
+            f"模型服务读取超时：连续 {read_timeout} 秒未收到响应数据"
         ) from exc
     except requests.RequestException as exc:
         _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
