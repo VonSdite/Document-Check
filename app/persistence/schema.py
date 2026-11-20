@@ -8,6 +8,8 @@ from app.persistence.connection import (
     now_text,
 )
 
+MODEL_READ_TIMEOUT_MIGRATION_KEY = "model_provider_read_timeout_600_v1"
+
 QUERY_INDEXES = {
     "idx_tasks_type_owner_status": (
         "tasks",
@@ -299,6 +301,7 @@ def init_db():
     if "user_identities" not in existing_tables:
         _register_existing_subjects(db)
     _migrate_model_thinking_defaults(db)
+    _migrate_model_read_timeouts(db)
     _clear_finished_task_api_keys(db)
     _initialize_query_indexes(db, existing_tables)
     _cleanup_orphaned_report_suppression_hits(db)
@@ -450,6 +453,33 @@ def _migrate_model_thinking_defaults(db):
         "INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)",
         (MODEL_THINKING_DEFAULT_MIGRATION_KEY, now),
     )
+
+
+def _migrate_model_read_timeouts(db):
+    now = now_text()
+    db.execute("SAVEPOINT model_read_timeout_defaults")
+    try:
+        inserted = db.execute(
+            """
+            INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)
+            ON CONFLICT(key) DO NOTHING
+            """,
+            (MODEL_READ_TIMEOUT_MIGRATION_KEY, now),
+        )
+        if inserted.rowcount:
+            db.execute(
+                """
+                UPDATE user_model_providers
+                SET request_timeout = 600, updated_at = ?
+                WHERE request_timeout != 600
+                """,
+                (now,),
+            )
+    except Exception:
+        db.execute("ROLLBACK TO model_read_timeout_defaults")
+        raise
+    finally:
+        db.execute("RELEASE model_read_timeout_defaults")
 
 
 def _clear_finished_task_api_keys(db):
