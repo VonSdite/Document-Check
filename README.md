@@ -195,6 +195,7 @@ uv run python -m scripts.audit_ip_owners --delete-ip 127.0.0.1 --yes
 - 模型 ID 列表使用表格维护，可手动新增、整理，也可从当前 API 地址拉取模型后在弹窗中选择加入。
 - 每个模型 ID 行都有“测试”按钮，用于从平台服务端按当前 API 地址、API Key、系统出站网络配置和模型 ID 发起一次 Chat Completions 连通性测试。
 - 模型默认保留思考能力；每个模型仍可单独开启“强制关闭思考”。开启后，系统统一写入 `enable_thinking=false`、`thinking: {"type": "disabled"}` 和 `chat_template_kwargs: {"enable_thinking": false, "thinking": false}`，兼容使用不同关闭参数的模型服务。
+- 服务初始化时一次性取消所有已保存模型的“强制关闭思考”勾选；同一提供商下的同名重复配置保留原本未勾选的一份。后续启动保留用户自行调整的值，新提交任务使用调整后的配置。
 
 ## 检查流程
 

@@ -3,7 +3,7 @@ from datetime import datetime
 
 from flask import current_app, g
 
-MODEL_THINKING_DEFAULT_MIGRATION_KEY = "model_force_disable_thinking_default_v2"
+MODEL_THINKING_DEFAULT_MIGRATION_KEY = "model_force_disable_thinking_default_v3"
 
 
 def now_text() -> str:

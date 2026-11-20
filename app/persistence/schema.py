@@ -420,39 +420,43 @@ def _migrate_task_owners(db):
 
 
 def _migrate_model_thinking_defaults(db):
-    migrated = db.execute(
-        "SELECT 1 FROM settings WHERE key = ?",
-        (MODEL_THINKING_DEFAULT_MIGRATION_KEY,),
-    ).fetchone()
-    if migrated is not None:
-        return
-
     now = now_text()
-    db.execute(
-        """
-        DELETE FROM user_model_configs AS current
-        WHERE current.force_disable_thinking = 1
-          AND EXISTS (
-              SELECT 1
-              FROM user_model_configs AS enabled
-              WHERE enabled.provider_id = current.provider_id
-                AND enabled.model_name = current.model_name
-                AND enabled.force_disable_thinking = 0
-          )
-        """
-    )
-    db.execute(
-        """
-        UPDATE user_model_configs
-        SET force_disable_thinking = 0, updated_at = ?
-        WHERE force_disable_thinking = 1
-        """,
-        (now,),
-    )
-    db.execute(
-        "INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)",
-        (MODEL_THINKING_DEFAULT_MIGRATION_KEY, now),
-    )
+    db.execute("SAVEPOINT model_thinking_defaults")
+    try:
+        inserted = db.execute(
+            """
+            INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)
+            ON CONFLICT(key) DO NOTHING
+            """,
+            (MODEL_THINKING_DEFAULT_MIGRATION_KEY, now),
+        )
+        if inserted.rowcount:
+            db.execute(
+                """
+                DELETE FROM user_model_configs AS current
+                WHERE current.force_disable_thinking = 1
+                  AND EXISTS (
+                      SELECT 1
+                      FROM user_model_configs AS enabled
+                      WHERE enabled.provider_id = current.provider_id
+                        AND enabled.model_name = current.model_name
+                        AND enabled.force_disable_thinking = 0
+                  )
+                """
+            )
+            db.execute(
+                """
+                UPDATE user_model_configs
+                SET force_disable_thinking = 0, updated_at = ?
+                WHERE force_disable_thinking = 1
+                """,
+                (now,),
+            )
+    except Exception:
+        db.execute("ROLLBACK TO model_thinking_defaults")
+        raise
+    finally:
+        db.execute("RELEASE model_thinking_defaults")
 
 
 def _migrate_model_read_timeouts(db):
