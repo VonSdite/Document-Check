@@ -4,7 +4,7 @@ from app.models.client import normalize_reasoning_effort
 from app.models.endpoints import normalize_chat_completions_endpoint
 from app.persistence.connection import get_db, now_text
 
-PROVIDER_TIMEOUT_DEFAULT = 3600
+PROVIDER_TIMEOUT_DEFAULT = 600
 PROVIDER_TIMEOUT_MIN = 30
 PROVIDER_TIMEOUT_MAX = 7200
 PROVIDER_INPUT_LIMIT_DEFAULT = 500000

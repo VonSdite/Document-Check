@@ -370,7 +370,7 @@ class LLMRetryPolicyTest(unittest.TestCase):
         )
         for run, kwargs in entries:
             for supplied_timeout, expected in (
-                (None, (10, 3600)),
+                (None, (10, 600)),
                 (77, (10, 77)),
                 (3, (3, 3)),
             ):
