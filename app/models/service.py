@@ -1,6 +1,7 @@
 import json
 
 from app.models.client import normalize_reasoning_effort
+from app.models.endpoints import normalize_chat_completions_endpoint
 from app.persistence.connection import get_db, now_text
 
 PROVIDER_TIMEOUT_DEFAULT = 3600
@@ -34,12 +35,14 @@ def _provider_connection_data(data: dict, name: str) -> dict | str:
 
 def _normalize_provider_input(value: dict, *, require_models: bool) -> dict | str:
     name = str(value.get("name") or "").strip()
-    api_base = str(value.get("api_base") or "").strip().rstrip("/")
+    api_base = str(value.get("api_base") or "").strip()
     api_key = str(value.get("api_key") or "").strip()
     if not name or not api_base:
         return "提供商名称和 API 地址不能为空。"
-    if not _is_chat_completions_endpoint(api_base):
-        return "API 地址必须填写完整的 /chat/completions 请求地址。"
+    try:
+        api_base = normalize_chat_completions_endpoint(api_base)
+    except ValueError as exc:
+        return str(exc)
     try:
         request_timeout = int(value.get("request_timeout") or PROVIDER_TIMEOUT_DEFAULT)
     except (TypeError, ValueError):
@@ -383,13 +386,6 @@ def _model_option(provider: dict, model_name) -> dict:
         "request_timeout": provider["request_timeout"],
         "max_input_chars": provider["max_input_chars"],
     }
-
-
-def _is_chat_completions_endpoint(value: str) -> bool:
-    endpoint = str(value or "").strip().rstrip("/")
-    return endpoint.startswith(("http://", "https://")) and endpoint.endswith(
-        "/chat/completions"
-    )
 
 
 def _find_enabled_model(model_id: str, owner_subject: str) -> dict | None:

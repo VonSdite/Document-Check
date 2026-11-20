@@ -3644,6 +3644,62 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(platform_response.status_code, 404)
         self.assertEqual(local_response.status_code, 404)
 
+    def test_model_pages_save_and_update_completed_api_urls(self):
+        for page in ("/models", "/admin/models"):
+            with self.subTest(page=page):
+                data = {
+                    "name": f"自动补全 {page}",
+                    "api_base": " http://127.0.0.1:31943/ ",
+                    "is_active": "on",
+                    "models": "model-a",
+                }
+                response = self.client.post(page, data=data)
+                self.assertEqual(response.status_code, 302)
+                with self.app.app_context():
+                    provider = (
+                        get_db()
+                        .execute(
+                            "SELECT id, api_base FROM user_model_providers WHERE name = ?",
+                            (data["name"],),
+                        )
+                        .fetchone()
+                    )
+                self.assertIsNotNone(provider)
+                self.assertEqual(
+                    provider["api_base"], "http://127.0.0.1:31943/v1/chat/completions"
+                )
+                data.update(
+                    provider_id=str(provider["id"]),
+                    api_base="https://example.test/proxy/v1/",
+                )
+                response = self.client.post(page, data=data, follow_redirects=True)
+                expected = "https://example.test/proxy/v1/chat/completions"
+                self.assertIn(expected, response.get_data(as_text=True))
+                with self.app.app_context():
+                    provider = (
+                        get_db()
+                        .execute(
+                            "SELECT api_base FROM user_model_providers WHERE id = ?",
+                            (provider["id"],),
+                        )
+                        .fetchone()
+                    )
+                self.assertEqual(provider["api_base"], expected)
+
+    def test_model_connection_routes_reject_invalid_api_urls(self):
+        for route, target in (
+            ("/models/fetch", "app.web.models.fetch_models"),
+            ("/models/test", "app.web.models.test_model_connection"),
+        ):
+            with self.subTest(route=route), patch(target) as mocked:
+                response = self.client.post(
+                    route,
+                    json={"api_base": "https:///v1", "model_name": "model-a"},
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("http://", response.get_json()["error"])
+                mocked.assert_not_called()
+
     def test_user_models_saves_model_thinking_configuration(self):
         response = self.client.post(
             "/models",
@@ -3864,7 +3920,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             response = self.client.post(
                 "/models/test",
                 json={
-                    "api_base": "https://example.test/v1/chat/completions",
+                    "api_base": "https://example.test/v1/",
                     "api_key": "sk-test",
                     "request_timeout": "30",
                     "model_name": "model-a",
@@ -3901,7 +3957,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             response = self.client.post(
                 "/models/fetch",
                 json={
-                    "api_base": "https://example.test/v1/chat/completions",
+                    "api_base": "https://example.test",
                     "api_key": "sk-test",
                     "request_timeout": "30",
                 },

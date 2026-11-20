@@ -246,17 +246,56 @@ class LLMResponseParsingTest(unittest.TestCase):
             ],
         )
 
-    def test_requires_full_chat_completions_endpoint(self):
-        with self.assertRaisesRegex(llm.LLMError, "chat/completions"):
-            llm._chat_completions_endpoint("http://example.test/v1")
-        with self.assertRaisesRegex(llm.LLMError, "chat/completions"):
-            llm._chat_completions_endpoint("example.test/v1/chat/completions")
+    def test_rejects_invalid_chat_completions_urls_without_retry(self):
+        for endpoint in (
+            "",
+            "example.test/v1/chat/completions",
+            "ftp://example.test/v1",
+            "https:///v1/chat/completions",
+            "http://[::1/v1",
+            "http://example.test:invalid/v1",
+            "http://example.test:99999/v1",
+            "http://example .test/v1",
+        ):
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaisesRegex(llm.LLMError, "http://") as caught:
+                    llm._chat_completions_endpoint(endpoint)
+                self.assertFalse(caught.exception.retryable)
 
-    def test_accepts_full_chat_completions_endpoint(self):
-        self.assertEqual(
-            llm._chat_completions_endpoint("http://example.test/v1/chat/completions/"),
-            "http://example.test/v1/chat/completions",
-        )
+    def test_completes_api_base_paths_and_preserves_full_endpoints(self):
+        for endpoint, expected in (
+            ("http://127.0.0.1:31943", "http://127.0.0.1:31943/v1/chat/completions"),
+            ("http://[::1]:31943/", "http://[::1]:31943/v1/chat/completions"),
+            ("https://example.test/v1", "https://example.test/v1/chat/completions"),
+            (
+                " https://example.test/v1/// ",
+                "https://example.test/v1/chat/completions",
+            ),
+            (
+                "https://example.test/proxy/v1/",
+                "https://example.test/proxy/v1/chat/completions",
+            ),
+            (
+                "https://example.test/api/paas/v4",
+                "https://example.test/api/paas/v4/chat/completions",
+            ),
+            ("https://example.test/chat/", "https://example.test/chat/completions"),
+            (
+                "https://example.test/v1/chat/completions/",
+                "https://example.test/v1/chat/completions",
+            ),
+            (
+                "https://example.test/v1/?api-version=2026-01&key=a%2Fb#section",
+                "https://example.test/v1/chat/completions?api-version=2026-01&key=a%2Fb#section",
+            ),
+            (
+                "https://example.test/custom/chat/completions?key=value/",
+                "https://example.test/custom/chat/completions?key=value/",
+            ),
+        ):
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(llm._chat_completions_endpoint(endpoint), expected)
+                self.assertEqual(llm._chat_completions_endpoint(expected), expected)
 
     def test_model_connection_uses_separate_connection_and_read_timeouts(self):
         for supplied_timeout, expected in (

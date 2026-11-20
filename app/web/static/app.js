@@ -1399,6 +1399,43 @@ let fetchedModelCandidates = [];
 let fetchedModelSelection = new Set();
 let fetchedModelExistingSelection = new Set();
 
+function normalizeChatCompletionsEndpoint(value) {
+  const endpoint = String(value || "").trim();
+  const parts = endpoint.match(/^(https?:\/\/[^/?#\s]+)([^?#]*)([?#].*)?$/i);
+  if (!parts || /\s/.test(endpoint)) {
+    return endpoint;
+  }
+  try {
+    new URL(endpoint);
+  } catch {
+    return endpoint;
+  }
+  let path = parts[2].replace(/\/+$/, "");
+  if (!path) {
+    path = "/v1/chat/completions";
+  } else if (!path.endsWith("/chat/completions")) {
+    path += path.endsWith("/chat") ? "/completions" : "/chat/completions";
+  }
+  return `${parts[1]}${path}${parts[3] || ""}`;
+}
+
+function completeProviderApiBase(form) {
+  const input = form.elements.api_base;
+  if (!(input instanceof HTMLInputElement)) {
+    return "";
+  }
+  input.value = normalizeChatCompletionsEndpoint(input.value);
+  return input.value;
+}
+
+document.addEventListener("focusout", (event) => {
+  const input = event.target;
+  const form = input.closest?.(".provider-modal-form");
+  if (form && input.matches?.('[name="api_base"]')) {
+    completeProviderApiBase(form);
+  }
+});
+
 function modelConfigKey(modelName, forceDisableThinking) {
   return `${forceDisableThinking ? "1" : "0"}:${modelName}`;
 }
@@ -1647,7 +1684,7 @@ function setModelTestStatus(row, state, message) {
 
 async function fetchModelsForForm(form, button) {
   writeModelConfigs(form);
-  const apiBase = form.elements.api_base?.value?.trim() || "";
+  const apiBase = completeProviderApiBase(form);
   const apiKey = form.elements.api_key?.value?.trim() || "";
   const requestTimeout = form.elements.request_timeout?.value || "30";
   if (!apiBase) {
@@ -1689,7 +1726,7 @@ async function testModelForRow(form, row, button) {
   const thinkingInput = row.querySelector("[data-model-thinking]");
   const reasoningInput = row.querySelector("[data-model-reasoning-effort]");
   const modelName = nameInput instanceof HTMLInputElement ? nameInput.value.trim() : "";
-  const apiBase = form.elements.api_base?.value?.trim() || "";
+  const apiBase = completeProviderApiBase(form);
   const apiKey = form.elements.api_key?.value?.trim() || "";
   const requestTimeout = form.elements.request_timeout?.value || "30";
   if (!apiBase) {
@@ -1982,6 +2019,7 @@ document.addEventListener("change", (event) => {
 document.addEventListener("submit", (event) => {
   const form = event.target;
   if (form instanceof HTMLFormElement && form.classList.contains("provider-modal-form")) {
+    completeProviderApiBase(form);
     writeModelConfigs(form);
   }
 });

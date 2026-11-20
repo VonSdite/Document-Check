@@ -21,6 +21,7 @@ from app.models.document_input import (
     PDF_TABLE_INPUT_INSTRUCTION,
     compact_model_document_text,
 )
+from app.models.endpoints import normalize_chat_completions_endpoint
 from app.models.timeouts import model_request_timeout
 
 logger = logging.getLogger(__name__)
@@ -1218,16 +1219,10 @@ def _start_response_cancel_watcher(
 
 
 def _chat_completions_endpoint(api_base: str) -> str:
-    endpoint = str(api_base or "").strip().rstrip("/")
-    if not endpoint.startswith(("http://", "https://")) or not endpoint.endswith(
-        "/chat/completions"
-    ):
-        raise LLMError(
-            "模型提供商 API 地址必须填写完整的 OpenAI Chat Completions 请求地址，"
-            "例如 https://api.example.com/v1/chat/completions",
-            retryable=False,
-        )
-    return endpoint
+    try:
+        return normalize_chat_completions_endpoint(api_base)
+    except ValueError as exc:
+        raise LLMError(f"模型提供商 {exc}", retryable=False) from exc
 
 
 def _disable_thinking_in_payload(

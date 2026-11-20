@@ -16,7 +16,7 @@
         <div class="form-field">
           <span class="field-with-help">
             <span class="field-label">API 地址</span>
-            <span class="help-tip" tabindex="0" data-tip="填写完整 OpenAI Chat Completions 请求地址，例如 https://api.example.com/v1/chat/completions。">?</span>
+            <span class="help-tip" tabindex="0" data-tip="支持填写服务根地址、API 基础路径或完整请求地址。根地址自动补全 /v1/chat/completions，已有基础路径自动补全 /chat/completions。">?</span>
           </span>
           <input name="api_base" value="{{ provider.api_base if provider else '' }}" placeholder="https://api.example.com/v1/chat/completions" required>
         </div>
@@ -101,7 +101,7 @@
           <th>
             <span class="table-heading-help">
               API 地址
-              <span class="help-tip" tabindex="0" data-tip="填写完整 OpenAI Chat Completions 请求地址，例如 https://api.example.com/v1/chat/completions。">?</span>
+              <span class="help-tip" tabindex="0" data-tip="支持填写服务根地址、API 基础路径或完整请求地址。根地址自动补全 /v1/chat/completions，已有基础路径自动补全 /chat/completions。">?</span>
             </span>
           </th>
           <th>模型 ID</th>

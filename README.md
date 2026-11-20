@@ -185,7 +185,7 @@ uv run python -m scripts.audit_ip_owners --delete-ip 127.0.0.1 --yes
 
 进入用户侧“模型管理”页面，或在 console 中进入“模型管理”，都可以创建自己的模型提供商。两处使用同一个当前用户主体，模型配置按该用户主体存入 SQLite；`config.yaml` 保存系统级本地配置。平台提交任务时只会使用当前用户自己启用的模型。
 
-- API 地址填写完整 OpenAI Chat Completions 请求地址，例如 `https://api.example.com/v1/chat/completions`。
+- API 地址支持服务根地址、API 基础路径和完整 OpenAI Chat Completions 请求地址。根地址（如 `https://api.example.com`）自动补全 `/v1/chat/completions`；基础路径（如 `https://api.example.com/v1`）自动补全 `/chat/completions`；以 `/chat` 结尾时补全 `/completions`。输入框失焦、保存、拉取模型和测试连接时自动补全，保留已有路径前缀和查询参数。
 - API Key 可为空，非空时会以 `Authorization: Bearer ...` 发送。
 - 代理和 SSL 校验不允许用户单独配置，统一由 `config.yaml` 的 `network` 控制。
 - 模型请求的连接超时上限为 10 秒。读取超时按提供商单独设置，默认 3600 秒，可设为 30–7200 秒，限制连接建立后连续未收到响应数据的等待时间，包含等待首次响应；持续收到流式数据时可以超过该时长。模型连通性测试和模型列表拉取同样使用 10 秒连接上限，读取等待最多 60 秒。整个任务没有统一的总执行时限。
