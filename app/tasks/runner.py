@@ -75,6 +75,7 @@ from app.tasks.runtime.common import (
 )
 from app.tasks.runtime.document_rounds import run_document_rounds
 from app.tasks.runtime.image_checks import _run_image_check_items_concurrently
+from app.tasks.runtime.model_requests import TaskModelAccess
 from app.tasks.runtime.preprocessing import _prepare_task_inputs
 from app.tasks.runtime.report_validation import parse_check_report
 from app.tasks.runtime.state import (
@@ -444,6 +445,7 @@ def _run_check_items_concurrently(
         result.get("code"): result
         for result in _check_results_from_json(_task_value(task, "result_json"))
     }
+    model_access = TaskModelAccess(task_id)
     round_progress: dict[str, float] = {}
     base_results = list(base_results or [])
     result_lock = threading.Lock()
@@ -740,7 +742,7 @@ def _run_check_items_concurrently(
                                 label=f"第 {number}/{check_rounds} 轮检查",
                                 executions={item["code"]: execution},
                             )
-                            return run_check(**kwargs)
+                            return model_access.run(run_check, **kwargs)
 
                         round_result = run_document_rounds(
                             code=item["code"],
@@ -758,7 +760,7 @@ def _run_check_items_concurrently(
                         content = round_result["result"]
                         structured_report = round_result["structured_report"]
                     else:
-                        content = run_check(**run_check_kwargs)
+                        content = model_access.run(run_check, **run_check_kwargs)
                         parse_check_report(content, allow_plain_text=True, label="本次")
                     content, filtered_unsupported_count = sanitize_text_check_result(
                         content,

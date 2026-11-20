@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import PropertyMock, call, patch
 
 from app.models import client as llm
 from tests.test_llm import FakeResponse, FakeSession
@@ -123,6 +123,101 @@ class LLMRetryPolicyTest(unittest.TestCase):
         self.assertEqual(len(self.session.calls), 2)
         self.wait.assert_called_once_with(2, None, None)
 
+    def test_expired_credentials_stop_in_gateway_json_and_sse(self):
+        errors = (
+            {"success": False, "code": 401, "message": "API KEY过期"},
+            {"success": False, "code": 401, "message": "API Key 已经过期"},
+            {"code": 401, "message": "API KEY已过期，请更新密钥"},
+            {"status": 401, "msg": "访问令牌已失效"},
+            {"error": {"message": "API key has expired"}},
+            {"error": {"message": "Expired API-key"}},
+            {"error": {"message": "Access token is expired"}},
+            {"error": {"message": "The credentials have expired"}},
+            {"error": {"code": "api_key_expired", "message": "服务拒绝请求"}},
+            {"error": {"code": "ExpiredApiKey", "message": "服务拒绝请求"}},
+            {"error": {"type": "token_expired", "message": "服务拒绝请求"}},
+        )
+        for error in errors:
+            for prefix in ("data: ", ""):
+                with self.subTest(error=error, prefix=prefix):
+                    responses = [
+                        FakeResponse(lines=[prefix + json.dumps(error)])
+                        for _ in range(3)
+                    ]
+                    self.session.responses = list(responses)
+                    self.session.calls.clear()
+                    self.wait.reset_mock()
+                    phases = []
+                    with self.assertRaises(llm.LLMError) as caught:
+                        self.run_check(
+                            on_activity=lambda phase, attempt: phases.append(phase)
+                        )
+                    self.assertFalse(caught.exception.retryable)
+                    self.assertTrue(caught.exception.authentication_failed)
+                    self.assertEqual(len(self.session.calls), 1)
+                    self.assertTrue(responses[0].closed)
+                    self.assertNotIn("retrying", phases)
+                    self.wait.assert_not_called()
+
+    def test_expired_key_overrides_transient_http_status(self):
+        for status in (429, 500, 502):
+            with self.subTest(status=status):
+                self.session.responses = [
+                    FakeResponse(
+                        status_code=status,
+                        text='{"error":{"message":"上游返回 401：API KEY过期"}}',
+                    )
+                    for _ in range(3)
+                ]
+                self.session.calls.clear()
+                self.wait.reset_mock()
+                with self.assertRaises(llm.LLMError) as caught:
+                    self.run_check()
+                self.assertFalse(caught.exception.retryable)
+                self.assertEqual(len(self.session.calls), 1)
+                self.wait.assert_not_called()
+
+    def test_request_expiration_with_valid_key_remains_retryable(self):
+        self.session.responses = [
+            FakeResponse(
+                lines=[
+                    'data: {"success":false,"code":401,"message":"API key is valid; upstream request expired"}'
+                ]
+            ),
+            completed_response(),
+        ]
+        self.assertEqual(self.run_check(), "检查完成")
+        self.assertEqual(len(self.session.calls), 2)
+        self.wait.assert_called_once_with(2, None, None)
+
+    def test_auth_status_survives_error_body_read_failure(self):
+        for status in (401, 403):
+            for error_type in (
+                llm.requests.ReadTimeout,
+                llm.requests.ConnectionError,
+            ):
+                with self.subTest(status=status, error_type=error_type):
+                    responses = [FakeResponse(status_code=status) for _ in range(3)]
+                    self.session.responses = list(responses)
+                    self.session.calls.clear()
+                    self.wait.reset_mock()
+                    with (
+                        patch.object(
+                            FakeResponse,
+                            "text",
+                            new_callable=PropertyMock,
+                            create=True,
+                            side_effect=error_type("error body read failed"),
+                        ),
+                        self.assertRaises(llm.LLMError) as caught,
+                    ):
+                        self.run_check()
+                    self.assertFalse(caught.exception.retryable)
+                    self.assertEqual(caught.exception.status_code, status)
+                    self.assertEqual(len(self.session.calls), 1)
+                    self.assertTrue(responses[0].closed)
+                    self.wait.assert_not_called()
+
     def test_permanent_service_codes_override_429_and_500(self):
         for status, code in ((429, "insufficient_quota"), (500, "invalid_api_key")):
             with self.subTest(status=status, code=code):
@@ -173,6 +268,21 @@ class LLMRetryPolicyTest(unittest.TestCase):
         ]
         with self.assertRaises(llm.LLMError):
             self.run_check(model_name="deepseek-v4-flash")
+        self.assertEqual(len(self.session.calls), 1)
+        self.wait.assert_not_called()
+
+    def test_gateway_authentication_error_skips_parameter_fallback(self):
+        self.session.responses = [
+            FakeResponse(
+                lines=[
+                    'data: {"error":{"code":"api_key_expired","message":"API KEY已过期；response_format json_object is not supported"}}'
+                ]
+            )
+            for _ in range(3)
+        ]
+        with self.assertRaises(llm.LLMError) as caught:
+            self.run_check(model_name="deepseek-v4-flash")
+        self.assertTrue(caught.exception.authentication_failed)
         self.assertEqual(len(self.session.calls), 1)
         self.wait.assert_not_called()
 
@@ -252,6 +362,8 @@ class LLMRetryPolicyTest(unittest.TestCase):
             self.run_check()
         self.assertFalse(caught.exception.retryable)
         self.assertEqual(caught.exception.partial_content, "部分正文")
+        self.assertTrue(caught.exception.authentication_failed)
+        self.assertEqual(caught.exception.status_code, 401)
         self.assertIn("401", str(caught.exception))
         self.assertEqual(len(self.session.calls), 2)
         self.wait.assert_called_once_with(2, None, None)

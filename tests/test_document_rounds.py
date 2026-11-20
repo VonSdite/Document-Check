@@ -1,8 +1,9 @@
 import json
 import tempfile
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock, Thread
 from unittest.mock import patch
 
 from flask import Flask
@@ -494,7 +495,7 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         task_id = self.create_task()
         with patch(
             "app.tasks.runner.run_check",
-            side_effect=[report(finding()), LLMError("权限不足", retryable=False)],
+            side_effect=[report(finding()), LLMError("API KEY已过期", status_code=401)],
         ) as model:
             TaskRunner(self.app).run(task_id)
         self.assertEqual(model.call_count, 2)
@@ -505,7 +506,7 @@ class DocumentRoundExecutionTest(unittest.TestCase):
             result["round_summary"], {"planned": 5, "completed": 1, "failed": 1}
         )
         item_id = result["structured_report"]["items"][0]["id"]
-        self.assertEqual(result["round_results"][1]["error"], "权限不足")
+        self.assertEqual(result["round_results"][1]["error"], "API KEY已过期")
 
         self.retry(task_id)
         with patch("app.tasks.runner.run_check", return_value=report()) as model:
@@ -516,6 +517,249 @@ class DocumentRoundExecutionTest(unittest.TestCase):
         result = json.loads(task["result_json"])[0]
         self.assertEqual(result["round_summary"]["completed"], 5)
         self.assertEqual(result["structured_report"]["items"][0]["id"], item_id)
+
+    def test_auth_failure_stops_other_text_checks(self):
+        from app.contracts.task_types import (
+            CONSISTENCY_TASK_TYPE,
+            DOCUMENT_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+        )
+
+        for task_type in (
+            DOCUMENT_TASK_TYPE,
+            CONSISTENCY_TASK_TYPE,
+            LANGUAGE_CONSISTENCY_TASK_TYPE,
+        ):
+            with self.subTest(task_type=task_type):
+                task_id = self.create_task(codes=("first", "second", "third"))
+                get_db().execute(
+                    "UPDATE tasks SET task_type=?, api_base=? WHERE id=?",
+                    (task_type, "https://example.test/v1/chat/completions", task_id),
+                )
+                get_db().commit()
+                session = FakeSession(
+                    [
+                        FakeResponse(status_code=401, text="API KEY已过期")
+                        for _ in range(3)
+                    ]
+                )
+                llm._reset_http_session_pools()
+                self.addCleanup(llm._reset_http_session_pools)
+                with (
+                    patch.object(llm.requests, "Session", return_value=session),
+                    patch.object(llm, "_wait_before_retry") as wait,
+                ):
+                    TaskRunner(self.app).run(task_id)
+                self.assertEqual(len(session.calls), 1)
+                wait.assert_not_called()
+                task = self.task(task_id)
+                self.assertEqual(task["status"], "failed")
+                results = json.loads(task["result_json"])
+                self.assertEqual(len(results), 3)
+                self.assertTrue(all(result.get("error") for result in results))
+                self.assertTrue(all(not result.get("canceled") for result in results))
+                self.assertIn(
+                    "已停止后续模型请求", json.dumps(results, ensure_ascii=False)
+                )
+
+    def test_auth_failure_preserves_finished_checks_and_runs_local_rules(self):
+        task_id = self.create_task(
+            codes=("finished", "expired", "pending", SENSITIVE_TERMS_CHECK_CODE),
+            rounds=1,
+        )
+        empty = {"summary": "检查完成", "items": []}
+        with (
+            patch(
+                "app.tasks.runner.run_check",
+                side_effect=[
+                    report(finding()),
+                    LLMError("API KEY已过期", status_code=401),
+                ],
+            ) as model,
+            patch(
+                "app.tasks.runner._run_sensitive_terms_check", return_value=empty
+            ) as local,
+        ):
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(model.call_count, 2)
+        local.assert_called_once()
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "partial")
+        results = {result["code"]: result for result in json.loads(task["result_json"])}
+        self.assertNotIn("error", results["finished"])
+        self.assertEqual(len(json.loads(results["finished"]["result"])["items"]), 1)
+        self.assertIn("error", results["expired"])
+        self.assertIn("error", results["pending"])
+        self.assertNotIn("error", results[SENSITIVE_TERMS_CHECK_CODE])
+
+    def test_auth_failure_closes_other_stream_and_stops_pending_checks(self):
+        task_id = self.create_task(codes=("waiting", "expired", "pending"))
+        get_db().execute(
+            "UPDATE tasks SET api_base=? WHERE id=?",
+            ("https://example.test/v1/chat/completions", task_id),
+        )
+        get_db().commit()
+        set_setting("check_item_concurrency", 2)
+        started, closed = Event(), Event()
+
+        class WaitingResponse(FakeResponse):
+            def iter_lines(self, decode_unicode=False):
+                started.set()
+                if not closed.wait(3):
+                    raise AssertionError("鉴权失败后并发流仍在等待")
+                raise llm.requests.ConnectionError("response closed")
+
+            def close(self):
+                super().close()
+                closed.set()
+
+        waiting = WaitingResponse()
+        session = FakeSession([])
+
+        def post(endpoint, **kwargs):
+            prompt = kwargs["json"]["messages"][1]["content"]
+            if "检查项：waiting" in prompt:
+                return waiting
+            self.assertIn("检查项：expired", prompt)
+            self.assertTrue(started.wait(3))
+            return FakeResponse(status_code=401, text="API KEY已过期")
+
+        llm._reset_http_session_pools()
+        self.addCleanup(llm._reset_http_session_pools)
+        with (
+            patch.object(llm.requests, "Session", return_value=session),
+            patch.object(session, "post", side_effect=post) as request,
+            patch.object(llm, "_wait_before_retry") as wait,
+        ):
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(request.call_count, 2)
+        self.assertTrue(waiting.closed)
+        wait.assert_not_called()
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "failed")
+        results = json.loads(task["result_json"])
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(result.get("error") for result in results))
+        self.assertTrue(all(not result.get("canceled") for result in results))
+
+    def test_non_auth_failure_allows_other_checks(self):
+        task_id = self.create_task(codes=("first", "second"), rounds=1)
+        with patch(
+            "app.tasks.runner.run_check",
+            side_effect=[LLMError("上下文超限", retryable=False), report()],
+        ) as model:
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(model.call_count, 2)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "partial")
+        self.assertNotIn("error", json.loads(task["result_json"])[1])
+
+    def test_auth_failure_wakes_other_check_retry_wait(self):
+        task_id = self.create_task(codes=("waiting", "expired", "pending"))
+        set_setting("check_item_concurrency", 2)
+        started = Event()
+
+        def model(**kwargs):
+            if kwargs["check_name"] == "expired":
+                self.assertTrue(started.wait(3))
+                raise LLMError("API KEY已过期", status_code=401)
+            self.assertEqual(kwargs["check_name"], "waiting")
+            started.set()
+            self.assertTrue(kwargs["cancel_event"].wait(3))
+            kwargs["check_canceled"]()
+            self.fail("鉴权失败后继续发起请求")
+
+        with patch("app.tasks.runner.run_check", side_effect=model) as request:
+            TaskRunner(self.app).run(task_id)
+        self.assertEqual(request.call_count, 2)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "failed")
+        results = json.loads(task["result_json"])
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(result.get("error") for result in results))
+        self.assertTrue(all(not result.get("canceled") for result in results))
+
+    def test_auth_failure_interrupts_stalled_http_read(self):
+        task_id = self.create_task(codes=("waiting", "expired", "pending"))
+        set_setting("check_item_concurrency", 2)
+        stream_started, release_stream, task_done = Event(), Event(), Event()
+        calls, failures = [], []
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                payload = json.loads(
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                )
+                prompt = payload["messages"][1]["content"]
+                calls.append(prompt)
+                if "检查项：waiting" in prompt:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    frame = b'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}\n\n'
+                    self.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
+                    self.wfile.flush()
+                    stream_started.set()
+                    release_stream.wait(8)
+                    try:
+                        self.wfile.write(b"0\r\n\r\n")
+                        self.wfile.flush()
+                    except OSError:
+                        pass
+                else:
+                    stream_started.wait(3)
+                    body = b'{"error":{"message":"API key expired"}}'
+                    self.send_response(401)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    self.wfile.flush()
+                self.close_connection = True
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        get_db().execute(
+            "UPDATE tasks SET api_base=?, request_timeout=6 WHERE id=?",
+            (f"http://127.0.0.1:{server.server_port}/v1/chat/completions", task_id),
+        )
+        get_db().commit()
+
+        def run():
+            try:
+                TaskRunner(self.app).run(task_id)
+            except BaseException as exc:
+                failures.append(exc)
+            finally:
+                task_done.set()
+
+        llm._reset_http_session_pools()
+        self.addCleanup(llm._reset_http_session_pools)
+        worker = Thread(target=run, daemon=True)
+        try:
+            worker.start()
+            self.assertTrue(task_done.wait(3), "已建立的并发请求仍在等待响应或超时")
+        finally:
+            release_stream.set()
+            worker.join(8)
+            server.shutdown()
+            server.server_close()
+            server_thread.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(len(calls), 2)
+        task = self.task(task_id)
+        self.assertEqual(task["status"], "failed")
+        results = json.loads(task["result_json"])
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(result.get("error") for result in results))
+        self.assertTrue(all(not result.get("canceled") for result in results))
 
     def test_comparison_and_cross_language_checks_validate_single_report(self):
         from app.contracts.task_types import (

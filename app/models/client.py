@@ -1,6 +1,8 @@
 import json
 import logging
 import queue
+import re
+import socket
 import threading
 import time
 import uuid
@@ -206,10 +208,12 @@ class LLMError(Exception):
         *,
         retryable: bool = True,
         status_code: int | None = None,
+        authentication_failed: bool = False,
     ):
         super().__init__(message)
-        self.retryable = retryable
         self.status_code = status_code
+        self.authentication_failed = authentication_failed or status_code in (401, 403)
+        self.retryable = retryable and not self.authentication_failed
 
 
 class LLMRequestCanceled(LLMError):
@@ -218,9 +222,20 @@ class LLMRequestCanceled(LLMError):
 
 class LLMIncompleteResponseError(LLMError):
     def __init__(
-        self, message: str, partial_content: str = "", *, retryable: bool = True
+        self,
+        message: str,
+        partial_content: str = "",
+        *,
+        retryable: bool = True,
+        status_code: int | None = None,
+        authentication_failed: bool = False,
     ):
-        super().__init__(message, retryable=retryable)
+        super().__init__(
+            message,
+            retryable=retryable,
+            status_code=status_code,
+            authentication_failed=authentication_failed,
+        )
         self.partial_content = partial_content
 
 
@@ -866,6 +881,7 @@ def _run_payload_with_retries(
                 raise
             if (
                 not response_format_fallback_used
+                and not exc.authentication_failed
                 and exc.status_code in (None, 400, 422)
                 and "response_format" in active_payload
                 and _is_json_response_format_unsupported_error(exc)
@@ -883,6 +899,7 @@ def _run_payload_with_retries(
                 continue
             if (
                 not output_token_fallback_used
+                and not exc.authentication_failed
                 and exc.status_code in (None, 400, 422)
                 and "max_completion_tokens" in active_payload
                 and _is_output_token_limit_unsupported_error(exc)
@@ -915,6 +932,8 @@ def _run_payload_with_retries(
                         f"模型输出不完整，后续重试失败：{exc}。已保留部分输出，可重试该检查项。",
                         last_incomplete_response.partial_content,
                         retryable=exc.retryable,
+                        status_code=exc.status_code,
+                        authentication_failed=exc.authentication_failed,
                     ) from exc
                 raise
             if (
@@ -1008,6 +1027,9 @@ def test_model_connection(
                     raise LLMError(
                         f"模型服务返回错误：{service_error}",
                         retryable=_is_retryable_service_error(data, service_error),
+                        authentication_failed=_is_authentication_error(
+                            data, service_error
+                        ),
                     )
                 return "模型连通性测试通过。"
             finally:
@@ -1071,6 +1093,7 @@ def _run_check_attempt(
                         ssl_verify,
                     )
                 started_at = time.monotonic()
+                _raise_if_request_canceled(cancel_event, check_canceled, poll=True)
                 response = session.post(
                     endpoint, json=stream_payload, stream=True, **request_kwargs
                 )
@@ -1163,8 +1186,8 @@ def _start_response_cancel_watcher(
         while not response_done.wait(0.1):
             if not cancel_event.is_set():
                 continue
-            logger.info("正在关闭已取消任务的模型响应 task_id=%s", task_id or "-")
-            _close_response(response)
+            logger.info("正在关闭已停止执行的模型响应 task_id=%s", task_id or "-")
+            _interrupt_response(response)
             return
 
     watcher = threading.Thread(
@@ -1581,6 +1604,7 @@ def _read_stream_lines(
             raise LLMError(
                 f"模型服务返回错误：{service_error}",
                 retryable=_is_retryable_service_error(data, service_error),
+                authentication_failed=_is_authentication_error(data, service_error),
             )
 
         if on_output:
@@ -1774,7 +1798,10 @@ def _raise_for_http_error(
     response, *, request_id: str = "-", task_id: Optional[int] = None
 ):
     if response.status_code >= 400:
-        raw_body = response.text
+        try:
+            raw_body = response.text
+        except requests.RequestException:
+            raw_body = "错误响应正文读取失败"
         body = _short_text(raw_body, 1500)
         logger.warning(
             "LLM HTTP 错误 request_id=%s task_id=%s status=%s body=%s",
@@ -1800,6 +1827,7 @@ def _raise_for_http_error(
             _http_error_message(response.status_code, body, retryable=retryable),
             retryable=retryable,
             status_code=response.status_code,
+            authentication_failed=_is_authentication_error(data, raw_body),
         )
 
 
@@ -1831,16 +1859,73 @@ def _is_retryable_request_error(error: requests.RequestException) -> bool:
     return True
 
 
+def _is_authentication_error(data, detail: str) -> bool:
+    codes = {
+        "invalidapikey",
+        "authenticationerror",
+        "unauthorized",
+        "permissiondenied",
+        "permissionerror",
+        "forbidden",
+        "apikeyexpired",
+        "expiredapikey",
+        "tokenexpired",
+        "expiredtoken",
+        "accesstokenexpired",
+        "expiredaccesstoken",
+        "invalidtoken",
+    }
+    messages = [detail]
+    if isinstance(data, dict):
+        error = data.get("error")
+        sources = [data, error] if isinstance(error, dict) else [data]
+        for source in sources:
+            for field in ("code", "errorCode", "type"):
+                code = re.sub(r"[\s_-]+", "", str(source.get(field) or "")).lower()
+                if code in codes:
+                    return True
+            messages.extend(
+                str(source.get(field) or "") for field in ("message", "msg")
+            )
+    text = "\n".join(messages).lower()
+    if re.sub(r"[\s_-]+", "", detail).lower() in codes:
+        return True
+    if any(
+        marker in text
+        for marker in (
+            "invalid api key",
+            "invalid api-key",
+            "api key is invalid",
+            "incorrect api key",
+            "authentication failed",
+            "unauthorized",
+            "forbidden",
+            "permission denied",
+            "access denied",
+            "密钥无效",
+            "无效的密钥",
+            "密钥错误",
+            "鉴权失败",
+            "认证失败",
+            "权限不足",
+            "无权限",
+        )
+    ):
+        return True
+    credential = r"(?:api[\s_-]*key|(?:access[\s_-]*|auth[\s_-]*|bearer[\s_-]*)?token|credentials?|密钥|令牌|凭证)"
+    pattern = (
+        rf"{credential}[\s:_-]*(?:(?:is|has|have|are|was|were|been|already)\s+)*"
+        rf"(?:expired\b|(?:已(?:经)?)?(?:过期|失效))|\bexpired\s+{credential}"
+    )
+    return any(re.search(pattern, message.lower()) for message in messages)
+
+
 def _is_retryable_service_error(data, detail: str) -> bool:
+    if _is_authentication_error(data, detail):
+        return False
     permanent_codes = {
         code.replace("_", "")
         for code in (
-            "invalid_api_key",
-            "authentication_error",
-            "unauthorized",
-            "permission_denied",
-            "permission_error",
-            "forbidden",
             "invalid_request_error",
             "invalid_request",
             "bad_request",
@@ -1883,15 +1968,6 @@ def _is_retryable_service_error(data, detail: str) -> bool:
     if "model" in text and "does not exist" in text:
         return False
     permanent_markers = (
-        "invalid api key",
-        "invalid api-key",
-        "api key is invalid",
-        "incorrect api key",
-        "authentication failed",
-        "unauthorized",
-        "forbidden",
-        "permission denied",
-        "access denied",
         "model not found",
         "model does not exist",
         "does not exist or you do not have access",
@@ -1912,13 +1988,6 @@ def _is_retryable_service_error(data, detail: str) -> bool:
         "exceeded your current quota",
         "account deactivated",
         "content policy violation",
-        "密钥无效",
-        "无效的密钥",
-        "密钥错误",
-        "鉴权失败",
-        "认证失败",
-        "权限不足",
-        "无权限",
         "模型不存在",
         "模型未找到",
         "不支持的模型",
@@ -1988,6 +2057,28 @@ def _close_response(response):
     close = getattr(response, "close", None)
     if close:
         close()
+
+
+def _interrupt_response(response):
+    """先中断底层读取，再关闭响应并释放连接。"""
+    raw = getattr(response, "raw", None)
+    connection = getattr(raw, "_connection", None)
+    connection_socket = getattr(connection, "sock", None)
+    if connection_socket is None:
+        reader = getattr(getattr(raw, "_fp", None), "fp", None)
+        connection_socket = getattr(getattr(reader, "raw", None), "_sock", None)
+    if isinstance(connection_socket, socket.socket):
+        try:
+            connection_socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            descriptor = connection_socket.detach()
+            if descriptor >= 0:
+                socket.close(descriptor)
+        except OSError:
+            pass
+    _close_response(response)
 
 
 class _OpenAIChatDiagnostics:
@@ -2135,6 +2226,13 @@ def _extract_service_error(data: dict) -> str:
             or data.get("code")
             or data
         )
+        return _short_text(message)
+    message = data.get("message") or data.get("msg")
+    if (
+        not data.get("choices")
+        and message
+        and _is_authentication_error(data, str(message))
+    ):
         return _short_text(message)
     return ""
 
