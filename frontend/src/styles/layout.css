@@ -108,13 +108,6 @@ h4 {
   margin: 5px 0 0;
   font-weight: 400;
 }
-.ui-step-label {
-  padding: 4px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
 .app-sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -394,9 +387,11 @@ select {
 .ui-task-composer {
   padding: 22px;
 }
-.ui-task-composer .compact-head {
-  padding: 0 0 18px;
-  align-items: center;
+.ui-composer-title {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-section);
+  font-weight: var(--weight-heading);
+  line-height: 1.4;
 }
 .ui-composer-fields {
   display: grid;
@@ -876,9 +871,6 @@ label {
   }
   .filter-bar label {
     min-width: 0;
-  }
-  .ui-step-label {
-    display: none;
   }
   .report-suppression-toolbar,
   .settings-ip-username-form,

@@ -47,12 +47,7 @@ onMounted(validate)
       :name="field.name"
       :value="field.value"
     />
-    <div class="panel-head compact-head">
-      <div>
-        <h2>新建任务</h2>
-      </div>
-      <span class="ui-step-label">创建检查</span>
-    </div>
+    <h2 class="ui-composer-title">新建任务</h2>
     <div class="ui-composer-fields" :class="{ 'ui-composer-fields--multiple': files.length > 1 }">
       <UiFilePicker v-for="field in files" :key="field.name" v-bind="field" @change="validate" />
       <label>
