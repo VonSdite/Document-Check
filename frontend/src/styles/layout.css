@@ -395,18 +395,19 @@ select {
 }
 .ui-composer-fields {
   display: grid;
-  grid-template-columns: minmax(240px, 1.5fr) minmax(180px, 1fr) minmax(100px, 0.35fr);
+  grid-template-columns: minmax(240px, 1.5fr) minmax(200px, 1fr);
   gap: 20px;
   align-items: start;
 }
-.ui-composer-fields:not(:has(select[name='check_rounds'])) {
-  grid-template-columns: minmax(240px, 1.5fr) minmax(200px, 1fr);
+.ui-composer-fields--rounds {
+  grid-template-columns: minmax(240px, 1.5fr) minmax(180px, 1fr) minmax(100px, 0.35fr);
 }
-.ui-composer-fields.ui-composer-fields--multiple {
-  grid-template-columns: repeat(2, minmax(180px, 1fr)) minmax(200px, 1fr);
+.ui-composer-fields--multiple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .ui-composer-fields > label {
   display: grid;
+  min-width: 0;
   gap: 8px;
   font-size: var(--text-sm);
   color: var(--label);
@@ -733,8 +734,7 @@ tbody tr:nth-child(even) {
   .page {
     padding: 24px 20px;
   }
-  .ui-composer-fields,
-  .ui-composer-fields.ui-composer-fields--multiple {
+  .ui-composer-fields--rounds {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .admin-summary {
@@ -788,8 +788,8 @@ tbody tr:nth-child(even) {
     padding: 16px;
   }
   .ui-composer-fields,
-  .ui-composer-fields:not(:has(select[name='check_rounds'])),
-  .ui-composer-fields.ui-composer-fields--multiple,
+  .ui-composer-fields--rounds,
+  .ui-composer-fields--multiple,
   .form-grid,
   .settings-concurrency-fields,
   .settings-network-form {
