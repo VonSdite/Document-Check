@@ -52,7 +52,7 @@
     return item;
   }
   function draftSignature(rule) {
-    const fields = ["title", "product", "docType", "scope", "condition", "evidence", "exception", "useException", "positiveIds", "negativeIds", "family"];
+    const fields = ["title", "product", "docType", "docVersion", "scope", "condition", "evidence", "exception", "useException", "positiveIds", "negativeIds", "family"];
     return JSON.stringify(fields.map((key) => rule[key]));
   }
   function makeDraft(state, caseId) {
@@ -90,7 +90,7 @@
   function saveDraft(state, id, updates) {
     const rule = findRule(state, id);
     if (rule.kind !== "check") throw new Error("误报参考需关联到有明确条件的检查规则。");
-    for (const key of ["title", "product", "docType", "scope", "condition", "evidence", "exception"]) {
+    for (const key of ["title", "product", "docType", "docVersion", "scope", "condition", "evidence", "exception"]) {
       if (key in updates) rule[key] = String(updates[key]).trim();
     }
     if ("useException" in updates) rule.useException = Boolean(updates.useException);
@@ -121,6 +121,14 @@
   }
   function evaluate(rule, scenario) {
     if ((rule.product !== "ALL" && rule.product !== scenario.product) || (rule.docType !== "全部" && rule.docType !== scenario.docType)) return { status: "skipped", reason: "当前产品或文档类型不在规则适用范围。", evidence: [] };
+    if (rule.docVersion && rule.docVersion !== "全部" && rule.docVersion !== scenario.docVersion) return { status: "skipped", reason: "当前文档版本不在已审核范围。", evidence: [] };
+    if (rule.family === "current") {
+      const text = scenario.currentText || scenario.text.map((line) => line.replaceAll("电压", "电流").replaceAll("220V", "10A").replaceAll("380V", "16A"));
+      const converted = { ...scenario, text, values: scenario.currentValues || (scenario.values[0] === scenario.values[1] ? [10, 10] : [10, 16]) };
+      const result = evaluate({ ...rule, family: "voltage" }, converted);
+      result.reason = result.reason.replaceAll("电压", "电流").replaceAll("220V", "10A").replaceAll("380V", "16A");
+      return result;
+    }
     if (rule.kind === "legacy") return { status: "reference", reason: "历史相似描述仅提供复核参考。", evidence: [] };
     if (rule.family === "term") return { status: scenario.term ? "issue" : "clear", reason: scenario.term ? "当前原文出现 WiFi，示例词表要求使用 Wi-Fi。" : "当前示例未出现需纠正的 WiFi 写法。", evidence: scenario.text.filter((line) => /Wi-?Fi/.test(line)) };
     if (rule.family !== "voltage") return { status: "review", reason: "此主题需人工设计验证案例，当前预设场景尚未覆盖。", evidence: [] };
@@ -135,20 +143,21 @@
     for (const [key, label] of [["title", "规则名称"], ["scope", "适用条件"], ["condition", "判错条件"], ["evidence", "证据要求"]]) if (!rule[key]?.trim()) errors.push(`请填写${label}。`);
     if (!rule.positiveIds.length) errors.push("请关联至少一个已确认的问题案例。");
     if (rule.useException && !rule.exception.trim()) errors.push("启用例外时，请填写可核对的例外条件。");
-    if (rule.family !== "voltage" && rule.family !== "term") errors.push("此主题尚无预设验证场景，当前可保存草稿供讨论。");
+    if (!["voltage", "current", "term"].includes(rule.family)) errors.push("此主题尚无预设验证场景，当前可保存草稿供讨论。");
     return errors;
   }
   function regression(state, id) {
     const rule = findRule(state, id);
     const errors = draftErrors(rule);
     if (errors.length) throw new Error(errors.join(" "));
-    const samples = rule.family === "voltage"
+    const samples = ["voltage", "current"].includes(rule.family)
       ? [["conflict", "issue"], ["exception", "exception"], ["fixed", "clear"], ["unclear", "review"], ["missing-evidence", "review"]]
       : [["conflict", "issue"], ["fixed", "clear"]];
     const results = samples.map(([scenarioId, expected]) => {
       const scenario = clone(SCENARIOS.find((entry) => entry.id === scenarioId));
       scenario.product = rule.product === "ALL" ? "VX120" : rule.product;
       scenario.docType = rule.docType === "全部" ? "安装手册" : rule.docType;
+      scenario.docVersion = rule.docVersion;
       const actual = evaluate(rule, scenario);
       return { title: scenario.title, expected, actual: actual.status, passed: actual.status === expected, reason: actual.reason };
     });
