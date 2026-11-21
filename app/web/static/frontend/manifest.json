@@ -19,7 +19,7 @@
     "name": "toast"
   },
   "src/main.ts": {
-    "file": "assets/main-XToiAbSL.js",
+    "file": "assets/main-DYavGm4Y.js",
     "name": "main",
     "src": "src/main.ts",
     "isEntry": true,
@@ -36,11 +36,11 @@
       "src/pages/permissions.ts"
     ],
     "css": [
-      "assets/main-AD-PVx4L.css"
+      "assets/main-DoC78FBW.css"
     ]
   },
   "src/pages/models.ts": {
-    "file": "assets/models-C0AN0QsO.js",
+    "file": "assets/models-A1gl9NZU.js",
     "name": "models",
     "src": "src/pages/models.ts",
     "isDynamicEntry": true,
@@ -62,7 +62,7 @@
     ]
   },
   "src/pages/reports.ts": {
-    "file": "assets/reports-CM6d49gc.js",
+    "file": "assets/reports-D3KYFqkC.js",
     "name": "reports",
     "src": "src/pages/reports.ts",
     "isDynamicEntry": true,
@@ -74,7 +74,7 @@
     ]
   },
   "src/pages/settings.ts": {
-    "file": "assets/settings-BhqOAN-Y.js",
+    "file": "assets/settings-Dgghu2Y0.js",
     "name": "settings",
     "src": "src/pages/settings.ts",
     "isDynamicEntry": true,
@@ -86,7 +86,7 @@
     ]
   },
   "src/pages/tasks.ts": {
-    "file": "assets/tasks-CBsFWUsg.js",
+    "file": "assets/tasks-BlkKwzw-.js",
     "name": "tasks",
     "src": "src/pages/tasks.ts",
     "isDynamicEntry": true,

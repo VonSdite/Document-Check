@@ -488,7 +488,7 @@ select {
 .ui-composer-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
   border-top: 1px solid var(--divider);
   padding-top: 18px;

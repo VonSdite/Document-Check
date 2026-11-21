@@ -50,7 +50,6 @@ onMounted(validate)
     <div class="panel-head compact-head">
       <div>
         <h2>新建任务</h2>
-        <p class="ui-section-description">选择文件、模型与检查项，提交后可在任务记录中查看进度。</p>
       </div>
       <span class="ui-step-label">创建检查</span>
     </div>
@@ -67,7 +66,6 @@ onMounted(validate)
     </div>
     <UiCheckPicker v-model="checks" :options="props.checks" :label="checkLabel" :help="checkHelp" />
     <div class="ui-composer-footer">
-      <span class="muted">检查结果将保留原文依据，支持后续人工标注。</span>
       <div class="submit-slot">
         <UiButton type="submit" variant="primary">提交检查</UiButton>
         <span class="submit-progress" data-submit-progress hidden>
