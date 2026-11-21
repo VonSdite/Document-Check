@@ -1915,7 +1915,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         task_pages = (
             ("/", "单文档检查", "单文档", "单文档检查"),
             ("/consistency", "多文档对照", "多文档", "多文档对照检查"),
-            ("/language-consistency", "跨语种检查", "跨语种", "跨语种文档一致性检查"),
+            ("/language-consistency", "跨语种检查", "跨语种", "跨语种检查"),
             ("/images", "图片检查", "图片", "图片检查"),
             ("/videos", "视频检查", "视频", "视频检查"),
         )

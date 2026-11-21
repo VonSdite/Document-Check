@@ -17,6 +17,7 @@ def main():
     fixture = AdminSettingsRouteTest()
     fixture.setUp()
     fixture.app.config["TEMPLATES_AUTO_RELOAD"] = True
+    fixture.app.jinja_env.auto_reload = True
     atexit.register(fixture.tearDown)
     fixture._configure_provider(api_key="example-frontend-key")
     fixture._insert_report_task()
