@@ -174,12 +174,13 @@ test('公共规则分页、提示词切换和权限保存可操作', async ({ pa
 
 test('侧栏折叠、主题记忆和移动端导航支持键盘', async ({ page }) => {
   await page.goto('/')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await page.getByRole('button', { name: '收起侧栏' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-sidebar', 'collapsed')
   await page.getByRole('button', { name: '切换主题' }).click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await page.reload()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(page.locator('html')).toHaveAttribute('data-sidebar', 'collapsed')
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('button', { name: '打开导航' }).click()

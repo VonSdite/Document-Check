@@ -74,6 +74,7 @@
   --z-toast: 80;
 }
 
+:root:not([data-theme='dark']),
 [data-theme='light'] {
   color-scheme: light;
   --background: #f5f6f8;

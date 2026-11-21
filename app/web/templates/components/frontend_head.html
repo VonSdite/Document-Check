@@ -1,5 +1,5 @@
 {% set assets = frontend_assets() %}
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
-<script>try{document.documentElement.dataset.theme=localStorage.getItem('theme')==='light'?'light':'dark'}catch{document.documentElement.dataset.theme='dark'}</script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem('theme')==='dark'?'dark':'light'}catch{document.documentElement.dataset.theme='light'}</script>
 {% for stylesheet in assets.styles %}<link rel="stylesheet" href="{{ stylesheet }}">{% endfor %}
 <script type="module" src="{{ assets.script }}"></script>
