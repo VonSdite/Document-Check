@@ -10,6 +10,9 @@
     <h1>{{ settings_title }}</h1>
     <p>{{ "维护公共检查项、提示词和全局误报忽略规则。" if rules_only else "为 IP 地址设置易识别的显示名称。" if settings_tab == "ip_users" else "维护运行参数、检查项与提示词配置。" }}</p>
   </div>
+  {% if settings_tab != 'ip_users' %}
+  <a class="secondary-button" href="{{ url_for('static', filename='rule-library-prototype/index.html') }}" target="_blank" rel="noopener">检查规则库原型 ↗</a>
+  {% endif %}
 </section>
 
 {% if settings_tab == 'ip_users' %}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>检查规则库 · 交互原型</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script src="model.js" defer></script>
+  <script src="prototype.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到主要内容</a>
+  <aside class="sidebar">
+    <a class="brand" href="#overview"><span class="brand-mark">文</span><span>文档智能门禁<small>检查经验工作台</small></span></a>
+    <div class="nav-label">检查规则库 <span class="tiny-pill">原型</span></div>
+    <nav aria-label="原型导航">
+      <a href="#overview" data-nav="overview"><span class="nav-icon">◫</span>流程总览</a>
+      <a href="#cases" data-nav="cases"><span class="nav-icon">▤</span>反馈案例<span class="nav-count" id="case-count"></span></a>
+      <a href="#rules" data-nav="rules"><span class="nav-icon">◇</span>规则库<span class="nav-count" id="rule-count"></span></a>
+      <a href="#trial" data-nav="trial"><span class="nav-icon">▷</span>文档试运行</a>
+      <a href="#review" data-nav="review"><span class="nav-icon">◷</span>复核与记录<span class="nav-count" id="review-count"></span></a>
+    </nav>
+    <div class="sidebar-note"><span class="status-dot"></span>示例工作区<p>从一次人工判断，走到一条可复用的检查规则。</p><button class="text-button" data-action="guide">开始体验流程 <span>↗</span></button></div>
+    <div class="sidebar-footer">产品流程讨论版 <span>01</span></div>
+  </aside>
+  <div class="app-shell">
+    <header class="topbar"><div class="breadcrumb">公共规则 <span>/</span> <strong id="breadcrumb-current">流程总览</strong></div><div class="topbar-actions"><span class="save-state" id="save-state">示例数据 · 本机保存</span><button class="button small" data-action="export">导出演示记录</button><button class="icon-button" data-action="reset" aria-label="重置演示" title="重置演示">↺</button></div></header>
+    <main id="workspace" tabindex="-1">
+      <div class="demo-notice"><span class="notice-icon">i</span><span><strong>交互原型</strong> 使用示例文档演示完整流程；试运行结果来自预设场景，实际报告与线上规则保持原状。</span><button class="text-button" data-action="help">使用说明</button></div>
+      <div id="view"></div>
+    </main>
+  </div>
+  <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <noscript><p class="noscript">请启用 JavaScript，体验规则编辑、审核和试运行。</p></noscript>
+</body>
+</html>
