@@ -1,0 +1,80 @@
+{% macro provider_modal(dialog_id, title, provider=None, models=[]) %}
+<dialog class="modal provider-modal" id="{{ dialog_id }}">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>{{ title }}</h2>
+      <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <form method="post" class="stack-form provider-modal-form" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}">
+      {% if provider %}<input type="hidden" name="provider_id" value="{{ provider.id }}">{% endif %}
+      <div class="form-grid">
+        <label>提供商名称<input name="name" value="{{ provider.name if provider else '' }}" placeholder="例如 OpenAI 兼容服务" required></label>
+        <div class="form-field">
+          <span class="field-with-help">
+            <span class="field-label">API 地址</span>
+            <span class="help-tip" tabindex="0" data-tip="支持填写服务根地址、API 基础路径或完整请求地址。根地址自动补全 /v1/chat/completions，已有基础路径自动补全 /chat/completions。">?</span>
+          </span>
+          <input name="api_base" value="{{ provider.api_base if provider else '' }}" placeholder="https://api.example.com/v1/chat/completions" required>
+        </div>
+        <label>API Key<input name="api_key" type="password" value="{{ provider.api_key if provider and provider.api_key else '' }}" autocomplete="new-password"></label>
+        <label>
+          <span class="field-with-help">
+            <span class="field-label">读取超时(秒)</span>
+            <span class="help-tip" tabindex="0" data-tip="连接超时为 {{ model_connect_timeout }} 秒。此处设置连接建立后连续未收到响应数据的最长等待时间，包含等待首次响应；持续收到数据时可以超过该时长。">?</span>
+          </span>
+          <input name="request_timeout" type="number" min="30" max="7200" step="1" value="{{ provider.request_timeout if provider and provider.request_timeout else 600 }}" required>
+        </label>
+        <label>文本上限(字)<input name="max_input_chars" type="number" min="5000" max="1000000" step="1" value="{{ provider.max_input_chars if provider and provider.max_input_chars else 500000 }}" required></label>
+      </div>
+      <div class="model-editor" data-model-editor>
+        <div class="model-editor-head">
+          <div>
+            <span class="field-with-help">
+              <span class="field-label">模型 ID 列表</span>
+              <span class="help-tip" tabindex="0" data-tip="每行填写一个模型 ID，可单独设置思考强度和是否关闭思考。">?</span>
+            </span>
+          </div>
+          <div class="model-editor-actions">
+            <button class="secondary-button small-button" type="button" data-model-list-tidy>整理</button>
+            <button class="secondary-button small-button" type="button" data-fetch-models>拉取模型</button>
+          </div>
+        </div>
+        <input type="hidden" name="model_configs" data-model-configs value='{{ models|tojson }}'>
+        <textarea name="models" data-model-list-fallback hidden>{% if provider %}{% for model in models if model.enabled %}{{ model.model_name }}
+{% endfor %}{% endif %}</textarea>
+        <div class="model-editor-summary" data-model-summary>共 0 个模型</div>
+        <div class="model-editor-table-wrap">
+          <table class="model-editor-table">
+            <thead>
+              <tr>
+                <th>模型 ID</th>
+                <th>
+                  <span class="table-heading-help">
+                    思考强度
+                    <span class="help-tip" tabindex="0" data-tip="选择模型思考强度；“不设置”时由模型服务决定。">?</span>
+                  </span>
+                </th>
+                <th>
+                  <span class="table-heading-help">
+                    强制关闭思考
+                    <span class="help-tip" tabindex="0" data-tip="勾选后请求模型关闭思考，思考强度设置不生效。">?</span>
+                  </span>
+                </th>
+                <th class="right">操作</th>
+              </tr>
+            </thead>
+            <tbody data-model-rows></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="form-actions modal-actions">
+        <label class="switch-line"><input type="checkbox" name="is_active" {{ "checked" if not provider or provider.is_active else "" }}><span>启用</span></label>
+        <div class="modal-action-buttons">
+          <button class="secondary-button" type="button" data-modal-close>取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</dialog>
+{% endmacro %}

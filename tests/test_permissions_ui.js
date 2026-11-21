@@ -1,10 +1,9 @@
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { controllerSource } = require('./frontend-controller.cjs');
 const { test } = require("node:test");
 const { runInNewContext } = require("node:vm");
 
-const script = readFileSync(join(__dirname, "../app/web/static/permissions.js"), "utf8");
+const script = controllerSource('features/permissions/editor.js');
 const codes = ["tasks.view_all", "tasks.manage_all", "stats.view_all", "rules.manage"];
 const settle = () => new Promise(setImmediate);
 

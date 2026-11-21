@@ -40,11 +40,14 @@ from app.web.common import (
     _task_endpoint,
 )
 from app.web.constants import STATUS_LABELS
+from app.web.frontend import frontend_assets, task_display_title
 
 FRONTEND_INJECTION_FILENAME = "frontend-injection.html"
 
 
 def register_presentation_routes(app):
+    app.add_template_global(frontend_assets, "frontend_assets")
+    app.add_template_global(task_display_title, "task_display_title")
     app.add_template_global(
         document_check_round_settings, "document_check_round_settings"
     )

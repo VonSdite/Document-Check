@@ -1,0 +1,108 @@
+{
+  "_client-ChBINePW.js": {
+    "file": "assets/client-ChBINePW.js",
+    "name": "client"
+  },
+  "_confirmation-C391MzNh.js": {
+    "file": "assets/confirmation-C391MzNh.js",
+    "name": "confirmation"
+  },
+  "_mount-x7IhjyV3.js": {
+    "file": "assets/mount-x7IhjyV3.js",
+    "name": "mount",
+    "imports": [
+      "_toast-D5ZDOhXR.js"
+    ]
+  },
+  "_toast-D5ZDOhXR.js": {
+    "file": "assets/toast-D5ZDOhXR.js",
+    "name": "toast"
+  },
+  "src/main.ts": {
+    "file": "assets/main-XToiAbSL.js",
+    "name": "main",
+    "src": "src/main.ts",
+    "isEntry": true,
+    "imports": [
+      "_mount-x7IhjyV3.js",
+      "_toast-D5ZDOhXR.js",
+      "_confirmation-C391MzNh.js"
+    ],
+    "dynamicImports": [
+      "src/pages/tasks.ts",
+      "src/pages/models.ts",
+      "src/pages/reports.ts",
+      "src/pages/settings.ts",
+      "src/pages/permissions.ts"
+    ],
+    "css": [
+      "assets/main-AD-PVx4L.css"
+    ]
+  },
+  "src/pages/models.ts": {
+    "file": "assets/models-C0AN0QsO.js",
+    "name": "models",
+    "src": "src/pages/models.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_mount-x7IhjyV3.js",
+      "_toast-D5ZDOhXR.js",
+      "src/main.ts",
+      "_client-ChBINePW.js"
+    ]
+  },
+  "src/pages/permissions.ts": {
+    "file": "assets/permissions-CqLLipoq.js",
+    "name": "permissions",
+    "src": "src/pages/permissions.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_toast-D5ZDOhXR.js",
+      "_client-ChBINePW.js"
+    ]
+  },
+  "src/pages/reports.ts": {
+    "file": "assets/reports-CM6d49gc.js",
+    "name": "reports",
+    "src": "src/pages/reports.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_toast-D5ZDOhXR.js",
+      "src/main.ts",
+      "_client-ChBINePW.js",
+      "_confirmation-C391MzNh.js"
+    ]
+  },
+  "src/pages/settings.ts": {
+    "file": "assets/settings-BhqOAN-Y.js",
+    "name": "settings",
+    "src": "src/pages/settings.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_toast-D5ZDOhXR.js",
+      "_client-ChBINePW.js",
+      "_confirmation-C391MzNh.js",
+      "src/main.ts"
+    ]
+  },
+  "src/pages/tasks.ts": {
+    "file": "assets/tasks-CBsFWUsg.js",
+    "name": "tasks",
+    "src": "src/pages/tasks.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_mount-x7IhjyV3.js",
+      "_toast-D5ZDOhXR.js",
+      "src/main.ts",
+      "_confirmation-C391MzNh.js",
+      "_client-ChBINePW.js"
+    ]
+  },
+  "src/report-export.ts": {
+    "file": "report-export.js",
+    "css": [
+      "report-export.css"
+    ],
+    "isEntry": true
+  }
+}

@@ -26,6 +26,10 @@ config.local.json
 node_modules/
 dist/
 build/
+frontend/test-results/
+frontend/playwright-report/
+frontend/coverage/
+*.tsbuildinfo
 
 .DS_Store
 Thumbs.db

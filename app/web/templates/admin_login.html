@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管理员登录 - 文档智能门禁</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  {% include "components/frontend_head.html" %}
 </head>
 <body class="login-body">
   <main class="login-panel">
@@ -36,6 +36,5 @@
       <button class="primary-button full" type="submit">登录管理面</button>
     </form>
   </main>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

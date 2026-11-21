@@ -97,10 +97,9 @@ def _export_task_report(task):
     static_folder = current_app.static_folder
     if not static_folder:
         raise RuntimeError("静态资源目录未配置，无法导出报告。")
-    app_css = (Path(static_folder) / "app.css").read_text(encoding="utf-8")
-    table_resize_js = (Path(static_folder) / "table-resize.js").read_text(
-        encoding="utf-8"
-    )
+    assets = Path(static_folder) / "frontend"
+    app_css = (assets / "report-export.css").read_text(encoding="utf-8")
+    table_resize_js = (assets / "report-export.js").read_text(encoding="utf-8")
     results = _task_results(task)
     html = render_template(
         "task_report_export.html",

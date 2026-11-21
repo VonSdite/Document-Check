@@ -1,10 +1,9 @@
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { controllerSource } = require('./frontend-controller.cjs');
 const { test } = require("node:test");
 const { runInNewContext } = require("node:vm");
 
-const script = readFileSync(join(__dirname, "../app/web/static/app.js"), "utf8");
+const script = controllerSource('features/tasks/forms.js');
 
 function createUi({ labels = ["文档"], model = "model-1", checks = [true, true], protect = true } = {}) {
   const events = {};

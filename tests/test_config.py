@@ -548,9 +548,13 @@ class ProviderConfigTest(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(created_app.config["APPLICATION_ROOT"], "/infoCheck")
-            self.assertRegex(html, r'href="/infoCheck/static/app\.css(?:\?[^\"]*)?"')
-            self.assertRegex(html, r'src="/infoCheck/static/app\.js(?:\?[^\"]*)?"')
-            self.assertIn('src="/infoCheck/static/table-resize.js"', html)
+            self.assertRegex(
+                html, r'href="/infoCheck/static/frontend/assets/[^\"]+\.css"'
+            )
+            self.assertRegex(
+                html, r'src="/infoCheck/static/frontend/assets/[^\"]+\.js"'
+            )
+            self.assertIn('type="module"', html)
 
     def test_config_drops_legacy_providers(self):
         with tempfile.TemporaryDirectory() as temp_dir:

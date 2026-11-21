@@ -1,0 +1,29 @@
+@import './index.css';
+
+:root {
+  --app-sidebar-width: 0px;
+}
+.topbar {
+  position: static;
+  background: var(--surface);
+}
+.topbar-inner,
+.page {
+  width: min(1600px, calc(100% - 32px));
+  margin: 0 auto;
+}
+.topbar-inner {
+  display: flex;
+}
+.page {
+  padding: 24px 0;
+}
+@media print {
+  body {
+    background: #fff;
+  }
+  .panel {
+    box-shadow: none;
+    break-inside: avoid;
+  }
+}

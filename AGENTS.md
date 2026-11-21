@@ -17,4 +17,5 @@
 - [4+1 架构视图](docs/architecture-4plus1.md)：系统的场景、逻辑、开发、进程和物理视图。
 
 - [开发与模块边界](docs/development.md)：模块职责、依赖方向、扩展方式和回归验证。
+- [前端开发](docs/frontend-development.md)：组件分层、主题、前端构建与浏览器验证。
 - [性能与容量验证](docs/performance.md)：数据库查询策略、文档处理与并发压测。

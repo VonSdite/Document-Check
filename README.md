@@ -10,6 +10,7 @@
 - 任务执行：独立调度进程从 SQLite 队列拉取任务，默认全局并发 3、单用户并发 1、单任务检查项并发 1，可在管理面调整；机器级任务进程上限默认为 4；单文档 AI 检查支持 1～5 轮独立全文检查，默认 5 轮，结果合并为一份报告；图片检查会把文档文本和按位置命名的图片批次一起送入多模态模型。
 - 本地存储：SQLite 数据库、用户模型配置、上传文件、提取图片和运行日志保存在 `instance/`，本地管理员配置保存在 `config.yaml`。
 - 服务运行：Windows 和 Linux 统一使用 Uvicorn 和 a2wsgi 适配 Flask，默认 1 个 Web 进程、每进程 16 个请求线程；后台任务由独立调度进程按配置动态创建任务进程，启动命令保持为 `uv run python run.py`。
+- 前端界面：Vue 3、TypeScript 和 Vite 组件化工作台，支持侧栏导航、深浅主题和移动端布局；公共上传、模型清单与交互控件统一复用。
 
 完整运行拓扑和组件职责见 [4+1 架构视图](docs/architecture-4plus1.md)。
 
@@ -34,6 +35,7 @@
 | `app/tasks/` | 任务提交、调度认领、执行、进度和文件生命周期 |
 | `app/reporting/` | 报告解析、人工复核、统计缓存和 Excel 数据处理 |
 | `app/web/` | HTTP 路由、请求与响应适配、模板和静态资源 |
+| `frontend/` | 页面入口、Vue 组件、业务交互、主题与前端构建 |
 
 模块依赖和扩展方式见 [开发与模块边界](docs/development.md)。数据库查询、并发配置和压测方法见 [性能与容量验证](docs/performance.md)。
 
@@ -47,6 +49,8 @@ uv run python run.py
 ```
 
 `uv sync` 会按 `pyproject.toml` 和 `uv.lock` 创建/更新 `.venv`，后续启动统一使用 `uv run`。
+
+仓库包含生产前端资源，Python 服务可直接使用。修改前端时使用 Node.js 24，执行 `npm --prefix frontend ci` 和 `npm --prefix frontend run build`；Windows PowerShell 可使用 `npm.cmd`。组件分层、主题、测试与部署方式见 [前端开发](docs/frontend-development.md)。
 
 `server.web_workers` 默认值为 `1`，`server.web_threads` 默认值为 `16`。已有配置中的显式值优先；单进程运行时将本地 `config.yaml` 的 `server.web_workers` 设为 `1`，保存后重启服务。
 

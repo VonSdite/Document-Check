@@ -237,14 +237,24 @@ app/                              Python 命名空间包
     formatting.py                 Markdown 展示
     common.py                     请求辅助
     constants.py                  展示约定
-    templates/                    Jinja 模板
-    static/                       脚本与样式
+    frontend.py                   Vite 资源解析与组件展示协议
+    templates/                    页面、报告片段与共享组件
+    static/frontend/              manifest、哈希脚本与主题样式
+frontend/src/
+  app/                            Vue 外壳、页面注册与主题
+  pages/                          按需加载的页面入口
+  features/                       任务、模型、报告、设置和权限交互
+  components/ui/                  Vue 控件与原生 DOM 适配器
+  api/                            同源请求、会话和资料同步
+  styles/                         语义变量、控件与页面布局
 run.py                            跨平台 Web 与监督器启动入口
 scripts/benchmark_internal.py     临时环境 HTTP 并发压测
 tests/                            行为、兼容、依赖和性能回归
 ```
 
 所有 Python 源码归属模块目录。Web 工厂以明确资源路径加载 `web/templates/` 和 `web/static/`；后台进程只装配运行上下文。源码、模板和运行数据目录分别承担代码、展示和持久化职责。
+
+浏览器使用 Vue 3、TypeScript 和 Vite 构建的多页组件前端。Flask 生成权限过滤后的导航、任务表单与报告片段，Vue 挂载应用外壳和业务组件，页面注册表按需加载其余交互模块。前端请求统一经过 `api/client.ts`。Node.js 用于开发、测试和构建，运行时由 Flask 提供 manifest 对应的生产资源，部署支持应用路径前缀。详见 [前端开发](frontend-development.md)。
 
 ## 进程视图
 
@@ -331,4 +341,4 @@ LLM 适配层通过 `on_activity` 回调报告等待、思考、输出与重试�
 
 `web/task_lists.py` 为个人任务和全部任务复用状态、标注状态与关键词筛选。个人任务查询以 `owner_subject` 和任务类型限制范围，全部任务查询按任务类型和授权提供；分页计数与记录查询使用相同条件。个人任务的关键词只在文件名中按文字包含匹配，全部任务同时匹配用户信息；对照任务通过 SQLite JSON 函数读取 `groups[].files[].original_filename`，候选范围由任务归属与类型限定。标注筛选查询统计缓存，请求线程最多准备当前用户最近 20 条记录，历史统计由监督器维护。
 
-列表 GET 的 `_partial=1` 仅渲染统计与任务列表片段，并省略新建任务区域及其模型、检查项查询。`task-list.js` 处理两端的筛选、分页、前进后退、手动刷新与 10 秒自动刷新；按请求版本丢弃过期响应。页面复用表头和未变化的任务行，维护 URL、列宽、勾选、横向滚动及页面视口。共享筛选与刷新模板保持五类任务界面一致。
+列表 GET 的 `_partial=1` 仅渲染统计与任务列表片段，并省略新建任务区域及其模型、检查项查询。`frontend/src/features/tasks/list.js` 处理两端的筛选、分页、前进后退、手动刷新与 10 秒自动刷新；按请求版本丢弃过期响应。页面复用表头和未变化的任务行，维护 URL、列宽、勾选、横向滚动及页面视口，保留独立的 Vue 任务创建组件。共享筛选与刷新模板保持五类任务界面一致。

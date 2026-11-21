@@ -5,9 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}文档智能门禁{% endblock %}</title>
-  <script src="{{ url_for('static', filename='auth.js', v='20260915-2') }}"></script>
+  {% include "components/frontend_head.html" %}
   {% block extra_head %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20261028-1') }}">
   {{ local_frontend_injection }}
 </head>
 <body>
@@ -15,6 +14,7 @@
   {% set is_management = is_admin or request.endpoint == 'user_rules' %}
   {% set task_nav_prefix = 'admin_' if is_superadmin else 'user_' %}
   {% set is_ip_users_page = request.endpoint == 'admin_settings' and request.args.get('tab') == 'ip_users' %}
+  <div id="app-navigation">
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="{{ url_for(management_entry_endpoint) if is_management else url_for('user_tasks') }}">
@@ -55,6 +55,7 @@
       </div>
     </div>
   </header>
+  </div>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -66,14 +67,11 @@
     {% endif %}
   {% endwith %}
 
-  <main class="page">
+  <main class="page" id="main-content" tabindex="-1">
 {% endif %}
     {% block content %}{% endblock %}
 {% if not list_partial %}
   </main>
-  <script src="{{ url_for('static', filename='app.js', v='20261011-1') }}"></script>
-  <script src="{{ url_for('static', filename='task-list.js', v='20261010-1') }}"></script>
-  <script src="{{ url_for('static', filename='table-resize.js') }}"></script>
 </body>
 </html>
 
