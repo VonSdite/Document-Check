@@ -21,7 +21,7 @@
                 {% endif %}
                 {% endfor %}
               </div>
-              <button type="button" class="small-button" data-save-initial {{ "disabled" if controls_disabled else "" }}>保存初审</button>
+              {% if not report_table_layout|default(false) %}<button type="button" class="small-button" data-save-initial {{ "disabled" if controls_disabled else "" }}>保存初审</button>{% endif %}
               <span class="subline" role="status" data-initial-save-status></span>
               {% else %}
               <span>{{ item.acceptance_label }}</span>
