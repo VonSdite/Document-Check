@@ -202,45 +202,10 @@
     {% if result.result_summary %}
     <div class="result-summary markdown-body">{{ result.result_summary|markdown }}</div>
     {% endif %}
-    <div class="report-table-wrap">
-      <table class="report-table report-table-review{% if media_report %} report-table-media{% endif %}">
-        <thead>
-          <tr>
-            <th class="report-index-cell">条目</th>
-            {% for field, label in report_item_fields %}
-            <th class="report-field-{{ field }}">{{ label }}</th>
-            {% endfor %}
-            <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
-            <th class="report-acceptance-cell">初审：是否认可 AI 结论</th>
-            <th class="report-final-review-cell">终审</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in result.report_items %}
-          {% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
-          <tr id="review-{{ result.code }}-{{ item.id }}" class="report-item" data-audit-item data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
-            <td class="report-index-cell"><span{% if item.cross_check_anchor_id %} id="{{ item.cross_check_anchor_id }}"{% endif %} class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}{% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}</td>
-            {% for field, label in report_item_fields %}
-            {% set field_value = item[field] %}
-            <td class="report-field report-field-{{ field }}">
-              {% include "_report_field_content.html" %}
-            </td>
-            {% endfor %}
-            <td class="report-status-cell">
-              <span class="report-item-type-badge">{{ item.type_label }}</span>
-              {% if item.review_display_label %}<div class="subline">{{ item.review_display_label }}</div>{% endif %}
-              {% if item.suppression_rule_id %}<div class="subline">忽略规则 #{{ item.suppression_rule_id }}</div>{% endif %}
-              {% if item.suppression_similarity is defined %}<div class="subline">描述相似度 {{ (item.suppression_similarity * 100)|round(0)|int }}%</div>{% endif %}
-            </td>
-            <td class="report-acceptance-cell" data-initial-review-cell>
-              {% include "_report_initial_review.html" %}
-            </td>
-            <td class="report-final-review-cell" data-final-review-cell>{% set state = item.review %}{% include "_report_final_review.html" %}</td>
-          </tr>
-          <tr class="report-history-row" id="history-{{ result.code }}-{{ item.id }}" hidden><td colspan="{{ report_item_fields|length + 4 }}" data-review-history-cell>{% include "_report_item_history.html" %}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <div class="report-review-list">
+      {% for item in result.report_items %}
+      {% include "_report_review_entry.html" %}
+      {% endfor %}
     </div>
     {% elif not result.suppressed_report_items %}
     {% set result_text = (result.result_summary or result.result or '')|markdown %}

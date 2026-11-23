@@ -17,7 +17,7 @@ async function finalReview(item: Locator, decision: string, note: string) {
   await expect(item.locator('textarea[name=note]')).toHaveValue(note)
 }
 
-test('管理员在报告表格内终审，刷新和重新进入保留意见', async ({ browser }, testInfo) => {
+test('管理员在报告页内终审，无需横向滚动且重新进入保留意见', async ({ browser }, testInfo) => {
   const author = await browser.newContext()
   const admin = await browser.newContext()
   const page = await author.newPage()
@@ -59,23 +59,31 @@ test('管理员在报告表格内终审，刷新和重新进入保留意见', as
     await expect(history).toContainText('local_admin:primary')
     await expect(history).toContainText('ip:127.0.0.1')
     await expect(history).toContainText(note)
-    await adminItems.first().locator('textarea[name=note]').scrollIntoViewIfNeeded()
-    await adminPage
-      .locator('.report-table-wrap')
-      .first()
-      .evaluate((node) => {
-        node.scrollLeft = node.scrollWidth
-      })
+    for (const width of [1440, 1280, 1024]) {
+      await adminPage.setViewportSize({ width, height: 1000 })
+      expect(
+        await adminPage.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(width)
+      const finalBounds = await adminItems.first().locator('[data-final-review-cell]').boundingBox()
+      expect(finalBounds!.x).toBeGreaterThanOrEqual(0)
+      expect(finalBounds!.x + finalBounds!.width).toBeLessThanOrEqual(width)
+      const entry = adminPage.locator('.report-review-entry').first()
+      expect(await entry.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+    }
+    await adminPage.setViewportSize({ width: 1440, height: 1000 })
     const historyBounds = await history.locator('.review-history').boundingBox()
-    const tableBounds = await adminPage.locator('.report-table-wrap').first().boundingBox()
-    expect(historyBounds!.x).toBeGreaterThanOrEqual(tableBounds!.x)
+    const entryBounds = await adminPage.locator('.report-review-entry').first().boundingBox()
+    expect(historyBounds!.x).toBeGreaterThanOrEqual(entryBounds!.x)
     expect(historyBounds!.x + historyBounds!.width).toBeLessThanOrEqual(
-      tableBounds!.x + tableBounds!.width,
+      entryBounds!.x + entryBounds!.width,
     )
-    await adminPage.screenshot({
-      path: testInfo.outputPath('inline-review-desktop.png'),
-      fullPage: true,
-    })
+    await adminItems.first().locator('[data-review-history-toggle]').click()
+    await adminPage
+      .locator('.report-review-entry')
+      .first()
+      .screenshot({
+        path: testInfo.outputPath('review-layout-desktop.png'),
+      })
   } finally {
     await author.request.delete('/__frontend__/review-fixture')
     await author.close()
@@ -83,7 +91,7 @@ test('管理员在报告表格内终审，刷新和重新进入保留意见', as
   }
 })
 
-test('报告表格区分初审和终审权限，初审修改后重新终审', async ({ browser }, testInfo) => {
+test('报告页区分初审和终审权限，初审修改后重新终审', async ({ browser }, testInfo) => {
   const author = await browser.newContext()
   const reviewer = await browser.newContext()
   const page = await author.newPage()
@@ -131,16 +139,22 @@ test('报告表格区分初审和终审权限，初审修改后重新终审', as
     await expect(history).toContainText('final-reviewer')
     await expect(history).toContainText(returnedNote)
     await reviewPage.setViewportSize({ width: 390, height: 844 })
+    const finalBounds = await reviewItems.first().locator('[data-final-review-cell]').boundingBox()
+    expect(finalBounds!.x).toBeGreaterThanOrEqual(0)
+    expect(finalBounds!.x + finalBounds!.width).toBeLessThanOrEqual(390)
     await reviewItems.first().locator('select[name=decision]').scrollIntoViewIfNeeded()
     const noteWidth = await reviewItems
       .first()
       .locator('textarea[name=note]')
       .evaluate((node) => node.getBoundingClientRect().width)
     expect(noteWidth).toBeGreaterThan(180)
-    await reviewPage.screenshot({
-      path: testInfo.outputPath('inline-review-mobile.png'),
-      fullPage: true,
-    })
+    await reviewItems.first().locator('[data-review-history-toggle]').click()
+    await reviewPage
+      .locator('.report-review-entry')
+      .first()
+      .screenshot({
+        path: testInfo.outputPath('review-layout-mobile.png'),
+      })
     expect(
       await reviewPage.evaluate(() => document.documentElement.scrollWidth),
     ).toBeLessThanOrEqual(390)

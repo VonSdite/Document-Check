@@ -1,0 +1,50 @@
+{% macro render_field(field, label) -%}
+<section class="report-field report-field-{{ field }}">
+  <h4 class="report-field-heading">{{ label }}</h4>
+  {% set field_value = item[field] %}
+  {% include "_report_field_content.html" %}
+</section>
+{%- endmacro %}
+{% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
+<section class="report-review-entry">
+  <article id="review-{{ result.code }}-{{ item.id }}" class="report-item report-review-card" data-audit-item data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
+    <header class="report-entry-header">
+      <div class="report-entry-heading">
+        <h3{% if item.cross_check_anchor_id %} id="{{ item.cross_check_anchor_id }}"{% endif %}>条目 <span class="report-index-cell">{{ item.index }}</span></h3>
+        <span class="report-item-type-badge" aria-label="AI判定：{{ item.type_label }}">{{ item.type_label }}</span>
+        {% for field, label in [('category', '问题类型'), ('severity_label', '严重程度'), ('confidence_label', '证据可信度')] %}
+        {% if not media_report or item[field] %}<span class="report-entry-tag report-field-{{ field }}"><span>{{ label }}</span>{{ item[field] or '-' }}</span>{% endif %}
+        {% endfor %}
+        {% if item.review_display_label %}<span class="report-entry-tag">{{ item.review_display_label }}</span>{% endif %}
+      </div>
+      <div class="report-entry-source">
+        {% include "_report_round_source.html" %}
+        {% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}
+        {% if item.suppression_rule_id %}<span>忽略规则 #{{ item.suppression_rule_id }}</span>{% endif %}
+        {% if item.suppression_similarity is defined %}<span>描述相似度 {{ (item.suppression_similarity * 100)|round(0)|int }}%</span>{% endif %}
+      </div>
+    </header>
+    {% if media_report %}
+    <div class="report-entry-body report-entry-body-media">{{ render_field('media_summary', 'AI检查结论') }}</div>
+    {% else %}
+    <div class="report-entry-body">
+      <div class="report-entry-evidence">{{ render_field('location', '位置') }}{{ render_field('excerpt', '原文/证据') }}</div>
+      <div class="report-entry-finding">{{ render_field('description', '问题描述') }}{{ render_field('impact', '影响') }}</div>
+      <div class="report-entry-suggestion">{{ render_field('suggestion', '修改建议') }}</div>
+    </div>
+    {% endif %}
+    <div class="report-entry-reviews">
+      <section class="report-review-stage">
+        <h4>初审 <span>是否认可 AI 结论</span></h4>
+        <div class="report-acceptance-cell" data-initial-review-cell>{% include "_report_initial_review.html" %}</div>
+      </section>
+      <section class="report-review-stage">
+        <h4>终审 <span>复核初审结论</span></h4>
+        <div class="report-final-review-cell" data-final-review-cell>{% set state = item.review %}{% include "_report_final_review.html" %}</div>
+      </section>
+    </div>
+  </article>
+  <div class="report-history-row" id="history-{{ result.code }}-{{ item.id }}" hidden>
+    <div data-review-history-cell>{% include "_report_item_history.html" %}</div>
+  </div>
+</section>

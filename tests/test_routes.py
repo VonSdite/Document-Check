@@ -362,7 +362,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     response = self.client.get(f"{prefix}/tasks/{task_id}{suffix}")
                     self.assertEqual(response.status_code, 200)
                     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                    rows = soup.select(".report-table tbody tr.report-item")
+                    rows = soup.select(".report-item")
                     self.assertEqual(len(rows), 2)
                     for row in rows:
                         for field in ("description", "impact", "suggestion"):
@@ -759,7 +759,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             str(article).index(
                 str(
                     article.select_one(
-                        ".report-table-wrap, .result-text, .result-summary"
+                        ".report-review-list, .result-text, .result-summary"
                     )
                 )
             ),
@@ -6169,26 +6169,16 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         headers = [
-            node.get_text(strip=True) for node in soup.select(".report-table th")
+            node.get_text(strip=True)
+            for node in soup.select_one("[data-report-item]").select(
+                ".report-field-heading"
+            )
         ]
         self.assertEqual(
             headers,
-            [
-                "条目",
-                "严重程度",
-                "证据可信度",
-                "问题类型",
-                "位置",
-                "原文/证据",
-                "问题描述",
-                "影响",
-                "修改建议",
-                "AI判定",
-                "初审：是否认可 AI 结论",
-                "终审",
-            ],
+            ["位置", "原文/证据", "问题描述", "影响", "修改建议"],
         )
-        row = _required_tag(soup.select_one("tr[data-report-item]"))
+        row = _required_tag(soup.select_one("[data-report-item]"))
         self.assertEqual(row.get("data-item-id"), "video-stable-item-1")
         frame = _required_tag(row.select_one(".video-evidence-frame img"))
         self.assertEqual(frame.get("src"), f"/admin/tasks/{task_id}/media/frame-0001")
@@ -6278,38 +6268,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [
-            node.get_text(strip=True) for node in soup.select(".report-table th")
+            node.get_text(strip=True)
+            for node in soup.select_one("[data-report-item]").select(
+                ".report-field-heading"
+            )
         ]
         self.assertEqual(
             headers,
-            [
-                "条目",
-                "严重程度",
-                "证据可信度",
-                "问题类型",
-                "位置",
-                "原文/证据",
-                "问题描述",
-                "影响",
-                "修改建议",
-                "AI判定",
-                "初审：是否认可 AI 结论",
-                "终审",
-            ],
+            ["位置", "原文/证据", "问题描述", "影响", "修改建议"],
         )
         self.assertIn(
             "report-field-severity_label",
-            _required_tag(soup.select_one(".report-table th:nth-child(2)")).get(
+            _required_tag(soup.select_one(".report-field-severity_label")).get(
                 "class", []
             ),
         )
         self.assertIn(
             "report-field-confidence_label",
-            _required_tag(soup.select_one(".report-table th:nth-child(3)")).get(
+            _required_tag(soup.select_one(".report-field-confidence_label")).get(
                 "class", []
             ),
         )
-        rows = soup.select("tr[data-report-item]")
+        rows = soup.select("[data-report-item]")
         self.assertEqual(len(rows), 2)
         self.assertFalse(rows[0].select("[data-report-item-type]"))
         self.assertEqual(len(rows[0].select(".report-status-cell select")), 0)
@@ -6448,14 +6428,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(exported.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [
-            node.get_text(strip=True) for node in soup.select(".report-table th")
+            node.get_text(strip=True)
+            for node in soup.select_one("[data-report-item]").select(
+                ".report-field-heading"
+            )
         ]
-        self.assertEqual(
-            headers, ["条目", "AI检查结论", "AI判定", "初审：是否认可 AI 结论", "终审"]
-        )
-        table = _required_tag(soup.select_one(".report-table-media"))
-        self.assertIn("report-table-media", table.get("class", []))
-        row_text = _required_tag(soup.select_one("tr[data-report-item]")).get_text(
+        self.assertEqual(headers, ["AI检查结论"])
+        self.assertIsNotNone(soup.select_one(".report-entry-body-media"))
+        row_text = _required_tag(soup.select_one("[data-report-item]")).get_text(
             " ", strip=True
         )
         self.assertIn("图中配置项与步骤文字一致", row_text)
@@ -6516,7 +6496,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        rows = soup.select("tr[data-report-item]")
+        rows = soup.select("[data-report-item]")
         self.assertEqual(len(rows), 2)
         first_row_text = rows[0].get_text(" ", strip=True)
         second_row_text = rows[1].get_text(" ", strip=True)
@@ -6584,7 +6564,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        rows = soup.select("tr[data-report-item]")
+        rows = soup.select("[data-report-item]")
         self.assertEqual(len(rows), 1)
         self.assertIn("额定功率不一致", rows[0].get_text(" ", strip=True))
         self.assertEqual(
@@ -6657,7 +6637,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        rows = soup.select("tr[data-report-item]")
+        rows = soup.select("[data-report-item]")
         self.assertEqual(len(rows), 1)
         row_text = rows[0].get_text(" ", strip=True)
         self.assertIn("标点误用", row_text)
@@ -6711,7 +6691,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        row = _required_tag(soup.select_one("tr[data-report-item]"))
+        row = _required_tag(soup.select_one("[data-report-item]"))
         row_text = row.get_text(" ", strip=True)
         self.assertIn("格式问题", row_text)
         self.assertIn("第一行", row_text)
@@ -6761,7 +6741,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        rows = soup.select("tr[data-report-item]")
+        rows = soup.select("[data-report-item]")
         self.assertEqual(len(rows), 2)
         page_text = soup.get_text(" ", strip=True)
         rows_text = " ".join(row.get_text(" ", strip=True) for row in rows)
@@ -6804,7 +6784,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
                 self.assertIn(error, soup.select_one(".report-error").get_text())
-                rows = soup.select("tr[data-report-item]")
+                rows = soup.select("[data-report-item]")
                 self.assertEqual(len(rows), 1)
                 self.assertIn("电流参数不一致", rows[0].get_text())
                 self.assertNotIn("未完成条目", rows[0].get_text())
@@ -6908,7 +6888,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        rows = soup.select("tr[data-report-item]")
+        rows = soup.select("[data-report-item]")
         self.assertEqual(len(rows), 4)
         first_row = rows[0].get_text(" ", strip=True)
         second_row = rows[1].get_text(" ", strip=True)
@@ -7140,7 +7120,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        row = _required_tag(soup.select_one("tr[data-report-item]"))
+        row = _required_tag(soup.select_one("[data-report-item]"))
         row_text = row.get_text(" ", strip=True)
         self.assertIn("结构层级", row_text)
         self.assertIn("文档名称和前言称谓不一致。", row_text)
