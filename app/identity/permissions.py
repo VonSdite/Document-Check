@@ -19,12 +19,16 @@ ASSIGNABLE_PERMISSIONS = {
         "label": "管理公共规则",
         "description": "维护公共检查项、提示词和全局误报忽略规则。",
     },
+    "reports.final_review": {
+        "label": "报告终审",
+        "description": "包含查看全部任务，可逐条终审他人的初审标注并查看审核记录。",
+    },
 }
 
 
 def effective_permissions(subject: str) -> frozenset[str]:
     permissions = set(subject_permissions(subject)) & ASSIGNABLE_PERMISSIONS.keys()
-    if "tasks.manage_all" in permissions:
+    if permissions & {"tasks.manage_all", "reports.final_review"}:
         permissions.add("tasks.view_all")
     return frozenset(permissions)
 
@@ -33,6 +37,6 @@ def normalize_permissions(permissions: set[str]) -> set[str]:
     if permissions - ASSIGNABLE_PERMISSIONS.keys():
         raise ValueError("权限选项无效。")
     permissions = set(permissions)
-    if "tasks.manage_all" in permissions:
+    if permissions & {"tasks.manage_all", "reports.final_review"}:
         permissions.add("tasks.view_all")
     return permissions

@@ -125,6 +125,9 @@ class DatabaseRuntimeTest(unittest.TestCase):
         self.app.template_folder = str(
             Path(__file__).resolve().parents[1] / "app/web/templates"
         )
+        self.app.static_folder = str(
+            Path(__file__).resolve().parents[1] / "app/web/static"
+        )
         self.app.config.update(
             SECRET_KEY="isolated-database-test",
             ADMIN_URL="/test-console",

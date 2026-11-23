@@ -23,11 +23,19 @@ from app.reporting.constants import (
     REPORT_EXPORT_RESULT_CODE_HEADER,
     REPORT_EXPORT_SHEET_NAME,
     REPORT_IMPORT_MAX_ROWS,
+    REPORT_ITEM_FIELDS,
     REPORT_ITEM_TYPE_LABEL,
     REPORT_REJECTION_REASON_LABEL,
     REPORT_REJECTION_REASONS,
     REPORT_TOTAL_EXPORT_ROWS,
     ReportExcelImportError,
+)
+from app.reporting.reviews import (
+    ReviewConflict,
+    audit_export_rows,
+    find_review_item,
+    review_context,
+    review_transaction,
 )
 from app.reporting.service import (
     _apply_report_item_review,
@@ -55,6 +63,67 @@ def build_report_workbook(task):
 
     _fill_report_items_sheet(report_sheet, task, results, document_groups)
     _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
+    audit = workbook.create_sheet("审核记录")
+    audit.append(
+        [
+            "记录ID",
+            "检查项编码",
+            "条目标识",
+            "阶段",
+            "结论",
+            "审核人",
+            "人员主体",
+            "身份来源",
+            "时间",
+            "提交来源",
+            "对应初审记录",
+            "初审不认可原因",
+            "初审说明",
+            "终审说明",
+            "条目版本",
+            *[label for _, label in REPORT_ITEM_FIELDS],
+        ]
+    )
+    for row in audit_export_rows(task):
+        audit.append([_excel_cell_text(value) for value in row])
+    _style_excel_sheet(audit)
+    final_sheet = workbook.create_sheet("双人审核")
+    final_sheet.append(
+        [
+            "检查项",
+            "条目标识",
+            "问题描述",
+            "初审结论",
+            "初审人",
+            "初审时间",
+            "终审状态",
+            "终审人",
+            "终审时间",
+            "终审说明",
+        ]
+    )
+    for result in review_context(task)["results"]:
+        for item in result["report_items"]:
+            state = item["review"]
+            initial, final = state["initial"] or {}, state["final"] or {}
+            final_sheet.append(
+                [
+                    _excel_cell_text(v)
+                    for v in [
+                        result.get("name"),
+                        item["id"],
+                        item.get("description"),
+                        item["acceptance_label"],
+                        initial.get("actor_name"),
+                        initial.get("created_at"),
+                        state["status_label"],
+                        final.get("actor_name"),
+                        final.get("created_at"),
+                        final.get("note"),
+                    ]
+                ]
+            )
+    _style_excel_sheet(final_sheet)
     if any(result.get("round_summary") for result in results):
         sheet = workbook.create_sheet("检查轮次")
         sheet.append(["检查项", "轮次", "状态", "摘要", "错误", "原始回复"])
@@ -79,7 +148,15 @@ def build_report_workbook(task):
     return output
 
 
-def _load_report_excel_reviews(task, payload: bytes) -> int:
+def _load_report_excel_reviews(task, payload: bytes, *, actor=None) -> int:
+    try:
+        with review_transaction(task["id"]) as current:
+            return _load_locked_report_excel_reviews(current, payload, actor=actor)
+    except ReviewConflict as exc:
+        raise ReportExcelImportError(str(exc)) from exc
+
+
+def _load_locked_report_excel_reviews(task, payload: bytes, *, actor=None) -> int:
     try:
         workbook = load_workbook(
             io.BytesIO(payload), read_only=True, data_only=False, keep_links=False
@@ -111,6 +188,14 @@ def _load_report_excel_reviews(task, payload: bytes) -> int:
     db = get_db()
     for review in reviews:
         result = result_targets[(review["result_code"], review["item_id"])]
+        _, _, state = find_review_item(task, review["result_code"], review["item_id"])
+        if state["initial"] and state["status"] != "returned":
+            saved = state["initial"]["acceptance"]
+            if all(
+                saved[k] == review[k]
+                for k in ("acceptance_status", "rejection_reason", "rejection_note")
+            ):
+                continue
         _apply_report_item_review(
             db,
             task=task,
@@ -120,19 +205,18 @@ def _load_report_excel_reviews(task, payload: bytes) -> int:
             acceptance_status=review["acceptance_status"],
             rejection_reason=review["rejection_reason"],
             rejection_note=review["rejection_note"],
+            actor=actor,
+            channel="excel",
         )
     task_updated_at = now_text()
     db.execute(
         "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
         (json.dumps(results, ensure_ascii=False), task_updated_at, task["id"]),
     )
-    db.commit()
     prepared = _prepare_task_results(
-        results,
-        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
-        task_id=task["id"],
+        results, task_type=task["task_type"], task_id=task["id"]
     )
-    _cache_prepared_task_report_stats(task, prepared, task_updated_at)
+    _cache_prepared_task_report_stats(task, prepared, task_updated_at, commit=False)
     return len(reviews)
 
 
@@ -243,6 +327,17 @@ def _parse_report_excel_reviews(task, sheet) -> list[dict]:
             raise ReportExcelImportError(
                 f"第 {row_number} 行报告条目不存在或已发生变化，请重新导出报告。"
             )
+        if "审核版本（请勿修改）" in columns:
+            _, _, state = find_review_item(task, *target_key)
+            if (
+                _excel_import_text(
+                    _excel_row_value(row, columns, "审核版本（请勿修改）")
+                )
+                != state["token"]
+            ):
+                raise ReportExcelImportError(
+                    f"第 {row_number} 行报告或审核记录已更新，请重新导出后回填。"
+                )
         if target_key in seen_targets:
             raise ReportExcelImportError(
                 f"第 {row_number} 行与前面的行重复指向同一报告条目。"
@@ -358,6 +453,7 @@ def _fill_report_items_sheet(
         "人工原因",
         REPORT_EXPORT_RESULT_CODE_HEADER,
         REPORT_EXPORT_ITEM_ID_HEADER,
+        "审核版本（请勿修改）",
     ]
     sheet.append(headers)
     context = _excel_task_context(task, document_groups)
@@ -416,6 +512,7 @@ def _fill_report_items_sheet(
                     else "",
                     _excel_cell_text(result.get("code")),
                     _excel_cell_text(item.get("id")),
+                    _excel_cell_text(item.get("review", {}).get("token")),
                 ]
             )
     _style_excel_sheet(sheet)
@@ -467,7 +564,11 @@ def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
         for row in range(2, sheet.max_row + 1):
             sheet.cell(row=row, column=column).fill = REPORT_EXPORT_EDITABLE_FILL
 
-    for header in (REPORT_EXPORT_RESULT_CODE_HEADER, REPORT_EXPORT_ITEM_ID_HEADER):
+    for header in (
+        REPORT_EXPORT_RESULT_CODE_HEADER,
+        REPORT_EXPORT_ITEM_ID_HEADER,
+        "审核版本（请勿修改）",
+    ):
         sheet.column_dimensions[get_column_letter(columns[header])].hidden = True
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{sheet.max_row}"
 

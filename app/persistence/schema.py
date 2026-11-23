@@ -65,7 +65,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS user_permissions (
             subject TEXT NOT NULL,
             permission TEXT NOT NULL CHECK(permission IN (
-                'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage'
+                'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage',
+                'reports.final_review'
             )),
             PRIMARY KEY(subject, permission),
             FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE
@@ -206,6 +207,47 @@ def init_db():
             UNIQUE(rule_id, task_id, result_code, item_id)
         );
 
+        CREATE TABLE IF NOT EXISTS report_review_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            result_code TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            stage TEXT NOT NULL CHECK(stage IN ('initial', 'final')),
+            decision TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            actor_subject TEXT NOT NULL,
+            actor_name TEXT NOT NULL,
+            actor_source TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            item_hash TEXT NOT NULL,
+            item_json TEXT NOT NULL,
+            acceptance_json TEXT NOT NULL,
+            initial_review_id INTEGER,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_report_review_events_item
+            ON report_review_events(task_id, result_code, item_id, id);
+        CREATE TABLE IF NOT EXISTS task_final_review_stats (
+            task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+            total INTEGER NOT NULL,
+            initial_count INTEGER NOT NULL,
+            confirmed INTEGER NOT NULL,
+            returned INTEGER NOT NULL,
+            deferred INTEGER NOT NULL,
+            pending INTEGER NOT NULL,
+            status TEXT NOT NULL
+        );
+        CREATE TRIGGER IF NOT EXISTS trg_tasks_final_review_stats_invalidate
+        AFTER UPDATE OF result_json, status ON tasks
+        BEGIN
+            DELETE FROM task_final_review_stats WHERE task_id = NEW.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_review_events_stats_invalidate
+        AFTER INSERT ON report_review_events
+        BEGIN
+            DELETE FROM task_final_review_stats WHERE task_id = NEW.task_id;
+        END;
+
         CREATE TABLE IF NOT EXISTS task_report_stats (
             task_id INTEGER PRIMARY KEY,
             source_updated_at TEXT NOT NULL,
@@ -247,6 +289,7 @@ def init_db():
             ON report_suppression_hits(rule_id, created_at DESC);
         """
     )
+    _ensure_final_review_permission(db)
     _ensure_column(
         db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
@@ -328,6 +371,40 @@ def init_db():
     _cleanup_orphaned_report_suppression_hits(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
+
+
+def _ensure_final_review_permission(db):
+    """权限取值包含终审能力，保留各主体的授权。"""
+    db.execute("SAVEPOINT final_review_permission")
+    try:
+        db.execute("UPDATE user_permissions SET permission = permission WHERE 0")
+        sql = db.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'user_permissions'"
+        ).fetchone()[0]
+        if "reports.final_review" not in sql:
+            db.execute("""
+                CREATE TABLE user_permissions_expanded (
+                    subject TEXT NOT NULL,
+                    permission TEXT NOT NULL CHECK(permission IN (
+                        'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage',
+                        'reports.final_review'
+                    )),
+                    PRIMARY KEY(subject, permission),
+                    FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE
+                )
+            """)
+            db.execute(
+                "INSERT INTO user_permissions_expanded SELECT * FROM user_permissions"
+            )
+            db.execute("DROP TABLE user_permissions")
+            db.execute(
+                "ALTER TABLE user_permissions_expanded RENAME TO user_permissions"
+            )
+    except Exception:
+        db.execute("ROLLBACK TO final_review_permission")
+        raise
+    finally:
+        db.execute("RELEASE final_review_permission")
 
 
 def _register_existing_subjects(db):

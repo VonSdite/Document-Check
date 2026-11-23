@@ -9,6 +9,7 @@ from app.reporting.constants import (
     REPORT_STATS_BACKGROUND_BATCH_SIZE,
     REPORT_STATS_INLINE_REBUILD_LIMIT,
 )
+from app.reporting.reviews import final_review_progress
 from app.reporting.service import (
     _empty_report_suppression_version,
     _enabled_report_suppression_rules,
@@ -106,6 +107,18 @@ def refresh_stale_report_stats_batch(
     stale = sorted(_stale_stat_ids(rows, versions))
     selected = stale[:batch_size]
     _refresh_stat_ids(selected, versions)
+    final_cursor = current_app.extensions.get("final_review_stats_scan_cursor", 0)
+    final_ids = [
+        row[0]
+        for row in get_db().execute(
+            "SELECT id FROM tasks WHERE id > ? ORDER BY id LIMIT ?",
+            (final_cursor, batch_size),
+        )
+    ]
+    final_review_progress(final_ids)
+    current_app.extensions["final_review_stats_scan_cursor"] = (
+        final_ids[-1] if final_ids else 0
+    )
     current_app.extensions["report_stats_scan_cursor"] = (
         selected[-1] if len(stale) > batch_size else ids[-1]
     )

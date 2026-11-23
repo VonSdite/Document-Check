@@ -1,0 +1,9 @@
+<details class="review-history"><summary>审核记录（{{ history|length }}）</summary>
+  {% for entry in history %}<section>
+    <strong>{{ '初审' if entry.stage == 'initial' else '终审' }} · {{ entry.decision_label }}</strong>
+    <p>{{ entry.actor_name }} · {{ entry.actor_subject }} · {{ entry.created_at }} · {{ 'Excel 回填' if entry.channel == 'excel' else '页面提交' }}</p>
+    {% if entry.initial_review_id %}<p>对应初审记录 #{{ entry.initial_review_id }}</p>{% endif %}
+    <p>{{ entry.acceptance.rejection_reason_label }} {{ entry.acceptance.rejection_note }} {{ entry.note }}</p>
+    <details><summary>当时的报告内容 · 记录 #{{ entry.id }}</summary>{% for field, label in report_item_fields %}{% if entry.item.get(field) %}<p><strong>{{ label }}</strong></p><div class="markdown-body">{{ entry.item[field]|markdown }}</div>{% endif %}{% endfor %}</details>
+  </section>{% endfor %}
+</details>

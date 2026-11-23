@@ -278,6 +278,7 @@ import { request as fetch } from '@/api/client'
         (row) =>
           returned.get(row.dataset.taskId)?.status !== row.dataset.taskStatus ||
           returned.get(row.dataset.taskId)?.review_key !== row.dataset.taskReviewKey ||
+          returned.get(row.dataset.taskId)?.final_review_key !== row.dataset.taskFinalReviewKey ||
           (row.dataset.ownerProfileLabel !== undefined &&
             returned.get(row.dataset.taskId)?.owner_profile_label !==
               row.dataset.ownerProfileLabel),

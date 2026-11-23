@@ -1,5 +1,6 @@
 from app.web.admin_tasks import register_admin_tasks_routes
 from app.web.auth import register_auth_routes
+from app.web.final_reviews import register_final_review_routes
 from app.web.models import register_models_routes
 from app.web.overview import register_overview_routes
 from app.web.permissions import register_permission_routes
@@ -17,3 +18,4 @@ def register_routes(app):
     register_admin_tasks_routes(app)
     register_settings_routes(app)
     register_permission_routes(app)
+    register_final_review_routes(app)

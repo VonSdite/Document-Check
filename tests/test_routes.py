@@ -3326,6 +3326,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "progress": 100,
                     "report_item_count": 0,
                     "review_key": "unavailable:0:0",
+                    "final_review_key": "stale",
                     "review_status": "unavailable",
                     "review_status_label": "—",
                     "reviewed_item_count": 0,
@@ -5725,9 +5726,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
         exported_acceptance = _required_tag(
             exported_soup.select_one(".report-table tbody .report-acceptance-cell")
         )
+        self.assertTrue(
+            exported_acceptance.get_text(" ", strip=True).startswith("不认可 初审")
+        )
         self.assertEqual(
-            exported_acceptance.get_text(" ", strip=True),
-            "不认可 模型误报：上下文可解释",
+            _required_tag(
+                exported_acceptance.select_one(".report-acceptance-reason")
+            ).get_text(" ", strip=True),
+            "模型误报：上下文可解释",
+        )
+        self.assertIn(
+            "初审 · 不认可",
+            _required_tag(exported_acceptance.select_one(".review-history")).get_text(
+                " ", strip=True
+            ),
         )
         self.assertIsNone(exported_soup.select_one(".report-rejection-cell"))
 
@@ -5748,7 +5760,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
             io.BytesIO(response.data), read_only=True, data_only=True
         )
         try:
-            self.assertEqual(workbook.sheetnames, ["报告条目", "统计"])
+            self.assertEqual(
+                workbook.sheetnames, ["报告条目", "统计", "审核记录", "双人审核"]
+            )
             report_rows = list(workbook["报告条目"].iter_rows(values_only=True))
             self.assertEqual(
                 report_rows[0],
@@ -5772,6 +5786,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "人工原因",
                     "检查项编码（请勿修改）",
                     "条目标识（请勿修改）",
+                    "审核版本（请勿修改）",
                 ),
             )
             self.assertEqual(len(report_rows), 3)
@@ -6051,9 +6066,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "人工原因",
                     "检查项编码（请勿修改）",
                     "条目标识（请勿修改）",
+                    "审核版本（请勿修改）",
                 ),
             )
-            self.assertEqual(len(rows[1]), 19)
+            self.assertEqual(len(rows[1]), 20)
             self.assertEqual(rows[1][7], "安装顺序")
             self.assertEqual(rows[1][8], "视频时间 00:01.000")
             self.assertEqual(rows[1][9], "未确认接地线后直接上电")

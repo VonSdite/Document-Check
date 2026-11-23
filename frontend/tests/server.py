@@ -4,13 +4,17 @@ import atexit
 import sys
 from pathlib import Path
 
-from flask import redirect, session
+from flask import g, redirect, session
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from app.identity.models import UserIdentity  # noqa: E402
 from app.persistence.connection import get_db  # noqa: E402
-from app.persistence.permissions import register_subject  # noqa: E402
+from app.persistence.permissions import (  # noqa: E402
+    register_subject,
+    replace_subject_permissions,
+)
 from app.persistence.settings import set_ip_username  # noqa: E402
 from tests.test_routes import AdminSettingsRouteTest  # noqa: E402
 
@@ -46,6 +50,63 @@ def main():
             register_subject(f"ip:{ip}")
             set_ip_username(ip, name)
     fixture._insert_suppression_rules(24)
+    review_task_id = None
+
+    @fixture.app.post("/__frontend__/review-fixture")
+    def create_review_fixture():
+        nonlocal review_task_id
+        if review_task_id is None:
+            review_task_id = fixture._insert_report_task()
+        db = get_db()
+        db.execute(
+            "UPDATE tasks SET owner_subject='cookie_session:review-author' WHERE id=?",
+            (review_task_id,),
+        )
+        db.commit()
+        for name in ("review-author", "final-reviewer"):
+            subject = "cookie_session:" + name
+            register_subject(subject)
+            replace_subject_permissions(subject, {"reports.final_review"})
+        return {"task_id": review_task_id}
+
+    @fixture.app.delete("/__frontend__/review-fixture")
+    def remove_review_fixture():
+        nonlocal review_task_id
+        with get_db() as db:
+            db.execute(
+                "DELETE FROM report_suppression_rules WHERE source_task_id=?",
+                (review_task_id,),
+            )
+            db.execute("DELETE FROM tasks WHERE id=?", (review_task_id,))
+            db.execute(
+                "DELETE FROM user_identities WHERE subject IN (?, ?)",
+                ("cookie_session:review-author", "cookie_session:final-reviewer"),
+            )
+        review_task_id = None
+        session.clear()
+        return {"ok": True}
+
+    @fixture.app.before_request
+    def review_test_identity():
+        name = session.get("review_test_identity")
+        if name:
+            g.user_identity = UserIdentity(
+                subject="cookie_session:" + name,
+                display_name=name,
+                source="cookie_session",
+                ip="127.0.0.1",
+            )
+
+    @fixture.app.get("/__frontend__/review-identity/<name>")
+    def review_login(name):
+        if name not in {"review-author", "final-reviewer"}:
+            return "Unknown fixture identity", 404
+        if review_task_id is None:
+            return "Review fixture is not ready", 409
+        session.clear()
+        session["review_test_identity"] = name
+        return redirect(f"/tasks/{review_task_id}/reviews")
+
     (Path(fixture.app.config["UPLOAD_FOLDER"]) / "stored.txt").write_text(
         "产品额定电压为 220V。安装说明中的额定电压为 380V。", encoding="utf-8"
     )

@@ -1,6 +1,12 @@
 [
   [
     "index",
+    "idx_report_review_events_item",
+    "report_review_events",
+    "CREATE INDEX idx_report_review_events_item\n            ON report_review_events(task_id, result_code, item_id, id)"
+  ],
+  [
+    "index",
     "idx_report_suppression_hits_rule",
     "report_suppression_hits",
     "CREATE INDEX idx_report_suppression_hits_rule\n            ON report_suppression_hits(rule_id, created_at DESC)"
@@ -145,6 +151,12 @@
   ],
   [
     "table",
+    "report_review_events",
+    "report_review_events",
+    "CREATE TABLE report_review_events (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\n            result_code TEXT NOT NULL,\n            item_id TEXT NOT NULL,\n            stage TEXT NOT NULL CHECK(stage IN ('initial', 'final')),\n            decision TEXT NOT NULL,\n            note TEXT NOT NULL DEFAULT '',\n            actor_subject TEXT NOT NULL,\n            actor_name TEXT NOT NULL,\n            actor_source TEXT NOT NULL,\n            channel TEXT NOT NULL,\n            item_hash TEXT NOT NULL,\n            item_json TEXT NOT NULL,\n            acceptance_json TEXT NOT NULL,\n            initial_review_id INTEGER,\n            created_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
     "report_suppression_hits",
     "report_suppression_hits",
     "CREATE TABLE report_suppression_hits (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            rule_id INTEGER NOT NULL,\n            task_id INTEGER NOT NULL,\n            result_code TEXT NOT NULL,\n            item_id TEXT NOT NULL,\n            item_json TEXT NOT NULL,\n            created_at TEXT NOT NULL,\n            FOREIGN KEY(rule_id) REFERENCES report_suppression_rules(id) ON DELETE CASCADE,\n            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,\n            UNIQUE(rule_id, task_id, result_code, item_id)\n        )"
@@ -166,6 +178,12 @@
     "sqlite_sequence",
     "sqlite_sequence",
     "CREATE TABLE sqlite_sequence(name,seq)"
+  ],
+  [
+    "table",
+    "task_final_review_stats",
+    "task_final_review_stats",
+    "CREATE TABLE task_final_review_stats (\n            task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,\n            total INTEGER NOT NULL,\n            initial_count INTEGER NOT NULL,\n            confirmed INTEGER NOT NULL,\n            returned INTEGER NOT NULL,\n            deferred INTEGER NOT NULL,\n            pending INTEGER NOT NULL,\n            status TEXT NOT NULL\n        )"
   ],
   [
     "table",
@@ -207,13 +225,25 @@
     "table",
     "user_permissions",
     "user_permissions",
-    "CREATE TABLE user_permissions (\n            subject TEXT NOT NULL,\n            permission TEXT NOT NULL CHECK(permission IN (\n                'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage'\n            )),\n            PRIMARY KEY(subject, permission),\n            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE\n        )"
+    "CREATE TABLE user_permissions (\n            subject TEXT NOT NULL,\n            permission TEXT NOT NULL CHECK(permission IN (\n                'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage',\n                'reports.final_review'\n            )),\n            PRIMARY KEY(subject, permission),\n            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE\n        )"
   ],
   [
     "table",
     "user_product_domains",
     "user_product_domains",
     "CREATE TABLE user_product_domains (\n            subject TEXT NOT NULL,\n            domain_id INTEGER NOT NULL,\n            assigned_at TEXT NOT NULL,\n            PRIMARY KEY(subject, domain_id),\n            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE,\n            FOREIGN KEY(domain_id) REFERENCES product_domains(id) ON DELETE CASCADE\n        )"
+  ],
+  [
+    "trigger",
+    "trg_review_events_stats_invalidate",
+    "report_review_events",
+    "CREATE TRIGGER trg_review_events_stats_invalidate\n        AFTER INSERT ON report_review_events\n        BEGIN\n            DELETE FROM task_final_review_stats WHERE task_id = NEW.task_id;\n        END"
+  ],
+  [
+    "trigger",
+    "trg_tasks_final_review_stats_invalidate",
+    "tasks",
+    "CREATE TRIGGER trg_tasks_final_review_stats_invalidate\n        AFTER UPDATE OF result_json, status ON tasks\n        BEGIN\n            DELETE FROM task_final_review_stats WHERE task_id = NEW.id;\n        END"
   ],
   [
     "trigger",

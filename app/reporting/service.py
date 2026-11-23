@@ -72,7 +72,7 @@ def _parse_report_suppression_item_json(raw: str | None) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _write_task_report_stat_rows(cache_rows: list[tuple]) -> None:
+def _write_task_report_stat_rows(cache_rows: list[tuple], *, commit=True) -> None:
     if not cache_rows:
         return
     db = get_db()
@@ -100,11 +100,12 @@ def _write_task_report_stat_rows(cache_rows: list[tuple]) -> None:
         """,
         cache_rows,
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def _cache_prepared_task_report_stats(
-    task, prepared_results: list[dict], source_updated_at: str
+    task, prepared_results: list[dict], source_updated_at: str, *, commit=True
 ) -> None:
     task_type = str(task["task_type"] or DOCUMENT_TASK_TYPE)
     suppression_version = _report_suppression_versions({task_type}).get(
@@ -120,7 +121,8 @@ def _cache_prepared_task_report_stats(
                 *[int(item_totals.get(key) or 0) for key in REPORT_COUNT_KEYS],
                 now_text(),
             )
-        ]
+        ],
+        commit=commit,
     )
 
 
@@ -181,12 +183,16 @@ def _media_report_item_text(item: dict) -> str:
 
 
 def _task_results(task):
-    return _prepare_task_results(
+    from app.reporting.reviews import attach_review_metadata
+
+    results = _prepare_task_results(
         _raw_task_results(task),
         task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
         task_id=task["id"],
         record_suppression_hits=True,
     )
+    attach_review_metadata(task, results)
+    return results
 
 
 def _raw_task_results(task) -> list[dict]:
@@ -1541,7 +1547,31 @@ def _report_item_totals(results: list[dict]) -> dict:
     return _finalize_report_counts(totals)
 
 
-def update_report_item_review(task, data):
+def update_report_item_review(task, data, *, actor=None):
+    from app.reporting.reviews import (
+        ReviewConflict,
+        find_review_item,
+        review_transaction,
+    )
+
+    try:
+        with review_transaction(task["id"]) as current:
+            token = data.get("review_token")
+            if token:
+                _, _, state = find_review_item(
+                    current,
+                    str(data.get("result_code") or ""),
+                    str(data.get("item_id") or ""),
+                )
+                if token != state["token"]:
+                    raise ReviewConflict("报告或审核记录已更新，请刷新后重新确认。")
+            response = _save_report_item_review(current, data, actor=actor)
+    except ReviewConflict as exc:
+        return {"ok": False, "error": str(exc)}, 409
+    return response
+
+
+def _save_report_item_review(task, data, *, actor=None):
     if task["status"] in {"queued", "running", "canceling"}:
         return {"ok": False, "error": "任务尚未完成，暂不能复核报告条目。"}, 409
     result_code = str(data.get("result_code") or "").strip()
@@ -1586,20 +1616,18 @@ def update_report_item_review(task, data):
         acceptance_status=acceptance_status,
         rejection_reason=rejection_reason,
         rejection_note=rejection_note,
+        actor=actor,
     )
     task_updated_at = now_text()
     db.execute(
         "UPDATE tasks SET result_json = ?, updated_at = ? WHERE id = ?",
         (json.dumps(results, ensure_ascii=False), task_updated_at, task["id"]),
     )
-    db.commit()
-
     prepared = _prepare_task_results(
         results,
         task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
         task_id=task["id"],
     )
-    _cache_prepared_task_report_stats(task, prepared, task_updated_at)
     updated_result = next(
         (item for item in prepared if str(item.get("code") or "") == result_code), None
     )
@@ -1607,6 +1635,12 @@ def update_report_item_review(task, data):
     if not isinstance(saved_acceptances, dict):
         saved_acceptances = {}
     updated_acceptance = _normalize_report_acceptance(saved_acceptances.get(item_id))
+    from app.reporting.reviews import find_review_item
+
+    saved_task = dict(task)
+    saved_task["result_json"] = json.dumps(results, ensure_ascii=False)
+    _cache_prepared_task_report_stats(task, prepared, task_updated_at, commit=False)
+    _, _, review_state = find_review_item(saved_task, result_code, item_id)
     return {
         "ok": True,
         "item_id": item_id,
@@ -1616,6 +1650,13 @@ def update_report_item_review(task, data):
         "result_counts": (updated_result or {}).get("report_counts", {}),
         "totals": _report_item_totals(prepared),
         "suppression_candidate_created": suppression_candidate_created,
+        "review_token": review_state["token"],
+        "review_initial_label": (
+            f"{review_state['initial']['actor_name']} · {review_state['initial']['created_at']}"
+            if review_state["initial"]
+            else "待记录初审"
+        ),
+        "final_review_label": review_state["status_label"],
     }
 
 
@@ -1629,6 +1670,8 @@ def _apply_report_item_review(
     acceptance_status: str,
     rejection_reason: str,
     rejection_note: str,
+    actor=None,
+    channel="web",
 ) -> bool:
     acceptances = result.get("item_acceptances")
     if not isinstance(acceptances, dict):
@@ -1642,6 +1685,11 @@ def _apply_report_item_review(
             record["rejection_note"] = rejection_note
         acceptances[item_id] = record
     result["item_acceptances"] = acceptances
+
+    if actor is not None:
+        from app.reporting.reviews import record_initial_review
+
+        record_initial_review(task, result, item_id, actor, channel=channel)
 
     return _maybe_create_report_suppression_candidate(
         db,

@@ -100,7 +100,7 @@ HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责�
 
 - `TaskSubmission` 承载文件列表、检查项、模型选择和提交令牌。`submit_document_task` 等提交服务返回 `SubmissionResult`，Web 层将消息和任务类型转换为提示与页面跳转。
 - `identity.models.UserIdentity` 是独立的身份数据类型。模型查询显式接收用户主体，任务提交使用身份快照保存归属信息。
-- `identity/permissions.py` 定义四项可分配管理权限；`persistence/permissions.py` 登记用户并保存授权，`web/auth.py` 在每个请求检查管理能力和任务范围。系统设置与用户授权使用独立的超级管理员登录。具体边界见 [用户权限](permissions.md)。
+- `identity/permissions.py` 定义五项可分配管理权限；`persistence/permissions.py` 登记用户并保存授权，`web/auth.py` 在每个请求检查管理能力和任务范围。系统设置与用户授权使用独立的超级管理员登录。具体边界见 [用户权限](permissions.md)。
 - `models.service` 管理提供商与模型配置，`models.client` 管理模型协议请求，`models.discovery` 管理模型列表发现。
 - `reporting.service.update_report_item_type(task, data)` 接收复核数据，`reporting.excel.build_report_workbook(task)` 返回工作簿内容；下载响应由 `web.reports` 构造。
 - `reporting.statistics.refresh_stale_report_stats_batch()` 在后台应用上下文中运行。监督器直接调用报告模块。
@@ -191,3 +191,13 @@ Windows 和 Linux 使用相同的 Uvicorn 与 a2wsgi 依赖。默认单进程运
 `reporting/rounds.py` 按共享原文证据、兼容的问题描述和明确修改目标归组不同检查项中的重复条目；归组要求组内条目两两匹配。同一对象的名称冲突可使用不同原句取证，描述需共享至少两个名称及重叠章节，待确认表述保留原判定。短句修改目标在原文中定位到对应片段，疑似重复字按相同原文词项匹配，图表题重复要求图表编号范围相同或包含。用户详情、管理员详情和 HTML 导出展示归组后的折算数量及原条目链接，原检查项、条目标识、复核状态和 Excel 行保持独立。`tests/test_cross_check_groups.py`、`tests/test_round_matching.py` 与报告路由测试覆盖归组边界、误归组隔离、同 ID 条目复核及导出保留。
 
 不认可必须选择原因，其他原因必须填写说明。模型误报、模型幻觉和不适用可生成误报忽略候选，由管理员启用；分类不准确和证据不足仅保存为反馈。Excel 导出展示 AI 判定，回填按任务和条目标识更新反馈，并支持“是否接纳”“不接纳原因”列。统计缓存按准备版本和误报规则版本失效，新增计数字段由数据库初始化补齐。
+
+## 报告双人审核
+
+`reporting/reviews.py` 管理逐条审核状态、内容指纹、操作记录及终审统计。`report_review_events` 保存每次初审和终审的人员、时间、来源、条目快照与初审结论，终审记录引用对应初审记录。当前结论由条目内容、初审反馈和关联记录共同校验，内容变化或初审重新提交后重新审核。不同版本中已移除的条目记录可在审核页展开查看。
+
+Web 层从当前身份构造操作者参数。在线初审、终审和 Excel 回填在 SQLite 写事务内重新读取任务并校验版本，初审结论、审核记录和报告统计一并提交。终审权限由路由校验，服务层验证个人身份和双人独立性。Excel 导出携带条目审核版本，回填按上传者记录来源。
+
+`task_final_review_stats` 缓存完整报告的初审数量、终审确认数量和待处理状态。报告与审核写入通过数据库触发器使缓存失效，审核事务在提交前同步重建当前任务的进度。任务列表按当前页准备缓存，轻量轮询仅读取缓存，监督器使用独立游标分批覆盖历史任务。终审列表按缓存状态筛选。
+
+`tests/test_final_review.py` 验证全量条目、权限、独立身份、意见分歧、报告内容变化、并发提交、事务回滚、Excel 版本与审核记录。`frontend/tests/e2e/final-review.spec.ts` 使用两个隔离的个人会话验证逐条初审、终审、退回、重新审核和移动端布局。

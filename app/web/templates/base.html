@@ -33,6 +33,7 @@
         <a href="{{ url_for(task_nav_prefix ~ 'images') }}" class="{{ 'active' if active_nav|default('') == 'image_check' or request.endpoint in ['admin_images', 'user_images'] else '' }}" title="图片检查">图片</a>
         <a href="{{ url_for(task_nav_prefix ~ 'videos') }}" class="{{ 'active' if active_nav|default('') == 'video_check' or request.endpoint in ['admin_videos', 'user_videos'] else '' }}" title="视频检查">视频</a>
         <a href="{{ url_for('admin_models' if is_admin and is_superadmin else 'user_models') }}" class="{{ 'active' if active_nav|default('') == 'models' or request.endpoint in ['admin_models', 'user_models'] else '' }}" title="模型管理">模型</a>
+        {% if has_permission('reports.final_review') %}<a href="{{ url_for(task_nav_prefix ~ 'final_reviews') }}" class="{{ 'active' if active_nav|default('') == 'final_reviews' else '' }}" title="报告终审">终审</a>{% endif %}
         {% if is_superadmin and auth_mode == 'ip' %}
         <a href="{{ url_for('admin_settings', tab='ip_users') }}" class="{{ 'active' if is_ip_users_page else '' }}" title="IP 用户标记">IP 用户</a>
         {% endif %}

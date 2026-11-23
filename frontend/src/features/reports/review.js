@@ -136,6 +136,12 @@ function revertReportItemControls(item) {
 }
 
 function applyReportItemSave(item, data) {
+  const version = item.querySelector('[data-review-token]')
+  if (version && data.review_token) version.value = data.review_token
+  const attribution = item.querySelector('[data-review-attribution]')
+  if (attribution) attribution.textContent = `初审 ${data.review_initial_label || ''}`
+  const finalStatus = item.querySelector('[data-final-review-status]')
+  if (finalStatus) finalStatus.textContent = `终审 ${data.final_review_label || '待终审'}`
   const controls = reportItemControls(item)
   const savedAcceptance =
     data.acceptance_status || reportControlValue(controls.acceptance, 'pending')
@@ -159,6 +165,7 @@ function reportItemPayload(item) {
   return {
     result_code: item.dataset.resultCode,
     item_id: item.dataset.itemId,
+    review_token: item.querySelector('[data-review-token]')?.value || '',
     acceptance_status: reportControlValue(controls.acceptance, 'pending'),
     rejection_reason: reportControlValue(controls.reason),
     rejection_note: controls.note instanceof HTMLInputElement ? controls.note.value.trim() : '',
@@ -281,12 +288,7 @@ function saveReportItemReview(item) {
     },
     body: JSON.stringify(payload),
   })
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error('save failed')
-      }
-      return response.json()
-    })
+    .then((response) => response.json())
     .then((data) => {
       if (!data.ok) {
         throw new Error(data.error || 'save failed')
@@ -294,9 +296,9 @@ function saveReportItemReview(item) {
       applyReportItemSave(item, data)
       updateReportCounts(data.totals || {})
     })
-    .catch(() => {
+    .catch((error) => {
       revertReportItemControls(item)
-      showToast('报告条目复核结果保存失败，请稍后重试。', 'error')
+      showToast(error.message || '报告条目复核结果保存失败，请稍后重试。', 'error')
     })
     .finally(() => {
       setReportItemControlsDisabled(item, false)

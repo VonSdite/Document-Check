@@ -34,6 +34,16 @@ from app.reporting.service import (
     update_report_item_review,
 )
 from app.tasks.submission import _consistency_task_title
+from app.web.auth import _current_user_identity
+
+
+def review_actor():
+    identity = _current_user_identity()
+    return {
+        "subject": identity.subject,
+        "name": identity.label,
+        "source": identity.source,
+    }
 
 
 def _report_download_name(task, extension: str) -> str:
@@ -84,7 +94,7 @@ def _import_task_report_excel(task, detail_endpoint: str):
         return redirect_response
 
     try:
-        imported_count = _load_report_excel_reviews(task, payload)
+        imported_count = _load_report_excel_reviews(task, payload, actor=review_actor())
     except ReportExcelImportError as exc:
         flash(str(exc), "error")
         return redirect_response
@@ -127,7 +137,7 @@ def _update_report_item_type(task):
     data = request.get_json(silent=True) if request.is_json else None
     if not isinstance(data, dict):
         data = request.form
-    return update_report_item_review(task, data)
+    return update_report_item_review(task, data, actor=review_actor())
 
 
 def _export_task_report_excel(task):

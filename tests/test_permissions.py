@@ -469,7 +469,9 @@ class UserPermissionTest(unittest.TestCase):
         self.assertIsNotNone(soup.select_one('nav a[href="/admin/permissions"]'))
         self.assertIsNone(soup.select_one("[data-permission-form] button"))
         self.assertIsNone(soup.select_one("[data-permission-status]"))
-        self.assertEqual(len(soup.select(".permission-table th")), 7)
+        self.assertEqual(
+            len(soup.select(".permission-table th")), 3 + len(ASSIGNABLE_PERMISSIONS)
+        )
         self.assertIsNone(soup.select_one('[name="source"]'))
         self.assertEqual(
             soup.select_one('[data-permission-user="ip:10.0.0.8"] .subline').text,
@@ -1408,13 +1410,13 @@ class UserPermissionTest(unittest.TestCase):
         self.grant("tasks.view_all")
         task = self.fixture._insert_task(ip="10.0.0.9")
         before = self.client.get(f"/task-statuses?ids={task}").get_json()
-        self.assertEqual(before["permission_signature"], "1:0:0:0")
+        self.assertEqual(before["permission_signature"], "1:0:0:0:0")
         self.grant("tasks.view_all", "stats.view_all")
         soup = BeautifulSoup(self.client.get("/").text, "html.parser")
         self.assertTrue(soup.select(".admin-metric-group"))
         after = self.client.get(f"/task-statuses?ids={task}").get_json()
         self.assertEqual(after["counts"]["tasks"], 1)
-        self.assertEqual(after["permission_signature"], "1:0:1:0")
+        self.assertEqual(after["permission_signature"], "1:0:1:0:0")
 
     def test_cookie_users_at_the_same_ip_have_independent_grants_and_grants_follow_stable_id(
         self,

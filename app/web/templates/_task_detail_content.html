@@ -8,6 +8,7 @@
     </svg>
     <span>返回列表</span>
   </a>
+  <a class="secondary-button" href="{{ url_for(task_endpoint('report_reviews'), task_id=task.id) }}">双人审核与记录</a>
   {% if task.status in ["completed", "partial", "failed", "canceled"] %}
   <div class="report-export-actions" aria-label="报告操作">
     {% if task.status in ["completed", "partial"] %}
@@ -236,6 +237,11 @@
               <span class="report-item-type-badge">{{ item.type_label }}</span>
             </td>
             <td class="report-acceptance-cell">
+              {% if item.review %}
+              <input type="hidden" data-review-token value="{{ item.review.token }}">
+              <div class="subline" data-review-attribution>{% if item.review.initial %}初审 {{ item.review.initial.actor_name }} · {{ item.review.initial.created_at }}{% endif %}</div>
+              <div class="subline" data-final-review-status>终审 {{ item.review.status_label }}</div>
+              {% endif %}
               {% if task_editable %}
               <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">
                 {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}

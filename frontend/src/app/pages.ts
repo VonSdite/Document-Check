@@ -1,7 +1,11 @@
 export const pages = [
   { id: 'tasks', selector: '[data-task-list-panel]', load: () => import('@/pages/tasks') },
   { id: 'models', selector: '.provider-modal-form', load: () => import('@/pages/models') },
-  { id: 'reports', selector: '[data-task-detail]', load: () => import('@/pages/reports') },
+  {
+    id: 'reports',
+    selector: '[data-task-detail], [data-report-audit]',
+    load: () => import('@/pages/reports'),
+  },
   { id: 'settings', selector: '.settings-section', load: () => import('@/pages/settings') },
   {
     id: 'permissions',

@@ -20,6 +20,7 @@ from app.reporting.constants import (
     REPORT_REVIEW_STATUSES,
     REPORT_STATS_INLINE_REBUILD_LIMIT,
 )
+from app.reporting.reviews import final_review_progress
 from app.reporting.service import (
     _empty_report_suppression_version,
     _report_suppression_versions,
@@ -327,13 +328,23 @@ def _task_status_payload(task_type: str, *, owner_clause: str, owner_params: tup
         )
         .fetchone()
     )
+    final_progress = final_review_progress([row["id"] for row in rows], refresh=False)
+    payload_rows = []
+    for row in rows:
+        payload = _task_status_payload_row(row, suppression_version)
+        final = final_progress.get(row["id"])
+        if final:
+            payload["final_review_key"] = final["key"]
+        else:
+            payload["final_review_key"] = "stale"
+        payload_rows.append(payload)
     return {
         "active": bool(counts["queued"] or counts["running"]),
         "counts": {
             key: int(counts[key] or 0)
             for key in ("tasks", "queued", "running", "completed", "partial")
         },
-        "tasks": [_task_status_payload_row(row, suppression_version) for row in rows],
+        "tasks": payload_rows,
     }
 
 
@@ -378,6 +389,7 @@ def _task_rows_with_review_progress(rows: list) -> list[dict]:
         tuple(task_ids),
     )
     stats_by_task = {int(row["id"]): row for row in stat_rows}
+    final_progress = final_review_progress(task_ids)
     activities = task_activities(task_ids)
     prepared_rows = []
     for row in rows:
@@ -398,6 +410,7 @@ def _task_rows_with_review_progress(rows: list) -> list[dict]:
                 str(task.get("status") or ""), total, reviewed, pending_review
             )
         )
+        task["final_review"] = final_progress.get(task["id"])
         prepared_rows.append(task)
     return prepared_rows
 

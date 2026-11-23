@@ -5,6 +5,7 @@ document.querySelectorAll('[data-permission-form]').forEach((form) => {
   const choices = Array.from(form.elements).filter((input) => input.name === 'permissions')
   const viewAll = choices.find((input) => input.value === 'tasks.view_all')
   const manageAll = choices.find((input) => input.value === 'tasks.manage_all')
+  const finalReview = choices.find((input) => input.value === 'reports.final_review')
   if (!viewAll || !manageAll) return
   let saved = choices.filter((input) => input.checked).map((input) => input.value)
   let saving = false
@@ -47,7 +48,11 @@ document.querySelectorAll('[data-permission-form]').forEach((form) => {
   choices.forEach((input) => {
     input.addEventListener('change', () => {
       if (input === manageAll && manageAll.checked) viewAll.checked = true
-      if (input === viewAll && !viewAll.checked) manageAll.checked = false
+      if (input === finalReview && finalReview.checked) viewAll.checked = true
+      if (input === viewAll && !viewAll.checked) {
+        manageAll.checked = false
+        if (finalReview) finalReview.checked = false
+      }
       save()
     })
   })

@@ -147,6 +147,12 @@
                 <td class="report-status-cell"><span class="report-item-type-badge">{{ item.type_label }}</span></td>
                 <td class="report-acceptance-cell">
                   {{ item.acceptance_label }}
+                  {% if item.review %}
+                  {% if item.review.initial %}<p>初审 {{ item.review.initial.actor_name }} · {{ item.review.initial.created_at }}</p>{% endif %}
+                  <p>终审 {{ item.review.status_label }}</p>
+                  {% if item.review.final %}<p>{{ item.review.final.actor_name }} · {{ item.review.final.created_at }} {{ item.review.final.note }}</p>{% endif %}
+                  {% if item.review.history %}{% with history = item.review.history %}{% include "_review_history.html" %}{% endwith %}{% endif %}
+                  {% endif %}
                   {% if item.acceptance_status == "rejected" and (item.rejection_reason_label or item.rejection_note) %}
                   <div class="report-acceptance-reason">{{ item.rejection_reason_label }}{% if item.rejection_reason_label and item.rejection_note %}：{% endif %}{{ item.rejection_note }}</div>
                   {% endif %}

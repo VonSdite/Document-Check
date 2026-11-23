@@ -39,6 +39,15 @@
     ]
   ],
   [
+    "/console/final-reviews",
+    "admin_final_reviews",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ]
+  ],
+  [
     "/console/images",
     "admin_images",
     [
@@ -282,6 +291,16 @@
     ]
   ],
   [
+    "/console/tasks/<int:task_id>/reviews",
+    "admin_report_reviews",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
     "/console/tasks/<int:task_id>/video",
     "admin_task_video",
     [
@@ -316,6 +335,15 @@
       "HEAD",
       "OPTIONS",
       "POST"
+    ]
+  ],
+  [
+    "/final-reviews",
+    "user_final_reviews",
+    [
+      "GET",
+      "HEAD",
+      "OPTIONS"
     ]
   ],
   [
@@ -525,6 +553,16 @@
     "/tasks/<int:task_id>/retry-check",
     "user_retry_check",
     [
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
+    "/tasks/<int:task_id>/reviews",
+    "user_report_reviews",
+    [
+      "GET",
+      "HEAD",
       "OPTIONS",
       "POST"
     ]
