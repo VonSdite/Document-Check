@@ -9,6 +9,15 @@ async function initialReview(page: Page, item: Locator, rejected = false) {
   await expect(item.locator('[data-initial-save-status]')).toHaveText('已保存')
 }
 
+async function expectInitialReadonly(item: Locator) {
+  const initial = item.locator('[data-initial-review-cell]')
+  await expect(initial).toContainText('不认可')
+  await expect(initial).toContainText('证据不足')
+  await expect(initial.locator('input:not([type="hidden"]), select, textarea, button')).toHaveCount(
+    0,
+  )
+}
+
 async function finalReview(item: Locator, decision: string, note: string) {
   await item.locator('select[name=decision]').selectOption(decision)
   await item.locator('textarea[name=note]').fill(note)
@@ -16,6 +25,7 @@ async function finalReview(item: Locator, decision: string, note: string) {
   await expect(item.locator('[data-final-save-status]')).toHaveText('已保存')
   await expect(item.locator('select[name=decision]')).toHaveValue(decision)
   await expect(item.locator('textarea[name=note]')).toHaveValue(note)
+  await expectInitialReadonly(item)
 }
 
 test('单文档报告使用表格初审，管理员在独立终审页保存并回显意见', async ({ browser }, testInfo) => {
@@ -43,6 +53,7 @@ test('单文档报告使用表格初审，管理员在独立终审页保存并�
     const note = '已核对原文中的 <参数> & "条件"。\n确认初审意见。'
     await expect(adminItems).toHaveCount(1)
     await expect(adminItems.first()).toHaveAttribute('data-acceptance-status', 'rejected')
+    await expectInitialReadonly(adminItems.first())
     await finalReview(adminItems.first(), 'confirmed', note)
     await expect(adminPage.locator('[data-report-review-progress]')).toContainText('终审确认 1/1')
     await adminPage.reload()
@@ -68,8 +79,18 @@ test('单文档报告使用表格初审，管理员在独立终审页保存并�
     await expect(adminPage.locator('[data-final-review-form]')).toHaveCount(0)
     await adminPage.getByRole('link', { name: '报告终审与记录', exact: true }).click()
     await expect(adminItems.first().locator('textarea[name=note]')).toHaveValue(note)
-    await adminItems.first().getByRole('button', { name: '保存初审' }).click()
+    await expectInitialReadonly(adminItems.first())
+    await adminPage.getByRole('link', { name: '检查报告', exact: true }).click()
+    await adminPage.waitForLoadState('load')
+    const initialNote = adminItems.first().locator('[data-report-rejection-note]')
+    await initialNote.fill('已复核原文上下文。')
+    await initialNote.press('Tab')
     await expect(adminItems.first().locator('[data-initial-save-status]')).toHaveText('已保存')
+    await adminPage.getByRole('link', { name: '报告终审与记录', exact: true }).click()
+    await expectInitialReadonly(adminItems.first())
+    await expect(adminItems.first().locator('[data-initial-review-cell]')).toContainText(
+      '已复核原文上下文。',
+    )
     await expect(adminItems.first()).toContainText('需重新终审')
     await expect(adminItems.first().locator('select[name=decision]')).toHaveValue('')
     await expect(adminItems.first().locator('textarea[name=note]')).toHaveValue('')
@@ -136,6 +157,7 @@ test('独立审核页区分初审和终审权限，初审修改后重新终审',
     await page.getByRole('link', { name: '报告终审与记录', exact: true }).click()
     await expect(items).toHaveCount(1)
     await expect(page.locator('[data-final-review-empty]')).toBeHidden()
+    await expectInitialReadonly(items.first())
     await finalReview(items.first(), 'confirmed', '确认本人初审。')
     await page.getByRole('link', { name: '检查报告', exact: true }).click()
     await initialReview(page, items.last(), true)
@@ -149,7 +171,10 @@ test('独立审核页区分初审和终审权限，初审修改后重新终审',
     await page.reload()
     const firstId = await items.first().getAttribute('data-item-id')
     const firstItem = page.locator(`[data-report-item][data-item-id="${firstId}"]`)
-    await firstItem.locator('input[data-report-acceptance-status][value=accepted]').check()
+    await expectInitialReadonly(firstItem)
+    await page.getByRole('link', { name: '检查报告', exact: true }).click()
+    await initialReview(page, firstItem)
+    await page.getByRole('link', { name: '报告终审与记录', exact: true }).click()
     await expect(firstItem).toHaveCount(0)
     await expect(items).toHaveCount(1)
     await expect(page.locator('[data-report-review-progress]')).toContainText('终审确认 1/1')
@@ -205,11 +230,16 @@ test('独立审核页区分初审和终审权限，初审修改后重新终审',
     expect(
       await reviewPage.evaluate(() => document.documentElement.scrollWidth),
     ).toBeLessThanOrEqual(390)
-    await page.reload()
+    await page.getByRole('link', { name: '检查报告', exact: true }).click()
+    await page.waitForLoadState('load')
     for (const [index, status] of ['accepted', 'pending'].entries()) {
-      await items.first().locator(`input[data-report-acceptance-status][value=${status}]`).check()
-      await expect(items).toHaveCount(1 - index)
+      await items
+        .nth(index)
+        .locator(`input[data-report-acceptance-status][value=${status}]`)
+        .check()
+      await expect(items.nth(index).locator('[data-initial-save-status]')).toHaveText('已保存')
     }
+    await page.getByRole('link', { name: '报告终审与记录', exact: true }).click()
     await expect(page.locator('[data-final-review-group]')).toHaveCount(0)
     await expect(page.locator('[data-final-review-empty]')).toBeVisible()
     await expect(page.locator('[data-report-review-progress]')).toContainText('无需终审')
@@ -252,13 +282,12 @@ test('终审保存失败和版本冲突时保留输入，不改写审核记录',
     await expect(item.locator('[data-final-save-status]')).toHaveText('暂时无法保存，请重试。')
     await expect(item.locator('select[name=decision]')).toHaveValue('returned')
     await expect(item.locator('textarea[name=note]')).toHaveValue('仍需核对的审核说明。')
-    await otherPage.goto(`/tasks/${taskId}/reviews`)
-    await otherPage
-      .locator('[data-report-item]')
-      .first()
-      .getByRole('button', { name: '保存初审' })
-      .click()
+    await otherPage.goto(`/tasks/${taskId}`)
+    const initialNote = otherPage.locator('[data-report-rejection-note]').first()
+    await initialNote.fill('补充初审依据。')
+    await initialNote.press('Tab')
     await expect(otherPage.locator('[data-initial-save-status]').first()).toHaveText('已保存')
+    await otherPage.getByRole('link', { name: '报告终审与记录', exact: true }).click()
     await item.getByRole('button', { name: '保存终审' }).click()
     await expect(item.locator('[data-final-save-status]')).toContainText('已更新')
     await expect(item.locator('textarea[name=note]')).toHaveValue('仍需核对的审核说明。')

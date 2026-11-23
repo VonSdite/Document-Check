@@ -178,7 +178,7 @@ def report_review_fragments(task_id, data):
         "result": result,
         "item": item,
         "state": item["review"],
-        "task_editable": can_manage_task(task),
+        "task_editable": can_manage_task(task) and not data.get("final_review_page"),
         "controls_disabled": task["status"] in ACTIVE_STATUSES,
         "final_decisions": FINAL_DECISIONS,
         "report_item_fields": fields,

@@ -471,7 +471,8 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(self.state()["status"], "deferred")
 
     def test_report_table_and_separate_final_review_page_have_distinct_entries(self):
-        self.initial()
+        initial_note = "结合上下文核对，原文参数含义一致。"
+        self.initial(note=initial_note)
         for prefix in ("", "/admin"):
             report = self.client.get(f"{prefix}/tasks/{self.task_id}")
             soup = BeautifulSoup(report.data, "html.parser")
@@ -490,7 +491,29 @@ class FinalReviewTest(unittest.TestCase):
                 [self.items[0]["id"]],
             )
             self.assertEqual(len(soup.select("[data-final-review-form]")), 1)
+            initial = soup.select_one("[data-initial-review-cell]")
+            self.assertFalse(
+                initial.select('input:not([type="hidden"]), select, textarea, button')
+            )
+            for text in ("不认可", "模型误报", initial_note, "author"):
+                self.assertIn(text, initial.get_text())
+            self.assertIn(self.state()["initial"]["created_at"], initial.get_text())
+            self.assertFalse(soup.select("[data-report-rejection-modal]"))
             self.assertIsNotNone(soup.find("a", href=f"{prefix}/tasks/{self.task_id}"))
+            before = self.state()
+            attempted_initial = self.client.post(
+                f"{prefix}/tasks/{self.task_id}/reviews",
+                json={
+                    "stage": "initial",
+                    "result_code": "consistency",
+                    "item_id": self.items[0]["id"],
+                    "acceptance_status": "accepted",
+                    "review_token": before["token"],
+                },
+            )
+            self.assertEqual(attempted_initial.status_code, 409)
+            self.assertIn("检查报告页面", attempted_initial.get_json()["error"])
+            self.assertEqual(self.state(), before)
             queue = self.client.get(f"{prefix}/final-reviews")
             soup = BeautifulSoup(queue.data, "html.parser")
             self.assertIsNotNone(
@@ -526,8 +549,9 @@ class FinalReviewTest(unittest.TestCase):
                 "note": note,
                 "review_token": self.state()["token"],
                 "inline_review": True,
+                "final_review_page": True,
             },
-            headers={"X-Test-Subject": "reviewer"},
+            headers={"X-Test-Subject": "author"},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -535,10 +559,12 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(final.select_one("option[selected]")["value"], "returned")
         self.assertEqual(final.select_one("textarea[name=note]").get_text(), note)
         self.assertIsNone(final.find("script"))
-        self.assertNotIn(
-            "data-report-acceptance-status", payload["review_fragments"]["initial"]
+        initial = BeautifulSoup(payload["review_fragments"]["initial"], "html.parser")
+        self.assertFalse(
+            initial.select('input:not([type="hidden"]), select, textarea, button')
         )
-        self.assertIn("cookie_session:reviewer", payload["review_fragments"]["history"])
+        self.assertIn("不认可", initial.get_text())
+        self.assertIn("cookie_session:author", payload["review_fragments"]["history"])
         page = self.client.get(
             f"/tasks/{self.task_id}/reviews", headers={"X-Test-Subject": "reviewer"}
         )
@@ -556,6 +582,7 @@ class FinalReviewTest(unittest.TestCase):
         )
         self.assertEqual(initial.status_code, 200)
         fragments = initial.get_json()["review_fragments"]
+        self.assertIn("data-report-acceptance-status", fragments["initial"])
         final = BeautifulSoup(fragments["final"], "html.parser")
         self.assertIsNone(final.select_one("[data-final-review-form]"))
         self.assertIn("无需终审", final.get_text())

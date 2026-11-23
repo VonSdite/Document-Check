@@ -1,4 +1,4 @@
-"""全量报告审核与终审待办页面。"""
+"""报告终审与终审待办页面。"""
 
 from flask import abort, flash, redirect, render_template, request, url_for
 
@@ -16,11 +16,9 @@ from app.reporting.reviews import (
 from app.reporting.service import (
     _report_item_fields_for_task,
     _uses_compact_media_report,
-    update_report_item_review,
 )
 from app.web.auth import (
     _check_write_origin,
-    can_manage_task,
     has_permission,
     permission_required,
 )
@@ -94,17 +92,10 @@ def register_final_review_routes(app):
                 abort(400)
             try:
                 if data.get("stage") == "initial":
-                    if not can_manage_task(task):
-                        abort(403)
-                    if not data.get("review_token"):
-                        raise ReviewConflict("页面审核版本缺失，请刷新后重试。")
-                    response = update_report_item_review(task, data, actor=actor)
-                    if isinstance(response, tuple):
-                        raise ReviewConflict(response[0]["error"])
-                else:
-                    if not has_permission("reports.final_review"):
-                        abort(403)
-                    save_final_review(task_id, data, actor)
+                    raise ReviewConflict("请在检查报告页面修改初审意见。")
+                if not has_permission("reports.final_review"):
+                    abort(403)
+                save_final_review(task_id, data, actor)
             except ReviewConflict as exc:
                 if request.is_json:
                     return {"ok": False, "error": str(exc)}, 409
@@ -135,16 +126,13 @@ def register_final_review_routes(app):
             archived_history=context["archived_history"],
             actor=review_actor(),
             active_nav="final_reviews",
-            task_editable=can_manage_task(task),
+            task_editable=False,
             task_finished=task["status"] not in ACTIVE_STATUSES,
             final_decisions=FINAL_DECISIONS,
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
             media_report=_uses_compact_media_report(task["task_type"]),
             video_report=task["task_type"] == VIDEO_TASK_TYPE,
             video_stream_url=_task_video_stream_url(task, _task_endpoint("task_video")),
-            report_classification_url=url_for(
-                _task_endpoint("update_report_item_type"), task_id=task_id
-            ),
         )
 
     for prefix, endpoint_prefix in (("", "user_"), (app.config["ADMIN_URL"], "admin_")):
