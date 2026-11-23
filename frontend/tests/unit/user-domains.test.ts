@@ -2,10 +2,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import UserDomainEditor from '@/features/permissions/UserDomainEditor.vue'
 import UserDomainFilter from '@/features/permissions/UserDomainFilter.vue'
-import { availableDomains } from '@/features/permissions/domains'
+import { assignedDomains, availableDomains } from '@/features/permissions/domains'
 import { saveUserDomains } from '@/api/user-domains'
 
-vi.mock('@/api/user-domains', () => ({ saveUserDomains: vi.fn() }))
+vi.mock('@/api/user-domains', () => ({ saveUserDomains: vi.fn(), addUserDomains: vi.fn() }))
 HTMLDialogElement.prototype.showModal = function () {
   this.open = true
 }
@@ -15,6 +15,7 @@ HTMLDialogElement.prototype.close = function () {
 enableAutoUnmount(afterEach)
 afterEach(() => {
   availableDomains.value = []
+  assignedDomains.clear()
   document.body.innerHTML = ''
   vi.resetAllMocks()
 })
@@ -33,7 +34,7 @@ async function editor() {
       domainLimit: 20,
     },
   })
-  await wrapper.get('button[aria-label="用户甲：编辑产品领域"]').trigger('click')
+  await wrapper.get('button[aria-label="用户甲：编辑领域"]').trigger('click')
   await flushPromises()
   return wrapper
 }
@@ -90,7 +91,7 @@ it('取消编辑后重新打开使用已保存标签，用户输入作为文本�
     .find((button) => button.text() === '取消')!
     .trigger('click')
   await flushPromises()
-  await wrapper.get('button[aria-label="用户甲：编辑产品领域"]').trigger('click')
+  await wrapper.get('button[aria-label="用户甲：编辑领域"]').trigger('click')
   await flushPromises()
   expect(wrapper.get('.domain-editor-selection').text()).toContain('电源')
   expect(wrapper.get('.domain-editor-selection').text()).not.toContain('<img')

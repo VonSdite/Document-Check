@@ -469,7 +469,7 @@ class UserPermissionTest(unittest.TestCase):
         self.assertIsNotNone(soup.select_one('nav a[href="/admin/permissions"]'))
         self.assertIsNone(soup.select_one("[data-permission-form] button"))
         self.assertIsNone(soup.select_one("[data-permission-status]"))
-        self.assertEqual(len(soup.select(".permission-table th")), 6)
+        self.assertEqual(len(soup.select(".permission-table th")), 7)
         self.assertIsNone(soup.select_one('[name="source"]'))
         self.assertEqual(
             soup.select_one('[data-permission-user="ip:10.0.0.8"] .subline').text,

@@ -10,6 +10,7 @@ from app.contracts.user_domains import MAX_DOMAIN_NAME_LENGTH, MAX_USER_DOMAINS
 from app.identity.permissions import ASSIGNABLE_PERMISSIONS, normalize_permissions
 from app.persistence.permissions import permission_users, replace_subject_permissions
 from app.persistence.user_domains import (
+    add_user_domains,
     product_domains,
     replace_user_domains,
     user_domains,
@@ -29,7 +30,7 @@ def register_permission_routes(app):
         domain = str(request.values.get("domain") or "").strip()
         if domain and domain != "unassigned":
             if not domain.isascii() or not domain.isdecimal() or len(domain) > 18:
-                abort(400, description="产品领域筛选无效。")
+                abort(400, description="领域筛选无效。")
         if request.method == "POST":
             token = session.get("permission_csrf_token", "")
             supplied = request.form.get("csrf_token", "")
@@ -37,6 +38,39 @@ def register_permission_routes(app):
                 abort(400, description="页面验证已失效，请刷新后保存。")
             subject = str(request.form.get("subject") or "").strip()
             action = request.form.get("action", "permissions")
+            if action == "add_domains":
+                try:
+                    assignments = add_user_domains(
+                        request.form.getlist("subjects"),
+                        request.form.getlist("domains"),
+                    )
+                except ValueError as exc:
+                    if _wants_json_response():
+                        return {"error": str(exc)}, 400
+                    abort(400, description=str(exc))
+                if assignments is None:
+                    if _wants_json_response():
+                        return {"error": "部分用户已不存在，请刷新后重新选择。"}, 404
+                    abort(404, description="部分用户已不存在，请刷新后重新选择。")
+                logger.info("用户领域已批量添加 subjects=%s", list(assignments))
+                if _wants_json_response():
+                    return {
+                        "users": [
+                            {"subject": key, "domains": value}
+                            for key, value in assignments.items()
+                        ],
+                        "available_domains": product_domains(),
+                    }
+                flash(f"已为 {len(assignments)} 位用户添加领域。", "success")
+                return redirect(
+                    url_for(
+                        "admin_permissions",
+                        keyword=keyword,
+                        domain=domain,
+                        page=request.form.get("page", "1"),
+                        per_page=request.form.get("per_page", "20"),
+                    )
+                )
             if action == "domains":
                 try:
                     found = replace_user_domains(
@@ -49,16 +83,14 @@ def register_permission_routes(app):
                 if not found:
                     abort(404, description="用户不存在。")
                 domains = user_domains([subject])[subject]
-                logger.info(
-                    "用户产品领域已更新 subject=%s domains=%s", subject, domains
-                )
+                logger.info("用户领域已更新 subject=%s domains=%s", subject, domains)
                 if _wants_json_response():
                     return {
                         "subject": subject,
                         "domains": domains,
                         "available_domains": product_domains(),
                     }
-                flash("产品领域已保存。", "success")
+                flash("领域已保存。", "success")
                 return redirect(
                     url_for(
                         "admin_permissions",

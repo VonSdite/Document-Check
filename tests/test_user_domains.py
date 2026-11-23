@@ -5,7 +5,11 @@ from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
-from app.contracts.user_domains import MAX_DOMAIN_NAME_LENGTH, MAX_USER_DOMAINS
+from app.contracts.user_domains import (
+    MAX_DOMAIN_BATCH_USERS,
+    MAX_DOMAIN_NAME_LENGTH,
+    MAX_USER_DOMAINS,
+)
 from app.persistence.connection import get_db
 from app.persistence.permissions import (
     permission_users,
@@ -16,6 +20,7 @@ from app.persistence.permissions import (
 from app.persistence.schema import init_db
 from app.persistence.settings import sync_identity_profile
 from app.persistence.user_domains import (
+    add_user_domains,
     product_domains,
     replace_user_domains,
     user_domains,
@@ -249,6 +254,107 @@ class UserDomainTest(unittest.TestCase):
             {tag.text for tag in root.select(".user-domain-tag")}, set(values)
         )
         self.assertFalse(root.select("img, script"))
+
+    def test_batch_add_merges_existing_domains_without_changing_permissions_or_other_users(
+        self,
+    ):
+        self.save(["电源"])
+        self.save(["工控"], subject=self.other)
+        with self.app.app_context():
+            register_subject("ip:192.0.2.99")
+            replace_user_domains("ip:192.0.2.99", ["其他"])
+            replace_subject_permissions(self.subject, {"rules.manage"})
+        for _ in range(2):
+            response = self.save(
+                [" AI   服务 ", "ai 服务", "电源"],
+                action="add_domains",
+                subjects=[self.subject, self.other, self.subject],
+            )
+            self.assertEqual(response.status_code, 200)
+            assignments = {
+                user["subject"]: {domain["name"] for domain in user["domains"]}
+                for user in response.get_json()["users"]
+            }
+            self.assertEqual(
+                assignments,
+                {
+                    self.subject: {"电源", "AI 服务"},
+                    self.other: {"工控", "电源", "AI 服务"},
+                },
+            )
+        with self.app.app_context():
+            self.assertEqual(subject_permissions(self.subject), {"rules.manage"})
+            self.assertEqual(subject_permissions(self.other), frozenset())
+            self.assertEqual(
+                user_domains(["ip:192.0.2.99"])["ip:192.0.2.99"][0]["name"], "其他"
+            )
+            self.assertEqual(len(product_domains()), 4)
+
+    def test_batch_add_rejects_invalid_selection_and_requires_admin_and_csrf(self):
+        self.save(["电源"])
+        for values, extra, status in [
+            (["新领域"], {"subjects": []}, 400),
+            ([], {"subjects": [self.subject]}, 400),
+            (["新领域"], {"subjects": [self.subject, "ip:unknown"]}, 404),
+            (
+                ["新领域"],
+                {
+                    "subjects": [
+                        f"ip:batch-{i}" for i in range(MAX_DOMAIN_BATCH_USERS + 1)
+                    ]
+                },
+                400,
+            ),
+            (["新领域"], {"subjects": [self.subject], "csrf_token": "wrong"}, 400),
+            (
+                ["新领域"],
+                {"subjects": [self.subject], "client": self.app.test_client()},
+                403,
+            ),
+        ]:
+            with self.subTest(extra=extra):
+                response = self.save(values, action="add_domains", **extra)
+                self.assertEqual(response.status_code, status)
+        with self.app.app_context():
+            self.assertEqual([item["name"] for item in product_domains()], ["电源"])
+            self.assertEqual(user_domains([self.other])[self.other], [])
+
+    def test_batch_add_checks_merged_limit_before_updating_any_user(self):
+        values = [f"领域{i}" for i in range(MAX_USER_DOMAINS)]
+        self.save(values, subject=self.other)
+        response = self.save(
+            ["新领域"], action="add_domains", subjects=[self.subject, self.other]
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("超过", response.get_json()["error"])
+        with self.app.app_context():
+            self.assertEqual(user_domains([self.subject])[self.subject], [])
+            self.assertEqual({item["name"] for item in product_domains()}, set(values))
+        response = self.save(
+            [values[0]], action="add_domains", subjects=[self.subject, self.other]
+        )
+        self.assertEqual(response.status_code, 200)
+        with self.app.app_context():
+            assignments = user_domains([self.subject, self.other])
+            self.assertEqual(len(assignments[self.subject]), 1)
+            self.assertEqual(len(assignments[self.other]), MAX_USER_DOMAINS)
+
+    def test_batch_failure_rolls_back_users_already_processed_and_new_catalog_entries(
+        self,
+    ):
+        self.save(["电源"])
+        with self.app.app_context():
+            db = get_db()
+            before = user_domains([self.subject, self.other])
+            db.executescript(
+                "CREATE TEMP TRIGGER reject_batch BEFORE INSERT ON user_product_domains "
+                "WHEN NEW.subject = 'cookie_session:domain-user' "
+                "BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END;"
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                add_user_domains([self.subject, self.other], ["新领域"])
+            self.assertEqual(user_domains([self.subject, self.other]), before)
+            self.assertEqual([item["name"] for item in product_domains()], ["电源"])
 
     def test_existing_database_adds_domain_tables_and_reinitialization_preserves_data(
         self,

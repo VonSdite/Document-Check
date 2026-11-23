@@ -13,9 +13,9 @@
     <label>用户
       <input name="keyword" value="{{ keyword }}" placeholder="搜索用户">
     </label>
-    <label>产品领域
+    <label>领域
       <span data-domain-filter data-selected="{{ domain }}">
-        <select name="domain" aria-label="产品领域筛选">
+        <select name="domain" aria-label="领域筛选">
           <option value="">全部领域</option>
           <option value="unassigned" {{ 'selected' if domain == 'unassigned' else '' }}>未标记</option>
           {% for item in domains %}
@@ -27,12 +27,18 @@
     <button type="submit" class="primary-button">查询</button>
   </form>
   {% if users %}
+  <div data-domain-bulk-editor></div>
   <div class="table-wrap">
     <table class="permission-table">
       <thead>
         <tr>
-          <th>用户</th>
-          <th class="permission-domain-cell">产品领域</th>
+          <th class="permission-select-cell">
+            <span data-user-domain-select data-label="选择本页全部用户">
+              <input type="checkbox" aria-label="选择本页全部用户" disabled>
+            </span>
+          </th>
+          <th class="permission-user-cell">用户</th>
+          <th class="permission-domain-cell">领域</th>
           {% for code, permission in permissions.items() %}
           <th>
             <span class="table-heading-help">
@@ -47,7 +53,12 @@
         {% for user in users %}
         {% set form_id = 'permission-user-' ~ loop.index %}
         <tr data-permission-user="{{ user.subject }}">
-          <td>
+          <td class="permission-select-cell">
+            <span data-user-domain-select data-subject="{{ user.subject }}" data-label="{{ user.label }}：选择用户">
+              <input type="checkbox" aria-label="{{ user.label }}：选择用户" disabled>
+            </span>
+          </td>
+          <td class="permission-user-cell">
             <strong>{{ user.label }}</strong>
             {% if user.subject.startswith('ip:') %}<div class="subline">{{ user.subject }}</div>{% endif %}
             <form id="{{ form_id }}" method="post" data-permission-form>

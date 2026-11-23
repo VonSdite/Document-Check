@@ -1,7 +1,8 @@
-"""用户产品领域标签的输入约束。"""
+"""用户领域标签的输入约束。"""
 
 MAX_USER_DOMAINS = 20
 MAX_DOMAIN_NAME_LENGTH = 40
+MAX_DOMAIN_BATCH_USERS = 200
 
 
 def normalize_domain_names(values: list[str]) -> list[str]:

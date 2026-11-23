@@ -26,7 +26,7 @@ app/web/
 
 `TaskComposer` 从服务端原生表单读取上传字段、模型、检查项、检查轮数和提交令牌，并保留挂载前的文件与选择。五类任务的用户端和管理端共用表单组件及两种列表组件。`ModelEditor` 使用稳定行标识，通过隐藏字段提交模型配置，拉取与测试结果关联当前连接草稿。
 
-`UserDomainEditor` 维护用户的产品领域标签，复用公共弹窗和同源请求；`UserDomainFilter` 与各行编辑器共享领域目录，新建领域保存后可直接复用。标签保存与权限自动保存分别提交，保存失败保留编辑草稿。
+`UserDomainEditor` 与 `UserDomainBulkEditor` 共用 `UserDomainDialog` 编辑领域标签，复用公共弹窗和同源请求。`UserDomainSelection` 管理本页多选与全选；筛选器和各行编辑器共享领域目录与保存结果，批量更新后可继续单人编辑。标签保存与权限自动保存分别提交，保存失败保留选择和草稿。
 
 列表和报告保持服务端片段协议。`features/tasks/list.js` 管理筛选、分页、历史与增量刷新；`features/reports` 管理条目复核、详情轮询和模型输出。共享事件通过明确模块导入或 DOM 事件交接。
 
