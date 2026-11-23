@@ -5,7 +5,7 @@
 <section class="panel">
   <div class="panel-head"><h1>报告终审</h1></div>
   <p class="subline">仅初审“不认可”的条目需要终审。</p>
-  <form method="get" class="filter-bar">
+  <form method="get" class="filter-bar final-review-queue-filter">
     <label>终审状态<select name="final_status"><option value="">全部</option>{% for key, label in final_statuses.items() %}{% if key != 'unavailable' %}<option value="{{ key }}"{{ ' selected' if final_status == key else '' }}>{{ label }}</option>{% endif %}{% endfor %}</select></label>
     <label>文件名称<input name="keyword" value="{{ keyword }}"></label>
     <button class="secondary-button" type="submit">筛选</button>

@@ -39,6 +39,16 @@
   overflow-wrap: anywhere;
 }
 
+@media (max-width: 600px) {
+  .final-review-queue-filter {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .final-review-queue-filter > button {
+    grid-column: 1 / -1;
+  }
+}
+
 .report-toolbar {
   display: flex;
   align-items: center;
