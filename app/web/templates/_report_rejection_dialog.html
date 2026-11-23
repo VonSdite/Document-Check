@@ -1,0 +1,28 @@
+<dialog class="modal report-rejection-modal" id="report-rejection-modal" data-report-rejection-modal>
+  <div class="modal-card report-rejection-modal-card">
+    <div class="modal-head">
+      <div>
+        <h2>选择不认可原因</h2>
+        <p>先判断模型给出的依据能否在文档或图片中找到。</p>
+      </div>
+      <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <div class="report-rejection-modal-body">
+      <div class="rejection-reason-list" role="list">
+        {% for reason, reason_label in REPORT_REJECTION_REASONS.items() %}
+        <button class="rejection-reason-option rejection-reason-{{ reason }}" type="button" data-report-rejection-choice="{{ reason }}" data-rejection-label="{{ reason_label }}" data-rejection-hint="{{ REPORT_REJECTION_REASON_HINTS[reason] }}">
+          <span class="rejection-reason-marker" aria-hidden="true"></span>
+          <span class="rejection-reason-copy">
+            <strong>{{ reason_label }}</strong>
+            <small>{{ REPORT_REJECTION_REASON_HINTS[reason] }}</small>
+          </span>
+        </button>
+        {% endfor %}
+      </div>
+      <div class="rejection-distinction">
+        <strong>误报和幻觉怎么区分？</strong>
+        <span>找得到原文但结论不成立，是模型误报；找不到模型声称存在的原文、位置或事实，才是模型幻觉。</span>
+      </div>
+    </div>
+  </div>
+</dialog>

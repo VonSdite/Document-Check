@@ -81,6 +81,18 @@ def _cross_check_group_context(results):
     }
 
 
+def task_report_context(task):
+    """单文档报告使用展示范围，独立终审读取完整条目。"""
+    if (task["task_type"] or DOCUMENT_TASK_TYPE) == DOCUMENT_TASK_TYPE:
+        return {
+            "results": _task_results(task),
+            "progress": None,
+            "archived_history": [],
+            "table_layout": True,
+        }
+    return {**review_report(task), "table_layout": False}
+
+
 def _import_task_report_excel(task, detail_endpoint: str):
     redirect_response = redirect(url_for(detail_endpoint, task_id=task["id"]))
     if task["status"] not in {"completed", "partial"}:

@@ -17,7 +17,7 @@ async function finalReview(item: Locator, decision: string, note: string) {
   await expect(item.locator('textarea[name=note]')).toHaveValue(note)
 }
 
-test('管理员在报告页内终审，无需横向滚动且重新进入保留意见', async ({ browser }, testInfo) => {
+test('单文档报告使用表格初审，管理员在独立终审页保存并回显意见', async ({ browser }, testInfo) => {
   const author = await browser.newContext()
   const admin = await browser.newContext()
   const page = await author.newPage()
@@ -28,12 +28,15 @@ test('管理员在报告页内终审，无需横向滚动且重新进入保留�
     const { task_id: taskId } = await response.json()
     await page.goto(`/tasks/${taskId}`)
     const items = page.locator('[data-report-item]')
+    await expect(page.locator('.report-table [data-report-item]')).toHaveCount(2)
+    await expect(page.locator('[data-final-review-cell], .report-review-entry')).toHaveCount(0)
     await initialReview(page, items.first(), true)
     await initialReview(page, items.last())
     await expect(page.getByRole('button', { name: '保存终审' })).toHaveCount(0)
     await adminPage.goto('/__frontend__/admin')
     await adminPage.goto(`/admin/tasks/${taskId}/reviews`)
-    await expect(adminPage).toHaveURL(new RegExp(`/admin/tasks/${taskId}#report-reviews$`))
+    await expect(adminPage).toHaveURL(new RegExp(`/admin/tasks/${taskId}/reviews$`))
+    await expect(adminPage.locator('[data-report-audit]')).toBeVisible()
     await expect(adminPage.locator('.review-notice')).toContainText('本地管理员')
     const adminItems = adminPage.locator('[data-report-item]')
     const note = '已核对原文中的 <参数> & "条件"。\n确认初审意见。'
@@ -45,8 +48,13 @@ test('管理员在报告页内终审，无需横向滚动且重新进入保留�
     await expect(adminItems.first().locator('select[name=decision]')).toHaveValue('confirmed')
     await expect(adminItems.first().locator('textarea[name=note]')).toHaveValue(note)
     await adminPage.getByRole('link', { name: '终审列表', exact: true }).click()
-    await adminPage.locator(`a[href="/admin/tasks/${taskId}#report-reviews"]`).click()
+    await adminPage.locator(`a[href="/admin/tasks/${taskId}/reviews"]`).click()
     await expect(adminItems.first().locator('select[name=decision]')).toHaveValue('confirmed')
+    await expect(adminItems.first().locator('textarea[name=note]')).toHaveValue(note)
+    await adminPage.getByRole('link', { name: '检查报告', exact: true }).click()
+    await expect(adminPage.locator('.report-table [data-report-item]')).toHaveCount(2)
+    await expect(adminPage.locator('[data-final-review-form]')).toHaveCount(0)
+    await adminPage.getByRole('link', { name: '报告终审与记录', exact: true }).click()
     await expect(adminItems.first().locator('textarea[name=note]')).toHaveValue(note)
     await adminItems.first().getByRole('button', { name: '保存初审' }).click()
     await expect(adminItems.first().locator('[data-initial-save-status]')).toHaveText('已保存')
@@ -92,7 +100,7 @@ test('管理员在报告页内终审，无需横向滚动且重新进入保留�
   }
 })
 
-test('报告页区分初审和终审权限，初审修改后重新终审', async ({ browser }, testInfo) => {
+test('独立审核页区分初审和终审权限，初审修改后重新终审', async ({ browser }, testInfo) => {
   const author = await browser.newContext()
   const reviewer = await browser.newContext()
   const page = await author.newPage()
@@ -140,7 +148,7 @@ test('报告页区分初审和终审权限，初审修改后重新终审', async
     await expect(reviewItems.first().locator('textarea[name=note]')).toHaveValue(returnedNote)
     await finalReview(reviewItems.first(), 'deferred', '需要补充原始依据。')
     await reviewPage.getByRole('link', { name: '终审列表', exact: true }).click()
-    await reviewPage.locator(`a[href="/tasks/${taskId}#report-reviews"]`).click()
+    await reviewPage.locator(`a[href="/tasks/${taskId}/reviews"]`).click()
     await expect(reviewItems.first().locator('select[name=decision]')).toHaveValue('deferred')
     await expect(reviewItems.first().locator('textarea[name=note]')).toHaveValue(
       '需要补充原始依据。',
@@ -204,7 +212,7 @@ test('终审保存失败和版本冲突时保留输入，不改写审核记录',
     await expect(item.locator('[data-final-save-status]')).toHaveText('暂时无法保存，请重试。')
     await expect(item.locator('select[name=decision]')).toHaveValue('returned')
     await expect(item.locator('textarea[name=note]')).toHaveValue('仍需核对的审核说明。')
-    await otherPage.goto(`/tasks/${taskId}`)
+    await otherPage.goto(`/tasks/${taskId}/reviews`)
     await otherPage
       .locator('[data-report-item]')
       .first()

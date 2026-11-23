@@ -2,14 +2,22 @@
 
 from flask import abort, flash, redirect, render_template, request, url_for
 
+from app.contracts.task_types import VIDEO_TASK_TYPE
 from app.persistence.connection import get_db
 from app.reporting.reviews import (
+    ACTIVE_STATUSES,
+    FINAL_DECISIONS,
     FINAL_STATUSES,
     ReviewConflict,
     final_review_progress,
+    review_report,
     save_final_review,
 )
-from app.reporting.service import update_report_item_review
+from app.reporting.service import (
+    _report_item_fields_for_task,
+    _uses_compact_media_report,
+    update_report_item_review,
+)
 from app.web.auth import (
     _check_write_origin,
     can_manage_task,
@@ -20,6 +28,7 @@ from app.web.common import _task_endpoint
 from app.web.reports import report_review_fragments, review_actor
 from app.web.task_actions import _get_task_or_404, _get_user_task
 from app.web.task_lists import _bounded_page, _page_arg, _pagination, _per_page_arg
+from app.web.task_media import _attach_report_media_urls, _task_video_stream_url
 
 
 def register_final_review_routes(app):
@@ -109,15 +118,33 @@ def register_final_review_routes(app):
                 flash("审核意见已保存。", "success")
             return redirect(
                 url_for(
-                    _task_endpoint("task_detail"),
+                    request.endpoint,
                     task_id=task_id,
                     _anchor=f"review-{data.get('result_code', '')}-{data.get('item_id', '')}",
                 )
             )
-        return redirect(
-            url_for(
-                _task_endpoint("task_detail"), task_id=task_id, _anchor="report-reviews"
-            )
+        context = review_report(task)
+        _attach_report_media_urls(
+            context["results"], task, _task_endpoint("task_media")
+        )
+        return render_template(
+            "final_review.html",
+            task=task,
+            results=context["results"],
+            review_progress=context["progress"],
+            archived_history=context["archived_history"],
+            actor=review_actor(),
+            active_nav="final_reviews",
+            task_editable=can_manage_task(task),
+            task_finished=task["status"] not in ACTIVE_STATUSES,
+            final_decisions=FINAL_DECISIONS,
+            report_item_fields=_report_item_fields_for_task(task["task_type"]),
+            media_report=_uses_compact_media_report(task["task_type"]),
+            video_report=task["task_type"] == VIDEO_TASK_TYPE,
+            video_stream_url=_task_video_stream_url(task, _task_endpoint("task_video")),
+            report_classification_url=url_for(
+                _task_endpoint("update_report_item_type"), task_id=task_id
+            ),
         )
 
     for prefix, endpoint_prefix in (("", "user_"), (app.config["ADMIN_URL"], "admin_")):

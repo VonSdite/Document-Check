@@ -121,7 +121,7 @@ class FinalReviewTest(unittest.TestCase):
             )
         self.assertEqual(self.state()["initial"]["actor_source"], "ip")
         page = self.client.get(
-            f"/admin/tasks/{self.task_id}",
+            f"/admin/tasks/{self.task_id}/reviews",
             headers={"X-Test-Subject": "ip:127.0.0.1"},
         )
         soup = BeautifulSoup(page.data, "html.parser")
@@ -150,7 +150,7 @@ class FinalReviewTest(unittest.TestCase):
             self.state()["initial"]["actor_subject"], "local_admin:primary"
         )
         page = self.client.get(
-            f"/admin/tasks/{self.task_id}",
+            f"/admin/tasks/{self.task_id}/reviews",
             headers={"X-Test-Subject": "ip:127.0.0.1"},
         )
         self.assertEqual(
@@ -248,7 +248,7 @@ class FinalReviewTest(unittest.TestCase):
             self.assertEqual(events[-1]["initial_review_id"], events[1]["id"])
             self.assertTrue(events[-1]["created_at"])
         page = self.client.get(
-            f"/tasks/{self.task_id}", headers={"X-Test-Subject": "reviewer"}
+            f"/tasks/{self.task_id}/reviews", headers={"X-Test-Subject": "reviewer"}
         )
         self.assertEqual(page.status_code, 200)
         self.assertEqual(
@@ -315,7 +315,7 @@ class FinalReviewTest(unittest.TestCase):
             progress = final_review_progress([self.task_id])[self.task_id]
             self.assertEqual(progress["confirmed"], 1)
             self.assertEqual(progress["status"], "completed")
-        page = self.client.get(f"/tasks/{self.task_id}")
+        page = self.client.get(f"/tasks/{self.task_id}/reviews")
         soup = BeautifulSoup(page.data, "html.parser")
         self.assertEqual(len(soup.select("[data-report-item]")), 2)
         self.assertEqual(len(soup.select("[data-final-review-form]")), 1)
@@ -337,7 +337,7 @@ class FinalReviewTest(unittest.TestCase):
                 self.assertEqual(progress["status"], "not_required")
                 self.assertEqual(progress["confirmed"], 0)
                 self.assertEqual(progress["required_count"], 0)
-            page = self.client.get(f"/tasks/{self.task_id}")
+            page = self.client.get(f"/tasks/{self.task_id}/reviews")
             soup = BeautifulSoup(page.data, "html.parser")
             self.assertFalse(soup.select("[data-final-review-form]"))
             self.assertTrue(soup.select("[data-review-history-toggle]"))
@@ -374,7 +374,7 @@ class FinalReviewTest(unittest.TestCase):
         state = self.state()
         self.assertIsNone(state["final"])
         self.assertEqual(len(state["history"]), 2)
-        for suffix in ("", "/export"):
+        for suffix in ("/reviews", "/export"):
             page = self.client.get(f"/tasks/{self.task_id}{suffix}")
             self.assertEqual(page.status_code, 200)
             self.assertIn("已保存的历史终审说明", page.get_data(as_text=True))
@@ -436,18 +436,44 @@ class FinalReviewTest(unittest.TestCase):
         )
         self.assertEqual(self.state()["status"], "deferred")
 
-    def test_review_entry_redirects_to_report_and_queue_links_to_table(self):
+    def test_report_table_and_separate_final_review_page_have_distinct_entries(self):
+        self.initial()
         for prefix in ("", "/admin"):
-            response = self.client.get(f"{prefix}/tasks/{self.task_id}/reviews")
-            self.assertEqual(response.status_code, 302)
-            self.assertEqual(
-                response.location, f"{prefix}/tasks/{self.task_id}#report-reviews"
+            report = self.client.get(f"{prefix}/tasks/{self.task_id}")
+            soup = BeautifulSoup(report.data, "html.parser")
+            self.assertEqual(len(soup.select(".report-table [data-report-item]")), 2)
+            self.assertFalse(soup.select("[data-audit-item], [data-final-review-form]"))
+            self.assertFalse(soup.select("[data-report-review-progress]"))
+            self.assertIsNotNone(
+                soup.find("a", href=f"{prefix}/tasks/{self.task_id}/reviews")
             )
+            response = self.client.get(f"{prefix}/tasks/{self.task_id}/reviews")
+            self.assertEqual(response.status_code, 200)
+            soup = BeautifulSoup(response.data, "html.parser")
+            self.assertIsNotNone(soup.select_one("[data-report-audit]"))
+            self.assertEqual(len(soup.select("[data-final-review-form]")), 1)
+            self.assertIsNotNone(soup.find("a", href=f"{prefix}/tasks/{self.task_id}"))
             queue = self.client.get(f"{prefix}/final-reviews")
             soup = BeautifulSoup(queue.data, "html.parser")
             self.assertIsNotNone(
-                soup.find("a", href=f"{prefix}/tasks/{self.task_id}#report-reviews")
+                soup.find("a", href=f"{prefix}/tasks/{self.task_id}/reviews")
             )
+
+        response = self.client.post(
+            f"/tasks/{self.task_id}/reviews",
+            data={
+                "stage": "final",
+                "result_code": "consistency",
+                "item_id": self.items[0]["id"],
+                "decision": "confirmed",
+                "review_token": self.state()["token"],
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.location,
+            f"/tasks/{self.task_id}/reviews#review-consistency-{self.items[0]['id']}",
+        )
 
     def test_inline_save_returns_current_controls_history_and_progress(self):
         self.initial()
@@ -476,7 +502,7 @@ class FinalReviewTest(unittest.TestCase):
         )
         self.assertIn("cookie_session:reviewer", payload["review_fragments"]["history"])
         page = self.client.get(
-            f"/tasks/{self.task_id}", headers={"X-Test-Subject": "reviewer"}
+            f"/tasks/{self.task_id}/reviews", headers={"X-Test-Subject": "reviewer"}
         )
         soup = BeautifulSoup(page.data, "html.parser")
         self.assertEqual(soup.select_one("textarea[name=note]").get_text(), note)
@@ -534,10 +560,16 @@ class FinalReviewTest(unittest.TestCase):
             self.assertEqual(
                 review_context(self.task())["progress"]["required_count"], 1
             )
-        page = self.client.get(f"/tasks/{self.task_id}")
+        page = self.client.get(f"/tasks/{self.task_id}/reviews")
         self.assertEqual(
             len(BeautifulSoup(page.data, "html.parser").select("[data-audit-item]")), 2
         )
+
+        report = self.client.get(f"/tasks/{self.task_id}")
+        soup = BeautifulSoup(report.data, "html.parser")
+        self.assertEqual(len(soup.select("[data-report-item]")), 1)
+        self.assertEqual(len(soup.select(".result-raw-details .is-suppressed")), 1)
+        self.assertFalse(soup.select("[data-final-review-form]"))
 
     def test_excel_records_importer_preserves_final_on_noop_and_rejects_stale(self):
         self.initial()
@@ -665,7 +697,7 @@ class FinalReviewTest(unittest.TestCase):
             context = review_context(self.task())
             self.assertEqual(context["progress"]["total"], 0)
             self.assertEqual(len(context["archived_history"]), 2)
-        page = self.client.get(f"/tasks/{self.task_id}")
+        page = self.client.get(f"/tasks/{self.task_id}/reviews")
         self.assertIn("其他版本条目的审核记录", page.get_data(as_text=True))
         self.assertIn("参数 A 前后不一致", page.get_data(as_text=True))
 

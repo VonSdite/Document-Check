@@ -1,0 +1,32 @@
+{% if result.report_limit %}
+<div class="report-limit-notice">
+  {% if result.report_limit.duplicate_count %}已合并 {{ result.report_limit.duplicate_count }} 条重复问题，去重后共 {{ result.report_limit.deduplicated_count }} 条。{% endif %}
+  {% if result.report_limit.limit_applied %}已按问题判定、证据可信度和严重程度排序，报告硬限制保留前 {{ result.report_limit.limit }} 条，省略 {{ result.report_limit.omitted_count }} 条。{% if result.uses_model %}模型输出内容可在上方展开查看。{% endif %}{% endif %}
+</div>
+{% endif %}
+<div class="report-table-wrap">
+  <table class="report-table">
+    <thead>
+      <tr>
+        <th class="report-index-cell">条目</th>
+        {% for field, label in report_item_fields %}<th class="report-field-{{ field }}">{{ label }}</th>{% endfor %}
+        <th class="report-status-cell">{{ REPORT_ITEM_TYPE_LABEL }}</th>
+        <th class="report-acceptance-cell">是否认可 AI 结论</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in result.report_items %}
+      {% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
+      <tr{% if item.cross_check_anchor_id %} id="{{ item.cross_check_anchor_id }}"{% endif %} class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
+        <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}{% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}</td>
+        {% for field, label in report_item_fields %}
+        {% set field_value = item[field] %}
+        <td class="report-field report-field-{{ field }}">{% include "_report_field_content.html" %}</td>
+        {% endfor %}
+        <td class="report-status-cell"><span class="report-item-type-badge">{{ item.type_label }}</span></td>
+        <td class="report-acceptance-cell" data-initial-review-cell>{% include "_report_initial_review.html" %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

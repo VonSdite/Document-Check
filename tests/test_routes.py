@@ -627,7 +627,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         record({"kind": "thinking", "text": "分析", "stream": "one", "attempt": 1})
         record({"kind": "end", "stream": "one", "attempt": 1})
         with patch(
-            "app.web.admin_tasks.review_report",
+            "app.web.admin_tasks.task_report_context",
             side_effect=AssertionError("loaded report"),
         ):
             response = self.client.get(f"/admin/tasks/{task_id}/model-output")
@@ -678,11 +678,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     side_effect=AssertionError("read output"),
                 ),
                 patch(
-                    "app.web.admin_tasks.review_report",
+                    "app.web.admin_tasks.task_report_context",
                     side_effect=AssertionError("read report"),
                 ),
                 patch(
-                    "app.web.user_tasks.review_report",
+                    "app.web.user_tasks.task_report_context",
                     side_effect=AssertionError("read report"),
                 ),
             ):
@@ -759,7 +759,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             str(article).index(
                 str(
                     article.select_one(
-                        ".report-review-list, .result-text, .result-summary"
+                        ".report-table-wrap, .report-review-list, .result-text, .result-summary"
                     )
                 )
             ),
@@ -790,7 +790,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertFalse(soup.select_one("[data-cancel-check]").has_attr("hidden"))
         revision = soup.select_one("[data-task-detail]")["data-detail-revision"]
         with patch(
-            "app.web.admin_tasks.review_report",
+            "app.web.admin_tasks.task_report_context",
             side_effect=AssertionError("report rerendered"),
         ):
             response = self.client.get(
@@ -6268,29 +6268,38 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [
-            node.get_text(strip=True)
-            for node in soup.select_one("[data-report-item]").select(
-                ".report-field-heading"
-            )
+            node.get_text(strip=True) for node in soup.select(".report-table th")
         ]
         self.assertEqual(
             headers,
-            ["位置", "原文/证据", "问题描述", "影响", "修改建议"],
+            [
+                "条目",
+                "严重程度",
+                "证据可信度",
+                "问题类型",
+                "位置",
+                "原文/证据",
+                "问题描述",
+                "影响",
+                "修改建议",
+                "AI判定",
+                "是否认可 AI 结论",
+            ],
         )
         self.assertIn(
             "report-field-severity_label",
-            _required_tag(soup.select_one(".report-field-severity_label")).get(
+            _required_tag(soup.select_one(".report-table th:nth-child(2)")).get(
                 "class", []
             ),
         )
         self.assertIn(
             "report-field-confidence_label",
-            _required_tag(soup.select_one(".report-field-confidence_label")).get(
+            _required_tag(soup.select_one(".report-table th:nth-child(3)")).get(
                 "class", []
             ),
         )
-        rows = soup.select("[data-report-item]")
-        self.assertEqual(len(rows), 2)
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0].select("[data-report-item-type]"))
         self.assertEqual(len(rows[0].select(".report-status-cell select")), 0)
         self.assertEqual(
@@ -6362,7 +6371,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         self.assertIsNone(rows[0].select_one(".report-rejection-cell"))
         self.assertIn("同一参数前后不一致", rows[0].get_text(" ", strip=True))
-        self.assertIn("补充审核条目", rows[1].get_text(" ", strip=True))
+        self.assertIn(
+            "报告硬限制保留前 1 条，省略 1 条", soup.get_text(" ", strip=True)
+        )
         self.assertEqual(
             _required_tag(soup.select_one('[data-report-count="issue"]')).get_text(
                 strip=True
@@ -6373,7 +6384,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             _required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(
                 strip=True
             ),
-            "1",
+            "0",
         )
 
     def test_media_task_detail_uses_compact_report_table(self):
@@ -6792,7 +6803,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertIsNotNone(retry)
                 self.assertNotIn("hidden", retry.attrs)
 
-    def test_task_detail_keeps_ranked_rows_and_includes_all_review_items(self):
+    def test_task_detail_deduplicates_ranks_and_limits_structured_items(self):
         with self.app.app_context():
             now = "2026-05-23 13:37:00"
             structured_result = {
@@ -6888,8 +6899,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-        rows = soup.select("[data-report-item]")
-        self.assertEqual(len(rows), 4)
+        rows = soup.select("tr[data-report-item]")
+        self.assertEqual(len(rows), 2)
         first_row = rows[0].get_text(" ", strip=True)
         second_row = rows[1].get_text(" ", strip=True)
         self.assertIn("高", first_row)
@@ -6898,14 +6909,21 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertIn("高", second_row)
         self.assertIn("低风险问题", second_row)
         page_text = soup.get_text(" ", strip=True)
-        self.assertIn("补充审核条目", page_text)
-        self.assertEqual(len({row["data-item-id"] for row in rows}), 4)
-        self.assertIn(
+        self.assertIn("已合并 1 条重复问题", page_text)
+        self.assertIn("硬限制保留前 2 条，省略 1 条", page_text)
+        self.assertNotIn(
             "安全约束前后矛盾", " ".join(row.get_text(" ", strip=True) for row in rows)
         )
         self.assertNotIn(
             "该项不是问题", " ".join(row.get_text(" ", strip=True) for row in rows)
         )
+
+        audit = self.client.get(f"/admin/tasks/{task_id}/reviews")
+        self.assertEqual(audit.status_code, 200)
+        audit_soup = BeautifulSoup(audit.data, "html.parser")
+        self.assertEqual(len(audit_soup.select("[data-audit-item]")), 4)
+        self.assertIn("补充审核条目", audit_soup.get_text())
+        self.assertIn("安全约束前后矛盾", audit_soup.get_text())
 
     def test_report_hard_limit_keeps_top_thirty_likely_issues(self):
         raw_items = [
@@ -8369,7 +8387,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         initial_row = _required_tag(soup.select_one("[data-report-item]"))
         item_id = initial_row["data-item-id"]
         self.assertIn("第一条候选问题", initial_row.get_text(" ", strip=True))
-        self.assertIn(
+        self.assertNotIn(
             "第二条候选问题",
             " ".join(
                 row.get_text(" ", strip=True)
@@ -8392,10 +8410,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
         refreshed = self.client.get(f"/admin/tasks/{task_id}")
         refreshed_soup = BeautifulSoup(refreshed.get_data(as_text=True), "html.parser")
         refreshed_rows = refreshed_soup.select("[data-report-item]")
-        self.assertEqual(len(refreshed_rows), 2)
+        self.assertEqual(len(refreshed_rows), 1)
         self.assertEqual(refreshed_rows[0]["data-item-id"], item_id)
         self.assertIn("第一条候选问题", refreshed_rows[0].get_text(" ", strip=True))
-        self.assertIn(
+        self.assertNotIn(
             "第二条候选问题",
             " ".join(row.get_text(" ", strip=True) for row in refreshed_rows),
         )
@@ -8765,7 +8783,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         detail_after_enable = self.client.get(f"/admin/tasks/{future_task_id}")
         soup = BeautifulSoup(detail_after_enable.get_data(as_text=True), "html.parser")
         visible_items = soup.select("[data-report-item]")
-        self.assertEqual(len(visible_items), 2)
+        self.assertEqual(len(visible_items), 1)
         self.assertIn("文档中缺少安全警告", visible_items[0].get_text(" ", strip=True))
         self.assertEqual(
             _required_tag(soup.select_one('[data-report-count="suppressed"]')).get_text(
@@ -8773,7 +8791,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ),
             "1",
         )
-        self.assertIn("已忽略误报", visible_items[1].get_text())
+        self.assertIn("已忽略误报 1 条", detail_after_enable.get_data(as_text=True))
         self.assertIn(
             "客户交付文档仍保留研发内部备注", detail_after_enable.get_data(as_text=True)
         )

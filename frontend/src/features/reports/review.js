@@ -312,7 +312,10 @@ async function submitReportReview(item, url, payload, stage) {
     const response = await fetch(url, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...payload, inline_review: true }),
+      body: JSON.stringify({
+        ...payload,
+        inline_review: Boolean(item.querySelector('[data-final-review-cell]')),
+      }),
       signal: controller.signal,
     })
     const data = await response.json().catch(() => ({}))
