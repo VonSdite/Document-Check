@@ -7,11 +7,22 @@
     <h1>用户权限</h1>
   </div>
 </section>
-<section class="panel">
-  <form method="get" class="filter-bar">
+<section class="panel" data-user-domains-page data-domain-options='{{ domains|tojson }}' data-save-url="{{ url_for('admin_permissions') }}" data-csrf-token="{{ csrf_token }}" data-domain-name-limit="{{ domain_name_limit }}" data-user-domain-limit="{{ user_domain_limit }}">
+  <form method="get" class="filter-bar permission-filter-bar">
     <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
     <label>用户
       <input name="keyword" value="{{ keyword }}" placeholder="搜索用户">
+    </label>
+    <label>产品领域
+      <span data-domain-filter data-selected="{{ domain }}">
+        <select name="domain" aria-label="产品领域筛选">
+          <option value="">全部领域</option>
+          <option value="unassigned" {{ 'selected' if domain == 'unassigned' else '' }}>未标记</option>
+          {% for item in domains %}
+          <option value="{{ item.id }}" {{ 'selected' if domain == item.id|string else '' }}>{{ item.name }}</option>
+          {% endfor %}
+        </select>
+      </span>
     </label>
     <button type="submit" class="primary-button">查询</button>
   </form>
@@ -21,6 +32,7 @@
       <thead>
         <tr>
           <th>用户</th>
+          <th class="permission-domain-cell">产品领域</th>
           {% for code, permission in permissions.items() %}
           <th>
             <span class="table-heading-help">
@@ -42,9 +54,17 @@
               <input type="hidden" name="subject" value="{{ user.subject }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="keyword" value="{{ keyword }}">
+              <input type="hidden" name="domain" value="{{ domain }}">
               <input type="hidden" name="page" value="{{ pagination.page }}">
               <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
             </form>
+          </td>
+          <td class="permission-domain-cell">
+            <div data-user-domain-editor data-subject="{{ user.subject }}" data-label="{{ user.label }}" data-domains='{{ user.domains|tojson }}'>
+              <div class="user-domain-tags">
+                {% for item in user.domains %}<span class="user-domain-tag">{{ item.name }}</span>{% else %}<span class="muted">未标记</span>{% endfor %}
+              </div>
+            </div>
           </td>
           {% for code, permission in permissions.items() %}
           <td class="permission-choice">
@@ -59,6 +79,6 @@
   {% else %}
   <div class="empty-state compact"><h3>暂无匹配用户</h3></div>
   {% endif %}
-  {{ table_pagination.render('admin_permissions', pagination, filters={'keyword': keyword}, aria_label='用户分页') }}
+  {{ table_pagination.render('admin_permissions', pagination, filters={'keyword': keyword, 'domain': domain}, aria_label='用户分页') }}
 </section>
 {% endblock %}

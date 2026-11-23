@@ -11,6 +11,11 @@ from app.persistence.connection import (
 MODEL_READ_TIMEOUT_MIGRATION_KEY = "model_provider_read_timeout_600_v1"
 
 QUERY_INDEXES = {
+    "idx_user_product_domains_domain": (
+        "user_product_domains",
+        "CREATE INDEX IF NOT EXISTS idx_user_product_domains_domain "
+        "ON user_product_domains(domain_id, subject)",
+    ),
     "idx_tasks_type_owner_status": (
         "tasks",
         "CREATE INDEX IF NOT EXISTS idx_tasks_type_owner_status "
@@ -64,6 +69,22 @@ def init_db():
             )),
             PRIMARY KEY(subject, permission),
             FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS product_domains (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            name_key TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_product_domains (
+            subject TEXT NOT NULL,
+            domain_id INTEGER NOT NULL,
+            assigned_at TEXT NOT NULL,
+            PRIMARY KEY(subject, domain_id),
+            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE,
+            FOREIGN KEY(domain_id) REFERENCES product_domains(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS check_items (

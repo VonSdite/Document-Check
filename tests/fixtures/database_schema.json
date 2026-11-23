@@ -120,6 +120,12 @@
     "CREATE INDEX idx_user_model_providers_owner ON user_model_providers(owner_subject, updated_at DESC)"
   ],
   [
+    "index",
+    "idx_user_product_domains_domain",
+    "user_product_domains",
+    "CREATE INDEX idx_user_product_domains_domain ON user_product_domains(domain_id, subject)"
+  ],
+  [
     "table",
     "check_items",
     "check_items",
@@ -130,6 +136,12 @@
     "ip_usernames",
     "ip_usernames",
     "CREATE TABLE ip_usernames (\n            ip TEXT PRIMARY KEY,\n            username TEXT NOT NULL,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+  ],
+  [
+    "table",
+    "product_domains",
+    "product_domains",
+    "CREATE TABLE product_domains (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            name TEXT NOT NULL,\n            name_key TEXT NOT NULL UNIQUE,\n            created_at TEXT NOT NULL\n        )"
   ],
   [
     "table",
@@ -196,6 +208,12 @@
     "user_permissions",
     "user_permissions",
     "CREATE TABLE user_permissions (\n            subject TEXT NOT NULL,\n            permission TEXT NOT NULL CHECK(permission IN (\n                'tasks.view_all', 'tasks.manage_all', 'stats.view_all', 'rules.manage'\n            )),\n            PRIMARY KEY(subject, permission),\n            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE\n        )"
+  ],
+  [
+    "table",
+    "user_product_domains",
+    "user_product_domains",
+    "CREATE TABLE user_product_domains (\n            subject TEXT NOT NULL,\n            domain_id INTEGER NOT NULL,\n            assigned_at TEXT NOT NULL,\n            PRIMARY KEY(subject, domain_id),\n            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE,\n            FOREIGN KEY(domain_id) REFERENCES product_domains(id) ON DELETE CASCADE\n        )"
   ],
   [
     "trigger",

@@ -4347,9 +4347,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 self.assertTrue(upload.has_attr("multiple"))
                 field = _required_tag(upload.find_parent(class_="multi-file-field"))
                 self.assertIsNotNone(field.select_one("[data-file-list]"))
-                self.assertIn(
-                    "每个视频独立创建检查任务", soup.get_text(" ", strip=True)
-                )
+                help_tip = _required_tag(field.select_one(".help-tip"))
+                self.assertIn("每个视频独立抽帧并创建任务", help_tip["data-tip"])
 
     def test_create_task_saves_check_snapshot_and_defers_text_extraction(self):
         model_id = self._configure_provider(reasoning_effort="high")

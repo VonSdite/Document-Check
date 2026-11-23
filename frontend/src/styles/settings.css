@@ -602,7 +602,7 @@
 }
 
 .permission-table {
-  min-width: 900px;
+  min-width: 1080px;
 }
 
 .permission-table th,
@@ -622,4 +622,93 @@
   width: 18px;
   height: 18px;
   accent-color: var(--primary);
+}
+
+.filter-bar.permission-filter-bar {
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 240px) auto;
+}
+.permission-filter-bar label {
+  min-width: 0;
+}
+.permission-filter-bar select {
+  width: 100%;
+}
+.permission-table .permission-domain-cell {
+  text-align: left;
+  min-width: 240px;
+}
+.user-domain-editor,
+.domain-editor-fields,
+.domain-editor-selection,
+.domain-editor-options {
+  display: grid;
+  gap: var(--space-3);
+}
+.user-domain-editor > .ui-button {
+  justify-self: start;
+}
+.user-domain-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.user-domain-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 260px;
+  padding: 4px 8px;
+  border-radius: var(--radius-control);
+  background: var(--tag-background);
+  color: var(--tag-text);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.user-domain-tag button {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  border: 0;
+  padding: 2px;
+  color: inherit;
+  background: transparent;
+}
+.domain-editor-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  gap: var(--space-5);
+  min-width: 0;
+}
+.domain-editor-user {
+  margin: 0 0 var(--space-4);
+  font-weight: var(--weight-heading);
+  overflow-wrap: anywhere;
+}
+.domain-editor-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: end;
+}
+.domain-editor-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.domain-editor-choices span {
+  overflow-wrap: anywhere;
+}
+.domain-editor-error {
+  color: var(--danger);
+  margin: var(--space-4) 0 0;
+}
+@media (max-width: 600px) {
+  .filter-bar.permission-filter-bar,
+  .domain-editor-choices {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

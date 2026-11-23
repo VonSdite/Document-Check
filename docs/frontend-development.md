@@ -26,6 +26,8 @@ app/web/
 
 `TaskComposer` 从服务端原生表单读取上传字段、模型、检查项、检查轮数和提交令牌，并保留挂载前的文件与选择。五类任务的用户端和管理端共用表单组件及两种列表组件。`ModelEditor` 使用稳定行标识，通过隐藏字段提交模型配置，拉取与测试结果关联当前连接草稿。
 
+`UserDomainEditor` 维护用户的产品领域标签，复用公共弹窗和同源请求；`UserDomainFilter` 与各行编辑器共享领域目录，新建领域保存后可直接复用。标签保存与权限自动保存分别提交，保存失败保留编辑草稿。
+
 列表和报告保持服务端片段协议。`features/tasks/list.js` 管理筛选、分页、历史与增量刷新；`features/reports` 管理条目复核、详情轮询和模型输出。共享事件通过明确模块导入或 DOM 事件交接。
 
 ## 开发与构建
@@ -61,7 +63,7 @@ npm --prefix frontend run test:unit
 npm --prefix frontend run build
 npm --prefix frontend run test:e2e
 node --test tests/test_task_form_ui.js tests/test_task_list_ui.js tests/test_permissions_ui.js
-uv run python -m unittest tests.test_routes tests.test_permissions tests.test_cookie_session_routes tests.test_config tests.test_architecture tests.test_frontend
+uv run python -m unittest tests.test_routes tests.test_user_domains tests.test_permissions tests.test_cookie_session_routes tests.test_config tests.test_architecture tests.test_frontend
 ```
 
 浏览器验证使用本机 Chrome 和 `frontend/tests/server.py` 提供的隔离工作区，示例模型请求由测试拦截。测试服务监听 `127.0.0.1:8768`，端口用于测试配置；实际工具的监听地址与端口由本地 `config.yaml` 控制。截图与 trace 保存在忽略的 `instance/frontend-test-results/`。组件测试覆盖文件合并、模型配置边界、草稿关联、请求取消、同源限制及用户资料版本；浏览器测试覆盖任务提交、筛选保留草稿、模型保存、报告标注、规则分页、权限、主题、移动端导航与 HTML 报告离线使用。

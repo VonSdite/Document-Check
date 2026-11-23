@@ -1,6 +1,7 @@
 """用户主体登记与管理权限持久化。"""
 
 from app.persistence.connection import get_db, now_text
+from app.persistence.user_domains import user_domains
 
 
 def register_subject(subject: str):
@@ -46,7 +47,7 @@ def replace_subject_permissions(subject: str, permissions: set[str]) -> bool:
     return True
 
 
-def permission_users(*, keyword: str, page: int, per_page: int):
+def permission_users(*, keyword: str, page: int, per_page: int, domain: str = ""):
     db = get_db()
     clauses, params = [], []
     joins = """
@@ -54,6 +55,16 @@ def permission_users(*, keyword: str, page: int, per_page: int):
         LEFT JOIN ip_usernames names ON u.subject = 'ip:' || names.ip
     """
     label = "COALESCE(NULLIF(json_extract(profile.value, '$.label'), ''), NULLIF(names.username, ''), u.subject)"
+    if domain == "unassigned":
+        clauses.append(
+            "NOT EXISTS (SELECT 1 FROM user_product_domains d WHERE d.subject = u.subject)"
+        )
+    elif domain:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM user_product_domains d "
+            "WHERE d.subject = u.subject AND d.domain_id = ?)"
+        )
+        params.append(domain)
     if keyword:
         clauses.append(f"(u.subject LIKE ? ESCAPE '\\' OR {label} LIKE ? ESCAPE '\\')")
         escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -72,8 +83,10 @@ def permission_users(*, keyword: str, page: int, per_page: int):
         )
     ]
     by_subject = {row["subject"]: row for row in rows}
+    domains = user_domains(list(by_subject))
     for row in rows:
         row["permissions"] = set()
+        row["domains"] = domains[row["subject"]]
     if rows:
         placeholders = ",".join("?" for _ in rows)
         for grant in db.execute(

@@ -12,6 +12,7 @@ from app.persistence.connection import get_db
 from app.persistence.schema import init_db
 
 INDEX_TABLES = {
+    "idx_user_product_domains_domain": "user_product_domains",
     "idx_tasks_type_owner_status": "tasks",
     "idx_tasks_pending_file_cleanup": "tasks",
     "idx_report_suppression_hits_task": "report_suppression_hits",
@@ -71,6 +72,15 @@ class DatabaseIndexInitializationTest(unittest.TestCase):
             """,
             [("first",), ("second",)],
         )
+        db.execute(
+            "INSERT INTO user_identities(subject, created_at) VALUES ('ip:127.0.0.1', '2026-09-01')"
+        )
+        db.execute(
+            "INSERT INTO product_domains(id, name, name_key, created_at) VALUES (1, '电源', '电源', '2026-09-01')"
+        )
+        db.execute(
+            "INSERT INTO user_product_domains(subject, domain_id, assigned_at) VALUES ('ip:127.0.0.1', 1, '2026-09-01')"
+        )
         db.commit()
 
     def drop_indexes(self, names):
@@ -127,6 +137,7 @@ class DatabaseIndexInitializationTest(unittest.TestCase):
                 "ANALYZE report_suppression_hits",
                 "ANALYZE report_suppression_rules",
                 "ANALYZE tasks",
+                "ANALYZE user_product_domains",
             ],
         )
         stats = {row["idx"] for row in get_db().execute("SELECT idx FROM sqlite_stat1")}

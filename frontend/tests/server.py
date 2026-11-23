@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from app.persistence.connection import get_db  # noqa: E402
+from app.persistence.permissions import register_subject  # noqa: E402
+from app.persistence.settings import set_ip_username  # noqa: E402
 from tests.test_routes import AdminSettingsRouteTest  # noqa: E402
 
 
@@ -40,6 +42,9 @@ def main():
             "UPDATE user_model_providers SET name='示例模型服务', request_timeout=600"
         )
         db.commit()
+        for ip, name in [("192.0.2.10", "示例用户甲"), ("192.0.2.11", "示例用户乙")]:
+            register_subject(f"ip:{ip}")
+            set_ip_username(ip, name)
     fixture._insert_suppression_rules(24)
     (Path(fixture.app.config["UPLOAD_FOLDER"]) / "stored.txt").write_text(
         "产品额定电压为 220V。安装说明中的额定电压为 380V。", encoding="utf-8"

@@ -5,7 +5,7 @@ export const pages = [
   { id: 'settings', selector: '.settings-section', load: () => import('@/pages/settings') },
   {
     id: 'permissions',
-    selector: '[data-permission-form]',
+    selector: '[data-user-domains-page]',
     load: () => import('@/pages/permissions'),
   },
 ] as const

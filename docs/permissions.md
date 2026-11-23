@@ -44,6 +44,7 @@ IP 用户和统一登录用户分别授权。任务及模型配置的 IP 归属�
 
 - 系统运行配置：任务并发、文件保留与清理、出站网络、诊断日志及 IP 显示名称。
 - 用户授权：查看用户权限列表、分配、替换和撤销管理权限。
+- 产品领域：维护领域标签，为用户选择一个或多个产品领域。
 
 公共规则使用独立的管理页面，超级管理员也可以在系统设置中维护。权限页只展示四项可分配的管理权限。权限保存验证超级管理员登录、页面令牌、目标用户存在性和权限选项，授权变更记录在应用日志中。
 
@@ -51,7 +52,7 @@ IP 用户和统一登录用户分别授权。任务及模型配置的 IP 归属�
 
 成功识别的用户登记到 `user_identities(subject, created_at)`。数据库首次建立用户登记表时，从已有任务、模型提供商、IP 显示名称和统一登录资料补齐用户。删除任务后继续保留用户登记。
 
-权限页支持按名称、IP 和身份 ID 搜索用户，复用任务表格的每页条数、翻页和页码跳转组件，分页保留搜索条件。统一登录用户取最新身份资料并单行显示，IP 用户显示名称及身份 ID 小字。各权限列通过问号提示说明对应功能。
+权限页支持按名称、IP 和身份 ID 搜索用户，可同时筛选产品领域或“未标记”用户，复用任务表格的每页条数、翻页和页码跳转组件，分页保留搜索与领域条件。统一登录用户取最新身份资料并单行显示，IP 用户显示名称及身份 ID 小字。各权限列通过问号提示说明对应功能。
 
 勾选或取消权限后自动保存。勾选管理全部任务时同时勾选查看权限，取消查看全部任务时同时取消管理权限。连续点击按用户逐行顺序保存，以最后一次选择为准；保存失败时恢复最近确认的选项，并通过页面通用提示反馈。
 
@@ -61,10 +62,19 @@ IP 用户和统一登录用户分别授权。任务及模型配置的 IP 归属�
 
 console 和普通用户的页面及接口响应使用 `Cache-Control: no-store`，页面与下载内容按当前请求的授权提供。
 
+## 产品领域标签
+
+超级管理员在“用户权限”表格的“产品领域”列点击“设置领域”或“编辑领域”，选择已有领域或输入名称添加新领域，点击“保存”提交。一个用户可关联多个领域，移除全部已选领域并保存后显示“未标记”。取消编辑保留已保存的标签；保存失败保留草稿供重试。
+
+领域目录在用户之间共享，名称合并多余空白并忽略大小写去重。每个用户最多关联 20 个领域，每个名称最多 40 个字符。取消用户关联后，领域名称继续保留在目录中供复用。
+
+`product_domains` 保存领域目录，`user_product_domains(subject, domain_id)` 保存用户关联。标签跟随稳定用户主体，身份资料更新后继续保留；IP 用户与统一登录用户分别维护。领域用于用户分类和筛选，管理权限、任务归属和检查规则按各自配置生效。标签与权限独立保存，写入均验证超级管理员登录、页面令牌和目标用户。
+
 ## 模块与验证
 
 - `identity/permissions.py` 定义可分配权限和包含关系。
 - `persistence/permissions.py` 登记用户、查询授权、保存授权和读取分页用户列表。
+- `contracts/user_domains.py` 定义领域名称和数量约束，`persistence/user_domains.py` 保存领域目录与用户关联。
 - `web/auth.py` 检查超级管理员、管理权限与任务操作范围。
 - `web/permissions.py` 提供超级管理员的权限设置页面。
 - `web/settings.py` 分别提供系统设置和公共规则管理入口。
@@ -73,7 +83,9 @@ console 和普通用户的页面及接口响应使用 `Cache-Control: no-store`�
 
 `tests/test_permissions_ui.js` 使用 Node.js 验证勾选联动、自动保存、连续点击、失败恢复与多用户独立保存。`tests/test_task_list_ui.js` 验证权限变化后的手动刷新与页面同步。
 
+`tests/test_user_domains.py` 验证领域复用、输入约束、身份隔离、独立保存、事务回滚、筛选分页及数据库初始化。前端组件与浏览器测试覆盖标签编辑、失败重试、取消请求、刷新保留和移动端操作。
+
 ```bash
-uv run python -m unittest tests.test_permissions tests.test_cookie_session_routes tests.test_routes tests.test_architecture
+uv run python -m unittest tests.test_user_domains tests.test_permissions tests.test_cookie_session_routes tests.test_routes tests.test_architecture
 node --test tests/test_permissions_ui.js tests/test_task_list_ui.js
 ```
