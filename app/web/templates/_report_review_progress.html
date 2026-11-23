@@ -1,1 +1,1 @@
-<p>已记录初审 {{ review_progress.initial_count }}/{{ review_progress.total }} · 终审确认 {{ review_progress.confirmed }}/{{ review_progress.total }} · {{ review_progress.status_label }}</p>
+<p>已记录初审 {{ review_progress.initial_count }}/{{ review_progress.total }} · {% if review_progress.required_count %}终审确认 {{ review_progress.confirmed }}/{{ review_progress.required_count }}（初审不认可条目） · {% endif %}{{ review_progress.status_label }}</p>

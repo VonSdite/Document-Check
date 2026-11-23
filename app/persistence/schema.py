@@ -231,6 +231,7 @@ def init_db():
             task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
             total INTEGER NOT NULL,
             initial_count INTEGER NOT NULL,
+            required_count INTEGER NOT NULL DEFAULT 0,
             confirmed INTEGER NOT NULL,
             returned INTEGER NOT NULL,
             deferred INTEGER NOT NULL,
@@ -290,6 +291,7 @@ def init_db():
         """
     )
     _ensure_final_review_permission(db)
+    _ensure_final_review_stats_scope(db)
     _ensure_column(
         db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
@@ -371,6 +373,28 @@ def init_db():
     _cleanup_orphaned_report_suppression_hits(db)
     current_app.teardown_appcontext(close_db)
     db.commit()
+
+
+def _ensure_final_review_stats_scope(db):
+    """终审缓存独立记录初审不认可的条目数量。"""
+    db.execute("SAVEPOINT final_review_scope")
+    try:
+        db.execute("DELETE FROM task_final_review_stats WHERE 0")
+        columns = {
+            row["name"]
+            for row in db.execute("PRAGMA table_info(task_final_review_stats)")
+        }
+        if "required_count" not in columns:
+            db.execute(
+                "ALTER TABLE task_final_review_stats "
+                "ADD COLUMN required_count INTEGER NOT NULL DEFAULT 0"
+            )
+            db.execute("DELETE FROM task_final_review_stats")
+    except Exception:
+        db.execute("ROLLBACK TO final_review_scope")
+        raise
+    finally:
+        db.execute("RELEASE final_review_scope")
 
 
 def _ensure_final_review_permission(db):

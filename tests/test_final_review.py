@@ -70,7 +70,7 @@ class FinalReviewTest(unittest.TestCase):
             ]
 
     def initial(
-        self, index=0, subject="author", status="accepted", token=None, admin=False
+        self, index=0, subject="author", status="rejected", token=None, admin=False
     ):
         return self.client.post(
             f"{'/admin' if admin else ''}/tasks/{self.task_id}/report-items",
@@ -125,14 +125,15 @@ class FinalReviewTest(unittest.TestCase):
             headers={"X-Test-Subject": "ip:127.0.0.1"},
         )
         soup = BeautifulSoup(page.data, "html.parser")
-        self.assertEqual(len(soup.select("select[name=decision]")), 2)
+        self.assertEqual(len(soup.select("select[name=decision]")), 1)
         self.assertIn("当前审核身份：本地管理员", page.get_data(as_text=True))
-        for index in range(2):
-            self.assertEqual(
-                self.final(index, subject="ip:127.0.0.1", admin=True).status_code,
-                200,
-            )
-        final = self.state()["final"]
+        self.assertEqual(
+            self.final(0, subject="ip:127.0.0.1", admin=True).status_code, 409
+        )
+        self.assertEqual(
+            self.final(1, subject="ip:127.0.0.1", admin=True).status_code, 200
+        )
+        final = self.state(1)["final"]
         self.assertEqual(final["actor_subject"], "local_admin:primary")
         self.assertEqual(final["actor_name"], "本地管理员")
         self.assertEqual(final["actor_source"], "local_admin")
@@ -214,7 +215,7 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(self.final(subject="ip:127.0.0.1").status_code, 403)
         self.assertEqual(len(self.state()["history"]), 2)
 
-    def test_all_findings_require_final_review_permission(self):
+    def test_rejected_findings_require_final_review_permission(self):
         self.assertEqual(self.initial().status_code, 200)
         self.assertEqual(self.initial(1, status="rejected").status_code, 200)
         self.assertEqual(self.final(subject="reader").status_code, 403)
@@ -227,6 +228,7 @@ class FinalReviewTest(unittest.TestCase):
                 self.task_id
             ]
             self.assertEqual((progress["confirmed"], progress["total"]), (1, 2))
+            self.assertEqual(progress["required_count"], 2)
             self.assertEqual(progress["status"], "in_progress")
         self.assertEqual(self.final(1).status_code, 200)
         with self.app.app_context():
@@ -283,6 +285,137 @@ class FinalReviewTest(unittest.TestCase):
             self.assertEqual(progress["confirmed"], 0)
         self.assertEqual(self.state()["status"], "awaiting_initial")
         self.assertEqual(len(self.state()["history"]), 4)
+
+    def test_only_rejected_items_enter_final_review_and_count_toward_completion(self):
+        for status in ("pending", "accepted"):
+            with self.subTest(status=status):
+                self.assertEqual(self.initial(status=status).status_code, 200)
+                before = self.state()
+                self.assertFalse(before["requires_final"])
+                self.assertEqual(before["status"], "not_required")
+                response = self.final()
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("仅初审结果为“不认可”", response.get_json()["error"])
+                self.assertEqual(self.state()["history"], before["history"])
+                with self.app.app_context():
+                    progress = final_review_progress([self.task_id])[self.task_id]
+                    self.assertEqual(progress["required_count"], 0)
+                    self.assertEqual(progress["pending"], 0)
+                    self.assertEqual(progress["status"], "not_required")
+
+        self.initial(status="pending")
+        self.initial(1)
+        with self.app.app_context():
+            progress = final_review_progress([self.task_id])[self.task_id]
+            self.assertEqual(progress["total"], 2)
+            self.assertEqual(progress["required_count"], 1)
+            self.assertEqual(progress["pending"], 1)
+        self.assertEqual(self.final(1).status_code, 200)
+        with self.app.app_context():
+            progress = final_review_progress([self.task_id])[self.task_id]
+            self.assertEqual(progress["confirmed"], 1)
+            self.assertEqual(progress["status"], "completed")
+        page = self.client.get(f"/tasks/{self.task_id}")
+        soup = BeautifulSoup(page.data, "html.parser")
+        self.assertEqual(len(soup.select("[data-report-item]")), 2)
+        self.assertEqual(len(soup.select("[data-final-review-form]")), 1)
+        self.assertIn(
+            "终审确认 1/1", soup.select_one("[data-report-review-progress]").text
+        )
+
+        for status in ("accepted", "pending"):
+            self.initial(1, status=status)
+            state = self.state(1)
+            self.assertFalse(state["requires_final"])
+            self.assertIsNone(state["final"])
+            self.assertTrue(
+                any(event["stage"] == "final" for event in state["history"])
+            )
+            self.assertEqual(self.final(1).status_code, 409)
+            with self.app.app_context():
+                progress = final_review_progress([self.task_id])[self.task_id]
+                self.assertEqual(progress["status"], "not_required")
+                self.assertEqual(progress["confirmed"], 0)
+                self.assertEqual(progress["required_count"], 0)
+            page = self.client.get(f"/tasks/{self.task_id}")
+            soup = BeautifulSoup(page.data, "html.parser")
+            self.assertFalse(soup.select("[data-final-review-form]"))
+            self.assertTrue(soup.select("[data-review-history-toggle]"))
+            queue = self.client.get("/final-reviews?final_status=not_required")
+            self.assertIn(f"任务 #{self.task_id}", queue.get_data(as_text=True))
+
+        self.initial(1)
+        self.assertEqual(self.state(1)["status"], "pending")
+        self.assertIsNone(self.state(1)["final"])
+        self.assertEqual(self.final(1).status_code, 200)
+
+    def test_accepted_legacy_final_stays_in_history_and_exports(self):
+        self.initial(status="accepted")
+        with self.app.app_context():
+            db = get_db()
+            event = dict(db.execute("SELECT * FROM report_review_events").fetchone())
+            initial_id = event.pop("id")
+            event.update(
+                stage="final",
+                decision="confirmed",
+                initial_review_id=initial_id,
+                note="已保存的历史终审说明",
+            )
+            db.execute(
+                f"INSERT INTO report_review_events ({','.join(event)}) "
+                f"VALUES ({','.join('?' for _ in event)})",
+                tuple(event.values()),
+            )
+            db.commit()
+            progress = final_review_progress([self.task_id])[self.task_id]
+            self.assertEqual(progress["status"], "not_required")
+            self.assertEqual(progress["confirmed"], 0)
+            self.assertEqual(progress["required_count"], 0)
+        state = self.state()
+        self.assertIsNone(state["final"])
+        self.assertEqual(len(state["history"]), 2)
+        for suffix in ("", "/export"):
+            page = self.client.get(f"/tasks/{self.task_id}{suffix}")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("已保存的历史终审说明", page.get_data(as_text=True))
+            self.assertIn("无需终审", page.get_data(as_text=True))
+            self.assertNotIn("需重新终审", page.get_data(as_text=True))
+        exported = self.client.get(f"/tasks/{self.task_id}/export.xlsx")
+        workbook = load_workbook(io.BytesIO(exported.data))
+        self.assertEqual(workbook["初审与终审"].cell(2, 7).value, "无需终审")
+        self.assertIsNone(workbook["初审与终审"].cell(2, 10).value)
+        self.assertIn(
+            "已保存的历史终审说明",
+            [cell.value for row in workbook["审核记录"] for cell in row],
+        )
+        workbook.close()
+
+    def test_final_scope_cache_upgrade_preserves_history_and_rebuilds_progress(self):
+        from app.persistence.schema import _ensure_final_review_stats_scope
+
+        self.initial()
+        self.initial(1, status="accepted")
+        self.final()
+        before = self.state()
+        with self.app.app_context():
+            db = get_db()
+            db.execute("ALTER TABLE task_final_review_stats DROP COLUMN required_count")
+            db.execute("UPDATE task_final_review_stats SET confirmed = total")
+            db.commit()
+            _ensure_final_review_stats_scope(db)
+            self.assertEqual(final_review_progress([self.task_id], refresh=False), {})
+            progress = final_review_progress([self.task_id])[self.task_id]
+            self.assertEqual(progress["total"], 2)
+            self.assertEqual(progress["initial_count"], 2)
+            self.assertEqual(progress["required_count"], 1)
+            self.assertEqual(progress["confirmed"], 1)
+            self.assertEqual(progress["status"], "completed")
+            _ensure_final_review_stats_scope(db)
+            self.assertEqual(
+                final_review_progress([self.task_id], refresh=False)[self.task_id],
+                {**progress, "task_id": self.task_id},
+            )
+        self.assertEqual(self.state(), before)
 
     def test_return_defer_and_resubmit_preserve_decisions(self):
         self.initial()
@@ -360,15 +493,15 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(initial.status_code, 200)
         fragments = initial.get_json()["review_fragments"]
         final = BeautifulSoup(fragments["final"], "html.parser")
-        self.assertIsNone(final.select_one("option[selected]"))
-        self.assertEqual(final.select_one("textarea").get_text(), "")
-        self.assertIn("需重新终审", final.get_text())
+        self.assertIsNone(final.select_one("[data-final-review-form]"))
+        self.assertIn("无需终审", final.get_text())
+        self.assertNotIn("需重新终审", final.get_text())
         self.assertIn("提单修改", fragments["history"])
 
     def test_legacy_feedback_needs_initial_record_before_authorized_ip_final(self):
         with self.app.app_context():
             raw = _raw_task_results(self.task())
-            raw[0]["item_acceptances"] = {self.items[0]["id"]: {"status": "accepted"}}
+            raw[0]["item_acceptances"] = {self.items[0]["id"]: {"status": "rejected"}}
             get_db().execute(
                 "UPDATE tasks SET result_json=? WHERE id=?",
                 (json.dumps(raw), self.task_id),
@@ -383,6 +516,7 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(self.state()["final"]["actor_subject"], "ip:192.0.2.10")
 
     def test_full_review_includes_suppressed_and_limited_items(self):
+        self.initial()
         with self.app.app_context():
             raw = _raw_task_results(self.task())
             raw[0]["issue_output_limit"] = 1
@@ -397,6 +531,9 @@ class FinalReviewTest(unittest.TestCase):
             )
             get_db().commit()
             self.assertEqual(review_context(self.task())["progress"]["total"], 2)
+            self.assertEqual(
+                review_context(self.task())["progress"]["required_count"], 1
+            )
         page = self.client.get(f"/tasks/{self.task_id}")
         self.assertEqual(
             len(BeautifulSoup(page.data, "html.parser").select("[data-audit-item]")), 2
@@ -422,13 +559,13 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(self.state()["status"], "confirmed")
         sheet = workbook["报告条目"]
         headers = [cell.value for cell in sheet[1]]
-        sheet.cell(2, headers.index(REPORT_ACCEPTANCE_LABEL) + 1).value = "不认可"
-        sheet.cell(2, headers.index("不认可原因") + 1).value = "模型误报"
+        sheet.cell(2, headers.index(REPORT_ACCEPTANCE_LABEL) + 1).value = "认可"
+        sheet.cell(2, headers.index("不认可原因") + 1).value = ""
         buffer = io.BytesIO()
         workbook.save(buffer)
         workbook.close()
         upload(buffer.getvalue())
-        self.assertEqual(self.state()["status"], "pending")
+        self.assertEqual(self.state()["status"], "not_required")
         with self.app.app_context():
             self.assertEqual(
                 final_review_progress([self.task_id], refresh=False)[self.task_id][

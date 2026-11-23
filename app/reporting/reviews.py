@@ -24,6 +24,7 @@ FINAL_DECISIONS = {
 FINAL_STATUSES = {
     "unavailable": "检查中",
     "empty": "无审核条目",
+    "not_required": "无需终审",
     "awaiting_initial": "待初审",
     "pending": "待终审",
     "in_progress": "终审中",
@@ -84,6 +85,7 @@ def review_events(task_id):
 
 def item_review_state(item, acceptance, history):
     fingerprint = item_fingerprint(item)
+    requires_final = acceptance["acceptance_status"] == "rejected"
     initial = next((e for e in reversed(history) if e["stage"] == "initial"), None)
     final = next((e for e in reversed(history) if e["stage"] == "final"), None)
     initial_current = bool(
@@ -93,13 +95,16 @@ def item_review_state(item, acceptance, history):
         and acceptance["acceptance_status"] != "pending"
     )
     final_current = bool(
-        initial_current
+        requires_final
+        and initial_current
         and final
         and final["initial_review_id"] == initial["id"]
         and final["item_hash"] == fingerprint
     )
     status = final["decision"] if final_current else "pending"
-    if not initial_current:
+    if not requires_final:
+        status = "not_required"
+    elif not initial_current:
         status = "awaiting_initial"
     token = hashlib.sha256(
         _json(
@@ -112,6 +117,7 @@ def item_review_state(item, acceptance, history):
     ).hexdigest()
     return {
         "token": token,
+        "requires_final": requires_final,
         "status": status,
         "status_label": FINAL_DECISIONS.get(status, FINAL_STATUSES.get(status)),
         "initial": initial if initial_current else None,
@@ -125,8 +131,18 @@ def review_context(task):
     current_keys = set()
     results = []
     counts = dict.fromkeys(
-        ("total", "initial_count", "confirmed", "returned", "deferred", "pending"), 0
+        (
+            "total",
+            "initial_count",
+            "required_count",
+            "confirmed",
+            "returned",
+            "deferred",
+            "pending",
+        ),
+        0,
     )
+    required_initial_count = 0
     for result in _raw_task_results(task):
         code = str(result.get("code") or "")
         acceptances = result.get("item_acceptances") or {}
@@ -146,11 +162,14 @@ def review_context(task):
             )
             counts["total"] += 1
             counts["initial_count"] += int(item["review"]["initial"] is not None)
-            state = item["review"]["status"]
-            counts[state if state in FINAL_DECISIONS else "pending"] += 1
+            if item["review"]["requires_final"]:
+                counts["required_count"] += 1
+                required_initial_count += int(item["review"]["initial"] is not None)
+                state = item["review"]["status"]
+                counts[state if state in FINAL_DECISIONS else "pending"] += 1
             items.append(item)
         results.append({**result, "report_items": items})
-    counts["status"] = _progress_status(task["status"], counts)
+    counts["status"] = _progress_status(task["status"], counts, required_initial_count)
     archived = [
         event
         for key, entries in history.items()
@@ -166,24 +185,26 @@ def review_context(task):
     }
 
 
-def _progress_status(task_status, counts):
+def _progress_status(task_status, counts, required_initial_count):
     if task_status in ACTIVE_STATUSES:
         return "unavailable"
     if not counts["total"]:
         return "empty"
+    if not counts["required_count"]:
+        return "not_required"
     if counts["returned"]:
         return "returned"
     if counts["deferred"]:
         return "deferred"
-    if counts["confirmed"] == counts["total"]:
+    if counts["confirmed"] == counts["required_count"]:
         return "completed"
     if counts["confirmed"]:
         return "in_progress"
-    return "pending" if counts["initial_count"] else "awaiting_initial"
+    return "pending" if required_initial_count else "awaiting_initial"
 
 
 def review_report(task):
-    """将完整审核条目合入报告表格，保留展示标记和历史。"""
+    """将完整审核条目合入报告，保留展示标记和历史。"""
     context = review_context(task)
     prepared = _prepare_task_results(
         _raw_task_results(task),
@@ -229,6 +250,7 @@ def present_progress(counts):
                 "status",
                 "total",
                 "initial_count",
+                "required_count",
                 "confirmed",
                 "returned",
                 "deferred",
@@ -271,8 +293,8 @@ def _write_final_review_progress(task):
     counts = review_context(task)["progress"]
     get_db().execute(
         "INSERT OR REPLACE INTO task_final_review_stats "
-        "(task_id, total, initial_count, confirmed, returned, deferred, pending, status) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "(task_id, total, initial_count, required_count, confirmed, returned, deferred, pending, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task["id"],
             *(
@@ -280,6 +302,7 @@ def _write_final_review_progress(task):
                 for k in (
                     "total",
                     "initial_count",
+                    "required_count",
                     "confirmed",
                     "returned",
                     "deferred",
@@ -396,6 +419,8 @@ def save_final_review(task_id, data, actor):
             raise ReviewConflict("该条目无需终审。")
         if data.get("review_token") != state["token"]:
             raise ReviewConflict("报告或审核记录已更新，请刷新后重新确认。")
+        if not state["requires_final"]:
+            raise ReviewConflict("仅初审结果为“不认可”的条目需要终审。")
         initial = state["initial"]
         if initial is None:
             raise ReviewConflict("请先完成初审并记录审核人，再进行终审。")

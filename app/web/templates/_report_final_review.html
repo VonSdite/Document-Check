@@ -2,10 +2,11 @@
 {% if state.final %}
 {% if not has_permission('reports.final_review') or controls_disabled %}<p class="review-note">{{ state.final.note }}</p>{% endif %}
 <p class="subline">{{ state.final.actor_name }} · {{ state.final.created_at }}</p>
-{% elif state.history|selectattr('stage', 'equalto', 'final')|list %}
+{% elif state.requires_final and state.history|selectattr('stage', 'equalto', 'final')|list %}
 <p class="subline">初审或报告内容已更新，需重新终审。之前的意见可在审核记录中查看。</p>
 {% endif %}
-{% if has_permission('reports.final_review') and not controls_disabled %}
+{% if not state.requires_final %}<p class="subline">仅初审“不认可”的条目需要终审。</p>{% endif %}
+{% if state.requires_final and has_permission('reports.final_review') and not controls_disabled %}
 {% if state.initial %}
 <form method="post" action="{{ url_for(task_endpoint('report_reviews'), task_id=task.id) }}" class="stack-form" data-final-review-form>
   <input type="hidden" name="stage" value="final">
