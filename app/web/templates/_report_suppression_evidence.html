@@ -1,0 +1,18 @@
+{% if rule.evidence %}
+<details class="report-suppression-evidence">
+  <summary>审核依据（{{ rule.evidence|length }}）</summary>
+  {% for evidence in rule.evidence %}
+  <section>
+    <p>{{ '有效终审确认' if evidence.is_current else '依据已失效，保留记录' }} · 任务 #{{ evidence.source_task_id }}</p>
+    <p>{{ evidence.filename }}</p>
+    <p>初审：{{ evidence.initial.actor_name }} · {{ evidence.initial.created_at }}<br>{{ evidence.initial.acceptance.rejection_reason_label }}{% if evidence.initial.acceptance.rejection_note %}：{{ evidence.initial.acceptance.rejection_note }}{% endif %}</p>
+    <p>终审：{{ evidence.final.actor_name }} · {{ evidence.final.created_at }}<br>确认初审{% if evidence.final.note %}：{{ evidence.final.note }}{% endif %}</p>
+    {% if evidence.task_id and has_permission('tasks.view_all') %}
+    <a class="small-button" href="{{ url_for(task_endpoint('report_reviews'), task_id=evidence.task_id, _anchor='review-' ~ evidence.result_code ~ '-' ~ evidence.item_id) }}">查看报告与记录</a>
+    {% elif not evidence.task_id %}<p class="subline">来源任务已删除，审核快照保留。</p>{% endif %}
+  </section>
+  {% endfor %}
+</details>
+{% elif rule.source_task_exists and has_permission('tasks.view_all') %}
+<div><a class="small-button" href="{{ url_for(task_endpoint('report_reviews'), task_id=rule.source_task_id) }}">前往终审</a></div>
+{% endif %}

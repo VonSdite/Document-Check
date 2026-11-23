@@ -213,9 +213,9 @@
   <div class="settings-section-head">
     <div>
       <h2 class="title-with-help">误报忽略规则
-        <button class="help-tip" type="button" aria-label="误报忽略规则说明" data-tip="当报告条目不认可且原因为模型幻觉、模型误报或不适用时，系统会生成候选规则。启用后，同任务类型、同检查项下问题描述相似的条目会自动折叠到已忽略误报中，不参与主统计。">?</button>
+        <button class="help-tip" type="button" aria-label="误报忽略规则说明" data-tip="初审不认可且终审确认初审后，条目进入误报库，保留原因、说明和两级审核依据。所有不认可原因均可入库。启用后，同任务类型、同检查项下问题描述相似的条目会折叠到已忽略误报中，不参与主统计。">?</button>
       </h2>
-      <p>候选规则默认不生效，启用后会过滤同任务类型、同检查项下问题描述相似度达到 56% 的报告条目。</p>
+      <p>终审确认的条目作为误报候选入库，默认不参与过滤。启用后过滤同任务类型、同检查项下描述相似度达到 56% 的条目。待终审条目保留供核查。</p>
     </div>
   </div>
   <form class="report-suppression-toolbar" method="get" action="{{ url_for(request.endpoint, _anchor='report-suppression-rules') }}">
@@ -238,6 +238,7 @@
         <option value=""{{ ' selected' if not report_suppression_status else '' }}>全部状态</option>
         <option value="candidate"{{ ' selected' if report_suppression_status == 'candidate' else '' }}>候选</option>
         <option value="enabled"{{ ' selected' if report_suppression_status == 'enabled' else '' }}>已启用</option>
+        <option value="awaiting_final"{{ ' selected' if report_suppression_status == 'awaiting_final' else '' }}>待终审</option>
       </select>
     </label>
     <div class="task-actions">
@@ -265,15 +266,18 @@
       </thead>
       <tbody id="report-suppression-rule-rows">
         {% for rule in report_suppression_rules %}
-        <tr data-report-suppression-row data-rule-status="{{ 'enabled' if rule.enabled else 'candidate' }}">
-          <td><span class="status-pill {{ 'status-completed' if rule.enabled else 'status-queued' }}">{{ "已启用" if rule.enabled else "候选" }}</span></td>
+        <tr data-report-suppression-row data-rule-status="{{ 'enabled' if rule.enabled else ('candidate' if rule.review_confirmed else 'awaiting_final') }}">
+          <td><span class="status-pill {{ 'status-completed' if rule.enabled else 'status-queued' }}">{{ "已启用" if rule.enabled else ("候选" if rule.review_confirmed else "待终审") }}</span>{% if rule.review_confirmed %}<div class="subline">已终审</div>{% endif %}</td>
           <td data-report-suppression-search-part>
             {{ rule.check_name }}
             <div class="subline">{{ rule.task_type_label }}</div>
           </td>
           <td data-report-suppression-search-part>{{ rule.item.category or '-' }}</td>
           <td data-report-suppression-search-part>{{ rule.item.location or '-' }}</td>
-          <td data-report-suppression-search-part>{{ rule.item.description or rule.item.text or '-' }}</td>
+          <td data-report-suppression-search-part>
+            {{ rule.item.description or rule.item.text or '-' }}
+            {% include "_report_suppression_evidence.html" %}
+          </td>
           <td data-report-suppression-search-part>{{ rule.reason or '-' }}</td>
           <td>
             {{ rule.hit_count }}
@@ -291,7 +295,7 @@
                 {% if rule.enabled %}
                 <button class="small-button" type="submit" name="operation" value="disable">停用</button>
                 {% else %}
-                <button class="small-button" type="submit" name="operation" value="enable">启用</button>
+                <button class="small-button" type="submit" name="operation" value="enable"{% if not rule.review_confirmed %} disabled title="需要有效的终审确认"{% endif %}>启用</button>
                 {% endif %}
               </form>
               <form method="post" data-confirm="确认删除该误报忽略规则？历史报告不会被删除。">
@@ -320,7 +324,7 @@
   {% else %}
   <div class="empty-state compact">
     <h3>暂无误报忽略规则</h3>
-    <p>在报告页选择“不认可”，原因为模型误报、模型幻觉或不适用时，系统会生成候选规则。分类不准确和证据不足仅保存为反馈。</p>
+    <p>初审选择“不认可”，再由有终审权限的用户确认初审后，条目进入误报库。所有不认可原因均可入库，并保留两级审核依据。</p>
   </div>
   {% endif %}
 </section>

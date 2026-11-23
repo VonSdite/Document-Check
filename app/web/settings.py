@@ -49,6 +49,12 @@ from app.persistence.settings import (
     set_ip_username,
     set_setting,
 )
+from app.reporting.suppression import (
+    VERIFIED_RULE_SQL,
+    enable_suppression_rule,
+    refresh_suppression_reviews,
+    suppression_evidence,
+)
 from app.tasks.files import _int_setting
 from app.tasks.runtime.artifacts import (
     cleanup_task_file_cache,
@@ -292,12 +298,10 @@ def register_settings_routes(app):
                     flash("误报忽略规则不存在。", "error")
                     return _report_suppression_rules_redirect()
                 if operation == "enable":
-                    db.execute(
-                        "UPDATE report_suppression_rules SET enabled = 1, updated_at = ? WHERE id = ?",
-                        (now_text(), int(rule_id)),
-                    )
-                    db.commit()
-                    flash("误报忽略规则已启用。", "success")
+                    if enable_suppression_rule(int(rule_id)):
+                        flash("误报忽略规则已启用。", "success")
+                    else:
+                        flash("仅有有效终审确认的误报条目可启用。", "error")
                     return _report_suppression_rules_redirect()
                 if operation == "disable":
                     db.execute(
@@ -586,7 +590,7 @@ def register_settings_routes(app):
 def _report_suppression_filter_values(values) -> tuple[str, str]:
     keyword = str(values.get("rule_keyword") or "").strip()[:200]
     status = str(values.get("rule_status") or "").strip()
-    if status not in {"candidate", "enabled"}:
+    if status not in {"candidate", "enabled", "awaiting_final"}:
         status = ""
     return keyword, status
 
@@ -606,10 +610,13 @@ def _report_suppression_rules_redirect():
 
 
 def _report_suppression_rule_rows(keyword: str, status: str) -> tuple[list[dict], dict]:
+    refresh_suppression_reviews()
     db = get_db()
     clauses, params = [], []
-    if status:
-        clauses.append("r.enabled = ?")
+    if status == "awaiting_final":
+        clauses.append(f"NOT {VERIFIED_RULE_SQL}")
+    elif status:
+        clauses.append(f"r.enabled = ? AND {VERIFIED_RULE_SQL}")
         params.append(int(status == "enabled"))
     if keyword:
         terms = unicodedata.normalize("NFKC", keyword).lower().split()
@@ -642,20 +649,24 @@ def _report_suppression_rule_rows(keyword: str, status: str) -> tuple[list[dict]
     page = _bounded_page(_page_arg(), total, per_page)
     rows = db.execute(
         f"""
-        SELECT r.*, c.name AS check_name
+        SELECT r.*, c.name AS check_name, {VERIFIED_RULE_SQL} AS review_confirmed,
+            EXISTS (SELECT 1 FROM tasks WHERE tasks.id = r.source_task_id) AS source_task_exists
         {source} {where}
         ORDER BY r.enabled ASC, r.updated_at DESC, r.id DESC
         LIMIT ? OFFSET ?
         """,
         [*params, per_page, (page - 1) * per_page],
     ).fetchall()
+    evidence = suppression_evidence([row["id"] for row in rows])
     result = []
     for row in rows:
         snapshot = _parse_report_suppression_item_json(row["item_json"])
         result.append(
             {
                 "id": row["id"],
-                "enabled": bool(row["enabled"]),
+                "enabled": bool(row["enabled"] and row["review_confirmed"]),
+                "review_confirmed": bool(row["review_confirmed"]),
+                "evidence": evidence.get(row["id"], []),
                 "task_type": row["task_type"],
                 "task_type_label": task_type_label(row["task_type"]),
                 "check_code": row["check_code"],
@@ -664,6 +675,7 @@ def _report_suppression_rule_rows(keyword: str, status: str) -> tuple[list[dict]
                 "hit_count": row["hit_count"],
                 "last_hit_at": row["last_hit_at"] or "",
                 "source_task_id": row["source_task_id"],
+                "source_task_exists": bool(row["source_task_exists"]),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "item": snapshot,

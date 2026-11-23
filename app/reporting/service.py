@@ -44,7 +44,6 @@ from app.reporting.constants import (
     REPORT_SUPPRESSION_DESCRIPTION_REPLACEMENTS,
     REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD,
     REPORT_SUPPRESSION_FIELDS,
-    REPORT_SUPPRESSION_REJECTION_REASONS,
 )
 
 
@@ -127,19 +126,22 @@ def _cache_prepared_task_report_stats(
 
 
 def _report_suppression_versions(task_types: set[str]) -> dict[str, str]:
+    from app.reporting.suppression import VERIFIED_RULE_SQL, refresh_suppression_reviews
+
     versions = {
         task_type: _empty_report_suppression_version() for task_type in task_types
     }
     if not task_types:
         return versions
+    refresh_suppression_reviews()
     placeholders = ",".join("?" for _ in task_types)
     rows = (
         get_db()
         .execute(
             f"""
         SELECT task_type, COUNT(*) AS total, COALESCE(SUM(id), 0) AS id_sum, MAX(updated_at) AS latest
-        FROM report_suppression_rules
-        WHERE enabled = 1 AND task_type IN ({placeholders})
+        FROM report_suppression_rules r
+        WHERE enabled = 1 AND task_type IN ({placeholders}) AND {VERIFIED_RULE_SQL}
         GROUP BY task_type
         """,
             tuple(sorted(task_types)),
@@ -334,15 +336,18 @@ def _prepare_task_results(
 
 
 def _enabled_report_suppression_rules(task_type: str | None) -> dict[str, list[dict]]:
+    from app.reporting.suppression import VERIFIED_RULE_SQL, refresh_suppression_reviews
+
     if not task_type:
         return {}
+    refresh_suppression_reviews()
     rows = (
         get_db()
         .execute(
-            """
+            f"""
         SELECT id, check_code, reason, item_json
-        FROM report_suppression_rules
-        WHERE task_type = ? AND enabled = 1
+        FROM report_suppression_rules r
+        WHERE task_type = ? AND enabled = 1 AND {VERIFIED_RULE_SQL}
         """,
             (task_type,),
         )
@@ -503,19 +508,16 @@ def _maybe_create_report_suppression_candidate(
     acceptance_status: str | None,
     rejection_reason: str,
     rejection_note: str,
-) -> bool:
-    if (
-        acceptance_status != "rejected"
-        or rejection_reason not in REPORT_SUPPRESSION_REJECTION_REASONS
-    ):
-        return False
+) -> int | None:
+    if acceptance_status != "rejected":
+        return None
 
     report_item = next(
         (item for item in _result_report_items(result) if item.get("id") == item_id),
         None,
     )
     if report_item is None:
-        return False
+        return None
 
     task_type = task["task_type"] or DOCUMENT_TASK_TYPE
     fingerprint = _report_item_suppression_fingerprint(
@@ -534,11 +536,7 @@ def _maybe_create_report_suppression_candidate(
         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?)
         ON CONFLICT(task_type, check_code, fingerprint) DO UPDATE SET
             item_json = excluded.item_json,
-            reason = CASE
-                WHEN report_suppression_rules.reason IS NULL OR report_suppression_rules.reason = ''
-                THEN excluded.reason
-                ELSE report_suppression_rules.reason
-            END,
+            reason = excluded.reason,
             updated_at = excluded.updated_at
         """,
         (
@@ -554,7 +552,10 @@ def _maybe_create_report_suppression_candidate(
             now,
         ),
     )
-    return True
+    return db.execute(
+        "SELECT id FROM report_suppression_rules WHERE task_type = ? AND check_code = ? AND fingerprint = ?",
+        (task_type, result_code, fingerprint),
+    ).fetchone()[0]
 
 
 def _report_item_suppression_fingerprint(
@@ -1691,13 +1692,4 @@ def _apply_report_item_review(
 
         record_initial_review(task, result, item_id, actor, channel=channel)
 
-    return _maybe_create_report_suppression_candidate(
-        db,
-        task=task,
-        result_code=result_code,
-        result=result,
-        item_id=item_id,
-        acceptance_status=acceptance_status,
-        rejection_reason=rejection_reason,
-        rejection_note=rejection_note,
-    )
+    return False

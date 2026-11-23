@@ -15,6 +15,12 @@ from app.persistence.schema import init_db
 from app.reporting.constants import REPORT_ACCEPTANCE_LABEL
 from app.reporting.reviews import final_review_progress, review_context
 from app.reporting.service import _raw_task_results, _result_report_items
+from app.reporting.suppression import (
+    REVIEW_MIGRATION_KEY,
+    enable_suppression_rule,
+    refresh_suppression_reviews,
+    suppression_evidence,
+)
 from tests import test_routes as route_fixtures
 
 
@@ -70,7 +76,14 @@ class FinalReviewTest(unittest.TestCase):
             ]
 
     def initial(
-        self, index=0, subject="author", status="rejected", token=None, admin=False
+        self,
+        index=0,
+        subject="author",
+        status="rejected",
+        token=None,
+        admin=False,
+        reason="false_positive",
+        note="",
     ):
         return self.client.post(
             f"{'/admin' if admin else ''}/tasks/{self.task_id}/report-items",
@@ -78,7 +91,8 @@ class FinalReviewTest(unittest.TestCase):
                 "result_code": "consistency",
                 "item_id": self.items[index]["id"],
                 "acceptance_status": status,
-                "rejection_reason": "false_positive" if status == "rejected" else "",
+                "rejection_reason": reason if status == "rejected" else "",
+                "rejection_note": note,
                 "review_token": token or self.state(index)["token"],
             },
             headers={"X-Test-Subject": subject},
@@ -543,6 +557,7 @@ class FinalReviewTest(unittest.TestCase):
 
     def test_full_review_includes_suppressed_and_limited_items(self):
         self.initial()
+        self.final()
         with self.app.app_context():
             raw = _raw_task_results(self.task())
             raw[0]["issue_output_limit"] = 1
@@ -550,11 +565,7 @@ class FinalReviewTest(unittest.TestCase):
                 "UPDATE tasks SET result_json=? WHERE id=?",
                 (json.dumps(raw), self.task_id),
             )
-            get_db().execute(
-                "INSERT INTO report_suppression_rules(task_type, check_code, fingerprint, item_json, enabled, created_at, updated_at) "
-                "VALUES ('document_check','consistency','test',?,1,'now','now')",
-                (json.dumps(self.items[0]),),
-            )
+            get_db().execute("UPDATE report_suppression_rules SET enabled = 1")
             get_db().commit()
             self.assertEqual(review_context(self.task())["progress"]["total"], 2)
             self.assertEqual(
@@ -625,11 +636,270 @@ class FinalReviewTest(unittest.TestCase):
             self.assertEqual(sorted(pool.map(lambda _: submit(), range(2))), [200, 409])
         before = self.state()
         with patch(
-            "app.reporting.service._maybe_create_report_suppression_candidate",
+            "app.reporting.reviews.record_initial_review",
             side_effect=RuntimeError("write failure"),
         ):
             self.assertEqual(self.initial(status="rejected").status_code, 500)
         self.assertEqual(self.state()["token"], before["token"])
+
+    def suppression_rows(self):
+        with self.app.app_context():
+            refresh_suppression_reviews()
+            return [
+                dict(row)
+                for row in get_db().execute(
+                    "SELECT * FROM report_suppression_rules ORDER BY id"
+                )
+            ]
+
+    def test_all_rejection_reasons_enter_library_only_after_confirmed_final(self):
+        from app.reporting.constants import REPORT_REJECTION_REASONS
+
+        for reason, label in REPORT_REJECTION_REASONS.items():
+            with self.subTest(reason=reason):
+                with self.app.app_context():
+                    get_db().execute("DELETE FROM report_suppression_rules")
+                    get_db().commit()
+                initial = self.initial(reason=reason, note="核对原文后的具体原因")
+                self.assertEqual(initial.status_code, 200)
+                self.assertFalse(initial.get_json()["suppression_candidate_created"])
+                self.assertEqual(self.suppression_rows(), [])
+                for decision in ("returned", "deferred"):
+                    self.assertEqual(
+                        self.final(decision=decision, note="需要核对").status_code, 200
+                    )
+                    self.assertEqual(self.suppression_rows(), [])
+                self.assertEqual(self.final(note="已核实初审 <依据>").status_code, 200)
+                rows = self.suppression_rows()
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["reason"], label)
+                self.assertEqual(rows[0]["enabled"], 0)
+                with self.app.app_context():
+                    proof = suppression_evidence([rows[0]["id"]])[rows[0]["id"]][0]
+                self.assertTrue(proof["is_current"])
+                self.assertEqual(
+                    proof["initial"]["actor_subject"], "cookie_session:author"
+                )
+                self.assertEqual(
+                    proof["final"]["actor_subject"], "cookie_session:reviewer"
+                )
+                self.assertEqual(
+                    proof["initial"]["acceptance"]["rejection_note"],
+                    "核对原文后的具体原因",
+                )
+                self.assertEqual(proof["final"]["note"], "已核实初审 <依据>")
+                page = self.client.get("/admin/settings?rule_status=candidate")
+                self.assertIn("审核依据", page.get_data(as_text=True))
+                self.assertIn("已核实初审 &lt;依据&gt;", page.get_data(as_text=True))
+
+    def test_invalidated_confirmation_disables_rule_and_preserves_evidence(self):
+        self.initial()
+        self.final(note="原终审说明")
+        rule_id = self.suppression_rows()[0]["id"]
+        with self.app.app_context():
+            self.assertTrue(enable_suppression_rule(rule_id))
+        self.initial(1, status="accepted")
+        self.assertEqual(self.suppression_rows()[0]["enabled"], 1)
+        for decision in ("returned", "deferred"):
+            self.final(decision=decision, note="补充核对")
+            self.assertEqual(self.suppression_rows()[0]["enabled"], 0)
+            with self.app.app_context():
+                self.assertFalse(enable_suppression_rule(rule_id))
+                self.assertFalse(
+                    suppression_evidence([rule_id])[rule_id][0]["is_current"]
+                )
+            self.final()
+            with self.app.app_context():
+                self.assertTrue(enable_suppression_rule(rule_id))
+        for status in ("rejected", "accepted", "pending"):
+            self.initial(status=status)
+            self.assertEqual(self.suppression_rows()[0]["enabled"], 0)
+            self.initial()
+            self.final()
+            with self.app.app_context():
+                self.assertTrue(enable_suppression_rule(rule_id))
+        self.assertEqual(len(self.suppression_rows()), 1)
+        with self.app.app_context():
+            proofs = suppression_evidence([rule_id])[rule_id]
+            self.assertEqual(sum(proof["is_current"] for proof in proofs), 1)
+            self.assertIn("原终审说明", [proof["final"]["note"] for proof in proofs])
+
+    def test_report_change_and_source_deletion_revalidate_library(self):
+        from app.reporting.service import _enabled_report_suppression_rules
+
+        self.initial()
+        self.final()
+        rule_id = self.suppression_rows()[0]["id"]
+        with self.app.app_context():
+            self.assertTrue(enable_suppression_rule(rule_id))
+            raw = _raw_task_results(self.task())
+            raw[0]["result"] = raw[0]["result"].replace(
+                "参数 A 前后不一致", "参数 A 的适用条件缺失"
+            )
+            get_db().execute(
+                "UPDATE tasks SET result_json = ? WHERE id = ?",
+                (json.dumps(raw), self.task_id),
+            )
+            get_db().commit()
+            self.assertEqual(_enabled_report_suppression_rules("document_check"), {})
+            self.assertEqual(
+                get_db()
+                .execute("SELECT enabled FROM report_suppression_rules")
+                .fetchone()[0],
+                0,
+            )
+            get_db().execute("DELETE FROM tasks WHERE id = ?", (self.task_id,))
+            get_db().commit()
+            refresh_suppression_reviews()
+            proof = suppression_evidence([rule_id])[rule_id][0]
+            self.assertIsNone(proof["task_id"])
+            self.assertFalse(proof["is_current"])
+            self.assertEqual(proof["final"]["decision"], "confirmed")
+
+    def test_same_rule_keeps_independent_confirmations_from_multiple_reports(self):
+        from app.reporting.reviews import find_review_item, save_final_review
+        from app.reporting.service import update_report_item_review
+
+        self.initial()
+        self.final()
+        rule_id = self.suppression_rows()[0]["id"]
+        other_id = self._insert_report_task()
+        actor = {
+            "subject": "local_admin:primary",
+            "name": "管理员",
+            "source": "local_admin",
+        }
+        with self.app.app_context():
+            task = dict(
+                get_db()
+                .execute("SELECT * FROM tasks WHERE id = ?", (other_id,))
+                .fetchone()
+            )
+            item_id = _result_report_items(_raw_task_results(task)[0])[0]["id"]
+            response = update_report_item_review(
+                task,
+                {
+                    "result_code": "consistency",
+                    "item_id": item_id,
+                    "acceptance_status": "rejected",
+                    "rejection_reason": "evidence_insufficient",
+                },
+                actor=actor,
+            )
+            save_final_review(
+                other_id,
+                {
+                    "result_code": "consistency",
+                    "item_id": item_id,
+                    "review_token": response["review_token"],
+                    "decision": "confirmed",
+                },
+                actor,
+            )
+            self.assertTrue(enable_suppression_rule(rule_id))
+        self.initial(status="accepted")
+        self.assertEqual(len(self.suppression_rows()), 1)
+        self.assertEqual(self.suppression_rows()[0]["enabled"], 1)
+        with self.app.app_context():
+            proofs = suppression_evidence([rule_id])[rule_id]
+            self.assertEqual(len(proofs), 2)
+            self.assertEqual(
+                [p["source_task_id"] for p in proofs if p["is_current"]], [other_id]
+            )
+            task = (
+                get_db()
+                .execute("SELECT * FROM tasks WHERE id = ?", (other_id,))
+                .fetchone()
+            )
+            state = find_review_item(task, "consistency", item_id)[2]
+            save_final_review(
+                other_id,
+                {
+                    "result_code": "consistency",
+                    "item_id": item_id,
+                    "review_token": state["token"],
+                    "decision": "returned",
+                    "note": "补充说明",
+                },
+                actor,
+            )
+        self.assertEqual(self.suppression_rows()[0]["enabled"], 0)
+
+    def test_final_and_suppression_evidence_commit_atomically(self):
+        self.initial()
+        before = self.state()
+        with self.app.app_context():
+            get_db().execute(
+                "CREATE TRIGGER fail_evidence BEFORE INSERT ON report_suppression_reviews "
+                "BEGIN SELECT RAISE(ABORT, 'evidence write failure'); END"
+            )
+            get_db().commit()
+        self.assertEqual(self.final().status_code, 500)
+        self.assertEqual(self.state()["token"], before["token"])
+        self.assertEqual(self.suppression_rows(), [])
+
+    def test_existing_rules_require_real_current_final_and_migration_is_idempotent(
+        self,
+    ):
+        self.initial()
+        self.final()
+        rule_id = self.suppression_rows()[0]["id"]
+        self.initial(1)
+        with self.app.app_context():
+            db = get_db()
+            db.execute("DELETE FROM report_suppression_reviews")
+            db.execute(
+                "UPDATE report_suppression_rules SET enabled = 1 WHERE id = ?",
+                (rule_id,),
+            )
+            db.execute("DELETE FROM settings WHERE key = ?", (REVIEW_MIGRATION_KEY,))
+            old_rule_id = db.execute(
+                "INSERT INTO report_suppression_rules (task_type, check_code, fingerprint, item_json, enabled, created_at, updated_at) "
+                "VALUES ('document_check', 'consistency', 'unreviewed', '{}', 1, 'now', 'now')"
+            ).lastrowid
+            db.commit()
+            refresh_suppression_reviews()
+            self.assertEqual(
+                db.execute(
+                    "SELECT enabled FROM report_suppression_rules WHERE id = ?",
+                    (rule_id,),
+                ).fetchone()[0],
+                1,
+            )
+            self.assertTrue(enable_suppression_rule(rule_id))
+            self.assertFalse(enable_suppression_rule(old_rule_id))
+            refresh_suppression_reviews()
+            self.assertEqual(
+                db.execute(
+                    "SELECT COUNT(*) FROM report_suppression_reviews"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM report_suppression_rules").fetchone()[
+                    0
+                ],
+                2,
+            )
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "report_suppression_rule",
+                "operation": "enable",
+                "rule_id": old_rule_id,
+            },
+            follow_redirects=True,
+        )
+        self.assertIn("仅有有效终审确认", response.get_data(as_text=True))
+        soup = BeautifulSoup(response.data, "html.parser")
+        self.assertEqual(
+            len(
+                soup.select(
+                    '[data-rule-status="awaiting_final"] button[value="enable"][disabled]'
+                )
+            ),
+            1,
+        )
 
     def test_permissions_origin_queue_and_schema_are_consistent(self):
         self.assertEqual(

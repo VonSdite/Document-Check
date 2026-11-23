@@ -31,6 +31,24 @@
   ],
   [
     "index",
+    "idx_suppression_reviews_pending",
+    "report_suppression_reviews",
+    "CREATE INDEX idx_suppression_reviews_pending\n            ON report_suppression_reviews(source_task_id) WHERE needs_validation = 1"
+  ],
+  [
+    "index",
+    "idx_suppression_reviews_rule",
+    "report_suppression_reviews",
+    "CREATE INDEX idx_suppression_reviews_rule\n            ON report_suppression_reviews(rule_id, is_current, needs_validation)"
+  ],
+  [
+    "index",
+    "idx_suppression_reviews_source",
+    "report_suppression_reviews",
+    "CREATE INDEX idx_suppression_reviews_source\n            ON report_suppression_reviews(source_task_id, source_result_code, source_item_id)"
+  ],
+  [
+    "index",
     "idx_tasks_ip_created",
     "tasks",
     "CREATE INDEX idx_tasks_ip_created ON tasks(ip, created_at DESC)"
@@ -163,6 +181,12 @@
   ],
   [
     "table",
+    "report_suppression_reviews",
+    "report_suppression_reviews",
+    "CREATE TABLE report_suppression_reviews (\n            final_review_id INTEGER PRIMARY KEY,\n            rule_id INTEGER NOT NULL REFERENCES report_suppression_rules(id) ON DELETE CASCADE,\n            source_task_id INTEGER NOT NULL,\n            source_result_code TEXT NOT NULL,\n            source_item_id TEXT NOT NULL,\n            evidence_json TEXT NOT NULL,\n            is_current INTEGER NOT NULL DEFAULT 1,\n            needs_validation INTEGER NOT NULL DEFAULT 0\n        )"
+  ],
+  [
+    "table",
     "report_suppression_rules",
     "report_suppression_rules",
     "CREATE TABLE report_suppression_rules (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL,\n            check_code TEXT NOT NULL,\n            fingerprint TEXT NOT NULL,\n            item_json TEXT NOT NULL,\n            reason TEXT,\n            enabled INTEGER NOT NULL DEFAULT 0,\n            source_task_id INTEGER,\n            source_result_code TEXT,\n            source_item_id TEXT,\n            hit_count INTEGER NOT NULL DEFAULT 0,\n            last_hit_at TEXT,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            UNIQUE(task_type, check_code, fingerprint)\n        )"
@@ -183,7 +207,7 @@
     "table",
     "task_final_review_stats",
     "task_final_review_stats",
-    "CREATE TABLE task_final_review_stats (\n            task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,\n            total INTEGER NOT NULL,\n            initial_count INTEGER NOT NULL,\n            confirmed INTEGER NOT NULL,\n            returned INTEGER NOT NULL,\n            deferred INTEGER NOT NULL,\n            pending INTEGER NOT NULL,\n            status TEXT NOT NULL\n        )"
+    "CREATE TABLE task_final_review_stats (\n            task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,\n            total INTEGER NOT NULL,\n            initial_count INTEGER NOT NULL,\n            required_count INTEGER NOT NULL DEFAULT 0,\n            confirmed INTEGER NOT NULL,\n            returned INTEGER NOT NULL,\n            deferred INTEGER NOT NULL,\n            pending INTEGER NOT NULL,\n            status TEXT NOT NULL\n        )"
   ],
   [
     "table",
@@ -238,6 +262,24 @@
     "trg_review_events_stats_invalidate",
     "report_review_events",
     "CREATE TRIGGER trg_review_events_stats_invalidate\n        AFTER INSERT ON report_review_events\n        BEGIN\n            DELETE FROM task_final_review_stats WHERE task_id = NEW.task_id;\n        END"
+  ],
+  [
+    "trigger",
+    "trg_suppression_reviews_report_changed",
+    "tasks",
+    "CREATE TRIGGER trg_suppression_reviews_report_changed\n        AFTER UPDATE OF result_json ON tasks\n        BEGIN\n            UPDATE report_suppression_reviews SET needs_validation = 1\n            WHERE source_task_id = NEW.id;\n        END"
+  ],
+  [
+    "trigger",
+    "trg_suppression_reviews_review_changed",
+    "report_review_events",
+    "CREATE TRIGGER trg_suppression_reviews_review_changed\n        AFTER INSERT ON report_review_events\n        BEGIN\n            UPDATE report_suppression_reviews SET needs_validation = 1\n            WHERE source_task_id = NEW.task_id\n              AND source_result_code = NEW.result_code AND source_item_id = NEW.item_id;\n        END"
+  ],
+  [
+    "trigger",
+    "trg_suppression_reviews_task_deleted",
+    "tasks",
+    "CREATE TRIGGER trg_suppression_reviews_task_deleted\n        BEFORE DELETE ON tasks\n        BEGIN\n            UPDATE report_suppression_reviews SET needs_validation = 1\n            WHERE source_task_id = OLD.id;\n        END"
   ],
   [
     "trigger",

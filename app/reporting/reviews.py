@@ -401,6 +401,11 @@ def record_initial_review(task, result, item_id, actor, *, channel="web"):
 
 
 def save_final_review(task_id, data, actor):
+    from app.reporting.suppression import (
+        record_confirmed_suppression,
+        refresh_suppression_reviews,
+    )
+
     decision = str(data.get("decision") or "")
     note = str(data.get("note") or "").strip()
     if decision not in FINAL_DECISIONS:
@@ -438,6 +443,9 @@ def save_final_review(task_id, data, actor):
             note=note,
             initial_review_id=initial["id"],
         )
+        _, _, saved_state = find_review_item(task, code, item_id)
+        record_confirmed_suppression(task, result, item, saved_state)
+        refresh_suppression_reviews()
 
 
 def attach_review_metadata(task, results):

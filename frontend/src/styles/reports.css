@@ -226,6 +226,20 @@
   overflow-wrap: anywhere;
 }
 
+.report-suppression-evidence {
+  margin-top: var(--space-2);
+}
+
+.report-suppression-evidence summary {
+  color: var(--link);
+  cursor: pointer;
+}
+
+.report-suppression-evidence section {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--divider);
+}
+
 .report-suppression-empty-row td {
   padding: 36px 16px;
   color: var(--muted);

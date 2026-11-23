@@ -49,11 +49,6 @@ REPORT_REJECTION_REASON_HINTS = {
     "classification_inaccurate": "条目有依据，但问题或建议的分类不准确",
     "other": "无法归入以上原因，请补充说明",
 }
-REPORT_SUPPRESSION_REJECTION_REASONS = {
-    "model_hallucination",
-    "false_positive",
-    "not_applicable",
-}
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
 REPORT_STATS_PREPARATION_VERSION = "5"
 REPORT_DICTIONARY_STATUS_CATEGORIES = {

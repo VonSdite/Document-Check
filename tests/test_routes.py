@@ -42,6 +42,7 @@ from app.reporting.service import (
     _prepare_task_results,
     _structured_report_items,
 )
+from app.reporting.suppression import refresh_suppression_reviews
 from app.tasks.files import UPLOAD_PATH_SAFE_CHARS, _upload_destination
 from app.tasks.submission import _consistency_task_title
 from app.web import register_routes
@@ -60,6 +61,37 @@ def _required_tag(value: object) -> Tag:
     if not isinstance(value, Tag):
         raise AssertionError("expected HTML tag")
     return value
+
+
+def _insert_suppression_review_fixture(db, rule_id):
+    """为规则分页、筛选和匹配测试提供已确认的审核快照。"""
+    event = {
+        "actor_name": "审核用户",
+        "created_at": "2026-11-01 10:00:00",
+        "acceptance": {
+            "rejection_reason_label": "模型误报",
+            "rejection_note": "已核实原文",
+        },
+        "note": "已核实初审意见",
+    }
+    db.execute(
+        "INSERT INTO report_suppression_reviews "
+        "(final_review_id, rule_id, source_task_id, source_result_code, source_item_id, evidence_json) "
+        "VALUES (?, ?, ?, 'consistency', 'fixture', ?)",
+        (
+            -rule_id,
+            rule_id,
+            -rule_id,
+            json.dumps(
+                {
+                    "filename": "已终审样本.pdf",
+                    "initial": event,
+                    "final": event,
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    )
 
 
 def _xlsx_bytes(rows, *, title: str = "Sheet1") -> io.BytesIO:
@@ -114,6 +146,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             init_db()
             seed_defaults()
+            refresh_suppression_reviews()
         register_routes(self.app)
         self.client = self.app.test_client()
         with self.client.session_transaction() as session:
@@ -2248,7 +2281,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 ],
                 start=1,
             ):
-                db.execute(
+                cursor = db.execute(
                     """
                     INSERT INTO report_suppression_rules(
                         task_type, check_code, fingerprint, item_json, reason,
@@ -2273,6 +2306,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         f"2026-09-08 10:0{index}:00",
                     ),
                 )
+                _insert_suppression_review_fixture(db, cursor.lastrowid)
             db.commit()
 
         response = self.client.get(
@@ -2332,6 +2366,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
             get_db().commit()
             rule_id = cursor.lastrowid
+            _insert_suppression_review_fixture(get_db(), rule_id)
+            get_db().commit()
 
         response = self.client.post(
             "/admin/settings",
@@ -2388,6 +2424,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     ),
                 )
                 ids.append(cursor.lastrowid)
+                _insert_suppression_review_fixture(db, cursor.lastrowid)
             db.commit()
         return ids
 
@@ -3277,7 +3314,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.client.get("/admin/tasks")
 
         with self.app.app_context():
-            get_db().execute(
+            cursor = get_db().execute(
                 """
                 INSERT INTO report_suppression_rules(
                     task_type, check_code, fingerprint, item_json, reason,
@@ -3292,6 +3329,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     "2026-05-01 10:02:00",
                 ),
             )
+            _insert_suppression_review_fixture(get_db(), cursor.lastrowid)
             get_db().commit()
         self.client.get("/admin/tasks")
 
@@ -5907,7 +5945,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "rejection_note": "已由业务人员确认",
             },
         )
-        self.assertEqual(candidate["reason"], "模型误报")
+        self.assertIsNone(candidate)
         self.assertEqual(cached["reviewed_item_count"], 1)
         self.assertEqual(cached["pending_review_item_count"], 1)
 
@@ -8682,7 +8720,26 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.get_json()["suppression_candidate_created"])
+        self.assertFalse(response.get_json()["suppression_candidate_created"])
+        with self.app.app_context():
+            self.assertEqual(
+                get_db()
+                .execute("SELECT COUNT(*) FROM report_suppression_rules")
+                .fetchone()[0],
+                0,
+            )
+        final_response = self.client.post(
+            f"/admin/tasks/{source_task_id}/reviews",
+            json={
+                "stage": "final",
+                "result_code": "compliance",
+                "item_id": item_id,
+                "decision": "confirmed",
+                "note": "已核对公司规范",
+                "review_token": response.get_json()["review_token"],
+            },
+        )
+        self.assertEqual(final_response.status_code, 200)
         with self.app.app_context():
             rule = (
                 get_db()

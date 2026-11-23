@@ -227,6 +227,41 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_report_review_events_item
             ON report_review_events(task_id, result_code, item_id, id);
+        CREATE TABLE IF NOT EXISTS report_suppression_reviews (
+            final_review_id INTEGER PRIMARY KEY,
+            rule_id INTEGER NOT NULL REFERENCES report_suppression_rules(id) ON DELETE CASCADE,
+            source_task_id INTEGER NOT NULL,
+            source_result_code TEXT NOT NULL,
+            source_item_id TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            is_current INTEGER NOT NULL DEFAULT 1,
+            needs_validation INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_suppression_reviews_rule
+            ON report_suppression_reviews(rule_id, is_current, needs_validation);
+        CREATE INDEX IF NOT EXISTS idx_suppression_reviews_source
+            ON report_suppression_reviews(source_task_id, source_result_code, source_item_id);
+        CREATE INDEX IF NOT EXISTS idx_suppression_reviews_pending
+            ON report_suppression_reviews(source_task_id) WHERE needs_validation = 1;
+        CREATE TRIGGER IF NOT EXISTS trg_suppression_reviews_report_changed
+        AFTER UPDATE OF result_json ON tasks
+        BEGIN
+            UPDATE report_suppression_reviews SET needs_validation = 1
+            WHERE source_task_id = NEW.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_suppression_reviews_task_deleted
+        BEFORE DELETE ON tasks
+        BEGIN
+            UPDATE report_suppression_reviews SET needs_validation = 1
+            WHERE source_task_id = OLD.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_suppression_reviews_review_changed
+        AFTER INSERT ON report_review_events
+        BEGIN
+            UPDATE report_suppression_reviews SET needs_validation = 1
+            WHERE source_task_id = NEW.task_id
+              AND source_result_code = NEW.result_code AND source_item_id = NEW.item_id;
+        END;
         CREATE TABLE IF NOT EXISTS task_final_review_stats (
             task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
             total INTEGER NOT NULL,
