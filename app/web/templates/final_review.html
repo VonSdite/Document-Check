@@ -11,7 +11,8 @@
     <h1>{{ task.original_filename }}</h1>
     <p>已记录初审 {{ progress.initial_count }}/{{ progress.total }} · 终审确认 {{ progress.confirmed }}/{{ progress.total }} · {{ progress.status_label }}</p>
     <p>逐条审核问题和建议，包含报告中已忽略及受展示上限省略的条目。退回修改和暂无法判断的条目继续等待处理。</p>
-    {% if actor.source != 'cookie_session' %}<p class="review-notice">当前以 IP 身份操作。双人终审需要双方通过统一登录使用个人身份。</p>{% endif %}
+    {% if actor.source == 'ip' %}<p class="review-notice">当前以 IP 身份记录初审，请由管理员终审。使用统一登录时，由两名不同用户分别初审和终审。</p>{% endif %}
+    {% if actor.source == 'local_admin' %}<p class="review-notice">当前以本地管理员身份审核。普通用户完成初审后，可在此逐条终审；管理员自己初审的条目需要另一位审核人员终审。</p>{% endif %}
     {% if not task_finished %}<p>检查结束后可提交审核意见。</p>{% endif %}
   </section>
   {% if video_report and video_stream_url %}<video controls preload="metadata" src="{{ video_stream_url }}" class="report-video-player" data-report-video-player></video>{% endif %}
@@ -43,15 +44,15 @@
         <p>{{ state.status_label }}</p>
         {% if state.final %}<p>{{ state.final.note }}</p><p class="subline">{{ state.final.actor_name }} · {{ state.final.actor_subject }} · {{ state.final.created_at }}</p>{% endif %}
         {% if has_permission('reports.final_review') and task_finished %}
-        {% if state.initial and state.initial.actor_subject == actor.subject %}<p>请由另一位审核人员终审此条目。</p>
-        {% elif state.initial and state.initial.actor_source == 'cookie_session' and actor.source == 'cookie_session' %}
+        {% if state.block_reason %}<p>{{ state.block_reason }}</p>
+        {% else %}
         <form method="post" class="stack-form" data-review-stage-form data-prevent-double-submit="true">
           <input type="hidden" name="stage" value="final"><input type="hidden" name="result_code" value="{{ result.code }}"><input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="review_token" value="{{ state.token }}">
           <label>终审意见<select name="decision" required><option value="">请选择</option>{% for key, label in final_decisions.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
           <label>终审说明<textarea name="note" rows="3" maxlength="4000" placeholder="退回修改或暂无法判断时填写具体说明"></textarea></label>
           <button class="primary-button" type="submit">保存终审</button>
         </form>
-        {% else %}<p>等待使用个人登录身份完成初审。</p>{% endif %}
+        {% endif %}
         {% endif %}
       </section>
     </div>

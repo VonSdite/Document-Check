@@ -336,6 +336,22 @@ def record_initial_review(task, result, item_id, actor, *, channel="web"):
     )
 
 
+def final_review_block_reason(initial, actor):
+    if initial is None:
+        return "请先完成初审并记录审核人，再进行终审。"
+    if initial["actor_subject"] == actor["subject"]:
+        return "请由另一位审核人员终审此条目。"
+    named_sources = {"cookie_session", "local_admin"}
+    if actor["source"] in named_sources:
+        if initial["actor_source"] in named_sources:
+            return ""
+        if actor.get("is_superadmin") and initial["actor_source"] == "ip":
+            return ""
+    if initial["actor_source"] == "ip":
+        return "此条初审使用 IP 身份，请由管理员终审，或使用统一登录重新确认初审。"
+    return "终审需要统一登录的个人身份或本地管理员身份。"
+
+
 def save_final_review(task_id, data, actor):
     decision = str(data.get("decision") or "")
     note = str(data.get("note") or "").strip()
@@ -356,17 +372,9 @@ def save_final_review(task_id, data, actor):
         if data.get("review_token") != state["token"]:
             raise ReviewConflict("报告或审核记录已更新，请刷新后重新确认。")
         initial = state["initial"]
-        if initial is None:
-            raise ReviewConflict("请先完成初审并记录审核人，再进行终审。")
-        if initial["actor_subject"] == actor["subject"]:
-            raise ReviewConflict("请由另一位审核人员终审此条目。")
-        if (
-            actor["source"] != "cookie_session"
-            or initial["actor_source"] != "cookie_session"
-        ):
-            raise ReviewConflict(
-                "双人终审需要双方使用统一登录的个人身份，请登录后重新确认初审。"
-            )
+        block_reason = final_review_block_reason(initial, actor)
+        if block_reason:
+            raise ReviewConflict(block_reason)
         acceptance = _normalize_report_acceptance(
             (result.get("item_acceptances") or {}).get(item_id)
         )

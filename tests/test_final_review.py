@@ -69,9 +69,11 @@ class FinalReviewTest(unittest.TestCase):
                 "review"
             ]
 
-    def initial(self, index=0, subject="author", status="accepted", token=None):
+    def initial(
+        self, index=0, subject="author", status="accepted", token=None, admin=False
+    ):
         return self.client.post(
-            f"/tasks/{self.task_id}/report-items",
+            f"{'/admin' if admin else ''}/tasks/{self.task_id}/report-items",
             json={
                 "result_code": "consistency",
                 "item_id": self.items[index]["id"],
@@ -90,9 +92,10 @@ class FinalReviewTest(unittest.TestCase):
         note="",
         token=None,
         client=None,
+        admin=False,
     ):
         return (client or self.client).post(
-            f"/tasks/{self.task_id}/reviews",
+            f"{'/admin' if admin else ''}/tasks/{self.task_id}/reviews",
             json={
                 "stage": "final",
                 "result_code": "consistency",
@@ -103,6 +106,94 @@ class FinalReviewTest(unittest.TestCase):
             },
             headers={"X-Test-Subject": subject},
         )
+
+    def test_ip_initial_can_be_finalized_by_local_admin(self):
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET owner_subject='ip:127.0.0.1' WHERE id=?",
+                (self.task_id,),
+            )
+            get_db().commit()
+        for index, status in enumerate(("accepted", "rejected")):
+            self.assertEqual(
+                self.initial(index, subject="ip:127.0.0.1", status=status).status_code,
+                200,
+            )
+        self.assertEqual(self.state()["initial"]["actor_source"], "ip")
+        page = self.client.get(
+            f"/admin/tasks/{self.task_id}/reviews",
+            headers={"X-Test-Subject": "ip:127.0.0.1"},
+        )
+        soup = BeautifulSoup(page.data, "html.parser")
+        self.assertEqual(len(soup.select("select[name=decision]")), 2)
+        self.assertIn("当前以本地管理员身份审核", page.get_data(as_text=True))
+        for index in range(2):
+            self.assertEqual(
+                self.final(index, subject="ip:127.0.0.1", admin=True).status_code,
+                200,
+            )
+        final = self.state()["final"]
+        self.assertEqual(final["actor_subject"], "local_admin:primary")
+        self.assertEqual(final["actor_name"], "本地管理员")
+        self.assertEqual(final["actor_source"], "local_admin")
+        with self.app.app_context():
+            self.assertEqual(
+                review_context(self.task())["progress"]["status"], "completed"
+            )
+
+    def test_local_admin_cannot_final_own_initial(self):
+        self.assertEqual(
+            self.initial(subject="ip:127.0.0.1", admin=True).status_code, 200
+        )
+        self.assertEqual(
+            self.state()["initial"]["actor_subject"], "local_admin:primary"
+        )
+        page = self.client.get(
+            f"/admin/tasks/{self.task_id}/reviews",
+            headers={"X-Test-Subject": "ip:127.0.0.1"},
+        )
+        self.assertIn("请由另一位审核人员终审此条目", page.get_data(as_text=True))
+        self.assertFalse(
+            BeautifulSoup(page.data, "html.parser").select("select[name=decision]")
+        )
+        self.assertEqual(
+            self.final(subject="ip:127.0.0.1", admin=True).status_code, 409
+        )
+        self.assertEqual(self.final().status_code, 200)
+
+    def test_cookie_admin_keeps_individual_identity(self):
+        self.assertEqual(self.initial(admin=True).status_code, 200)
+        self.assertEqual(
+            self.state()["initial"]["actor_subject"], "cookie_session:author"
+        )
+        self.assertEqual(self.final(subject="author", admin=True).status_code, 409)
+        self.assertEqual(self.final(admin=True).status_code, 200)
+        self.assertEqual(
+            self.state()["final"]["actor_subject"], "cookie_session:reviewer"
+        )
+
+    def test_client_cannot_claim_admin_identity_for_ip_final(self):
+        with self.app.app_context():
+            register_subject("ip:127.0.0.1")
+            replace_subject_permissions(
+                "ip:127.0.0.1", {"reports.final_review", "tasks.manage_all"}
+            )
+        self.initial(subject="ip:127.0.0.1")
+        response = self.client.post(
+            f"/tasks/{self.task_id}/reviews",
+            json={
+                "stage": "final",
+                "result_code": "consistency",
+                "item_id": self.items[0]["id"],
+                "decision": "confirmed",
+                "review_token": self.state()["token"],
+                "is_superadmin": True,
+                "actor": {"subject": "local_admin:primary", "source": "local_admin"},
+            },
+            headers={"X-Test-Subject": "ip:127.0.0.1"},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(len(self.state()["history"]), 1)
 
     def test_all_findings_require_independent_final_review(self):
         self.assertEqual(self.initial().status_code, 200)

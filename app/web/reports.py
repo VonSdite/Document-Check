@@ -34,15 +34,24 @@ from app.reporting.service import (
     update_report_item_review,
 )
 from app.tasks.submission import _consistency_task_title
-from app.web.auth import _current_user_identity
+from app.web.auth import _current_user_identity, is_superadmin
 
 
 def review_actor():
     identity = _current_user_identity()
+    admin = is_superadmin()
+    if admin and identity.source == "ip":
+        return {
+            "subject": "local_admin:primary",
+            "name": "本地管理员",
+            "source": "local_admin",
+            "is_superadmin": True,
+        }
     return {
         "subject": identity.subject,
         "name": identity.label,
         "source": identity.source,
+        "is_superadmin": admin,
     }
 
 

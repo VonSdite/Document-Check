@@ -4,7 +4,7 @@ import atexit
 import sys
 from pathlib import Path
 
-from flask import g, redirect, session
+from flask import g, redirect, request, session
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -59,8 +59,13 @@ def main():
             review_task_id = fixture._insert_report_task()
         db = get_db()
         db.execute(
-            "UPDATE tasks SET owner_subject='cookie_session:review-author' WHERE id=?",
-            (review_task_id,),
+            "UPDATE tasks SET owner_subject=? WHERE id=?",
+            (
+                "ip:127.0.0.1"
+                if request.args.get("mode") == "ip"
+                else "cookie_session:review-author",
+                review_task_id,
+            ),
         )
         db.commit()
         for name in ("review-author", "final-reviewer"):

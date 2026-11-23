@@ -10,6 +10,7 @@ from app.reporting.reviews import (
     FINAL_DECISIONS,
     FINAL_STATUSES,
     ReviewConflict,
+    final_review_block_reason,
     final_review_progress,
     review_context,
     save_final_review,
@@ -117,6 +118,11 @@ def register_final_review_routes(app):
                 )
             )
         context = review_context(task)
+        for result in context["results"]:
+            for item in result["report_items"]:
+                item["review"]["block_reason"] = final_review_block_reason(
+                    item["review"]["initial"], actor
+                )
         media_endpoint = "admin_task_media" if is_superadmin() else "user_task_media"
         _attach_report_media_urls(context["results"], task, media_endpoint)
         return render_template(
