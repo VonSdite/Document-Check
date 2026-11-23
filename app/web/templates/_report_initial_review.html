@@ -1,0 +1,30 @@
+              {% if item.review %}
+              <input type="hidden" data-review-token value="{{ item.review.token }}">
+              <div class="subline" data-review-attribution>{% if item.review.initial %}初审 {{ item.review.initial.actor_name }} · {{ item.review.initial.created_at }}{% endif %}</div>
+              {% endif %}
+              {% if task_editable %}
+              <div class="report-radio-group" role="radiogroup" aria-label="条目 {{ item.index }} 是否认可 AI 结论">
+                {% for status, label in REPORT_ACCEPTANCE_STATUSES.items() %}
+                <label class="report-radio-option report-radio-option-{{ status }}">
+                  <input type="radio" name="report-acceptance-{{ result.code }}-{{ item.id }}" value="{{ status }}" data-report-acceptance-status data-saved-value="{{ item.acceptance_status }}" aria-label="{{ '认可' if status == 'accepted' else '不认可' if status == 'rejected' else label }}" {{ "checked" if item.acceptance_status == status else "" }} {{ "disabled" if controls_disabled else "" }}>
+                  <span>{{ "认可" if status == "accepted" else "不认可" if status == "rejected" else label }}</span>
+                </label>
+                {% if status == "rejected" %}
+                <div class="rejection-controls" data-report-rejection-controls {{ "hidden" if item.acceptance_status != "rejected" else "" }}>
+                  <input type="hidden" value="{{ item.rejection_reason }}" data-report-rejection-reason data-saved-value="{{ item.rejection_reason }}" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                  <button class="rejection-reason-trigger{{ ' has-value' if item.rejection_reason else '' }}" type="button" data-report-rejection-trigger {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                    <span data-report-rejection-trigger-label>{{ item.rejection_reason_label or "选择不认可原因" }}</span>
+                    <small data-report-rejection-trigger-hint>{{ REPORT_REJECTION_REASON_HINTS.get(item.rejection_reason, "查看判断标准后选择") }}</small>
+                  </button>
+                  <input data-report-rejection-note data-saved-value="{{ item.rejection_note }}" value="{{ item.rejection_note }}" placeholder="补充说明（选择“其他”时必填）" aria-label="条目 {{ item.index }} 人工填写不认可原因" {{ "disabled" if controls_disabled or item.acceptance_status != "rejected" else "" }}>
+                </div>
+                {% endif %}
+                {% endfor %}
+              </div>
+              <button type="button" class="small-button" data-save-initial {{ "disabled" if controls_disabled else "" }}>保存初审</button>
+              <span class="subline" role="status" data-initial-save-status></span>
+              {% else %}
+              <span>{{ item.acceptance_label }}</span>
+              {% if item.rejection_reason_label %}<div class="subline">{{ item.rejection_reason_label }}</div>{% endif %}
+              {% if item.rejection_note %}<div class="subline">{{ item.rejection_note }}</div>{% endif %}
+              {% endif %}

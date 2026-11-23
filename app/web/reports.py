@@ -18,12 +18,14 @@ from app.contracts.task_types import (
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
 )
+from app.persistence.connection import get_db
 from app.reporting.constants import (
     REPORT_EXPORT_MIMETYPE,
     REPORT_IMPORT_MAX_BYTES,
     ReportExcelImportError,
 )
 from app.reporting.excel import _load_report_excel_reviews, build_report_workbook
+from app.reporting.reviews import ACTIVE_STATUSES, FINAL_DECISIONS, review_report
 from app.reporting.rounds import group_cross_check_report_items
 from app.reporting.service import (
     _report_item_fields_for_task,
@@ -34,7 +36,7 @@ from app.reporting.service import (
     update_report_item_review,
 )
 from app.tasks.submission import _consistency_task_title
-from app.web.auth import _current_user_identity, is_superadmin
+from app.web.auth import _current_user_identity, can_manage_task, is_superadmin
 
 
 def review_actor():
@@ -143,7 +145,45 @@ def _update_report_item_type(task):
     data = request.get_json(silent=True) if request.is_json else None
     if not isinstance(data, dict):
         data = request.form
-    return update_report_item_review(task, data, actor=review_actor())
+    response = update_report_item_review(task, data, actor=review_actor())
+    if isinstance(response, dict) and response.get("ok") and data.get("inline_review"):
+        response.update(report_review_fragments(task["id"], data))
+    return response
+
+
+def report_review_fragments(task_id, data):
+    task = get_db().execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    context = review_report(task)
+    result = next(
+        result for result in context["results"] if result["code"] == data["result_code"]
+    )
+    item = next(
+        item for item in result["report_items"] if item["id"] == data["item_id"]
+    )
+    fields = _report_item_fields_for_task(task["task_type"])
+    values = {
+        "task": task,
+        "result": result,
+        "item": item,
+        "state": item["review"],
+        "task_editable": can_manage_task(task),
+        "controls_disabled": task["status"] in ACTIVE_STATUSES,
+        "final_decisions": FINAL_DECISIONS,
+        "report_item_fields": fields,
+        "review_progress": context["progress"],
+    }
+    return {
+        "review_fragments": {
+            key: render_template(template, **values)
+            for key, template in {
+                "initial": "_report_initial_review.html",
+                "final": "_report_final_review.html",
+                "history": "_report_item_history.html",
+                "progress": "_report_review_progress.html",
+            }.items()
+        },
+        "review_totals": _report_item_totals(context["results"]),
+    }
 
 
 def _export_task_report_excel(task):

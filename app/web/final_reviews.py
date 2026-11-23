@@ -2,16 +2,11 @@
 
 from flask import abort, flash, redirect, render_template, request, url_for
 
-from app.contracts.task_types import VIDEO_TASK_TYPE
 from app.persistence.connection import get_db
-from app.reporting.constants import REPORT_ITEM_FIELDS
 from app.reporting.reviews import (
-    ACTIVE_STATUSES,
-    FINAL_DECISIONS,
     FINAL_STATUSES,
     ReviewConflict,
     final_review_progress,
-    review_context,
     save_final_review,
 )
 from app.reporting.service import update_report_item_review
@@ -21,10 +16,10 @@ from app.web.auth import (
     has_permission,
     permission_required,
 )
-from app.web.reports import review_actor
+from app.web.common import _task_endpoint
+from app.web.reports import report_review_fragments, review_actor
 from app.web.task_actions import _get_task_or_404, _get_user_task
 from app.web.task_lists import _bounded_page, _page_arg, _pagination, _per_page_arg
-from app.web.task_media import _attach_report_media_urls, _task_video_stream_url
 
 
 def register_final_review_routes(app):
@@ -82,8 +77,8 @@ def register_final_review_routes(app):
         from app.web.auth import is_superadmin
 
         task = _get_task_or_404(task_id) if is_superadmin() else _get_user_task(task_id)
-        actor = review_actor()
         if request.method == "POST":
+            actor = review_actor()
             _check_write_origin()
             data = request.get_json(silent=True) if request.is_json else request.form
             if not isinstance(data, dict) and not request.form:
@@ -107,32 +102,22 @@ def register_final_review_routes(app):
                 flash(str(exc), "error")
             else:
                 if request.is_json:
-                    return {"ok": True}
+                    payload = {"ok": True}
+                    if data.get("inline_review"):
+                        payload.update(report_review_fragments(task_id, data))
+                    return payload
                 flash("审核意见已保存。", "success")
             return redirect(
                 url_for(
-                    request.endpoint,
+                    _task_endpoint("task_detail"),
                     task_id=task_id,
                     _anchor=f"review-{data.get('result_code', '')}-{data.get('item_id', '')}",
                 )
             )
-        context = review_context(task)
-        media_endpoint = "admin_task_media" if is_superadmin() else "user_task_media"
-        _attach_report_media_urls(context["results"], task, media_endpoint)
-        return render_template(
-            "final_review.html",
-            task=task,
-            **context,
-            actor=actor,
-            active_nav="final_reviews",
-            final_decisions=FINAL_DECISIONS,
-            report_item_fields=REPORT_ITEM_FIELDS,
-            task_editable=can_manage_task(task),
-            task_finished=task["status"] not in ACTIVE_STATUSES,
-            video_report=task["task_type"] == VIDEO_TASK_TYPE,
-            video_stream_url=_task_video_stream_url(
-                task, "admin_task_video" if is_superadmin() else "user_task_video"
-            ),
+        return redirect(
+            url_for(
+                _task_endpoint("task_detail"), task_id=task_id, _anchor="report-reviews"
+            )
         )
 
     for prefix, endpoint_prefix in (("", "user_"), (app.config["ADMIN_URL"], "admin_")):

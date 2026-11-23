@@ -1,10 +1,10 @@
 from flask import flash, redirect, render_template, request, url_for
 
 from app.contracts.task_types import DOCUMENT_TASK_TYPE, VIDEO_TASK_TYPE
+from app.reporting.reviews import FINAL_DECISIONS, review_report
 from app.reporting.service import (
     _report_item_fields_for_task,
     _report_item_totals,
-    _task_results,
     _uses_compact_media_report,
 )
 from app.tasks.files import _task_document_groups
@@ -150,7 +150,8 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             return progress
         if polling:
             task = _get_task_or_404(task_id)
-        results = present_check_activity(task, _task_results(task), progress)
+        review = review_report(task)
+        results = present_check_activity(task, review["results"], progress)
         cross_check_group_context = _cross_check_group_context(results)
         _attach_report_media_urls(results, task, _task_endpoint("task_media"))
         back_endpoint = _task_list_endpoint(True, task["task_type"])
@@ -167,6 +168,9 @@ def _register_all_task_routes(app, route_prefix, endpoint_prefix):
             results=results,
             **cross_check_group_context,
             report_totals=_report_item_totals(results),
+            review_progress=review["progress"],
+            archived_history=review["archived_history"],
+            final_decisions=FINAL_DECISIONS,
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
             media_report=_uses_compact_media_report(task["task_type"]),
             video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,

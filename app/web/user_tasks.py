@@ -9,10 +9,10 @@ from app.contracts.task_types import (
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
 )
+from app.reporting.reviews import FINAL_DECISIONS, review_report
 from app.reporting.service import (
     _report_item_fields_for_task,
     _report_item_totals,
-    _task_results,
     _uses_compact_media_report,
 )
 from app.tasks.files import _task_document_groups
@@ -161,7 +161,8 @@ def register_user_tasks_routes(app):
             return progress
         if polling:
             task = _get_user_task(task_id)
-        results = present_check_activity(task, _task_results(task), progress)
+        review = review_report(task)
+        results = present_check_activity(task, review["results"], progress)
         _attach_report_media_urls(results, task, "user_task_media")
         back_endpoint = _task_list_endpoint(False, task["task_type"])
         html = render_template(
@@ -177,6 +178,9 @@ def register_user_tasks_routes(app):
             results=results,
             **_cross_check_group_context(results),
             report_totals=_report_item_totals(results),
+            review_progress=review["progress"],
+            archived_history=review["archived_history"],
+            final_decisions=FINAL_DECISIONS,
             report_item_fields=_report_item_fields_for_task(task["task_type"]),
             media_report=_uses_compact_media_report(task["task_type"]),
             video_report=(task["task_type"] or DOCUMENT_TASK_TYPE) == VIDEO_TASK_TYPE,

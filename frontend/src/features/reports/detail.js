@@ -33,6 +33,9 @@ import { request as fetch } from '@/api/client'
     const selection = window.getSelection()
     return (
       actionPending ||
+      Boolean(
+        root.querySelector('.report-item.is-saving, [data-final-review-form][data-dirty="1"]'),
+      ) ||
       Boolean(document.querySelector('.confirm-popover')) ||
       (root.contains(focused) && focused.matches('input, textarea, select')) ||
       (selection && !selection.isCollapsed && root.contains(selection.anchorNode))

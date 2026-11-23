@@ -106,16 +106,14 @@ function syncReportAcceptanceFields(item) {
 }
 
 function setReportItemControlsDisabled(item, disabled) {
-  Object.values(reportItemControls(item)).forEach((control) => {
-    reportControlNodes(control).forEach((node) => {
-      if (
-        node instanceof HTMLSelectElement ||
-        node instanceof HTMLInputElement ||
-        node instanceof HTMLButtonElement
-      ) {
-        node.disabled = disabled
-      }
-    })
+  item.querySelectorAll('input, select, textarea, button').forEach((node) => {
+    if (disabled) {
+      node.dataset.reviewWasDisabled = node.disabled ? '1' : '0'
+      node.disabled = true
+    } else if ('reviewWasDisabled' in node.dataset) {
+      node.disabled = node.dataset.reviewWasDisabled === '1'
+      delete node.dataset.reviewWasDisabled
+    }
   })
 }
 
@@ -265,47 +263,134 @@ function placeReportRejectionModal(modal, anchor) {
   modal.style.top = `${top}px`
 }
 
+function applyReviewFragments(item, data, stage) {
+  const fragments = data.review_fragments
+  if (!fragments) return
+  const draft = item.querySelector('[data-final-review-form][data-dirty="1"]')
+  const savedDraft =
+    stage === 'initial' && draft
+      ? { decision: draft.elements.decision.value, note: draft.elements.note.value }
+      : null
+  item.querySelector('[data-initial-review-cell]').innerHTML = fragments.initial
+  item.querySelector('[data-final-review-cell]').innerHTML = fragments.final
+  const history = item.nextElementSibling
+  if (history?.matches('[data-review-history-row], .report-history-row')) {
+    history.querySelector('[data-review-history-cell]').innerHTML = fragments.history
+    const expanded = !history.hidden
+    history.querySelector('.review-history').open = expanded
+    item
+      .querySelector('[data-review-history-toggle]')
+      ?.setAttribute('aria-expanded', String(expanded))
+  }
+  document.querySelector('[data-report-review-progress]').innerHTML = fragments.progress
+  const form = item.querySelector('[data-final-review-form]')
+  if (savedDraft && form) {
+    form.elements.decision.value = savedDraft.decision
+    form.elements.note.value = savedDraft.note
+    form.dataset.dirty = '1'
+    form.querySelector('[data-final-save-status]').textContent = '初审已更新，请核对后保存终审。'
+  }
+}
+
+const reviewRequests = new Set()
+window.addEventListener('pagehide', () =>
+  reviewRequests.forEach((controller) => controller.abort()),
+)
+
+async function submitReportReview(item, url, payload, stage) {
+  if (item.classList.contains('is-saving')) return
+  const controller = new AbortController()
+  const version = item.querySelector('[data-review-token]')?.value
+  reviewRequests.add(controller)
+  setReportItemControlsDisabled(item, true)
+  item.classList.add('is-saving')
+  const statusSelector =
+    stage === 'final' ? '[data-final-save-status]' : '[data-initial-save-status]'
+  const status = item.querySelector(statusSelector)
+  if (status) status.textContent = '保存中…'
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, inline_review: true }),
+      signal: controller.signal,
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || !data.ok) {
+      throw new Error(
+        data.error ||
+          (response.status === 403 ? '当前身份没有此项审核权限。' : '审核保存失败，请重试。'),
+      )
+    }
+    if (
+      !item.isConnected ||
+      controller.signal.aborted ||
+      item.querySelector('[data-review-token]')?.value !== version
+    )
+      return
+    if (stage === 'initial') applyReportItemSave(item, data)
+    applyReviewFragments(item, data, stage)
+    updateReportCounts(data.review_totals || data.totals || {})
+    const savedStatus = item.querySelector(statusSelector)
+    if (savedStatus) savedStatus.textContent = '已保存'
+  } catch (error) {
+    if (!item.isConnected || controller.signal.aborted) return
+    if (stage === 'initial') revertReportItemControls(item)
+    if (status) status.textContent = error.message || '审核保存失败，请重试。'
+    showToast(error.message || '审核保存失败，请重试。', 'error')
+  } finally {
+    reviewRequests.delete(controller)
+    setReportItemControlsDisabled(item, false)
+    syncReportAcceptanceFields(item)
+    item.classList.remove('is-saving')
+  }
+}
+
 function saveReportItemReview(item) {
   const results = item.closest('[data-report-results]')
   if (!(results instanceof HTMLElement)) {
     return
   }
   const url = results.dataset.reportClassificationUrl
-  if (!url || !validateReportAcceptance(item)) {
+  if (!url || item.classList.contains('is-saving') || !validateReportAcceptance(item)) {
     return
   }
   const payload = reportItemPayload(item)
 
-  setReportItemControlsDisabled(item, true)
-  item.classList.add('is-saving')
-  fetch(url, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-Requested-With': 'fetch',
-    },
-    body: JSON.stringify(payload),
-  })
-    .then((response) => response.json())
-    .then((data) => {
-      if (!data.ok) {
-        throw new Error(data.error || 'save failed')
-      }
-      applyReportItemSave(item, data)
-      updateReportCounts(data.totals || {})
-    })
-    .catch((error) => {
-      revertReportItemControls(item)
-      showToast(error.message || '报告条目复核结果保存失败，请稍后重试。', 'error')
-    })
-    .finally(() => {
-      setReportItemControlsDisabled(item, false)
-      syncReportAcceptanceFields(item)
-      item.classList.remove('is-saving')
-    })
+  submitReportReview(item, url, payload, 'initial')
 }
+
+document.addEventListener('submit', (event) => {
+  const form = event.target
+  if (!(form instanceof HTMLFormElement) || !form.matches('[data-final-review-form]')) return
+  event.preventDefault()
+  form.elements.note.required = ['returned', 'deferred'].includes(form.elements.decision.value)
+  if (!form.reportValidity()) return
+  const payload = Object.fromEntries(new FormData(form))
+  submitReportReview(form.closest('[data-report-item]'), form.action, payload, 'final')
+})
+
+document.addEventListener('input', (event) => {
+  const form = event.target.closest('[data-final-review-form]')
+  if (!form) return
+  form.dataset.dirty = '1'
+  form.elements.note.required = ['returned', 'deferred'].includes(form.elements.decision.value)
+  form.querySelector('[data-final-save-status]').textContent = '未保存'
+})
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-save-initial], [data-review-history-toggle]')
+  if (!(button instanceof HTMLButtonElement)) return
+  const item = button.closest('[data-report-item]')
+  if (button.matches('[data-save-initial]')) {
+    saveReportItemReview(item)
+    return
+  }
+  const history = document.getElementById(button.getAttribute('aria-controls'))
+  history.hidden = !history.hidden
+  history.querySelector('.review-history').open = !history.hidden
+  button.setAttribute('aria-expanded', String(!history.hidden))
+})
 
 document.addEventListener('change', (event) => {
   const control = event.target.closest(

@@ -3,7 +3,7 @@ export const pages = [
   { id: 'models', selector: '.provider-modal-form', load: () => import('@/pages/models') },
   {
     id: 'reports',
-    selector: '[data-task-detail], [data-report-audit]',
+    selector: '[data-task-detail]',
     load: () => import('@/pages/reports'),
   },
   { id: 'settings', selector: '.settings-section', load: () => import('@/pages/settings') },

@@ -4,10 +4,14 @@ import hashlib
 import json
 from contextlib import contextmanager
 
+from app.contracts.task_types import DOCUMENT_TASK_TYPE
 from app.persistence.connection import get_db, now_text
 from app.reporting.constants import REPORT_ITEM_FIELDS, REPORT_ITEM_TYPES
 from app.reporting.service import (
+    _count_report_items,
+    _media_report_item_text,
     _normalize_report_acceptance,
+    _prepare_task_results,
     _raw_task_results,
     _result_report_items,
 )
@@ -176,6 +180,43 @@ def _progress_status(task_status, counts):
     if counts["confirmed"]:
         return "in_progress"
     return "pending" if counts["initial_count"] else "awaiting_initial"
+
+
+def review_report(task):
+    """将完整审核条目合入报告表格，保留展示标记和历史。"""
+    context = review_context(task)
+    prepared = _prepare_task_results(
+        _raw_task_results(task),
+        task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
+        task_id=task["id"],
+        record_suppression_hits=True,
+    )
+    originals = {str(result.get("code") or ""): result for result in context["results"]}
+    for result in prepared:
+        original = originals[str(result.get("code") or "")]
+        review_items = {item["id"]: item for item in original["report_items"]}
+        visible = result["report_items"]
+        suppressed = result["suppressed_report_items"]
+        present_ids = {item["id"] for item in visible + suppressed}
+        additional = [
+            item for item in original["report_items"] if item["id"] not in present_ids
+        ]
+        for item in suppressed:
+            item["review_display_label"] = "已忽略误报"
+        for item in additional:
+            item["review_display_label"] = "补充审核条目"
+            item["media_summary"] = _media_report_item_text(item)
+        items = visible + suppressed + additional
+        for index, item in enumerate(items, start=1):
+            item["index"] = index
+            item["review"] = review_items[item["id"]]["review"]
+        result["report_items"] = items
+        result["suppressed_report_items"] = []
+        result["report_counts"] = _count_report_items(
+            items, suppressed_count=len(suppressed)
+        )
+    context["results"] = prepared
+    return context
 
 
 def present_progress(counts):

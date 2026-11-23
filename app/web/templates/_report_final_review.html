@@ -1,0 +1,22 @@
+<p class="review-current-status" data-final-review-status>{{ state.status_label }}</p>
+{% if state.final %}
+{% if not has_permission('reports.final_review') or controls_disabled %}<p class="review-note">{{ state.final.note }}</p>{% endif %}
+<p class="subline">{{ state.final.actor_name }} · {{ state.final.created_at }}</p>
+{% elif state.history|selectattr('stage', 'equalto', 'final')|list %}
+<p class="subline">初审或报告内容已更新，需重新终审。之前的意见可在审核记录中查看。</p>
+{% endif %}
+{% if has_permission('reports.final_review') and not controls_disabled %}
+{% if state.initial %}
+<form method="post" action="{{ url_for(task_endpoint('report_reviews'), task_id=task.id) }}" class="stack-form" data-final-review-form>
+  <input type="hidden" name="stage" value="final">
+  <input type="hidden" name="result_code" value="{{ result.code }}">
+  <input type="hidden" name="item_id" value="{{ item.id }}">
+  <input type="hidden" name="review_token" value="{{ state.token }}">
+  <label>终审意见<select name="decision" required><option value="">请选择</option>{% for key, label in final_decisions.items() %}<option value="{{ key }}"{{ ' selected' if state.final and state.final.decision == key else '' }}>{{ label }}</option>{% endfor %}</select></label>
+  <label>终审说明<textarea name="note" rows="3" maxlength="4000" placeholder="退回修改或暂无法判断时必填">{{ state.final.note if state.final else '' }}</textarea></label>
+  <button class="primary-button" type="submit">保存终审</button>
+  <span class="subline" role="status" data-final-save-status></span>
+</form>
+{% else %}<p class="subline">请先完成初审并记录审核人。</p>{% endif %}
+{% endif %}
+{% if state.history %}<button type="button" class="small-button" data-review-history-toggle aria-expanded="false" aria-controls="history-{{ result.code }}-{{ item.id }}">审核记录（{{ state.history|length }}）</button>{% endif %}

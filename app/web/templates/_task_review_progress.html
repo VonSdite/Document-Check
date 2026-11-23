@@ -9,6 +9,6 @@
   <div class="task-review-progress" aria-hidden="true"><span style="width: {{ ((task.reviewed_item_count / task.report_item_count) * 100)|round(0)|int if task.report_item_count else 0 }}%"></span></div>
   {% endif %}
   {% if task.final_review %}
-  <div class="task-final-review-progress"><a href="{{ url_for(task_endpoint('report_reviews'), task_id=task.id) }}">{{ task.final_review.status_label }} {{ task.final_review.confirmed }}/{{ task.final_review.total }}</a></div>
+  <div class="task-final-review-progress"><a href="{{ url_for(task_endpoint('task_detail'), task_id=task.id, _anchor='report-reviews') }}">{{ task.final_review.status_label }} {{ task.final_review.confirmed }}/{{ task.final_review.total }}</a></div>
   {% endif %}
 </td>
