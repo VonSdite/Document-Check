@@ -18,7 +18,7 @@ from app.reporting.service import (
 
 FINAL_DECISIONS = {
     "confirmed": "确认初审",
-    "returned": "退回修改",
+    "returned": "提单修改",
     "deferred": "暂无法判断",
 }
 FINAL_STATUSES = {
@@ -27,7 +27,7 @@ FINAL_STATUSES = {
     "awaiting_initial": "待初审",
     "pending": "待终审",
     "in_progress": "终审中",
-    "returned": "需修改初审",
+    "returned": "待提单修改",
     "deferred": "待补充依据",
     "completed": "终审完成",
 }
@@ -383,7 +383,7 @@ def save_final_review(task_id, data, actor):
     if decision not in FINAL_DECISIONS:
         raise ReviewConflict("请选择终审意见。")
     if decision in {"returned", "deferred"} and not note:
-        raise ReviewConflict("退回修改或暂无法判断时，请填写具体说明。")
+        raise ReviewConflict("提单修改或暂无法判断时，请填写具体说明。")
     if len(note) > 4000:
         raise ReviewConflict("终审说明最多填写 4000 字。")
     with review_transaction(task_id) as task:

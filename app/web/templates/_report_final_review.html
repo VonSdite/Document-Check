@@ -13,7 +13,7 @@
   <input type="hidden" name="item_id" value="{{ item.id }}">
   <input type="hidden" name="review_token" value="{{ state.token }}">
   <label>终审意见<select name="decision" required><option value="">请选择</option>{% for key, label in final_decisions.items() %}<option value="{{ key }}"{{ ' selected' if state.final and state.final.decision == key else '' }}>{{ label }}</option>{% endfor %}</select></label>
-  <label>终审说明<textarea name="note" rows="3" maxlength="4000" placeholder="退回修改或暂无法判断时必填">{{ state.final.note if state.final else '' }}</textarea></label>
+  <label>终审说明<textarea name="note" rows="3" maxlength="4000" placeholder="提单修改或暂无法判断时必填">{{ state.final.note if state.final else '' }}</textarea></label>
   <button class="primary-button" type="submit">保存终审</button>
   <span class="subline" role="status" data-final-save-status></span>
 </form>

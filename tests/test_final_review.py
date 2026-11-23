@@ -363,7 +363,7 @@ class FinalReviewTest(unittest.TestCase):
         self.assertIsNone(final.select_one("option[selected]"))
         self.assertEqual(final.select_one("textarea").get_text(), "")
         self.assertIn("需重新终审", final.get_text())
-        self.assertIn("退回修改", fragments["history"])
+        self.assertIn("提单修改", fragments["history"])
 
     def test_legacy_feedback_needs_initial_record_before_authorized_ip_final(self):
         with self.app.app_context():
