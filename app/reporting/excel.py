@@ -87,7 +87,7 @@ def build_report_workbook(task):
     for row in audit_export_rows(task):
         audit.append([_excel_cell_text(value) for value in row])
     _style_excel_sheet(audit)
-    final_sheet = workbook.create_sheet("双人审核")
+    final_sheet = workbook.create_sheet("初审与终审")
     final_sheet.append(
         [
             "检查项",

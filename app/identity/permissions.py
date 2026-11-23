@@ -21,7 +21,7 @@ ASSIGNABLE_PERMISSIONS = {
     },
     "reports.final_review": {
         "label": "报告终审",
-        "description": "包含查看全部任务，可逐条终审他人的初审标注并查看审核记录。",
+        "description": "包含查看全部任务，可逐条终审自己或他人的初审标注并查看审核记录。",
     },
 }
 

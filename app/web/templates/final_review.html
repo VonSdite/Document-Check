@@ -11,8 +11,7 @@
     <h1>{{ task.original_filename }}</h1>
     <p>已记录初审 {{ progress.initial_count }}/{{ progress.total }} · 终审确认 {{ progress.confirmed }}/{{ progress.total }} · {{ progress.status_label }}</p>
     <p>逐条审核问题和建议，包含报告中已忽略及受展示上限省略的条目。退回修改和暂无法判断的条目继续等待处理。</p>
-    {% if actor.source == 'ip' %}<p class="review-notice">当前以 IP 身份记录初审，请由管理员终审。使用统一登录时，由两名不同用户分别初审和终审。</p>{% endif %}
-    {% if actor.source == 'local_admin' %}<p class="review-notice">当前以本地管理员身份审核。普通用户完成初审后，可在此逐条终审；管理员自己初审的条目需要另一位审核人员终审。</p>{% endif %}
+    <p class="review-notice">当前审核身份：{{ actor.name }}。{% if has_permission('reports.final_review') %}你已获得报告终审权限，可终审自己或他人已初审的条目。{% else %}完成初审后，由具有报告终审权限的用户继续终审。{% endif %}</p>
     {% if not task_finished %}<p>检查结束后可提交审核意见。</p>{% endif %}
   </section>
   {% if video_report and video_stream_url %}<video controls preload="metadata" src="{{ video_stream_url }}" class="report-video-player" data-report-video-player></video>{% endif %}
@@ -44,7 +43,7 @@
         <p>{{ state.status_label }}</p>
         {% if state.final %}<p>{{ state.final.note }}</p><p class="subline">{{ state.final.actor_name }} · {{ state.final.actor_subject }} · {{ state.final.created_at }}</p>{% endif %}
         {% if has_permission('reports.final_review') and task_finished %}
-        {% if state.block_reason %}<p>{{ state.block_reason }}</p>
+        {% if not state.initial %}<p>请先完成初审并记录审核人，再进行终审。</p>
         {% else %}
         <form method="post" class="stack-form" data-review-stage-form data-prevent-double-submit="true">
           <input type="hidden" name="stage" value="final"><input type="hidden" name="result_code" value="{{ result.code }}"><input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="review_token" value="{{ state.token }}">

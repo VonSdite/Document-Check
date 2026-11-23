@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('IP 用户初审后管理员逐条终审，管理员自审受限', async ({ browser }) => {
+test('管理员可终审普通用户和自己初审的条目', async ({ browser }) => {
   const author = await browser.newContext()
   const admin = await browser.newContext()
   const page = await author.newPage()
@@ -34,8 +34,12 @@ test('IP 用户初审后管理员逐条终审，管理员自审受限', async ({
       '终审确认 2/2',
     )
     await adminItems.first().getByRole('button', { name: '保存初审' }).click()
-    await expect(adminItems.first()).toContainText('请由另一位审核人员终审此条目')
-    await expect(adminItems.first().getByRole('button', { name: '保存终审' })).toHaveCount(0)
+    await expect(adminItems.first()).toContainText('待终审')
+    await adminItems.first().locator('select[name=decision]').selectOption('confirmed')
+    await adminItems.first().getByRole('button', { name: '保存终审' }).click()
+    await expect(adminPage.locator('[data-report-audit] > .panel').first()).toContainText(
+      '终审确认 2/2',
+    )
     await adminItems.first().locator('.review-history > summary').click()
     await expect(adminItems.first().locator('.review-history')).toContainText('local_admin:primary')
     await expect(adminItems.first().locator('.review-history')).toContainText('ip:127.0.0.1')
@@ -46,7 +50,7 @@ test('IP 用户初审后管理员逐条终审，管理员自审受限', async ({
   }
 })
 
-test('全部报告条目经过双人审核，修改初审后重新终审', async ({ browser }, testInfo) => {
+test('报告按权限逐条终审，修改初审后重新审核', async ({ browser }, testInfo) => {
   const author = await browser.newContext()
   const reviewer = await browser.newContext()
   const page = await author.newPage()
@@ -67,12 +71,17 @@ test('全部报告条目经过双人审核，修改初审后重新终审', async
         .selectOption(index ? 'rejected' : 'accepted')
       if (index) await item.locator('select[name=rejection_reason]').selectOption('false_positive')
       await item.getByRole('button', { name: '保存初审' }).click()
-      await expect(item).toContainText('请由另一位审核人员终审此条目')
+      await expect(item.getByRole('button', { name: '保存终审' })).toBeVisible()
+      if (index === 0) {
+        await item.locator('select[name=decision]').selectOption('confirmed')
+        await item.getByRole('button', { name: '保存终审' }).click()
+        await expect(item).toContainText('确认初审')
+      }
     }
     await reviewPage.goto('/__frontend__/review-identity/final-reviewer')
     const reviewItems = reviewPage.locator('[data-audit-item]')
     await expect(reviewPage.getByRole('button', { name: '保存初审' })).toHaveCount(0)
-    for (let index = 0; index < 2; index++) {
+    for (let index = 1; index < 2; index++) {
       const item = reviewItems.nth(index)
       await item.locator('select[name=decision]').selectOption('confirmed')
       await item.getByRole('button', { name: '保存终审' }).click()

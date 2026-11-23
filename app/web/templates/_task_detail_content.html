@@ -8,7 +8,7 @@
     </svg>
     <span>返回列表</span>
   </a>
-  <a class="secondary-button" href="{{ url_for(task_endpoint('report_reviews'), task_id=task.id) }}">双人审核与记录</a>
+  <a class="secondary-button" href="{{ url_for(task_endpoint('report_reviews'), task_id=task.id) }}">审核与记录</a>
   {% if task.status in ["completed", "partial", "failed", "canceled"] %}
   <div class="report-export-actions" aria-label="报告操作">
     {% if task.status in ["completed", "partial"] %}

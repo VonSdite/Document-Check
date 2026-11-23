@@ -126,7 +126,7 @@ class FinalReviewTest(unittest.TestCase):
         )
         soup = BeautifulSoup(page.data, "html.parser")
         self.assertEqual(len(soup.select("select[name=decision]")), 2)
-        self.assertIn("当前以本地管理员身份审核", page.get_data(as_text=True))
+        self.assertIn("当前审核身份：本地管理员", page.get_data(as_text=True))
         for index in range(2):
             self.assertEqual(
                 self.final(index, subject="ip:127.0.0.1", admin=True).status_code,
@@ -141,7 +141,7 @@ class FinalReviewTest(unittest.TestCase):
                 review_context(self.task())["progress"]["status"], "completed"
             )
 
-    def test_local_admin_cannot_final_own_initial(self):
+    def test_local_admin_can_final_own_initial_with_separate_history(self):
         self.assertEqual(
             self.initial(subject="ip:127.0.0.1", admin=True).status_code, 200
         )
@@ -152,32 +152,36 @@ class FinalReviewTest(unittest.TestCase):
             f"/admin/tasks/{self.task_id}/reviews",
             headers={"X-Test-Subject": "ip:127.0.0.1"},
         )
-        self.assertIn("请由另一位审核人员终审此条目", page.get_data(as_text=True))
-        self.assertFalse(
-            BeautifulSoup(page.data, "html.parser").select("select[name=decision]")
+        self.assertEqual(
+            len(
+                BeautifulSoup(page.data, "html.parser").select("select[name=decision]")
+            ),
+            1,
         )
         self.assertEqual(
-            self.final(subject="ip:127.0.0.1", admin=True).status_code, 409
+            self.final(subject="ip:127.0.0.1", admin=True).status_code, 200
         )
-        self.assertEqual(self.final().status_code, 200)
+        state = self.state()
+        self.assertEqual(
+            state["initial"]["actor_subject"], state["final"]["actor_subject"]
+        )
+        self.assertEqual(state["final"]["initial_review_id"], state["initial"]["id"])
+        self.assertEqual(len(state["history"]), 2)
 
     def test_cookie_admin_keeps_individual_identity(self):
         self.assertEqual(self.initial(admin=True).status_code, 200)
         self.assertEqual(
             self.state()["initial"]["actor_subject"], "cookie_session:author"
         )
-        self.assertEqual(self.final(subject="author", admin=True).status_code, 409)
-        self.assertEqual(self.final(admin=True).status_code, 200)
+        self.assertEqual(self.final(subject="author", admin=True).status_code, 200)
         self.assertEqual(
-            self.state()["final"]["actor_subject"], "cookie_session:reviewer"
+            self.state()["final"]["actor_subject"], "cookie_session:author"
         )
 
-    def test_client_cannot_claim_admin_identity_for_ip_final(self):
+    def test_ip_final_requires_grant_and_stops_after_revocation(self):
         with self.app.app_context():
             register_subject("ip:127.0.0.1")
-            replace_subject_permissions(
-                "ip:127.0.0.1", {"reports.final_review", "tasks.manage_all"}
-            )
+            replace_subject_permissions("ip:127.0.0.1", {"tasks.manage_all"})
         self.initial(subject="ip:127.0.0.1")
         response = self.client.post(
             f"/tasks/{self.task_id}/reviews",
@@ -192,15 +196,32 @@ class FinalReviewTest(unittest.TestCase):
             },
             headers={"X-Test-Subject": "ip:127.0.0.1"},
         )
-        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(len(self.state()["history"]), 1)
+        with self.app.app_context():
+            replace_subject_permissions(
+                "ip:127.0.0.1", {"reports.final_review", "tasks.manage_all"}
+            )
+        self.assertEqual(self.final(subject="ip:127.0.0.1").status_code, 200)
+        state = self.state()
+        self.assertEqual(
+            state["initial"]["actor_subject"], state["final"]["actor_subject"]
+        )
+        self.assertEqual(state["final"]["actor_source"], "ip")
+        self.assertEqual(state["final"]["initial_review_id"], state["initial"]["id"])
+        with self.app.app_context():
+            replace_subject_permissions("ip:127.0.0.1", {"tasks.manage_all"})
+        self.assertEqual(self.final(subject="ip:127.0.0.1").status_code, 403)
+        self.assertEqual(len(self.state()["history"]), 2)
 
-    def test_all_findings_require_independent_final_review(self):
+    def test_all_findings_require_final_review_permission(self):
         self.assertEqual(self.initial().status_code, 200)
         self.assertEqual(self.initial(1, status="rejected").status_code, 200)
-        self.assertEqual(self.final(subject="author").status_code, 409)
         self.assertEqual(self.final(subject="reader").status_code, 403)
-        self.assertEqual(self.final().status_code, 200)
+        self.assertEqual(self.final(subject="author").status_code, 200)
+        self.assertEqual(
+            self.state()["final"]["actor_subject"], "cookie_session:author"
+        )
         with self.app.app_context():
             progress = final_review_progress([self.task_id], refresh=False)[
                 self.task_id
@@ -282,7 +303,7 @@ class FinalReviewTest(unittest.TestCase):
         )
         self.assertEqual(self.state()["status"], "deferred")
 
-    def test_legacy_feedback_needs_recorded_identity_and_ip_cannot_final(self):
+    def test_legacy_feedback_needs_initial_record_before_authorized_ip_final(self):
         with self.app.app_context():
             raw = _raw_task_results(self.task())
             raw[0]["item_acceptances"] = {self.items[0]["id"]: {"status": "accepted"}}
@@ -296,8 +317,8 @@ class FinalReviewTest(unittest.TestCase):
         with self.app.app_context():
             register_subject("ip:192.0.2.10")
             replace_subject_permissions("ip:192.0.2.10", {"reports.final_review"})
-        self.assertEqual(self.final(subject="ip:192.0.2.10").status_code, 409)
-        self.assertEqual(self.final().status_code, 200)
+        self.assertEqual(self.final(subject="ip:192.0.2.10").status_code, 200)
+        self.assertEqual(self.state()["final"]["actor_subject"], "ip:192.0.2.10")
 
     def test_full_review_includes_suppressed_and_limited_items(self):
         with self.app.app_context():
@@ -326,7 +347,7 @@ class FinalReviewTest(unittest.TestCase):
         export = self.client.get(f"/tasks/{self.task_id}/export.xlsx")
         workbook = load_workbook(io.BytesIO(export.data))
         self.assertIn("审核记录", workbook.sheetnames)
-        self.assertIn("双人审核", workbook.sheetnames)
+        self.assertIn("初审与终审", workbook.sheetnames)
 
         def upload(payload):
             return self.client.post(

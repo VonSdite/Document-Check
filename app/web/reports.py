@@ -39,19 +39,16 @@ from app.web.auth import _current_user_identity, is_superadmin
 
 def review_actor():
     identity = _current_user_identity()
-    admin = is_superadmin()
-    if admin and identity.source == "ip":
+    if is_superadmin() and identity.source == "ip":
         return {
             "subject": "local_admin:primary",
             "name": "本地管理员",
             "source": "local_admin",
-            "is_superadmin": True,
         }
     return {
         "subject": identity.subject,
         "name": identity.label,
         "source": identity.source,
-        "is_superadmin": admin,
     }
 
 

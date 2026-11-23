@@ -5761,7 +5761,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         try:
             self.assertEqual(
-                workbook.sheetnames, ["报告条目", "统计", "审核记录", "双人审核"]
+                workbook.sheetnames, ["报告条目", "统计", "审核记录", "初审与终审"]
             )
             report_rows = list(workbook["报告条目"].iter_rows(values_only=True))
             self.assertEqual(
