@@ -6956,10 +6956,28 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "该项不是问题", " ".join(row.get_text(" ", strip=True) for row in rows)
         )
 
+        limited_item = next(
+            item
+            for item in _structured_report_items("consistency", structured_result)
+            if item["description"] == "安全约束前后矛盾"
+        )
+        initial = self.client.post(
+            f"/admin/tasks/{task_id}/report-items",
+            json={
+                "result_code": "consistency",
+                "item_id": limited_item["id"],
+                "acceptance_status": "rejected",
+                "rejection_reason": "false_positive",
+            },
+        )
+        self.assertEqual(initial.status_code, 200)
         audit = self.client.get(f"/admin/tasks/{task_id}/reviews")
         self.assertEqual(audit.status_code, 200)
         audit_soup = BeautifulSoup(audit.data, "html.parser")
-        self.assertEqual(len(audit_soup.select("[data-audit-item]")), 4)
+        self.assertEqual(
+            [item["data-item-id"] for item in audit_soup.select("[data-audit-item]")],
+            [limited_item["id"]],
+        )
         self.assertIn("补充审核条目", audit_soup.get_text())
         self.assertIn("安全约束前后矛盾", audit_soup.get_text())
 

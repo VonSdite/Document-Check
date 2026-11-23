@@ -316,6 +316,14 @@ class FinalReviewTest(unittest.TestCase):
                     self.assertEqual(progress["required_count"], 0)
                     self.assertEqual(progress["pending"], 0)
                     self.assertEqual(progress["status"], "not_required")
+                for prefix in ("", "/admin"):
+                    page = self.client.get(f"{prefix}/tasks/{self.task_id}/reviews")
+                    soup = BeautifulSoup(page.data, "html.parser")
+                    self.assertFalse(soup.select("[data-report-item]"))
+                    self.assertFalse(soup.select("[data-final-review-group]"))
+                    empty = soup.select_one("[data-final-review-empty]")
+                    self.assertFalse(empty.has_attr("hidden"))
+                    self.assertIn("无需终审", empty.get_text())
 
         self.initial(status="pending")
         self.initial(1)
@@ -331,8 +339,12 @@ class FinalReviewTest(unittest.TestCase):
             self.assertEqual(progress["status"], "completed")
         page = self.client.get(f"/tasks/{self.task_id}/reviews")
         soup = BeautifulSoup(page.data, "html.parser")
-        self.assertEqual(len(soup.select("[data-report-item]")), 2)
+        self.assertEqual(
+            [item["data-item-id"] for item in soup.select("[data-report-item]")],
+            [self.items[1]["id"]],
+        )
         self.assertEqual(len(soup.select("[data-final-review-form]")), 1)
+        self.assertTrue(soup.select_one("[data-final-review-empty]").has_attr("hidden"))
         self.assertIn(
             "终审确认 1/1", soup.select_one("[data-report-review-progress]").text
         )
@@ -353,8 +365,12 @@ class FinalReviewTest(unittest.TestCase):
                 self.assertEqual(progress["required_count"], 0)
             page = self.client.get(f"/tasks/{self.task_id}/reviews")
             soup = BeautifulSoup(page.data, "html.parser")
+            self.assertFalse(soup.select("[data-report-item]"))
+            self.assertFalse(soup.select("[data-final-review-group]"))
             self.assertFalse(soup.select("[data-final-review-form]"))
-            self.assertTrue(soup.select("[data-review-history-toggle]"))
+            self.assertFalse(
+                soup.select_one("[data-final-review-empty]").has_attr("hidden")
+            )
             queue = self.client.get("/final-reviews?final_status=not_required")
             self.assertIn(f"任务 #{self.task_id}", queue.get_data(as_text=True))
 
@@ -391,7 +407,11 @@ class FinalReviewTest(unittest.TestCase):
         for suffix in ("/reviews", "/export"):
             page = self.client.get(f"/tasks/{self.task_id}{suffix}")
             self.assertEqual(page.status_code, 200)
-            self.assertIn("已保存的历史终审说明", page.get_data(as_text=True))
+            if suffix == "/export":
+                self.assertIn("已保存的历史终审说明", page.get_data(as_text=True))
+            else:
+                soup = BeautifulSoup(page.data, "html.parser")
+                self.assertFalse(soup.select("[data-report-item]"))
             self.assertIn("无需终审", page.get_data(as_text=True))
             self.assertNotIn("需重新终审", page.get_data(as_text=True))
         exported = self.client.get(f"/tasks/{self.task_id}/export.xlsx")
@@ -465,6 +485,10 @@ class FinalReviewTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             soup = BeautifulSoup(response.data, "html.parser")
             self.assertIsNotNone(soup.select_one("[data-report-audit]"))
+            self.assertEqual(
+                [item["data-item-id"] for item in soup.select("[data-report-item]")],
+                [self.items[0]["id"]],
+            )
             self.assertEqual(len(soup.select("[data-final-review-form]")), 1)
             self.assertIsNotNone(soup.find("a", href=f"{prefix}/tasks/{self.task_id}"))
             queue = self.client.get(f"{prefix}/final-reviews")
@@ -555,7 +579,7 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(self.final(subject="ip:192.0.2.10").status_code, 200)
         self.assertEqual(self.state()["final"]["actor_subject"], "ip:192.0.2.10")
 
-    def test_full_review_includes_suppressed_and_limited_items(self):
+    def test_final_review_includes_rejected_suppressed_and_limited_items(self):
         self.initial()
         self.final()
         with self.app.app_context():
@@ -572,15 +596,28 @@ class FinalReviewTest(unittest.TestCase):
                 review_context(self.task())["progress"]["required_count"], 1
             )
         page = self.client.get(f"/tasks/{self.task_id}/reviews")
+        soup = BeautifulSoup(page.data, "html.parser")
         self.assertEqual(
-            len(BeautifulSoup(page.data, "html.parser").select("[data-audit-item]")), 2
+            [item["data-item-id"] for item in soup.select("[data-audit-item]")],
+            [self.items[0]["id"]],
         )
+        self.assertIn("已忽略误报", soup.select_one("[data-audit-item]").get_text())
 
         report = self.client.get(f"/tasks/{self.task_id}")
         soup = BeautifulSoup(report.data, "html.parser")
         self.assertEqual(len(soup.select("[data-report-item]")), 1)
         self.assertEqual(len(soup.select(".result-raw-details .is-suppressed")), 1)
         self.assertFalse(soup.select("[data-final-review-form]"))
+
+        self.initial(1)
+        with self.app.app_context():
+            get_db().execute("UPDATE report_suppression_rules SET enabled = 0")
+            get_db().commit()
+        page = self.client.get(f"/tasks/{self.task_id}/reviews")
+        soup = BeautifulSoup(page.data, "html.parser")
+        self.assertEqual(len(soup.select("[data-audit-item]")), 2)
+        additional = soup.select_one(f'[data-item-id="{self.items[1]["id"]}"]')
+        self.assertIn("补充审核条目", additional.get_text())
 
     def test_excel_records_importer_preserves_final_on_noop_and_rejects_stale(self):
         self.initial()

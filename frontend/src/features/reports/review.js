@@ -290,6 +290,15 @@ function applyReviewFragments(item, data, stage) {
     form.dataset.dirty = '1'
     form.querySelector('[data-final-save-status]').textContent = '初审已更新，请核对后保存终审。'
   }
+  const audit = item.closest('[data-report-audit]')
+  if (audit && stage === 'initial' && item.dataset.acceptanceStatus !== 'rejected') {
+    const group = item.closest('[data-final-review-group]')
+    item.closest('.report-review-entry').remove()
+    if (!group.querySelector('[data-report-item]')) group.remove()
+    audit.querySelector('[data-final-review-empty]').hidden = Boolean(
+      audit.querySelector('[data-report-item]'),
+    )
+  }
 }
 
 const reviewRequests = new Set()
