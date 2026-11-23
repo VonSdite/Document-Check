@@ -11,6 +11,34 @@
   font-size: 12px;
 }
 
+.final-review-queue-table {
+  min-width: 800px;
+  table-layout: fixed;
+}
+
+.final-review-queue-table th,
+.final-review-queue-table td:nth-child(n + 2) {
+  white-space: nowrap;
+}
+
+.final-review-queue-table th:nth-child(2),
+.final-review-queue-table th:nth-child(5),
+.final-review-queue-table th:nth-child(6) {
+  width: 120px;
+}
+
+.final-review-queue-table th:nth-child(3) {
+  width: 112px;
+}
+
+.final-review-queue-table th:nth-child(4) {
+  width: 100px;
+}
+
+.final-review-queue-filename {
+  overflow-wrap: anywhere;
+}
+
 .report-toolbar {
   display: flex;
   align-items: center;
