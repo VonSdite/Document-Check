@@ -563,7 +563,7 @@
 }
 
 .report-table {
-  min-width: 1200px;
+  min-width: 1900px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -619,12 +619,12 @@
 }
 
 .report-status-cell {
-  width: 9%;
+  width: 104px;
   white-space: nowrap;
 }
 
 .report-acceptance-cell {
-  width: 14%;
+  width: 160px;
 }
 
 .report-item-title {
@@ -767,35 +767,35 @@
 }
 
 .report-field-severity_label {
-  width: 4%;
+  width: 64px;
 }
 
 .report-field-confidence_label {
-  width: 5%;
+  width: 80px;
 }
 
 .report-field-category {
-  width: 7%;
+  width: 96px;
 }
 
 .report-field-location {
-  width: 8%;
+  width: 280px;
 }
 
 .report-field-excerpt {
-  width: 13%;
+  width: 320px;
 }
 
 .report-field-description {
-  width: 14%;
+  width: 240px;
 }
 
 .report-field-suggestion {
-  width: 14%;
+  width: 240px;
 }
 
 .report-field-impact {
-  width: 9%;
+  width: 144px;
 }
 
 .report-field-media_summary {
