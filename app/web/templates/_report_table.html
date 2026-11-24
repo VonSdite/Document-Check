@@ -18,7 +18,7 @@
       {% for item in result.report_items %}
       {% set controls_disabled = task.status in ["queued", "running", "canceling"] %}
       <tr{% if item.cross_check_anchor_id %} id="{{ item.cross_check_anchor_id }}"{% endif %} class="report-item" data-report-item data-result-code="{{ result.code }}" data-item-id="{{ item.id }}" data-item-type="{{ item.type }}" data-acceptance-status="{{ item.acceptance_status }}">
-        <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}{% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}</td>
+        <td class="report-index-cell">{% include "_report_item_index.html" %}</td>
         {% for field, label in report_item_fields %}
         {% set field_value = item[field] %}
         <td class="report-field report-field-{{ field }}">{% include "_report_field_content.html" %}</td>

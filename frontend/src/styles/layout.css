@@ -770,7 +770,7 @@ tbody tr:nth-child(even) {
   }
   .provider-table,
   .settings-ip-table,
-  .report-table-media {
+  .report-table {
     min-width: 720px;
   }
   .modal {

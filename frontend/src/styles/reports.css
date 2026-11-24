@@ -563,7 +563,7 @@
 }
 
 .report-table {
-  min-width: 1900px;
+  min-width: 0;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -609,7 +609,7 @@
 }
 
 .report-index-cell {
-  width: 136px;
+  width: 56px;
   min-width: 0;
   text-align: center;
 }
@@ -619,12 +619,12 @@
 }
 
 .report-status-cell {
-  width: 104px;
+  width: 9%;
   white-space: nowrap;
 }
 
 .report-acceptance-cell {
-  width: 160px;
+  width: 14%;
 }
 
 .report-item-title {
@@ -633,6 +633,63 @@
   font-size: 13px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.report-item-source {
+  position: relative;
+  margin-top: var(--space-2);
+}
+
+.report-item-source > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  gap: 2px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  list-style: none;
+  cursor: pointer;
+}
+
+.report-item-source > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-item-source > summary:focus-visible {
+  border-radius: var(--radius);
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+.report-item-source > summary::before {
+  content: '▸';
+}
+
+.report-item-source[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.report-item-source-content {
+  position: relative;
+  z-index: var(--z-popup);
+  width: 176px;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+}
+
+.report-item-source-content .report-round-source:first-child {
+  margin-top: 0;
+}
+
+.report-item-source-content .cross-check-group-badge {
+  margin: var(--space-2) 0 0;
 }
 
 .report-radio-group {
@@ -767,35 +824,35 @@
 }
 
 .report-field-severity_label {
-  width: 64px;
+  width: 4%;
 }
 
 .report-field-confidence_label {
-  width: 80px;
+  width: 5%;
 }
 
 .report-field-category {
-  width: 96px;
+  width: 7%;
 }
 
 .report-field-location {
-  width: 280px;
+  width: 8%;
 }
 
 .report-field-excerpt {
-  width: 320px;
+  width: 13%;
 }
 
 .report-field-description {
-  width: 240px;
+  width: 14%;
 }
 
 .report-field-suggestion {
-  width: 240px;
+  width: 14%;
 }
 
 .report-field-impact {
-  width: 144px;
+  width: 9%;
 }
 
 .report-field-media_summary {
@@ -841,6 +898,14 @@
   font-size: 13px;
   font-weight: 800;
   text-align: center;
+}
+
+.report-table .report-item-type-badge {
+  width: 76px;
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: 6px;
+  white-space: normal;
 }
 
 .report-item[data-item-type='issue'] .report-item-type-badge {

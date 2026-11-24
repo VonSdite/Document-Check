@@ -1,0 +1,10 @@
+<span class="report-item-title">{{ item.index }}</span>
+{% if (item.source_rounds and result.round_summary) or item.cross_check_group_id %}
+<details class="report-item-source">
+  <summary aria-label="条目 {{ item.index }} 的轮次和重复组信息">来源</summary>
+  <div class="report-item-source-content">
+    {% include "_report_round_source.html" %}
+    {% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}
+  </div>
+</details>
+{% endif %}

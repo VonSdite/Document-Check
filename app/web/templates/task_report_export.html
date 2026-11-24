@@ -137,7 +137,7 @@
             <tbody>
               {% for item in result.report_items %}
               <tr{% if item.cross_check_anchor_id %} id="{{ item.cross_check_anchor_id }}"{% endif %} class="report-item" data-item-type="{{ item.type }}">
-                <td class="report-index-cell"><span class="report-item-title">{{ item.index }}</span>{% include "_report_round_source.html" %}{% if item.cross_check_group_id %}<a class="cross-check-group-badge" href="#cross-check-group-{{ item.cross_check_group_id }}">重复组 {{ item.cross_check_group_id }}</a>{% endif %}</td>
+                <td class="report-index-cell">{% include "_report_item_index.html" %}</td>
                 {% for field, label in report_item_fields %}
                 {% set field_value = item[field] %}
                 <td class="report-field report-field-{{ field }}">
