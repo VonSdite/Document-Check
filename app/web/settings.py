@@ -37,6 +37,11 @@ from app.contracts.task_types import (
 from app.documents.images import DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES
 from app.infrastructure.config import save_network_config
 from app.infrastructure.network import suppress_insecure_request_warning
+from app.persistence.check_profiles import (
+    check_profiles,
+    copy_check_profile,
+    save_check_profile,
+)
 from app.persistence.connection import get_db, now_text
 from app.persistence.defaults import (
     default_check_item_codes,
@@ -82,7 +87,7 @@ def register_settings_routes(app):
     @app.route(f"{admin_prefix}/prompts", methods=["GET", "POST"])
     @admin_required
     def admin_prompts():
-        return redirect(url_for(_settings_endpoint()))
+        return redirect(_settings_url())
 
     @app.get(f"{admin_prefix}/settings/task-cache")
     @admin_required
@@ -146,6 +151,68 @@ def register_settings_routes(app):
 
     def settings_response(rules_only=False):
         db = get_db()
+        rule_actions = {
+            "report_suppression_rule",
+            "create_check_item",
+            "reorder_check_items",
+            "delete_check_item",
+            "prompt",
+            "save_profile",
+            "copy_profile",
+        }
+        if request.method == "POST" and request.form.get("action") in rule_actions:
+            rules_only = True
+        profile_id = request.form.get(
+            "profile_id", request.args.get("profile_id", "default")
+        )
+        profile = db.execute(
+            "SELECT * FROM check_profiles WHERE id = ?", (profile_id,)
+        ).fetchone()
+        if rules_only and profile is None:
+            abort(400, description="检查方案不存在，请重新选择。")
+        if request.method == "POST" and rules_only:
+            action = request.form.get("action")
+            item_id = request.form.get("item_id")
+            if action in {"prompt", "delete_check_item"} and item_id:
+                if (
+                    db.execute(
+                        "SELECT 1 FROM check_items WHERE id = ? AND profile_id = ?",
+                        (item_id, profile_id),
+                    ).fetchone()
+                    is None
+                ):
+                    abort(400, description="检查项不属于当前方案。")
+            if action == "report_suppression_rule":
+                rule_id = request.form.get("rule_id")
+                if (
+                    rule_id
+                    and db.execute(
+                        "SELECT 1 FROM report_suppression_rules WHERE id = ? AND profile_id = ?",
+                        (rule_id, profile_id),
+                    ).fetchone()
+                    is None
+                ):
+                    abort(400, description="误报规则不属于当前方案。")
+            if action in {"save_profile", "copy_profile"}:
+                try:
+                    if action == "copy_profile":
+                        profile_id = copy_check_profile(
+                            profile_id, request.form.get("name", "")
+                        )
+                    else:
+                        save_check_profile(
+                            profile_id,
+                            request.form.get("name", ""),
+                            request.form.get("description", "").strip(),
+                            request.form.get("enabled") == "on",
+                        )
+                    db.commit()
+                except ValueError as exc:
+                    db.rollback()
+                    flash(str(exc), "error")
+                else:
+                    flash("检查方案已保存。", "success")
+                return redirect(url_for(_rules_endpoint(), profile_id=profile_id))
         if request.method == "POST":
             action = request.form.get("action", "concurrency")
             if rules_only and action not in {
@@ -154,6 +221,8 @@ def register_settings_routes(app):
                 "reorder_check_items",
                 "delete_check_item",
                 "prompt",
+                "save_profile",
+                "copy_profile",
             }:
                 abort(403, description="运行设置仅限超级管理员修改。")
             if action == "concurrency":
@@ -214,7 +283,7 @@ def register_settings_routes(app):
                         "任务设置必须是整数，任务文件保留天数可为 0，其余必须为正整数。",
                         "error",
                     )
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 max_task_processes = _max_task_processes()
                 if (
                     not 1
@@ -226,13 +295,13 @@ def register_settings_routes(app):
                         f"单文档检查轮数需满足：1 ≤ 默认轮数 ≤ 最大轮数 ≤ {MAX_DOCUMENT_CHECK_ROUNDS}。",
                         "error",
                     )
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 if not 1 <= global_concurrency <= max_task_processes:
                     flash(
                         f"系统同时执行任务数必须在 1 到 {max_task_processes} 之间。",
                         "error",
                     )
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 set_setting("global_concurrency", global_concurrency)
                 set_setting("user_concurrency", user_concurrency)
                 set_setting("check_item_concurrency", check_item_concurrency)
@@ -242,7 +311,7 @@ def register_settings_routes(app):
                 set_setting("document_check_rounds", document_check_rounds)
                 set_setting("document_check_max_rounds", document_check_max_rounds)
                 flash("任务设置已保存。", "success")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             if action == "diagnostics":
                 llm_stream_trace_enabled = (
@@ -252,14 +321,14 @@ def register_settings_routes(app):
                 if _wants_json_response():
                     return {"llm_stream_trace_enabled": llm_stream_trace_enabled}
                 flash("定位日志设置已保存。", "success")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             if action == "network":
                 proxy_mode = request.form.get("proxy_mode", "direct")
                 proxy = request.form.get("proxy", "")
                 if proxy_mode == "custom" and not str(proxy or "").strip():
                     flash("自定义代理模式需要填写代理地址。", "error")
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 network = save_network_config(
                     current_app.config["ROOT_DIR"],
                     {
@@ -271,7 +340,7 @@ def register_settings_routes(app):
                 current_app.config["NETWORK"] = network
                 suppress_insecure_request_warning(network["ssl_verify"])
                 flash("系统出站网络配置已保存。", "success")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             if action == "ip_username":
                 if not _ip_username_management_enabled():
@@ -335,21 +404,22 @@ def register_settings_routes(app):
                             "error": "检查项名称和提示词不能为空。",
                         }, 400
                     flash("检查项名称和提示词不能为空。", "error")
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 now = now_text()
                 cursor = db.execute(
                     """
-                    INSERT INTO check_items(task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO check_items(profile_id, task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
+                        profile_id,
                         task_type,
                         f"{_check_item_code_prefix(task_type)}-{uuid.uuid4().hex}",
                         name,
                         description,
                         prompt,
                         enabled,
-                        _next_check_item_sort_order(db, task_type),
+                        _next_check_item_sort_order(db, task_type, profile_id),
                         now,
                         now,
                     ),
@@ -368,7 +438,7 @@ def register_settings_routes(app):
                         ),
                     }
                 flash("扩展检查项已创建。", "success")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             if action == "reorder_check_items":
                 task_type = _check_item_task_type(request.form.get("task_type"))
@@ -381,13 +451,19 @@ def register_settings_routes(app):
                     if request.headers.get("X-Requested-With") == "fetch":
                         return Response("检查项顺序不能为空。", status=400)
                     flash("检查项顺序不能为空。", "error")
-                    return redirect(url_for(_settings_endpoint()))
-                _reorder_check_items(db, item_ids, task_type)
+                    return redirect(_settings_url())
+                valid_ids = {
+                    row["id"]
+                    for row in _check_items_for_task_type(db, task_type, profile_id)
+                }
+                if not set(item_ids).issubset(valid_ids):
+                    abort(400, description="排序包含其他方案或检查方式的检查项。")
+                _reorder_check_items(db, item_ids, task_type, profile_id)
                 db.commit()
                 if request.headers.get("X-Requested-With") == "fetch":
                     return Response(status=204)
                 flash("检查项顺序已保存。", "success")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             if action == "delete_check_item":
                 item_id = request.form.get("item_id")
@@ -395,7 +471,7 @@ def register_settings_routes(app):
                     if _wants_json_response():
                         return {"ok": False, "error": "检查项不存在，无法删除。"}, 400
                     flash("检查项不存在，无法删除。", "error")
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 item = db.execute(
                     "SELECT code FROM check_items WHERE id = ?", (item_id,)
                 ).fetchone()
@@ -403,12 +479,12 @@ def register_settings_routes(app):
                     if _wants_json_response():
                         return {"ok": False, "error": "检查项不存在，无法删除。"}, 404
                     flash("检查项不存在，无法删除。", "error")
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 if item["code"] in default_check_item_codes():
                     if _wants_json_response():
                         return {"ok": False, "error": "内置检查项不能删除。"}, 400
                     flash("内置检查项不能删除。", "error")
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 db.execute("DELETE FROM check_items WHERE id = ?", (item_id,))
                 db.commit()
                 if _wants_json_response():
@@ -418,22 +494,22 @@ def register_settings_routes(app):
                         "item_id": int(item_id),
                     }
                 flash("扩展检查项已删除。", "success")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             if action == "prompt" and request.form.get("reset_prompt") == "1":
                 item_id = request.form.get("item_id")
                 if not item_id or not item_id.isdigit():
                     flash("检查项不存在，无法重置。", "error")
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 if not reset_default_check_item_prompt(int(item_id)):
                     flash("该检查项没有默认提示词可重置。", "error")
-                    return redirect(url_for(_settings_endpoint()))
+                    return redirect(_settings_url())
                 flash("检查项提示词已重置为默认内容。", "success")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             if action != "prompt":
                 flash("未知设置操作。", "error")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
 
             item_id = request.form.get("item_id")
             name = request.form.get("name", "").strip()
@@ -442,7 +518,7 @@ def register_settings_routes(app):
             enabled = 1 if request.form.get("enabled") == "on" else 0
             if not item_id or not item_id.isdigit() or not name or not prompt:
                 flash("检查项名称和提示词不能为空。", "error")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
             if (
                 db.execute(
                     "SELECT 1 FROM check_items WHERE id = ?", (item_id,)
@@ -450,26 +526,38 @@ def register_settings_routes(app):
                 is None
             ):
                 flash("检查项不存在，无法保存。", "error")
-                return redirect(url_for(_settings_endpoint()))
+                return redirect(_settings_url())
             db.execute(
                 """
                 UPDATE check_items
-                SET name = ?, description = ?, prompt = ?, enabled = ?, updated_at = ?
+                SET name = ?, description = ?, prompt = ?, enabled = ?, default_selected = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (name, description, prompt, enabled, now_text(), item_id),
+                (
+                    name,
+                    description,
+                    prompt,
+                    enabled,
+                    1 if request.form.get("default_selected", "on") == "on" else 0,
+                    now_text(),
+                    item_id,
+                ),
             )
             db.commit()
             flash("检查项提示词已保存。", "success")
-            return redirect(url_for(_settings_endpoint()))
+            return redirect(_settings_url())
 
-        document_check_items = _check_items_for_task_type(db, DOCUMENT_TASK_TYPE)
-        consistency_check_items = _check_items_for_task_type(db, CONSISTENCY_TASK_TYPE)
-        language_consistency_check_items = _check_items_for_task_type(
-            db, LANGUAGE_CONSISTENCY_TASK_TYPE
+        document_check_items = _check_items_for_task_type(
+            db, DOCUMENT_TASK_TYPE, profile_id
         )
-        image_check_items = _check_items_for_task_type(db, IMAGE_TASK_TYPE)
-        video_check_items = _check_items_for_task_type(db, VIDEO_TASK_TYPE)
+        consistency_check_items = _check_items_for_task_type(
+            db, CONSISTENCY_TASK_TYPE, profile_id
+        )
+        language_consistency_check_items = _check_items_for_task_type(
+            db, LANGUAGE_CONSISTENCY_TASK_TYPE, profile_id
+        )
+        image_check_items = _check_items_for_task_type(db, IMAGE_TASK_TYPE, profile_id)
+        video_check_items = _check_items_for_task_type(db, VIDEO_TASK_TYPE, profile_id)
         settings_tab = "general" if rules_only else _settings_tab()
         report_suppression_keyword, report_suppression_status = (
             _report_suppression_filter_values(request.args)
@@ -480,7 +568,9 @@ def register_settings_routes(app):
             )
         )
         return render_template(
-            "admin_settings.html",
+            "admin_rules.html" if rules_only else "admin_settings.html",
+            profiles=check_profiles(),
+            selected_profile=dict(profile) if profile else {},
             rules_only=rules_only,
             active_nav="rules" if rules_only else "settings",
             check_item_groups=[
@@ -597,7 +687,10 @@ def _report_suppression_filter_values(values) -> tuple[str, str]:
 
 def _report_suppression_rules_redirect():
     keyword, status = _report_suppression_filter_values(request.form)
-    url_values = {"_anchor": "report-suppression-rules"}
+    url_values = {
+        "_anchor": "report-suppression-rules",
+        "profile_id": request.form.get("profile_id", "default"),
+    }
     if keyword:
         url_values["rule_keyword"] = keyword
     if status:
@@ -606,13 +699,13 @@ def _report_suppression_rules_redirect():
         value = request.form.get(field, type=int)
         if value and value > 0:
             url_values[field] = value
-    return redirect(url_for(_settings_endpoint(), **url_values))
+    return redirect(url_for(_rules_endpoint(), **url_values))
 
 
 def _report_suppression_rule_rows(keyword: str, status: str) -> tuple[list[dict], dict]:
     refresh_suppression_reviews()
     db = get_db()
-    clauses, params = [], []
+    clauses, params = ["r.profile_id = ?"], [request.args.get("profile_id", "default")]
     if status == "awaiting_final":
         clauses.append(f"NOT {VERIFIED_RULE_SQL}")
     elif status:
@@ -643,7 +736,7 @@ def _report_suppression_rule_rows(keyword: str, status: str) -> tuple[list[dict]
             "r.task_type, r.item_json, r.reason)"
         )
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
-    source = "FROM report_suppression_rules r LEFT JOIN check_items c ON c.code = r.check_code"
+    source = "FROM report_suppression_rules r LEFT JOIN check_items c ON c.code = r.check_code AND c.profile_id = r.profile_id"
     total = db.execute(f"SELECT COUNT(*) {source} {where}", params).fetchone()[0]
     per_page = _per_page_arg()
     page = _bounded_page(_page_arg(), total, per_page)
@@ -745,3 +838,30 @@ def _settings_endpoint():
     if request.endpoint in {"admin_rules", "user_rules"}:
         return request.endpoint
     return "admin_settings"
+
+
+def _rules_endpoint():
+    return "admin_rules" if request.endpoint.startswith("admin_") else "user_rules"
+
+
+def _settings_url():
+    if request.endpoint in {
+        "admin_rules",
+        "user_rules",
+        "admin_prompts",
+    } or request.form.get("action") in {
+        "report_suppression_rule",
+        "create_check_item",
+        "reorder_check_items",
+        "delete_check_item",
+        "prompt",
+        "save_profile",
+        "copy_profile",
+    }:
+        return url_for(
+            _rules_endpoint(),
+            profile_id=request.form.get(
+                "profile_id", request.args.get("profile_id", "default")
+            ),
+        )
+    return url_for(_settings_endpoint())

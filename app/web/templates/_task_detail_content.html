@@ -69,6 +69,7 @@
   <div class="progress"><span style="width: {{ task.progress }}%"></span></div>
   <dl class="meta-list report-meta-list">
     <div><dt>任务类型</dt><dd>{{ task_type_label(task.task_type) }}</dd></div>
+    {% set profile = task_check_profile(task) %}<div><dt>检查方案</dt><dd>{{ profile.name }}{% if profile.revision %} · 版本 {{ profile.revision }}{% else %} · 原任务规则{% endif %}</dd></div>
     <div>
       <dt>归属用户</dt>
       <dd>

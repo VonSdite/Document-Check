@@ -5,6 +5,7 @@ from flask import current_app, flash, g, redirect, request
 from markupsafe import Markup
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from app.contracts.check_profiles import task_check_profile
 from app.contracts.task_types import task_type_label
 from app.identity.models import UserIdentity, ip_subject
 from app.identity.service import (
@@ -46,6 +47,7 @@ FRONTEND_INJECTION_FILENAME = "frontend-injection.html"
 
 
 def register_presentation_routes(app):
+    app.add_template_global(task_check_profile, "task_check_profile")
     app.add_template_global(frontend_assets, "frontend_assets")
     app.add_template_global(task_display_title, "task_display_title")
     app.add_template_global(

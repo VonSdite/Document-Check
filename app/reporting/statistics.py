@@ -173,14 +173,17 @@ def _refresh_stat_ids(task_ids: list[int], versions: dict[str, str]) -> None:
     rows = (
         get_db()
         .execute(
-            f"SELECT id, task_type, updated_at, result_json FROM tasks WHERE id IN ({placeholders})",
+            f"SELECT id, task_type, check_profile_id, updated_at, result_json FROM tasks WHERE id IN ({placeholders})",
             tuple(task_ids),
         )
         .fetchall()
     )
     rules_by_type = {
-        task_type: _enabled_report_suppression_rules(task_type)
-        for task_type in {str(row["task_type"] or DOCUMENT_TASK_TYPE) for row in rows}
+        scope: _enabled_report_suppression_rules(*scope)
+        for scope in {
+            (str(row["task_type"] or DOCUMENT_TASK_TYPE), row["check_profile_id"])
+            for row in rows
+        }
     }
     cache_rows = []
     for row in rows:
@@ -190,7 +193,8 @@ def _refresh_stat_ids(task_ids: list[int], versions: dict[str, str]) -> None:
                 _parse_result_json(row["result_json"]),
                 task_type=task_type,
                 task_id=row["id"],
-                suppression_rules=rules_by_type[task_type],
+                suppression_rules=rules_by_type[(task_type, row["check_profile_id"])],
+                profile_id=row["check_profile_id"],
             )
         )
         cache_rows.append(

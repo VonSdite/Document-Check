@@ -4,7 +4,7 @@
 
 ## 打开方式
 
-- 在工具的“设置”或“公共规则”页面点击“检查规则库原型”。
+- 在工具的“检查规则”页面点击“检查规则库原型”。
 - 直接用浏览器打开 `app/web/static/rule-library-prototype/index.html`。
 - 服务运行时访问 `/static/rule-library-prototype/index.html`，部署有路径前缀时使用设置页入口。
 

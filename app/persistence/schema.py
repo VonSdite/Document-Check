@@ -1,6 +1,7 @@
 from flask import current_app
 
 from app.contracts.task_types import DOCUMENT_TASK_TYPE
+from app.persistence.check_profiles import initialize_check_profiles
 from app.persistence.connection import (
     MODEL_THINKING_DEFAULT_MIGRATION_KEY,
     close_db,
@@ -331,6 +332,15 @@ def init_db():
         db, "check_items", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )
     _normalize_check_item_schema(db, existing_tables)
+    initialize_check_profiles(db)
+    _ensure_column(db, "tasks", "check_profile_id", "TEXT NOT NULL DEFAULT 'default'")
+    _ensure_column(db, "tasks", "check_profile_snapshot_json", "TEXT")
+    _ensure_column(
+        db, "report_suppression_rules", "profile_id", "TEXT NOT NULL DEFAULT 'default'"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_suppression_profile ON report_suppression_rules(profile_id, task_type, check_code) WHERE enabled = 1"
+    )
     _ensure_column(
         db, "tasks", "task_type", f"TEXT NOT NULL DEFAULT '{DOCUMENT_TASK_TYPE}'"
     )

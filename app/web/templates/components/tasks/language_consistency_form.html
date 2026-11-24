@@ -61,6 +61,7 @@
     </div>
   </div>
 
+  {% include "_task_profile_picker.html" %}
   {% with check_label="跨语种检查项", check_help="系统会先静态抽取数字、版本、链接、标题和长度线索，再按检查项调用模型生成中文报告。" %}
     {% include "_task_check_picker.html" %}
   {% endwith %}

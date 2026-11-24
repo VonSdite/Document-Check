@@ -752,7 +752,7 @@ class FinalReviewTest(unittest.TestCase):
                     "核对原文后的具体原因",
                 )
                 self.assertEqual(proof["final"]["note"], "已核实初审 <依据>")
-                page = self.client.get("/admin/settings?rule_status=candidate")
+                page = self.client.get("/admin/rules?rule_status=candidate")
                 self.assertIn("审核依据", page.get_data(as_text=True))
                 self.assertIn("已核实初审 &lt;依据&gt;", page.get_data(as_text=True))
 
@@ -946,7 +946,7 @@ class FinalReviewTest(unittest.TestCase):
                 2,
             )
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "report_suppression_rule",
                 "operation": "enable",

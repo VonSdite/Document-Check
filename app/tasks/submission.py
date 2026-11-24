@@ -20,6 +20,7 @@ from app.documents.extraction import allowed_file, extension_of
 from app.documents.videos import allowed_video_file, video_extension_of
 from app.identity.models import UserIdentity
 from app.models.service import _find_enabled_model
+from app.persistence.check_profiles import check_profile_snapshot
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import document_check_round_settings
 from app.tasks.files import (
@@ -42,6 +43,7 @@ class TaskSubmission:
     model_id: str
     submission_token: str = ""
     check_rounds: str | int | None = None
+    profile_id: str = "default"
 
     def first_file(self, name: str):
         values = self.files.get(name, [])
@@ -104,7 +106,7 @@ def _consistency_title_from_groups(
 
 
 def _enabled_check_item_snapshots(
-    db, check_ids: list[int], task_type: str
+    db, check_ids: list[int], task_type: str, profile_id: str = "default"
 ) -> list[dict]:
     unique_ids = []
     seen = set()
@@ -118,15 +120,20 @@ def _enabled_check_item_snapshots(
     placeholders = ",".join("?" for _ in unique_ids)
     rows = db.execute(
         f"""
-        SELECT id, code, name, prompt
-        FROM check_items
-        WHERE id IN ({placeholders}) AND task_type = ? AND enabled = 1
-        ORDER BY sort_order ASC, id ASC
+        SELECT c.id, c.code, c.name, c.prompt, p.id AS profile_id, p.name AS profile_name, p.revision
+        FROM check_items c JOIN check_profiles p ON p.id = c.profile_id
+        WHERE c.id IN ({placeholders}) AND c.task_type = ? AND c.profile_id = ? AND c.enabled = 1 AND p.enabled = 1
+        ORDER BY c.sort_order ASC, c.id ASC
         """,
-        tuple(unique_ids + [task_type]),
+        tuple(unique_ids + [task_type, profile_id]),
     ).fetchall()
     return [
         {
+            "profile": {
+                "id": row["profile_id"],
+                "name": row["profile_name"],
+                "revision": row["revision"],
+            },
             "id": row["id"],
             "code": row["code"],
             "name": row["name"],
@@ -134,6 +141,16 @@ def _enabled_check_item_snapshots(
         }
         for row in rows
     ]
+
+
+def _check_snapshot_json(checks):
+    return json.dumps(
+        [
+            {key: value for key, value in item.items() if key != "profile"}
+            for item in checks
+        ],
+        ensure_ascii=False,
+    )
 
 
 def submit_document_task(
@@ -176,7 +193,9 @@ def submit_document_task(
     if not check_ids:
         messages.append(("请至少选择一个检查项。", "error"))
         return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, DOCUMENT_TASK_TYPE)
+    check_snapshots = _enabled_check_item_snapshots(
+        db, check_ids, DOCUMENT_TASK_TYPE, submission.profile_id
+    )
     if len(check_snapshots) != len(set(check_ids)):
         messages.append(("请选择当前可用的检查项。", "error"))
         return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
@@ -213,11 +232,11 @@ def submit_document_task(
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json, provider_id, provider_name, model_name,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, check_profile_id, check_profile_snapshot_json, provider_id, provider_name, model_name,
                 api_base, api_key, request_timeout, max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             rows,
         )
@@ -270,7 +289,9 @@ def _prepare_document_task_row(
             ensure_ascii=False,
         ),
         json.dumps(check_ids, ensure_ascii=False),
-        json.dumps(check_snapshots, ensure_ascii=False),
+        _check_snapshot_json(check_snapshots),
+        check_profile_snapshot(check_snapshots)["id"],
+        json.dumps(check_profile_snapshot(check_snapshots), ensure_ascii=False),
         model["provider_id"],
         model["provider_name"],
         model["model_name"],
@@ -320,7 +341,9 @@ def submit_image_task(
     if not check_ids:
         messages.append(("请至少选择一个图片检查项。", "error"))
         return SubmissionResult(IMAGE_TASK_TYPE, messages)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, IMAGE_TASK_TYPE)
+    check_snapshots = _enabled_check_item_snapshots(
+        db, check_ids, IMAGE_TASK_TYPE, submission.profile_id
+    )
     if len(check_snapshots) != len(set(check_ids)):
         messages.append(("请选择当前可用的图片检查项。", "error"))
         return SubmissionResult(IMAGE_TASK_TYPE, messages)
@@ -359,12 +382,12 @@ def submit_image_task(
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, check_profile_id, check_profile_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
                 max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 IMAGE_TASK_TYPE,
@@ -380,7 +403,9 @@ def submit_image_task(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                _check_snapshot_json(check_snapshots),
+                check_profile_snapshot(check_snapshots)["id"],
+                json.dumps(check_profile_snapshot(check_snapshots), ensure_ascii=False),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
@@ -418,7 +443,9 @@ def submit_video_task(
     if not check_ids:
         messages.append(("请至少选择一个视频检查项。", "error"))
         return SubmissionResult(VIDEO_TASK_TYPE, messages)
-    check_snapshots = _enabled_check_item_snapshots(db, check_ids, VIDEO_TASK_TYPE)
+    check_snapshots = _enabled_check_item_snapshots(
+        db, check_ids, VIDEO_TASK_TYPE, submission.profile_id
+    )
     if len(check_snapshots) != len(set(check_ids)):
         messages.append(("请选择当前可用的视频检查项。", "error"))
         return SubmissionResult(VIDEO_TASK_TYPE, messages)
@@ -501,12 +528,12 @@ def _create_video_task_from_upload(
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, check_profile_id, check_profile_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
                 max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 VIDEO_TASK_TYPE,
@@ -522,7 +549,9 @@ def _create_video_task_from_upload(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                _check_snapshot_json(check_snapshots),
+                check_profile_snapshot(check_snapshots)["id"],
+                json.dumps(check_profile_snapshot(check_snapshots), ensure_ascii=False),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
@@ -578,7 +607,7 @@ def submit_consistency_task(
         messages.append(("请至少选择一个多文档对照项。", "error"))
         return SubmissionResult(CONSISTENCY_TASK_TYPE, messages)
     check_snapshots = _enabled_check_item_snapshots(
-        db, check_ids, CONSISTENCY_TASK_TYPE
+        db, check_ids, CONSISTENCY_TASK_TYPE, submission.profile_id
     )
     if len(check_snapshots) != len(set(check_ids)):
         messages.append(("请选择当前可用的多文档对照项。", "error"))
@@ -636,12 +665,12 @@ def submit_consistency_task(
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, check_profile_id, check_profile_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
                 max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 CONSISTENCY_TASK_TYPE,
@@ -657,7 +686,9 @@ def submit_consistency_task(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                _check_snapshot_json(check_snapshots),
+                check_profile_snapshot(check_snapshots)["id"],
+                json.dumps(check_profile_snapshot(check_snapshots), ensure_ascii=False),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],
@@ -703,7 +734,7 @@ def submit_language_consistency_task(
         messages.append(("请至少选择一个跨语种检查项。", "error"))
         return SubmissionResult(LANGUAGE_CONSISTENCY_TASK_TYPE, messages)
     check_snapshots = _enabled_check_item_snapshots(
-        db, check_ids, LANGUAGE_CONSISTENCY_TASK_TYPE
+        db, check_ids, LANGUAGE_CONSISTENCY_TASK_TYPE, submission.profile_id
     )
     if len(check_snapshots) != len(set(check_ids)):
         messages.append(("请选择当前可用的跨语种检查项。", "error"))
@@ -757,12 +788,12 @@ def submit_language_consistency_task(
             INSERT INTO tasks(
                 task_type, ip, username_snapshot, owner_subject, owner_name_snapshot, owner_source, submission_token,
                 original_filename, stored_filename, file_type, file_size,
-                document_text, document_meta_json, checks_json, checks_snapshot_json,
+                document_text, document_meta_json, checks_json, checks_snapshot_json, check_profile_id, check_profile_snapshot_json,
                 provider_id, provider_name, model_name, api_base, api_key, request_timeout,
                 max_input_chars, force_disable_thinking, reasoning_effort,
                 status, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
             """,
             (
                 LANGUAGE_CONSISTENCY_TASK_TYPE,
@@ -779,7 +810,9 @@ def submit_language_consistency_task(
                 None,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
-                json.dumps(check_snapshots, ensure_ascii=False),
+                _check_snapshot_json(check_snapshots),
+                check_profile_snapshot(check_snapshots)["id"],
+                json.dumps(check_profile_snapshot(check_snapshots), ensure_ascii=False),
                 model["provider_id"],
                 model["provider_name"],
                 model["model_name"],

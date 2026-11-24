@@ -45,6 +45,7 @@
     </div>
   </div>
 
+  {% include "_task_profile_picker.html" %}
   {% with check_label="检查项", check_help="可多选；系统会按检查项逐项调用模型。" %}
     {% include "_task_check_picker.html" %}
   {% endwith %}

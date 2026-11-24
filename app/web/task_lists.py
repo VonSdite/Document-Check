@@ -12,6 +12,7 @@ from app.contracts.task_types import (
 )
 from app.identity.service import UserIdentity
 from app.models.service import get_enabled_models
+from app.persistence.check_profiles import available_check_profiles
 from app.persistence.connection import get_db
 from app.persistence.settings import get_setting
 from app.reporting.constants import (
@@ -121,6 +122,23 @@ def _task_list_partial():
 
 def _render_list_template(template_name, **context):
     partial = _task_list_partial()
+    if not partial:
+        task_type = context.get("active_nav", DOCUMENT_TASK_TYPE)
+        profiles = available_check_profiles(task_type)
+        selected = next(
+            (
+                p
+                for p in profiles
+                if p["id"] == request.args.get("profile_id", "default")
+            ),
+            profiles[0] if profiles else None,
+        )
+        context["task_check_profiles"] = profiles
+        context["selected_check_profile_id"] = selected["id"] if selected else ""
+        if selected and selected["id"] != "default":
+            context["check_items"] = get_enabled_check_items(task_type, selected["id"])
+        elif selected is None:
+            context["check_items"] = []
     pagination = context["pagination"]
     context["list_url"] = url_for(
         request.endpoint,
@@ -213,7 +231,7 @@ def _user_task_list_data(identity: UserIdentity, task_type: str):
         get_db()
         .execute(
             f"""
-        SELECT t.id, t.task_type, t.ip,
+        SELECT t.id, t.task_type, t.check_profile_id, t.check_profile_snapshot_json, t.ip,
                t.original_filename, t.stored_filename, t.file_type, t.file_size,
                t.provider_name, t.model_name, t.status, t.progress,
                t.created_at,
@@ -544,7 +562,7 @@ def _render_admin_task_list(
         .execute(
             f"""
         SELECT
-               t.id, t.task_type, t.ip, t.username_snapshot,
+               t.id, t.task_type, t.check_profile_id, t.check_profile_snapshot_json, t.ip, t.username_snapshot,
                t.owner_subject, t.owner_name_snapshot, t.owner_source,
                t.original_filename, t.stored_filename, t.file_type, t.file_size,
                t.provider_name, t.model_name, t.status, t.progress,

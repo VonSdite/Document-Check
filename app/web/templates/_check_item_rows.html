@@ -15,12 +15,13 @@
     <div class="check-item-row-main">
       <span class="check-item-kind status-pill {{ 'status-completed' if is_builtin else 'status-queued' }}">{{ "内置" if is_builtin else "扩展" }}</span>
       <button class="check-item-toggle" type="button" data-check-item-toggle aria-expanded="false" aria-controls="check-item-detail-{{ item.id }}">
-        <span>{{ item.name }}</span>
+        <span>{{ item.name }}<small class="check-item-state">{{ '已停用' if not item.enabled else '启用 · 默认勾选' if item.default_selected else '启用 · 按需勾选' }}</small></span>
       </button>
       <div class="check-item-row-actions">
         {% if not is_builtin %}
         <form method="post" class="check-item-delete-form" data-delete-check-item-form>
-          <input type="hidden" name="action" value="delete_check_item">
+          <input type="hidden" name="profile_id" value="{{ item.profile_id }}">
+        <input type="hidden" name="action" value="delete_check_item">
           <input type="hidden" name="item_id" value="{{ item.id }}">
           <button class="check-item-delete-button" type="submit" data-confirm-click="确认删除该扩展检查项？已创建的历史任务报告不会被删除。" aria-label="删除扩展检查项：{{ item.name }}">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -45,6 +46,7 @@
   <td>
     <div class="check-item-detail-panel">
       <form method="post" class="stack-form">
+        <input type="hidden" name="profile_id" value="{{ item.profile_id }}">
         <input type="hidden" name="action" value="prompt">
         <input type="hidden" name="item_id" value="{{ item.id }}">
         <div class="form-grid">
@@ -63,6 +65,11 @@
             <input type="checkbox" name="enabled" {{ "checked" if item.enabled else "" }}>
             <span>启用</span>
           </label>
+          <label class="switch-line">
+            <input type="checkbox" name="default_selected" value="on" {{ "checked" if item.default_selected else "" }}>
+            <span>默认勾选</span>
+          </label>
+          <input type="hidden" name="default_selected" value="off">
           {% if is_builtin %}
           <button class="secondary-button settings-save-button" type="submit" name="reset_prompt" value="1" formnovalidate data-confirm-click="确认将该检查项提示词重置为默认内容？">重置</button>
           {% endif %}

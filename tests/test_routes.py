@@ -2310,7 +2310,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             db.commit()
 
         response = self.client.get(
-            "/admin/settings?rule_keyword=功率+参数&rule_status=candidate"
+            "/admin/rules?rule_keyword=功率+参数&rule_status=candidate"
         )
 
         self.assertEqual(response.status_code, 200)
@@ -2370,7 +2370,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             get_db().commit()
 
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "report_suppression_rule",
                 "rule_id": str(rule_id),
@@ -2387,6 +2387,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(
             parse_qs(location.query),
             {
+                "profile_id": ["default"],
                 "rule_keyword": ["保留 搜索"],
                 "rule_status": ["candidate"],
                 "page": ["2"],
@@ -2432,7 +2433,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         ids = self._insert_suppression_rules(43)
         found = []
         for page, expected_count in ((1, 20), (2, 20), (3, 3)):
-            response = self.client.get("/admin/settings", query_string={"page": page})
+            response = self.client.get("/admin/rules", query_string={"page": page})
             self.assertEqual(response.status_code, 200)
             soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
             section = _required_tag(soup.select_one("[data-report-suppression-rules]"))
@@ -2478,7 +2479,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         ):
             with self.subTest(keyword=keyword, status=status):
                 response = self.client.get(
-                    "/admin/settings",
+                    "/admin/rules",
                     query_string={
                         "rule_keyword": keyword,
                         "rule_status": status,
@@ -2547,7 +2548,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_deleting_last_rule_on_page_returns_to_last_available_page(self):
         ids = self._insert_suppression_rules(21)
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "report_suppression_rule",
                 "operation": "delete",
@@ -2897,7 +2898,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(get_ip_username("10.0.0.8"), "")
 
     def test_admin_settings_shows_document_and_consistency_prompt_groups(self):
-        response = self.client.get("/admin/settings")
+        response = self.client.get("/admin/rules")
 
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
@@ -4090,7 +4091,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_creates_consistency_check_item(self):
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "create_check_item",
                 "task_type": CONSISTENCY_TASK_TYPE,
@@ -4123,7 +4124,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_creates_check_item_without_page_reload(self):
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "create_check_item",
                 "task_type": DOCUMENT_TASK_TYPE,
@@ -4151,7 +4152,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_deletes_check_item_without_page_reload(self):
         created = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "create_check_item",
                 "task_type": DOCUMENT_TASK_TYPE,
@@ -4162,7 +4163,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         ).get_json()
 
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={"action": "delete_check_item", "item_id": str(created["item_id"])},
             headers={"Accept": "application/json", "X-Requested-With": "fetch"},
         )
@@ -4188,7 +4189,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_returns_json_error_for_invalid_check_item(self):
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "create_check_item",
                 "task_type": DOCUMENT_TASK_TYPE,
@@ -4206,7 +4207,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def test_admin_settings_orders_new_check_items_first(self):
         for name in ("先创建的检查项", "后创建的检查项"):
             response = self.client.post(
-                "/admin/settings",
+                "/admin/rules",
                 data={
                     "action": "create_check_item",
                     "task_type": DOCUMENT_TASK_TYPE,
@@ -4237,7 +4238,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_creates_image_check_item(self):
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "create_check_item",
                 "task_type": IMAGE_TASK_TYPE,
@@ -4270,7 +4271,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_creates_video_check_item(self):
         response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "create_check_item",
                 "task_type": VIDEO_TASK_TYPE,
@@ -5397,7 +5398,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             for node in soup.select(".report-meta-list > div > dt")
         ]
         self.assertEqual(
-            meta_labels[:5], ["任务类型", "归属用户", "原文件", "文件名称", "文件信息"]
+            meta_labels[:5], ["任务类型", "检查方案", "归属用户", "原文件", "文件名称"]
         )
         file_meta = _required_tag(soup.select_one(".report-file-meta"))
         self.assertEqual(file_meta.get_text(" ", strip=True), "文件名称 report.txt")
@@ -5448,7 +5449,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             for node in exported_soup.select(".report-meta-list > div > dt")
         ]
         self.assertEqual(
-            exported_meta_labels[:4], ["任务类型", "归属用户", "文件名称", "文件信息"]
+            exported_meta_labels[:4], ["任务类型", "检查方案", "归属用户", "文件名称"]
         )
         exported_headers = [
             node.get_text(strip=True)
@@ -5801,7 +5802,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         try:
             self.assertEqual(
-                workbook.sheetnames, ["报告条目", "统计", "审核记录", "初审与终审"]
+                workbook.sheetnames,
+                ["报告条目", "统计", "检查方案", "审核记录", "初审与终审"],
             )
             report_rows = list(workbook["报告条目"].iter_rows(values_only=True))
             self.assertEqual(
@@ -8771,7 +8773,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             self.assertEqual(rule["reason"], "模型误报")
             rule_id = rule["id"]
 
-        settings = self.client.get("/admin/settings")
+        settings = self.client.get("/admin/rules")
         settings_html = settings.get_data(as_text=True)
         self.assertIn("误报忽略规则", settings_html)
         self.assertIn("候选", settings_html)
@@ -8844,7 +8846,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         enable_response = self.client.post(
-            "/admin/settings",
+            "/admin/rules",
             data={
                 "action": "report_suppression_rule",
                 "rule_id": str(rule_id),

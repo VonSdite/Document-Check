@@ -908,3 +908,12 @@ label {
     flex-wrap: wrap;
   }
 }
+
+.task-profile-field {
+  margin-block: var(--space-3, 12px);
+}
+.task-profile-field > label {
+  display: grid;
+  gap: 6px;
+  max-width: 32rem;
+}

@@ -241,6 +241,7 @@ function moveCheckItemPair(row, reference) {
 function saveCheckItemOrder(table) {
   const formData = new FormData()
   formData.append('action', 'reorder_check_items')
+  formData.append('profile_id', table.dataset.checkProfile || 'default')
   formData.append('task_type', table.dataset.checkItemTaskType || 'document_check')
   table.querySelectorAll('[data-check-item-row]').forEach((row) => {
     formData.append('item_ids', row.dataset.checkItemId)

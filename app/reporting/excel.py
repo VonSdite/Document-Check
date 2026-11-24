@@ -7,6 +7,7 @@ from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from app.contracts.check_profiles import task_check_profile
 from app.contracts.task_types import (
     DOCUMENT_TASK_TYPE,
     VIDEO_TASK_TYPE,
@@ -63,6 +64,12 @@ def build_report_workbook(task):
 
     _fill_report_items_sheet(report_sheet, task, results, document_groups)
     _fill_report_totals_sheet(workbook.create_sheet("统计"), report_totals)
+    profile = task_check_profile(task)
+    config_sheet = workbook.create_sheet("检查方案")
+    config_sheet.append(["方案标识", "方案名称", "提交版本"])
+    config_sheet.append(
+        [profile["id"], profile["name"], profile["revision"] or "原任务规则"]
+    )
     audit = workbook.create_sheet("审核记录")
     audit.append(
         [

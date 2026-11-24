@@ -6,7 +6,7 @@
   <div class="check-chip-grid">
     {% for item in check_items %}
     <label class="check-chip">
-      <input type="checkbox" name="checks" value="{{ item.id }}"{% if not check_first_only|default(false) or loop.first %} checked{% endif %} autocomplete="off">
+      <input type="checkbox" name="checks" value="{{ item.id }}"{% if item.default_selected|default(true) and (not check_first_only|default(false) or loop.first) %} checked{% endif %} autocomplete="off">
       <span>{{ item.name }}</span>
       <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
     </label>

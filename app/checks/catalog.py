@@ -32,38 +32,42 @@ def _check_item_code_prefix(task_type: str) -> str:
     return "custom"
 
 
-def _check_items_for_task_type(db, task_type: str):
+def _check_items_for_task_type(db, task_type: str, profile_id: str = "default"):
     return db.execute(
         """
         SELECT *
         FROM check_items
-        WHERE task_type = ?
+        WHERE profile_id = ? AND task_type = ?
         ORDER BY sort_order ASC, id ASC
         """,
-        (task_type,),
+        (profile_id, task_type),
     ).fetchall()
 
 
-def get_enabled_check_items(task_type: str = DOCUMENT_TASK_TYPE):
+def get_enabled_check_items(
+    task_type: str = DOCUMENT_TASK_TYPE, profile_id: str = "default"
+):
     return (
         get_db()
         .execute(
             """
         SELECT *
         FROM check_items
-        WHERE task_type = ? AND enabled = 1
+        WHERE profile_id = ? AND task_type = ? AND enabled = 1
         ORDER BY sort_order ASC, id ASC
         """,
-            (task_type,),
+            (profile_id, task_type),
         )
         .fetchall()
     )
 
 
-def _next_check_item_sort_order(db, task_type: str = DOCUMENT_TASK_TYPE) -> int:
+def _next_check_item_sort_order(
+    db, task_type: str = DOCUMENT_TASK_TYPE, profile_id: str = "default"
+) -> int:
     row = db.execute(
-        "SELECT MIN(sort_order) AS value FROM check_items WHERE task_type = ?",
-        (task_type,),
+        "SELECT MIN(sort_order) AS value FROM check_items WHERE profile_id = ? AND task_type = ?",
+        (profile_id, task_type),
     ).fetchone()
     if row is None or row["value"] is None:
         return 10
@@ -71,16 +75,19 @@ def _next_check_item_sort_order(db, task_type: str = DOCUMENT_TASK_TYPE) -> int:
 
 
 def _reorder_check_items(
-    db, item_ids: list[int], task_type: str = DOCUMENT_TASK_TYPE
+    db,
+    item_ids: list[int],
+    task_type: str = DOCUMENT_TASK_TYPE,
+    profile_id: str = "default",
 ) -> list[int]:
     rows = db.execute(
         """
         SELECT id
         FROM check_items
-        WHERE task_type = ?
+        WHERE profile_id = ? AND task_type = ?
         ORDER BY sort_order ASC, id ASC
         """,
-        (task_type,),
+        (profile_id, task_type),
     ).fetchall()
     existing_ids = [int(row["id"]) for row in rows]
     existing_set = set(existing_ids)

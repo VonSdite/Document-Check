@@ -1,6 +1,12 @@
 [
   [
     "index",
+    "idx_check_items_profile_type",
+    "check_items",
+    "CREATE INDEX idx_check_items_profile_type ON check_items(profile_id, task_type, enabled, sort_order)"
+  ],
+  [
+    "index",
     "idx_report_review_events_item",
     "report_review_events",
     "CREATE INDEX idx_report_review_events_item\n            ON report_review_events(task_id, result_code, item_id, id)"
@@ -28,6 +34,12 @@
     "idx_report_suppression_rules_lookup",
     "report_suppression_rules",
     "CREATE INDEX idx_report_suppression_rules_lookup\n            ON report_suppression_rules(task_type, check_code, fingerprint, enabled)"
+  ],
+  [
+    "index",
+    "idx_suppression_profile",
+    "report_suppression_rules",
+    "CREATE INDEX idx_suppression_profile ON report_suppression_rules(profile_id, task_type, check_code) WHERE enabled = 1"
   ],
   [
     "index",
@@ -153,7 +165,13 @@
     "table",
     "check_items",
     "check_items",
-    "CREATE TABLE check_items (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL DEFAULT 'document_check',\n            code TEXT NOT NULL UNIQUE,\n            name TEXT NOT NULL,\n            description TEXT,\n            prompt TEXT NOT NULL,\n            enabled INTEGER NOT NULL DEFAULT 1,\n            sort_order INTEGER NOT NULL DEFAULT 0,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL\n        )"
+    "CREATE TABLE \"check_items\" (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            profile_id TEXT NOT NULL DEFAULT 'default',\n            task_type TEXT NOT NULL DEFAULT 'document_check', code TEXT NOT NULL,\n            name TEXT NOT NULL, description TEXT, prompt TEXT NOT NULL,\n            enabled INTEGER NOT NULL DEFAULT 1, default_selected INTEGER NOT NULL DEFAULT 1,\n            sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\n            UNIQUE(profile_id, code)\n        )"
+  ],
+  [
+    "table",
+    "check_profiles",
+    "check_profiles",
+    "CREATE TABLE check_profiles (\n        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '',\n        template_id TEXT NOT NULL DEFAULT 'default',\n        enabled INTEGER NOT NULL DEFAULT 1, revision INTEGER NOT NULL DEFAULT 1,\n        created_at TEXT NOT NULL, updated_at TEXT NOT NULL\n    )"
   ],
   [
     "table",
@@ -189,7 +207,7 @@
     "table",
     "report_suppression_rules",
     "report_suppression_rules",
-    "CREATE TABLE report_suppression_rules (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL,\n            check_code TEXT NOT NULL,\n            fingerprint TEXT NOT NULL,\n            item_json TEXT NOT NULL,\n            reason TEXT,\n            enabled INTEGER NOT NULL DEFAULT 0,\n            source_task_id INTEGER,\n            source_result_code TEXT,\n            source_item_id TEXT,\n            hit_count INTEGER NOT NULL DEFAULT 0,\n            last_hit_at TEXT,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            UNIQUE(task_type, check_code, fingerprint)\n        )"
+    "CREATE TABLE report_suppression_rules (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL,\n            check_code TEXT NOT NULL,\n            fingerprint TEXT NOT NULL,\n            item_json TEXT NOT NULL,\n            reason TEXT,\n            enabled INTEGER NOT NULL DEFAULT 0,\n            source_task_id INTEGER,\n            source_result_code TEXT,\n            source_item_id TEXT,\n            hit_count INTEGER NOT NULL DEFAULT 0,\n            last_hit_at TEXT,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL, profile_id TEXT NOT NULL DEFAULT 'default',\n            UNIQUE(task_type, check_code, fingerprint)\n        )"
   ],
   [
     "table",
@@ -225,7 +243,7 @@
     "table",
     "tasks",
     "tasks",
-    "CREATE TABLE tasks (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL DEFAULT 'document_check',\n            ip TEXT NOT NULL,\n            username_snapshot TEXT,\n            owner_subject TEXT,\n            owner_name_snapshot TEXT,\n            owner_source TEXT,\n            submission_token TEXT,\n            original_filename TEXT NOT NULL,\n            stored_filename TEXT NOT NULL,\n            file_type TEXT NOT NULL,\n            file_size INTEGER NOT NULL,\n            document_text TEXT,\n            document_meta_json TEXT,\n            checks_json TEXT NOT NULL,\n            checks_snapshot_json TEXT,\n            retry_check_codes_json TEXT,\n            provider_id INTEGER,\n            provider_name TEXT,\n            model_name TEXT NOT NULL,\n            api_base TEXT NOT NULL,\n            api_key TEXT,\n            request_timeout INTEGER NOT NULL DEFAULT 600,\n            max_input_chars INTEGER NOT NULL DEFAULT 80000,\n            force_disable_thinking INTEGER NOT NULL DEFAULT 0,\n            reasoning_effort TEXT,\n            status TEXT NOT NULL DEFAULT 'queued',\n            progress INTEGER NOT NULL DEFAULT 0,\n            cancel_requested INTEGER NOT NULL DEFAULT 0,\n            claim_token TEXT,\n            lease_expires_at TEXT,\n            result_json TEXT,\n            summary TEXT,\n            error TEXT,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            started_at TEXT,\n            finished_at TEXT,\n            source_files_cleaned_at TEXT\n        )"
+    "CREATE TABLE tasks (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            task_type TEXT NOT NULL DEFAULT 'document_check',\n            ip TEXT NOT NULL,\n            username_snapshot TEXT,\n            owner_subject TEXT,\n            owner_name_snapshot TEXT,\n            owner_source TEXT,\n            submission_token TEXT,\n            original_filename TEXT NOT NULL,\n            stored_filename TEXT NOT NULL,\n            file_type TEXT NOT NULL,\n            file_size INTEGER NOT NULL,\n            document_text TEXT,\n            document_meta_json TEXT,\n            checks_json TEXT NOT NULL,\n            checks_snapshot_json TEXT,\n            retry_check_codes_json TEXT,\n            provider_id INTEGER,\n            provider_name TEXT,\n            model_name TEXT NOT NULL,\n            api_base TEXT NOT NULL,\n            api_key TEXT,\n            request_timeout INTEGER NOT NULL DEFAULT 600,\n            max_input_chars INTEGER NOT NULL DEFAULT 80000,\n            force_disable_thinking INTEGER NOT NULL DEFAULT 0,\n            reasoning_effort TEXT,\n            status TEXT NOT NULL DEFAULT 'queued',\n            progress INTEGER NOT NULL DEFAULT 0,\n            cancel_requested INTEGER NOT NULL DEFAULT 0,\n            claim_token TEXT,\n            lease_expires_at TEXT,\n            result_json TEXT,\n            summary TEXT,\n            error TEXT,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            started_at TEXT,\n            finished_at TEXT,\n            source_files_cleaned_at TEXT\n        , check_profile_id TEXT NOT NULL DEFAULT 'default', check_profile_snapshot_json TEXT)"
   ],
   [
     "table",
@@ -256,6 +274,24 @@
     "user_product_domains",
     "user_product_domains",
     "CREATE TABLE user_product_domains (\n            subject TEXT NOT NULL,\n            domain_id INTEGER NOT NULL,\n            assigned_at TEXT NOT NULL,\n            PRIMARY KEY(subject, domain_id),\n            FOREIGN KEY(subject) REFERENCES user_identities(subject) ON DELETE CASCADE,\n            FOREIGN KEY(domain_id) REFERENCES product_domains(id) ON DELETE CASCADE\n        )"
+  ],
+  [
+    "trigger",
+    "trg_check_profile_delete",
+    "check_items",
+    "CREATE TRIGGER trg_check_profile_delete\n            AFTER DELETE ON check_items BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = OLD.updated_at\n                WHERE id = OLD.profile_id;\n            END"
+  ],
+  [
+    "trigger",
+    "trg_check_profile_insert",
+    "check_items",
+    "CREATE TRIGGER trg_check_profile_insert\n            AFTER INSERT ON check_items BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
+  ],
+  [
+    "trigger",
+    "trg_check_profile_update",
+    "check_items",
+    "CREATE TRIGGER trg_check_profile_update\n            AFTER UPDATE ON check_items BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
   ],
   [
     "trigger",

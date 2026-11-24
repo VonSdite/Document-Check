@@ -662,12 +662,24 @@ def default_check_item_codes(task_type: str | None = None) -> set[str]:
 
 def reset_default_check_item_prompt(item_id: int) -> bool:
     db = get_db()
-    row = db.execute("SELECT code FROM check_items WHERE id = ?", (item_id,)).fetchone()
+    row = db.execute(
+        "SELECT code, profile_id FROM check_items WHERE id = ?", (item_id,)
+    ).fetchone()
     if row is None:
         return False
     default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get(row["code"])
     if default_item is None:
         return False
+    profile = db.execute(
+        "SELECT template_id FROM check_profiles WHERE id = ?", (row["profile_id"],)
+    ).fetchone()
+    if profile and profile["template_id"] == "software":
+        from app.persistence.software_defaults import software_prompt
+
+        default_item = {
+            **default_item,
+            "prompt": software_prompt(row["code"]) or default_item["prompt"],
+        }
     db.execute(
         "UPDATE check_items SET prompt = ?, updated_at = ? WHERE id = ?",
         (default_item["prompt"], now_text(), item_id),
@@ -719,7 +731,8 @@ def seed_defaults():
 
     for item in DEFAULT_CHECK_ITEMS:
         exists = db.execute(
-            "SELECT 1 FROM check_items WHERE code = ?", (item["code"],)
+            "SELECT 1 FROM check_items WHERE profile_id = 'default' AND code = ?",
+            (item["code"],),
         ).fetchone()
         if exists is None:
             db.execute(
@@ -751,6 +764,9 @@ def seed_defaults():
     _sync_qwen_vl_optimized_image_check_items(db, now)
     _disable_merged_image_check_items(db, now)
     _remove_retired_default_check_items(db)
+    from app.persistence.software_defaults import seed_software_profile
+
+    seed_software_profile(db)
     db.commit()
 
 
@@ -772,7 +788,9 @@ def _migrate_task_file_retention_setting(db, updated_at: str):
 
 def _remove_retired_default_check_items(db):
     for code in _REMOVED_DEFAULT_CHECK_ITEM_CODES:
-        db.execute("DELETE FROM check_items WHERE code = ?", (code,))
+        db.execute(
+            "DELETE FROM check_items WHERE profile_id = 'default' AND code = ?", (code,)
+        )
 
 
 def _sync_compliance_prompt(db, updated_at: str):
@@ -780,7 +798,7 @@ def _sync_compliance_prompt(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'compliance'"
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = 'compliance'"
     ).fetchone()
     if row is None:
         return
@@ -806,7 +824,7 @@ def _sync_compliance_prompt(db, updated_at: str):
             prompt = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = 'compliance'
+        WHERE profile_id = 'default' AND code = 'compliance'
         """,
         (
             default_item["name"],
@@ -823,7 +841,7 @@ def _sync_typo_location_prompt(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'typo'"
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = 'typo'"
     ).fetchone()
     if row is None:
         return
@@ -849,7 +867,7 @@ def _sync_typo_location_prompt(db, updated_at: str):
             prompt = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = 'typo'
+        WHERE profile_id = 'default' AND code = 'typo'
         """,
         (
             default_item["name"],
@@ -866,7 +884,7 @@ def _sync_understandability_prompt(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'understandability'"
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = 'understandability'"
     ).fetchone()
     if row is None:
         return
@@ -892,7 +910,7 @@ def _sync_understandability_prompt(db, updated_at: str):
             prompt = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = 'understandability'
+        WHERE profile_id = 'default' AND code = 'understandability'
         """,
         (
             default_item["name"],
@@ -909,7 +927,7 @@ def _sync_completeness_prompt(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'completeness'"
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = 'completeness'"
     ).fetchone()
     if row is None:
         return
@@ -935,7 +953,7 @@ def _sync_completeness_prompt(db, updated_at: str):
             prompt = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = 'completeness'
+        WHERE profile_id = 'default' AND code = 'completeness'
         """,
         (
             default_item["name"],
@@ -952,7 +970,7 @@ def _sync_consistency_prompt(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'consistency'"
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = 'consistency'"
     ).fetchone()
     if row is None:
         return
@@ -978,7 +996,7 @@ def _sync_consistency_prompt(db, updated_at: str):
             prompt = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = 'consistency'
+        WHERE profile_id = 'default' AND code = 'consistency'
         """,
         (
             default_item["name"],
@@ -995,7 +1013,7 @@ def _disable_merged_typo_check_item(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, enabled, sort_order FROM check_items WHERE code = 'typo'"
+        "SELECT name, description, prompt, enabled, sort_order FROM check_items WHERE profile_id = 'default' AND code = 'typo'"
     ).fetchone()
     if row is None:
         return
@@ -1024,7 +1042,7 @@ def _disable_merged_typo_check_item(db, updated_at: str):
             enabled = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = 'typo'
+        WHERE profile_id = 'default' AND code = 'typo'
         """,
         (
             default_item["name"],
@@ -1042,7 +1060,7 @@ def _sync_language_consistency_prompt(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = 'language-consistency-cross-lingual'"
     ).fetchone()
     if row is None:
         return
@@ -1069,7 +1087,7 @@ def _sync_language_consistency_prompt(db, updated_at: str):
             prompt = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = 'language-consistency-cross-lingual'
+        WHERE profile_id = 'default' AND code = 'language-consistency-cross-lingual'
         """,
         (
             default_item["name"],
@@ -1086,7 +1104,7 @@ def _sync_renamed_default_check_items(db, updated_at: str):
     if default_item is None:
         return
     row = db.execute(
-        "SELECT name, description, prompt, sort_order FROM check_items WHERE code = ?",
+        "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = ?",
         (_IMAGE_LANGUAGE_MATCH_CODE,),
     ).fetchone()
     if row is None:
@@ -1111,7 +1129,7 @@ def _sync_renamed_default_check_items(db, updated_at: str):
             prompt = ?,
             sort_order = ?,
             updated_at = ?
-        WHERE code = ?
+        WHERE profile_id = 'default' AND code = ?
         """,
         (
             default_item["name"],
@@ -1130,7 +1148,7 @@ def _sync_qwen_vl_optimized_image_check_items(db, updated_at: str):
         if default_item is None:
             continue
         row = db.execute(
-            "SELECT name, description, prompt, sort_order FROM check_items WHERE code = ?",
+            "SELECT name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = ?",
             (code,),
         ).fetchone()
         if row is None:
@@ -1156,7 +1174,7 @@ def _sync_qwen_vl_optimized_image_check_items(db, updated_at: str):
                 prompt = ?,
                 sort_order = ?,
                 updated_at = ?
-            WHERE code = ?
+            WHERE profile_id = 'default' AND code = ?
             """,
             (
                 default_item["name"],
@@ -1172,7 +1190,7 @@ def _sync_qwen_vl_optimized_image_check_items(db, updated_at: str):
 def _disable_merged_image_check_items(db, updated_at: str):
     for code, legacy in _MERGED_IMAGE_CHECK_ITEM_MARKERS.items():
         row = db.execute(
-            "SELECT name, prompt, enabled FROM check_items WHERE code = ?",
+            "SELECT name, prompt, enabled FROM check_items WHERE profile_id = 'default' AND code = ?",
             (code,),
         ).fetchone()
         if row is None:
@@ -1182,6 +1200,6 @@ def _disable_merged_image_check_items(db, updated_at: str):
         if not is_stock_item or not int(row["enabled"] or 0):
             continue
         db.execute(
-            "UPDATE check_items SET enabled = 0, updated_at = ? WHERE code = ?",
+            "UPDATE check_items SET enabled = 0, updated_at = ? WHERE profile_id = 'default' AND code = ?",
             (updated_at, code),
         )

@@ -53,14 +53,14 @@ def _task_check_items(db, task, task_type: str) -> list[dict]:
         params.extend(check_codes)
     if not clauses:
         return []
-    params.append(task_type)
+    params.extend((task_type, task.get("check_profile_id") or "default"))
     return [
         dict(row)
         for row in db.execute(
             f"""
             SELECT *
             FROM check_items
-            WHERE ({" OR ".join(clauses)}) AND task_type = ? AND enabled = 1
+            WHERE ({" OR ".join(clauses)}) AND task_type = ? AND profile_id = ? AND enabled = 1
             ORDER BY sort_order ASC, id ASC
             """,
             tuple(params),

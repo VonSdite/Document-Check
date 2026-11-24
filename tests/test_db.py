@@ -51,7 +51,9 @@ class CheckItemDefaultsTest(unittest.TestCase):
 
     def test_resets_builtin_check_item_prompt(self):
         db = get_db()
-        item = db.execute("SELECT id FROM check_items WHERE code = 'typo'").fetchone()
+        item = db.execute(
+            "SELECT id FROM check_items WHERE profile_id = 'default' AND code = 'typo'"
+        ).fetchone()
         db.execute(
             "UPDATE check_items SET prompt = ? WHERE id = ?",
             ("已修改提示词", item["id"]),
@@ -77,7 +79,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         )
         db.commit()
         item = db.execute(
-            "SELECT id, prompt FROM check_items WHERE code = 'custom'"
+            "SELECT id, prompt FROM check_items WHERE profile_id = 'default' AND code = 'custom'"
         ).fetchone()
 
         self.assertFalse(reset_default_check_item_prompt(item["id"]))
@@ -117,7 +119,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
             """
             INSERT INTO skill_cases(check_item_id, case_json, created_at, updated_at)
             SELECT id, '{"evidence":"案例原文"}', created_at, updated_at
-            FROM check_items WHERE code = 'skill-example'
+            FROM check_items WHERE profile_id = 'default' AND code = 'skill-example'
             """
         )
         set_setting("task_report_limit", 20)
@@ -236,13 +238,13 @@ class CheckItemDefaultsTest(unittest.TestCase):
         )
         self.assertIsNotNone(
             db.execute(
-                "SELECT id FROM check_items WHERE code = 'skill-example'"
+                "SELECT id FROM check_items WHERE profile_id = 'default' AND code = 'skill-example'"
             ).fetchone()
         )
         init_db()
         self.assertIsNone(
             db.execute(
-                "SELECT id FROM check_items WHERE code = 'skill-example'"
+                "SELECT id FROM check_items WHERE profile_id = 'default' AND code = 'skill-example'"
             ).fetchone()
         )
 
@@ -639,7 +641,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
     def test_default_consistency_prompt_covers_cross_document_internal_conflicts(self):
         db = get_db()
         item = db.execute(
-            "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
+            "SELECT name, prompt FROM check_items WHERE profile_id = 'default' AND code = 'consistency'"
         ).fetchone()
 
         self.assertEqual(item["name"], "全文一致性检查")
@@ -659,7 +661,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
     def test_default_compliance_prompt_covers_language_and_document_structure(self):
         db = get_db()
         item = db.execute(
-            "SELECT description, prompt FROM check_items WHERE code = 'compliance'"
+            "SELECT description, prompt FROM check_items WHERE profile_id = 'default' AND code = 'compliance'"
         ).fetchone()
 
         self.assertEqual(
@@ -696,10 +698,10 @@ class CheckItemDefaultsTest(unittest.TestCase):
     ):
         db = get_db()
         understandability = db.execute(
-            "SELECT name, prompt FROM check_items WHERE code = 'understandability'"
+            "SELECT name, prompt FROM check_items WHERE profile_id = 'default' AND code = 'understandability'"
         ).fetchone()
         completeness = db.execute(
-            "SELECT name, prompt FROM check_items WHERE code = 'completeness'"
+            "SELECT name, prompt FROM check_items WHERE profile_id = 'default' AND code = 'completeness'"
         ).fetchone()
 
         self.assertEqual(understandability["name"], "易理解性检查")
@@ -733,28 +735,28 @@ class CheckItemDefaultsTest(unittest.TestCase):
         document_codes = [
             row["code"]
             for row in db.execute(
-                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT code FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (DOCUMENT_TASK_TYPE,),
             ).fetchall()
         ]
         consistency_codes = [
             row["code"]
             for row in db.execute(
-                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT code FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (CONSISTENCY_TASK_TYPE,),
             ).fetchall()
         ]
         language_consistency_codes = [
             row["code"]
             for row in db.execute(
-                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT code FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (LANGUAGE_CONSISTENCY_TASK_TYPE,),
             ).fetchall()
         ]
         video_codes = [
             row["code"]
             for row in db.execute(
-                "SELECT code FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT code FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (VIDEO_TASK_TYPE,),
             ).fetchall()
         ]
@@ -793,19 +795,19 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("sensitive-terms", default_check_item_codes(DOCUMENT_TASK_TYPE))
         self.assertIn("common-terms", default_check_item_codes(DOCUMENT_TASK_TYPE))
         hyperlink_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE code = 'hyperlink-validity'"
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND code = 'hyperlink-validity'"
         ).fetchone()
         self.assertEqual(hyperlink_item["name"], "超链接有效性检查")
         self.assertIn("不调用大模型", hyperlink_item["prompt"])
         self.assertIn("HTTP 404/410", hyperlink_item["prompt"])
         self.assertIn("回环、私网、链路本地或保留地址", hyperlink_item["prompt"])
         typo_state = db.execute(
-            "SELECT enabled, description FROM check_items WHERE code = 'typo'"
+            "SELECT enabled, description FROM check_items WHERE profile_id = 'default' AND code = 'typo'"
         ).fetchone()
         self.assertFalse(bool(typo_state["enabled"]))
         self.assertIn("已合并至“文档规范性检查”", typo_state["description"])
         language_consistency_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (LANGUAGE_CONSISTENCY_TASK_TYPE, "language-consistency-cross-lingual"),
         ).fetchone()
         self.assertIsNotNone(language_consistency_item)
@@ -820,7 +822,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
             language_consistency_item["prompt"],
         )
         compliance_item = db.execute(
-            "SELECT prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "compliance"),
         ).fetchone()
         self.assertIn(
@@ -832,7 +834,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         )
         self.assertIn("页码仅作为章节位置的辅助信息", compliance_item["prompt"])
         sensitive_terms_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "sensitive-terms"),
         ).fetchone()
         self.assertIsNotNone(sensitive_terms_item)
@@ -840,7 +842,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("不规范用语", sensitive_terms_item["description"])
         self.assertIn("规范用语", sensitive_terms_item["prompt"])
         common_terms_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (DOCUMENT_TASK_TYPE, "common-terms"),
         ).fetchone()
         self.assertIsNotNone(common_terms_item)
@@ -855,7 +857,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
             "image-device-installation", default_check_item_codes(IMAGE_TASK_TYPE)
         )
         image_text_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (IMAGE_TASK_TYPE, "image-text-correspondence"),
         ).fetchone()
         self.assertIsNotNone(image_text_item)
@@ -863,7 +865,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("界面截图", image_text_item["description"])
         self.assertIn("旧版界面", image_text_item["prompt"])
         wiring_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (IMAGE_TASK_TYPE, "image-wiring"),
         ).fetchone()
         self.assertIsNotNone(wiring_item)
@@ -871,7 +873,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("设备外观", wiring_item["description"])
         self.assertIn("壁挂/导轨/机柜/桌面", wiring_item["prompt"])
         image_title_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (IMAGE_TASK_TYPE, "image-figure-table-title-standard"),
         ).fetchone()
         self.assertIsNotNone(image_title_item)
@@ -883,7 +885,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("页眉或文档名不能替代表标题", image_title_item["prompt"])
         self.assertIn("续表x-x", image_title_item["prompt"])
         image_quality_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (IMAGE_TASK_TYPE, "image-integrity-clarity"),
         ).fetchone()
         self.assertIsNotNone(image_quality_item)
@@ -891,7 +893,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("关键文字", image_quality_item["description"])
         self.assertIn("端子号", image_quality_item["prompt"])
         video_item = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE task_type = ? AND code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? AND code = ?",
             (VIDEO_TASK_TYPE, "video-installation-sequence"),
         ).fetchone()
         self.assertIsNotNone(video_item)
@@ -914,7 +916,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT 1 FROM check_items WHERE code = 'consistency-translation-coverage'"
+            "SELECT 1 FROM check_items WHERE profile_id = 'default' AND code = 'consistency-translation-coverage'"
         ).fetchone()
         self.assertIsNone(row)
 
@@ -927,7 +929,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
 2. 对专业术语、人名、地名、品牌名保持谨慎，不确定时标注“疑似”。
 3. 如果未发现明显问题，明确说明“未发现明显错别字或语病”。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'typo'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'typo'",
             (legacy_prompt,),
         )
         db.commit()
@@ -935,7 +937,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt, description, enabled FROM check_items WHERE code = 'typo'"
+            "SELECT prompt, description, enabled FROM check_items WHERE profile_id = 'default' AND code = 'typo'"
         ).fetchone()
         self.assertIn("页码：未提取", row["prompt"])
         self.assertIn("章节：未识别", row["prompt"])
@@ -955,7 +957,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
 3. 如果未发现问题，明确说明“未发现明显规范性问题”。
 4. 不要编造文档中不存在的内容。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'compliance'",
             (legacy_prompt,),
         )
         db.commit()
@@ -963,7 +965,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'compliance'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'compliance'"
         ).fetchone()
         self.assertEqual(
             row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"]
@@ -975,7 +977,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         db = get_db()
         custom_prompt = "自定义文档规范性提示词：只检查标题格式。"
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'compliance'",
             (custom_prompt,),
         )
         db.commit()
@@ -983,7 +985,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'compliance'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'compliance'"
         ).fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
 
@@ -993,7 +995,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
 3. 数字、单位和符号：中英文及数字间空格的明确格式问题。
 6. 不检查标题层级、章节顺序、目录、编号、交叉引用。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'compliance'",
             (previous_prompt,),
         )
         db.commit()
@@ -1001,7 +1003,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'compliance'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'compliance'"
         ).fetchone()
         self.assertEqual(
             row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"]
@@ -1017,7 +1019,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
 不检查标题层级、章节顺序、目录、编号、交叉引用。
 输出前必须把候选原文中的空格和换行全部去除后重新判断。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'compliance'",
             (previous_prompt,),
         )
         db.commit()
@@ -1025,7 +1027,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'compliance'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'compliance'"
         ).fetchone()
         self.assertEqual(
             row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"]
@@ -1040,7 +1042,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
 10. 表格文字难理解：检查表头和单元格条件关系。
 问题类型建议使用：主体不明确、表格文字难理解。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'understandability'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'understandability'",
             (previous_prompt,),
         )
         db.commit()
@@ -1048,7 +1050,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'understandability'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'understandability'"
         ).fetchone()
         self.assertEqual(
             row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["understandability"]["prompt"]
@@ -1059,7 +1061,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         db = get_db()
         custom_prompt = "自定义易理解性提示词：只检查长句。"
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'understandability'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'understandability'",
             (custom_prompt,),
         )
         db.commit()
@@ -1067,7 +1069,7 @@ class CheckItemDefaultsTest(unittest.TestCase):
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'understandability'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'understandability'"
         ).fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
 
@@ -1089,14 +1091,15 @@ issue 必须提供两处可以直接对照的证据。
         }
         for code, prompt in previous_prompts.items():
             db.execute(
-                "UPDATE check_items SET prompt = ? WHERE code = ?", (prompt, code)
+                "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = ?",
+                (prompt, code),
             )
         db.commit()
 
         seed_defaults()
 
         rows = db.execute(
-            "SELECT code, prompt FROM check_items WHERE code IN ('compliance', 'understandability', 'consistency', 'completeness')"
+            "SELECT code, prompt FROM check_items WHERE profile_id = 'default' AND code IN ('compliance', 'understandability', 'consistency', 'completeness')"
         ).fetchall()
         migrated = {row["code"]: row["prompt"] for row in rows}
         for code in previous_prompts:
@@ -1108,7 +1111,7 @@ issue 必须提供两处可以直接对照的证据。
         db = get_db()
         custom_prompt = "自定义完整性提示词：只检查步骤缺失。"
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'completeness'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'completeness'",
             (custom_prompt,),
         )
         db.commit()
@@ -1116,7 +1119,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'completeness'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'completeness'"
         ).fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
 
@@ -1127,7 +1130,7 @@ issue 必须提供两处可以直接对照的证据。
 通用写作经验和常见章节结构不能单独证明信息必需。
 链接实际可访问性不作为本检查的缺失依据。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'completeness'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'completeness'",
             (previous_prompt,),
         )
         db.commit()
@@ -1135,7 +1138,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'completeness'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'completeness'"
         ).fetchone()
         self.assertEqual(
             row["prompt"],
@@ -1153,7 +1156,7 @@ issue 必须提供两处可以直接对照的证据。
 10. 版本、版权和发布信息规范
 若未发现明显规范性问题，请明确回复：“未发现明显规范性问题。”"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'compliance'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'compliance'",
             (expanded_prompt,),
         )
         db.commit()
@@ -1161,7 +1164,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'compliance'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'compliance'"
         ).fetchone()
         self.assertEqual(
             row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["compliance"]["prompt"]
@@ -1175,7 +1178,7 @@ issue 必须提供两处可以直接对照的证据。
 2. 按条列出不一致内容：涉及位置线索、冲突表述、判断依据、建议统一口径。
 3. 对不确定的问题标注“需人工确认”，不要武断下结论。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'consistency'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'consistency'",
             (legacy_prompt,),
         )
         db.commit()
@@ -1183,7 +1186,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
+            "SELECT name, prompt FROM check_items WHERE profile_id = 'default' AND code = 'consistency'"
         ).fetchone()
         self.assertEqual(
             row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"]
@@ -1196,7 +1199,7 @@ issue 必须提供两处可以直接对照的证据。
         db = get_db()
         custom_prompt = "自定义全文一致性提示词：只检查产品名称是否统一。"
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'consistency'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'consistency'",
             (custom_prompt,),
         )
         db.commit()
@@ -1204,7 +1207,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'consistency'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'consistency'"
         ).fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
 
@@ -1216,7 +1219,7 @@ issue 必须提供两处可以直接对照的证据。
 1. 每条明确问题原则上至少提供两处可以直接对照的文档证据。
 3. 证据不足但确有直接冲突线索时标为 suggestion。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'consistency'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'consistency'",
             (previous_prompt,),
         )
         db.commit()
@@ -1224,7 +1227,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'consistency'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'consistency'"
         ).fetchone()
         self.assertEqual(
             row["prompt"], DEFAULT_CHECK_ITEMS_BY_CODE["consistency"]["prompt"]
@@ -1239,7 +1242,7 @@ issue 必须提供两处可以直接对照的证据。
 1. 只有一处原文、证据缺失或证据关系需要猜测时，不输出任何条目。
 8. 如果未发现明确问题，summary 写“未发现明显内容正确性问题”。"""
         db.execute(
-            "UPDATE check_items SET name = '内容正确性检查', prompt = ? WHERE code = 'consistency'",
+            "UPDATE check_items SET name = '内容正确性检查', prompt = ? WHERE profile_id = 'default' AND code = 'consistency'",
             (previous_prompt,),
         )
         db.commit()
@@ -1247,7 +1250,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
+            "SELECT name, prompt FROM check_items WHERE profile_id = 'default' AND code = 'consistency'"
         ).fetchone()
         self.assertEqual(row["name"], "全文一致性检查")
         self.assertEqual(
@@ -1262,7 +1265,7 @@ issue 必须提供两处可以直接对照的证据。
 检查每个章节标题是否准确概括其正文内容。
 若未发现问题，请明确回复：“未发现明显不一致问题。”这个提示词呢应该怎么优化"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'consistency'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'consistency'",
             (expanded_prompt,),
         )
         db.commit()
@@ -1270,7 +1273,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT name, prompt FROM check_items WHERE code = 'consistency'"
+            "SELECT name, prompt FROM check_items WHERE profile_id = 'default' AND code = 'consistency'"
         ).fetchone()
         self.assertEqual(row["name"], "全文一致性检查")
         self.assertEqual(
@@ -1281,7 +1284,7 @@ issue 必须提供两处可以直接对照的证据。
         db = get_db()
         custom_prompt = "自定义错别字提示词：只检查用户提供的专用词典。"
         db.execute(
-            "UPDATE check_items SET prompt = ?, enabled = 1 WHERE code = 'typo'",
+            "UPDATE check_items SET prompt = ?, enabled = 1 WHERE profile_id = 'default' AND code = 'typo'",
             (custom_prompt,),
         )
         db.commit()
@@ -1289,7 +1292,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt, enabled FROM check_items WHERE code = 'typo'"
+            "SELECT prompt, enabled FROM check_items WHERE profile_id = 'default' AND code = 'typo'"
         ).fetchone()
         self.assertEqual(row["prompt"], custom_prompt)
         self.assertTrue(bool(row["enabled"]))
@@ -1310,7 +1313,7 @@ issue 必须提供两处可以直接对照的证据。
 2. 按条列出差异：问题类型、位置、文档A证据、文档B证据、差异说明、影响、修改建议。
 3. 单独概括“缺失内容”和“关键事实/数字差异”；若没有发现，明确说明未发现。"""
         db.execute(
-            "UPDATE check_items SET prompt = ? WHERE code = 'language-consistency-cross-lingual'",
+            "UPDATE check_items SET prompt = ? WHERE profile_id = 'default' AND code = 'language-consistency-cross-lingual'",
             (legacy_prompt,),
         )
         db.commit()
@@ -1318,7 +1321,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT prompt FROM check_items WHERE code = 'language-consistency-cross-lingual'"
+            "SELECT prompt FROM check_items WHERE profile_id = 'default' AND code = 'language-consistency-cross-lingual'"
         ).fetchone()
         self.assertEqual(
             row["prompt"],
@@ -1336,7 +1339,7 @@ issue 必须提供两处可以直接对照的证据。
                 description = ?,
                 prompt = ?,
                 sort_order = ?
-            WHERE code = ?
+            WHERE profile_id = 'default' AND code = ?
             """,
             (
                 "图片小语种文字检查",
@@ -1351,7 +1354,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT task_type, name, description, prompt, sort_order FROM check_items WHERE code = ?",
+            "SELECT task_type, name, description, prompt, sort_order FROM check_items WHERE profile_id = 'default' AND code = ?",
             ("image-small-language-text",),
         ).fetchone()
         self.assertEqual(row["task_type"], IMAGE_TASK_TYPE)
@@ -1368,7 +1371,7 @@ issue 必须提供两处可以直接对照的证据。
             """
             UPDATE check_items
             SET prompt = ?
-            WHERE code = ?
+            WHERE profile_id = 'default' AND code = ?
             """,
             (
                 "旧版提示词：必须判为表标题缺失；同一张图片中可能同时出现多个表格。",
@@ -1380,7 +1383,7 @@ issue 必须提供两处可以直接对照的证据。
         seed_defaults()
 
         row = db.execute(
-            "SELECT name, description, prompt FROM check_items WHERE code = ?",
+            "SELECT name, description, prompt FROM check_items WHERE profile_id = 'default' AND code = ?",
             ("image-figure-table-title-standard",),
         ).fetchone()
         self.assertEqual(row["name"], "图表标题可见性复核")
@@ -1430,7 +1433,7 @@ issue 必须提供两处可以直接对照的证据。
         rows = {
             row["code"]: bool(row["enabled"])
             for row in db.execute(
-                "SELECT code, enabled FROM check_items WHERE code IN (?, ?)",
+                "SELECT code, enabled FROM check_items WHERE profile_id = 'default' AND code IN (?, ?)",
                 ("image-ui-step-consistency", "image-device-installation"),
             ).fetchall()
         }
@@ -1447,7 +1450,7 @@ issue 必须提供两处可以直接对照的证据。
         original_ids = [
             row["id"]
             for row in db.execute(
-                "SELECT id FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT id FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (DOCUMENT_TASK_TYPE,),
             ).fetchall()
         ]
@@ -1459,7 +1462,7 @@ issue 必须提供两处可以直接对照的证据。
         updated_ids = [
             row["id"]
             for row in db.execute(
-                "SELECT id FROM check_items WHERE task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT id FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (DOCUMENT_TASK_TYPE,),
             ).fetchall()
         ]

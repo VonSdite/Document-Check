@@ -98,7 +98,7 @@ ASGI 适配器在每个 WSGI 请求线程内创建独立 Flask 应用上下文�
 
 HTTP 请求、会话、页面渲染和跳转由 `web` 与认证适配器负责。任务和报告服务通过参数接受业务数据，返回结构化结果；数据库操作使用进程内的 Flask 应用上下文，日志使用模块级 logger。
 
-- `TaskSubmission` 承载文件列表、检查项、模型选择和提交令牌。`submit_document_task` 等提交服务返回 `SubmissionResult`，Web 层将消息和任务类型转换为提示与页面跳转。
+- `TaskSubmission` 承载文件列表、方案标识、检查项、模型选择和提交令牌。`submit_document_task` 等提交服务返回 `SubmissionResult`，Web 层将消息和任务类型转换为提示与页面跳转。
 - `identity.models.UserIdentity` 是独立的身份数据类型。模型查询显式接收用户主体，任务提交使用身份快照保存归属信息。
 - `identity/permissions.py` 定义五项可分配管理权限；`persistence/permissions.py` 登记用户并保存授权，`web/auth.py` 在每个请求检查管理能力和任务范围。系统设置与用户授权使用独立的超级管理员登录。具体边界见 [用户权限](permissions.md)。
 - `models.service` 管理提供商与模型配置，`models.client` 管理模型协议请求，`models.discovery` 管理模型列表发现。
@@ -203,3 +203,11 @@ Web 层从当前身份构造操作者参数，IP 模式的管理员操作记录�
 `reporting/suppression.py` 在终审保存事务内收录所有原因的不认可确认条目。`report_suppression_reviews` 按终审记录保存来源、模型、完整条目和两级审核快照，同一规则可对应多份独立依据。初审写入、报告变化和来源任务删除通过触发器标记待校验；规则读取、版本计算及启用前按来源任务校验当前终审，失效记录保留且停止作为过滤依据。规则必须具有有效依据才能启用，所有依据失效时自动停用。终审与误报入库共用事务，任一步失败均回滚。缺少有效确认的记录保持待终审状态。
 
 `tests/test_final_review.py` 验证报告表格与独立终审入口、初审只读展示与提交范围、已忽略和超限条目的终审、初审不认可的展示与终审范围、缓存更新、权限授予与撤销、同一用户完成两级审核、意见分歧、报告内容变化、并发提交、事务回滚、Excel 版本与审核记录。`frontend/tests/e2e/final-review.spec.ts` 验证 IP 用户、统一登录用户和管理员的表格初审、独立终审、往返报告后的意见回显、提单修改、终审范围切换、重新审核和移动端布局。
+
+## 检查方案与快照
+
+`persistence/check_profiles.py` 保存方案目录、启用状态、模板来源与版本。检查项以 `(profile_id, code)` 唯一标识，任务内部继续使用稳定检查项编码。本地词表和链接执行器按编码调度。检查项增删改与排序更新方案版本；软件初始规则由 `persistence/software_defaults.py` 提供，初始化保留已配置内容。
+
+提交服务在同一查询中读取启用的方案和属于当前检查方式的检查项，保存 `check_profile_id`、`check_profile_snapshot_json` 和 `checks_snapshot_json`。后台执行与重试使用提示词快照，报告通过 `contracts/check_profiles.py` 展示提交时的方案名称与版本。未记录方案快照的任务属于默认方案。
+
+误报规则保存 `profile_id`，候选指纹、规则读取和页面操作均包含方案范围。批量统计按 `(task_type, profile_id)` 缓存本批所需规则，统计失效版本按任务类型统一刷新。`tests/test_check_profiles.py` 覆盖表结构初始化、提示词保护、方案归属、停用、复制、任务快照以及报告和统计的误报隔离。

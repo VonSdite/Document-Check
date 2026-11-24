@@ -1243,7 +1243,7 @@ class UserPermissionTest(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/rules")
+        self.assertEqual(response.headers["Location"], "/rules?profile_id=default")
         with self.app.app_context():
             self.assertIsNotNone(
                 get_db()

@@ -1,0 +1,13 @@
+{% if task_check_profiles is defined %}
+<div class="form-field task-profile-field">
+  <label>检查方案
+    <select name="profile_id" required>
+      {% for profile in task_check_profiles %}
+      <option value="{{ profile.id }}" {{ 'selected' if profile.id == selected_check_profile_id else '' }}>{{ profile.name }}</option>
+      {% else %}<option value="">暂无可用方案</option>{% endfor %}
+    </select>
+  </label>
+  <p class="subline">同批文档使用所选方案；不同方案的文档请分别提交。</p>
+</div>
+<script type="application/json" data-check-profiles>{{ task_check_profiles|tojson }}</script>
+{% endif %}

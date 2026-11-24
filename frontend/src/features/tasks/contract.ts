@@ -3,7 +3,15 @@ export interface SelectOption {
   label: string
   badge?: string
 }
+export interface CheckProfile {
+  id: string
+  name: string
+  description: string
+  checks: { id: number; name: string; description: string; default_selected: number }[]
+}
 export interface TaskComposerProps {
+  profiles?: CheckProfile[]
+  profile?: string
   action: string
   attributes: Record<string, string>
   files: {
@@ -33,6 +41,8 @@ export function readTaskComposer(root: HTMLElement): TaskComposerProps {
   const form = root.querySelector('form')!
   const model = form.querySelector<HTMLSelectElement>('[name=model_id]')!
   const rounds = form.querySelector<HTMLSelectElement>('[name=check_rounds]')
+  const profile = form.querySelector<HTMLSelectElement>('[name=profile_id]')
+  const profileData = form.querySelector('[data-check-profiles]')
   const options = (select: HTMLSelectElement) =>
     Array.from(select.options).map((option) => ({
       value: option.value,
@@ -40,6 +50,10 @@ export function readTaskComposer(root: HTMLElement): TaskComposerProps {
       badge: option.dataset.thinkingDisabled === 'true' ? '关闭思考' : undefined,
     }))
   return {
+    profiles: profileData
+      ? (JSON.parse(profileData.textContent || '[]') as CheckProfile[])
+      : undefined,
+    profile: profile?.value,
     action: form.getAttribute('action') || '',
     attributes: Object.fromEntries(
       Array.from(form.attributes)

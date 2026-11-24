@@ -59,7 +59,7 @@ test('单文档报告使用表格初审，管理员在独立终审页保存并�
     await adminPage.reload()
     await expect(adminItems.first().locator('select[name=decision]')).toHaveValue('confirmed')
     await expect(adminItems.first().locator('textarea[name=note]')).toHaveValue(note)
-    await adminPage.goto('/admin/settings?rule_status=candidate')
+    await adminPage.goto('/admin/rules?rule_status=candidate')
     const candidate = adminPage.locator('[data-report-suppression-row]').filter({ hasText: note })
     await expect(candidate).toHaveCount(1)
     await expect(candidate).toHaveAttribute('data-rule-status', 'candidate')

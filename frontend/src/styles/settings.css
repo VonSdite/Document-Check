@@ -377,6 +377,14 @@
   overflow-wrap: anywhere;
 }
 
+.check-item-state {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .check-item-row.is-expanded .check-item-chevron {
   transform: rotate(180deg);
 }

@@ -220,11 +220,22 @@ def _prepare_task_results(
     task_id: int | None = None,
     record_suppression_hits: bool = False,
     suppression_rules: dict[str, list[dict]] | None = None,
+    profile_id: str | None = None,
 ) -> list[dict]:
     prepared = []
+    if profile_id is None and task_id is not None:
+        profile = (
+            get_db()
+            .execute("SELECT check_profile_id FROM tasks WHERE id = ?", (task_id,))
+            .fetchone()
+        )
+        profile_id = profile["check_profile_id"] if profile else "default"
+    profile_id = profile_id or "default"
     if suppression_rules is None:
         suppression_rules = (
-            _enabled_report_suppression_rules(task_type) if task_type else {}
+            _enabled_report_suppression_rules(task_type, profile_id)
+            if task_type
+            else {}
         )
     for result in results:
         item = dict(result)
@@ -335,7 +346,9 @@ def _prepare_task_results(
     return prepared
 
 
-def _enabled_report_suppression_rules(task_type: str | None) -> dict[str, list[dict]]:
+def _enabled_report_suppression_rules(
+    task_type: str | None, profile_id: str = "default"
+) -> dict[str, list[dict]]:
     from app.reporting.suppression import VERIFIED_RULE_SQL, refresh_suppression_reviews
 
     if not task_type:
@@ -347,9 +360,9 @@ def _enabled_report_suppression_rules(task_type: str | None) -> dict[str, list[d
             f"""
         SELECT id, check_code, reason, item_json
         FROM report_suppression_rules r
-        WHERE task_type = ? AND enabled = 1 AND {VERIFIED_RULE_SQL}
+        WHERE task_type = ? AND profile_id = ? AND enabled = 1 AND {VERIFIED_RULE_SQL}
         """,
-            (task_type,),
+            (task_type, profile_id),
         )
         .fetchall()
     )
@@ -521,7 +534,10 @@ def _maybe_create_report_suppression_candidate(
 
     task_type = task["task_type"] or DOCUMENT_TASK_TYPE
     fingerprint = _report_item_suppression_fingerprint(
-        task_type, result_code, report_item
+        task_type,
+        result_code,
+        report_item,
+        dict(task).get("check_profile_id") or "default",
     )
     now = now_text()
     reason = REPORT_REJECTION_REASONS.get(rejection_reason, "") or rejection_note
@@ -529,11 +545,11 @@ def _maybe_create_report_suppression_candidate(
     db.execute(
         """
         INSERT INTO report_suppression_rules(
-            task_type, check_code, fingerprint, item_json, reason, enabled,
+            task_type, check_code, fingerprint, item_json, reason, profile_id, enabled,
             source_task_id, source_result_code, source_item_id,
             hit_count, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?)
         ON CONFLICT(task_type, check_code, fingerprint) DO UPDATE SET
             item_json = excluded.item_json,
             reason = excluded.reason,
@@ -545,6 +561,7 @@ def _maybe_create_report_suppression_candidate(
             fingerprint,
             json.dumps(snapshot, ensure_ascii=False),
             reason,
+            dict(task).get("check_profile_id") or "default",
             task["id"],
             result_code,
             item_id,
@@ -559,13 +576,15 @@ def _maybe_create_report_suppression_candidate(
 
 
 def _report_item_suppression_fingerprint(
-    task_type: str, result_code: str, item: dict
+    task_type: str, result_code: str, item: dict, profile_id: str = "default"
 ) -> str:
     source = {
         "task_type": str(task_type or ""),
         "check_code": str(result_code or ""),
         "description": _report_suppression_description(item),
     }
+    if profile_id != "default":
+        source["profile_id"] = profile_id
     raw = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

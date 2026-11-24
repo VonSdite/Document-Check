@@ -27,6 +27,7 @@ def _submission_input() -> TaskSubmission:
             int(value) for value in request.form.getlist("checks") if value.isdigit()
         ],
         model_id=request.form.get("model_id", ""),
+        profile_id=request.form.get("profile_id", "default"),
         submission_token=request.form.get("submission_token", ""),
         check_rounds=request.form.get("check_rounds"),
     )

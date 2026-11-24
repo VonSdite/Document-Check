@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import yaml
+from jinja2 import Environment, nodes
 from urllib3.exceptions import InsecureRequestWarning
 
 from app.bootstrap.factory import create_app
@@ -28,26 +29,41 @@ def _write_config(root_dir: str, config: dict):
 class ProviderConfigTest(unittest.TestCase):
     def test_all_table_templates_load_column_resize_support(self):
         template_dir = Path(__file__).resolve().parents[1] / "app" / "web" / "templates"
-        table_templates = []
-        for template_path in template_dir.glob("*.html"):
-            source = template_path.read_text(encoding="utf-8")
-            if "<table" not in source:
-                continue
-            table_templates.append(template_path.name)
-            parents = [
-                parent.read_text(encoding="utf-8")
-                for parent in template_dir.glob("*.html")
-                if ('{% include "' + template_path.name + '" %}')
-                in parent.read_text(encoding="utf-8")
-            ]
-            self.assertTrue(
+        sources = {
+            path.relative_to(template_dir).as_posix(): path.read_text(encoding="utf-8")
+            for path in template_dir.rglob("*.html")
+        }
+        parents = {}
+        for name, source in sources.items():
+            for include in (
+                Environment()
+                .parse(source)
+                .find_all((nodes.Include, nodes.Import, nodes.FromImport))
+            ):
+                if isinstance(include.template, nodes.Const):
+                    parents.setdefault(include.template.value, []).append(name)
+
+        def loads_resize(name, visited):
+            if name in visited:
+                return False
+            source = sources[name]
+            if (
                 '{% extends "base.html" %}' in source
                 or "{{ table_resize_js|safe }}" in source
-                or (
-                    parents
-                    and all('{% extends "base.html" %}' in parent for parent in parents)
-                ),
-                f"{template_path.name} 及其使用页面未加载表格列宽拖拽脚本",
+            ):
+                return True
+            return bool(parents.get(name)) and all(
+                loads_resize(parent, visited | {name}) for parent in parents[name]
+            )
+
+        table_templates = []
+        for name, source in sources.items():
+            if "<table" not in source:
+                continue
+            table_templates.append(name)
+            self.assertTrue(
+                loads_resize(name, set()),
+                f"{name} 及其使用页面未加载表格列宽拖拽脚本",
             )
 
         self.assertGreater(len(table_templates), 0)
