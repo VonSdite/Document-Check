@@ -824,19 +824,25 @@
 }
 
 .report-field-severity_label {
-  width: 4%;
+  width: 3.5%;
 }
 
 .report-field-confidence_label {
-  width: 5%;
+  width: 4.5%;
 }
 
 .report-field-category {
-  width: 7%;
+  width: 5%;
+}
+
+.report-table .report-field-severity_label,
+.report-table .report-field-confidence_label,
+.report-table .report-field-category {
+  padding-inline: var(--space-1);
 }
 
 .report-field-location {
-  width: 8%;
+  width: 11%;
 }
 
 .report-field-excerpt {
