@@ -563,7 +563,7 @@
 }
 
 .report-table {
-  min-width: 0;
+  min-width: 1200px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -609,9 +609,13 @@
 }
 
 .report-index-cell {
-  width: 3%;
+  width: 136px;
   min-width: 0;
   text-align: center;
+}
+
+.report-table th.report-index-cell {
+  white-space: nowrap;
 }
 
 .report-status-cell {
