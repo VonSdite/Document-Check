@@ -72,6 +72,8 @@ uv run python -m unittest tests.test_routes tests.test_user_domains tests.test_p
 
 ## 检查方案页面
 
-`admin_rules.html` 展示检查方案管理、按检查方式组织的检查项与方案内误报规则，`admin_settings.html` 展示运行参数。创建任务的原生表单通过 `_task_profile_picker.html` 提供方案选择及 JSON 目录；目录只包含可用检查项的名称、说明和默认勾选，不包含提示词。`TaskComposer` 在切换方案时保留文件、模型和每个方案的勾选草稿，按检查页面记住最近选择。后端独立校验方案启用状态、检查方式与检查项归属。
+`admin_rules.html` 展示单文档检查方案、检查项与方案内误报规则，`admin_settings.html` 展示其他四类检查项、误报规则及运行参数。两页复用 `_settings_check_items.html` 和 `_settings_report_suppression.html`，各自只传入本页管理范围的数据。
 
-`frontend/tests/e2e/check-profiles.spec.ts` 覆盖切换、草稿、真实提交、报告方案展示、软件提示词编辑、默认勾选以及移动端深色布局。
+单文档原生表单通过 `_task_profile_picker.html` 提供方案选择及 JSON 目录；目录只包含可用检查项的名称、说明和默认勾选，不包含提示词。`TaskComposer` 在切换方案时保留文件、模型和每个方案的勾选草稿，记住最近选择。其他检查页面直接显示系统配置的检查项。后端独立校验方案启用状态、检查方式与检查项归属。
+
+`frontend/tests/e2e/check-profiles.spec.ts` 覆盖单文档方案切换、草稿、真实提交、快照展示、软件提示词编辑、默认勾选，以及其他检查页面的方案选择范围和系统设置页签。规则页验证移动端深色布局，系统设置验证移动端布局。

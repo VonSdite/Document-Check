@@ -150,11 +150,12 @@ test('导出的 HTML 报告离线打开时保留样式和列宽调整', async ({
 
 test('公共规则分页、提示词切换和权限保存可操作', async ({ page }) => {
   await page.goto('/__frontend__/admin')
-  await page.goto('/admin/rules')
+  await page.goto('/admin/settings')
   const tabs = page.locator('[data-prompt-tab]')
   await tabs.nth(1).click()
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('[data-prompt-panel]:not([hidden])')).toHaveCount(1)
+  await page.goto('/admin/rules')
   const rules = page.locator('[data-report-suppression-rules]')
   await expect(rules.locator('[data-report-suppression-row]')).toHaveCount(20)
   await rules.getByRole('link', { name: '下一页', exact: true }).click()

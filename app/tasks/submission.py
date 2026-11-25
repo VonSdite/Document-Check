@@ -118,6 +118,18 @@ def _enabled_check_item_snapshots(
         return []
 
     placeholders = ",".join("?" for _ in unique_ids)
+    if task_type != DOCUMENT_TASK_TYPE:
+        if profile_id != "default":
+            return []
+        return [
+            dict(row)
+            for row in db.execute(
+                f"""SELECT id, code, name, prompt FROM check_items
+                WHERE id IN ({placeholders}) AND task_type = ? AND profile_id = 'default' AND enabled = 1
+                ORDER BY sort_order ASC, id ASC""",
+                (*unique_ids, task_type),
+            )
+        ]
     rows = db.execute(
         f"""
         SELECT c.id, c.code, c.name, c.prompt, p.id AS profile_id, p.name AS profile_name, p.revision

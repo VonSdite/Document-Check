@@ -122,8 +122,8 @@ def _task_list_partial():
 
 def _render_list_template(template_name, **context):
     partial = _task_list_partial()
-    if not partial:
-        task_type = context.get("active_nav", DOCUMENT_TASK_TYPE)
+    task_type = context.get("active_nav", DOCUMENT_TASK_TYPE)
+    if not partial and task_type == DOCUMENT_TASK_TYPE:
         profiles = available_check_profiles(task_type)
         selected = next(
             (

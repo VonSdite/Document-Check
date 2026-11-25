@@ -160,39 +160,56 @@ def register_settings_routes(app):
             "save_profile",
             "copy_profile",
         }
-        if request.method == "POST" and request.form.get("action") in rule_actions:
-            rules_only = True
-        profile_id = request.form.get(
-            "profile_id", request.args.get("profile_id", "default")
+        profile_id = (
+            request.form.get("profile_id", request.args.get("profile_id", "default"))
+            if rules_only
+            else "default"
+        )
+        allowed_task_types = (
+            {DOCUMENT_TASK_TYPE}
+            if rules_only
+            else {
+                CONSISTENCY_TASK_TYPE,
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                IMAGE_TASK_TYPE,
+                VIDEO_TASK_TYPE,
+            }
         )
         profile = db.execute(
             "SELECT * FROM check_profiles WHERE id = ?", (profile_id,)
         ).fetchone()
         if rules_only and profile is None:
             abort(400, description="检查方案不存在，请重新选择。")
-        if request.method == "POST" and rules_only:
+        if request.method == "POST" and request.form.get("action") in rule_actions:
             action = request.form.get("action")
+            if not rules_only and (
+                request.form.get("profile_id", "default") != "default"
+                or action in {"save_profile", "copy_profile"}
+            ):
+                abort(400, description="单文档检查方案请在检查规则页面管理。")
+            if action in {"create_check_item", "reorder_check_items"}:
+                if (
+                    _check_item_task_type(request.form.get("task_type"))
+                    not in allowed_task_types
+                ):
+                    abort(400, description="该检查方式不属于当前页面的管理范围。")
             item_id = request.form.get("item_id")
             if action in {"prompt", "delete_check_item"} and item_id:
-                if (
-                    db.execute(
-                        "SELECT 1 FROM check_items WHERE id = ? AND profile_id = ?",
-                        (item_id, profile_id),
-                    ).fetchone()
-                    is None
-                ):
-                    abort(400, description="检查项不属于当前方案。")
+                item = db.execute(
+                    "SELECT task_type FROM check_items WHERE id = ? AND profile_id = ?",
+                    (item_id, profile_id),
+                ).fetchone()
+                if item is None or item["task_type"] not in allowed_task_types:
+                    abort(400, description="检查项不属于当前页面或方案。")
             if action == "report_suppression_rule":
                 rule_id = request.form.get("rule_id")
-                if (
-                    rule_id
-                    and db.execute(
-                        "SELECT 1 FROM report_suppression_rules WHERE id = ? AND profile_id = ?",
+                if rule_id:
+                    rule = db.execute(
+                        "SELECT task_type FROM report_suppression_rules WHERE id = ? AND profile_id = ?",
                         (rule_id, profile_id),
                     ).fetchone()
-                    is None
-                ):
-                    abort(400, description="误报规则不属于当前方案。")
+                    if rule is None or rule["task_type"] not in allowed_task_types:
+                        abort(400, description="误报规则不属于当前页面或方案。")
             if action in {"save_profile", "copy_profile"}:
                 try:
                     if action == "copy_profile":
@@ -215,15 +232,7 @@ def register_settings_routes(app):
                 return redirect(url_for(_rules_endpoint(), profile_id=profile_id))
         if request.method == "POST":
             action = request.form.get("action", "concurrency")
-            if rules_only and action not in {
-                "report_suppression_rule",
-                "create_check_item",
-                "reorder_check_items",
-                "delete_check_item",
-                "prompt",
-                "save_profile",
-                "copy_profile",
-            }:
+            if rules_only and action not in rule_actions:
                 abort(403, description="运行设置仅限超级管理员修改。")
             if action == "concurrency":
                 try:
@@ -547,98 +556,92 @@ def register_settings_routes(app):
             flash("检查项提示词已保存。", "success")
             return redirect(_settings_url())
 
-        document_check_items = _check_items_for_task_type(
-            db, DOCUMENT_TASK_TYPE, profile_id
-        )
-        consistency_check_items = _check_items_for_task_type(
-            db, CONSISTENCY_TASK_TYPE, profile_id
-        )
-        language_consistency_check_items = _check_items_for_task_type(
-            db, LANGUAGE_CONSISTENCY_TASK_TYPE, profile_id
-        )
-        image_check_items = _check_items_for_task_type(db, IMAGE_TASK_TYPE, profile_id)
-        video_check_items = _check_items_for_task_type(db, VIDEO_TASK_TYPE, profile_id)
+        check_item_groups = [
+            {
+                "task_type": DOCUMENT_TASK_TYPE,
+                "tab_title": "单文档检查",
+                "title": "单文档检查提示词",
+                "description": "内置检查项不可删除；扩展检查项可新增、停用或删除。",
+                "new_title": "新增单文档检查项",
+                "name_placeholder": "例如：术语一致性检查",
+                "description_placeholder": "用于向用户说明该检查项的范围",
+                "prompt_placeholder": "描述该检查项的审查角色、关注范围和输出要求",
+                "default_check_codes": default_check_item_codes(DOCUMENT_TASK_TYPE),
+            },
+            {
+                "task_type": CONSISTENCY_TASK_TYPE,
+                "tab_title": "多文档对照",
+                "title": "多文档对照提示词",
+                "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。",
+                "new_title": "新增多文档对照项",
+                "name_placeholder": "例如：关键参数一致性检查",
+                "description_placeholder": "用于说明该多文档对照项的比对范围",
+                "prompt_placeholder": "描述素材与资料的比对规则、关注范围和输出要求",
+                "default_check_codes": default_check_item_codes(CONSISTENCY_TASK_TYPE),
+            },
+            {
+                "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "tab_title": "跨语种检查",
+                "title": "跨语种检查提示词",
+                "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。",
+                "new_title": "新增跨语种检查项",
+                "name_placeholder": "例如：翻译缺失与事实差异检查",
+                "description_placeholder": "用于说明该跨语种检查项的范围",
+                "prompt_placeholder": "描述两份不同语种文档的比对规则、关注范围和中文输出要求",
+                "default_check_codes": default_check_item_codes(
+                    LANGUAGE_CONSISTENCY_TASK_TYPE
+                ),
+            },
+            {
+                "task_type": IMAGE_TASK_TYPE,
+                "tab_title": "图片检查",
+                "title": "图片检查提示词",
+                "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。",
+                "new_title": "新增图片检查项",
+                "name_placeholder": "例如：端子标识完整性检查",
+                "description_placeholder": "用于说明该图片检查项的范围",
+                "prompt_placeholder": "描述图片审查角色、关注范围、判断规则和输出要求",
+                "default_check_codes": default_check_item_codes(IMAGE_TASK_TYPE),
+            },
+            {
+                "task_type": VIDEO_TASK_TYPE,
+                "tab_title": "视频检查",
+                "title": "视频检查提示词",
+                "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。",
+                "new_title": "新增视频检查项",
+                "name_placeholder": "例如：安装力矩与工具使用检查",
+                "description_placeholder": "用于说明该视频检查项的范围",
+                "prompt_placeholder": "描述视频质检角色、关注范围、判断规则和输出要求",
+                "default_check_codes": default_check_item_codes(VIDEO_TASK_TYPE),
+            },
+        ]
+        check_item_groups = [
+            {
+                **group,
+                "items": _check_items_for_task_type(db, group["task_type"], profile_id),
+            }
+            for group in check_item_groups
+            if group["task_type"] in allowed_task_types
+        ]
         settings_tab = "general" if rules_only else _settings_tab()
         report_suppression_keyword, report_suppression_status = (
             _report_suppression_filter_values(request.args)
         )
         report_suppression_rules, report_suppression_pagination = (
             _report_suppression_rule_rows(
-                report_suppression_keyword, report_suppression_status
+                report_suppression_keyword,
+                report_suppression_status,
+                profile_id=profile_id,
+                document_only=rules_only,
             )
         )
         return render_template(
             "admin_rules.html" if rules_only else "admin_settings.html",
-            profiles=check_profiles(),
+            profiles=check_profiles() if rules_only else [],
             selected_profile=dict(profile) if profile else {},
             rules_only=rules_only,
             active_nav="rules" if rules_only else "settings",
-            check_item_groups=[
-                {
-                    "task_type": DOCUMENT_TASK_TYPE,
-                    "tab_title": "单文档检查",
-                    "title": "单文档检查提示词",
-                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除。",
-                    "new_title": "新增单文档检查项",
-                    "name_placeholder": "例如：术语一致性检查",
-                    "description_placeholder": "用于向用户说明该检查项的范围",
-                    "prompt_placeholder": "描述该检查项的审查角色、关注范围和输出要求",
-                    "items": document_check_items,
-                    "default_check_codes": default_check_item_codes(DOCUMENT_TASK_TYPE),
-                },
-                {
-                    "task_type": CONSISTENCY_TASK_TYPE,
-                    "tab_title": "多文档对照",
-                    "title": "多文档对照提示词",
-                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交多文档对照任务时可多选。",
-                    "new_title": "新增多文档对照项",
-                    "name_placeholder": "例如：关键参数一致性检查",
-                    "description_placeholder": "用于说明该多文档对照项的比对范围",
-                    "prompt_placeholder": "描述素材与资料的比对规则、关注范围和输出要求",
-                    "items": consistency_check_items,
-                    "default_check_codes": default_check_item_codes(
-                        CONSISTENCY_TASK_TYPE
-                    ),
-                },
-                {
-                    "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
-                    "tab_title": "跨语种检查",
-                    "title": "跨语种检查提示词",
-                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交跨语种检查任务时可多选。",
-                    "new_title": "新增跨语种检查项",
-                    "name_placeholder": "例如：翻译缺失与事实差异检查",
-                    "description_placeholder": "用于说明该跨语种检查项的范围",
-                    "prompt_placeholder": "描述两份不同语种文档的比对规则、关注范围和中文输出要求",
-                    "items": language_consistency_check_items,
-                    "default_check_codes": default_check_item_codes(
-                        LANGUAGE_CONSISTENCY_TASK_TYPE
-                    ),
-                },
-                {
-                    "task_type": IMAGE_TASK_TYPE,
-                    "tab_title": "图片检查",
-                    "title": "图片检查提示词",
-                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交图片检查任务时可多选。",
-                    "new_title": "新增图片检查项",
-                    "name_placeholder": "例如：端子标识完整性检查",
-                    "description_placeholder": "用于说明该图片检查项的范围",
-                    "prompt_placeholder": "描述图片审查角色、关注范围、判断规则和输出要求",
-                    "items": image_check_items,
-                    "default_check_codes": default_check_item_codes(IMAGE_TASK_TYPE),
-                },
-                {
-                    "task_type": VIDEO_TASK_TYPE,
-                    "tab_title": "视频检查",
-                    "title": "视频检查提示词",
-                    "description": "内置检查项不可删除；扩展检查项可新增、停用或删除，提交视频检查任务时可多选。",
-                    "new_title": "新增视频检查项",
-                    "name_placeholder": "例如：安装力矩与工具使用检查",
-                    "description_placeholder": "用于说明该视频检查项的范围",
-                    "prompt_placeholder": "描述视频质检角色、关注范围、判断规则和输出要求",
-                    "items": video_check_items,
-                    "default_check_codes": default_check_item_codes(VIDEO_TASK_TYPE),
-                },
-            ],
+            check_item_groups=check_item_groups,
             global_concurrency=min(
                 _max_task_processes(),
                 max(1, _int_setting("global_concurrency", 3)),
@@ -689,8 +692,9 @@ def _report_suppression_rules_redirect():
     keyword, status = _report_suppression_filter_values(request.form)
     url_values = {
         "_anchor": "report-suppression-rules",
-        "profile_id": request.form.get("profile_id", "default"),
     }
+    if request.endpoint in {"admin_rules", "user_rules"}:
+        url_values["profile_id"] = request.form.get("profile_id", "default")
     if keyword:
         url_values["rule_keyword"] = keyword
     if status:
@@ -699,13 +703,19 @@ def _report_suppression_rules_redirect():
         value = request.form.get(field, type=int)
         if value and value > 0:
             url_values[field] = value
-    return redirect(url_for(_rules_endpoint(), **url_values))
+    return redirect(url_for(_settings_endpoint(), **url_values))
 
 
-def _report_suppression_rule_rows(keyword: str, status: str) -> tuple[list[dict], dict]:
+def _report_suppression_rule_rows(
+    keyword: str, status: str, *, profile_id: str, document_only: bool
+) -> tuple[list[dict], dict]:
     refresh_suppression_reviews()
     db = get_db()
-    clauses, params = ["r.profile_id = ?"], [request.args.get("profile_id", "default")]
+    clauses = [
+        "r.profile_id = ?",
+        "r.task_type = ?" if document_only else "r.task_type != ?",
+    ]
+    params = [profile_id, DOCUMENT_TASK_TYPE]
     if status == "awaiting_final":
         clauses.append(f"NOT {VERIFIED_RULE_SQL}")
     elif status:
@@ -849,14 +859,6 @@ def _settings_url():
         "admin_rules",
         "user_rules",
         "admin_prompts",
-    } or request.form.get("action") in {
-        "report_suppression_rule",
-        "create_check_item",
-        "reorder_check_items",
-        "delete_check_item",
-        "prompt",
-        "save_profile",
-        "copy_profile",
     }:
         return url_for(
             _rules_endpoint(),

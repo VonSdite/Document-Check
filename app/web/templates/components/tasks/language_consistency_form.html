@@ -60,8 +60,6 @@
       <span class="submit-progress" data-submit-progress hidden>正在上传并读取两份文档，请勿重复提交。</span>
     </div>
   </div>
-
-  {% include "_task_profile_picker.html" %}
   {% with check_label="跨语种检查项", check_help="系统会先静态抽取数字、版本、链接、标题和长度线索，再按检查项调用模型生成中文报告。" %}
     {% include "_task_check_picker.html" %}
   {% endwith %}

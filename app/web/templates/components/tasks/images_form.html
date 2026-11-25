@@ -38,8 +38,6 @@
       <button class="primary-button" type="submit">提交检查</button>
     </div>
   </div>
-
-  {% include "_task_profile_picker.html" %}
   {% with check_label="图片检查项", check_help="系统会按页面截图和图片资源分组检查，每批最多 4 张图，并只带当前页附近文本给多模态模型，减少跨页误配。" %}
     {% include "_task_check_picker.html" %}
   {% endwith %}

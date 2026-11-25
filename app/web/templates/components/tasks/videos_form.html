@@ -40,8 +40,6 @@
       <div class="submit-progress" data-submit-progress hidden>正在逐个上传并抽取视频关键帧，请勿重复提交。</div>
     </div>
   </div>
-
-  {% include "_task_profile_picker.html" %}
   {% with check_label="视频检查项", check_help="系统会把视频抽成采样帧分批送给多模态模型，重点检查硬件安装顺序、接线端子、安全防护、调测界面和视频完整性。" %}
     {% include "_task_check_picker.html" %}
   {% endwith %}

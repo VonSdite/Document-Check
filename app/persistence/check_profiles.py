@@ -3,6 +3,7 @@
 import uuid
 
 from app.contracts.check_profiles import DEFAULT_CHECK_PROFILE
+from app.contracts.task_types import DOCUMENT_TASK_TYPE
 from app.persistence.connection import get_db, now_text
 
 
@@ -68,11 +69,20 @@ def initialize_check_profiles(db):
         "CREATE INDEX IF NOT EXISTS idx_check_items_profile_type ON check_items(profile_id, task_type, enabled, sort_order)"
     )
     for operation, record in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
-        db.execute(f"""CREATE TRIGGER IF NOT EXISTS trg_check_profile_{operation.lower()}
-            AFTER {operation} ON check_items BEGIN
+        trigger = f"trg_check_profile_{operation.lower()}"
+        sql = f"""CREATE TRIGGER {trigger}
+            AFTER {operation} ON check_items
+            WHEN {record}.task_type = '{DOCUMENT_TASK_TYPE}' BEGIN
                 UPDATE check_profiles SET revision = revision + 1, updated_at = {record}.updated_at
                 WHERE id = {record}.profile_id;
-            END""")
+            END"""
+        existing = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (trigger,),
+        ).fetchone()
+        if existing is None or existing["sql"] != sql:
+            db.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+            db.execute(sql)
 
 
 def check_profiles(*, enabled_only=False):
@@ -126,13 +136,15 @@ def copy_check_profile(source_id, name):
     db.execute(
         """INSERT INTO check_items(profile_id, task_type, code, name, description, prompt, enabled, default_selected, sort_order, created_at, updated_at)
         SELECT ?, task_type, code, name, description, prompt, enabled, default_selected, sort_order, ?, ?
-        FROM check_items WHERE profile_id = ?""",
-        (profile_id, now, now, source_id),
+        FROM check_items WHERE profile_id = ? AND task_type = ?""",
+        (profile_id, now, now, source_id, DOCUMENT_TASK_TYPE),
     )
     return profile_id
 
 
 def available_check_profiles(task_type):
+    if task_type != DOCUMENT_TASK_TYPE:
+        return []
     db = get_db()
     profiles = check_profiles(enabled_only=True)
     items = [
@@ -153,6 +165,4 @@ def available_check_profiles(task_type):
 
 
 def check_profile_snapshot(checks):
-    return checks[0].get(
-        "profile", {"id": DEFAULT_CHECK_PROFILE, "name": "现有文档方案", "revision": 1}
-    )
+    return checks[0].get("profile", {"id": DEFAULT_CHECK_PROFILE})

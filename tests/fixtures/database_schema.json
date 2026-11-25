@@ -279,19 +279,19 @@
     "trigger",
     "trg_check_profile_delete",
     "check_items",
-    "CREATE TRIGGER trg_check_profile_delete\n            AFTER DELETE ON check_items BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = OLD.updated_at\n                WHERE id = OLD.profile_id;\n            END"
+    "CREATE TRIGGER trg_check_profile_delete\n            AFTER DELETE ON check_items\n            WHEN OLD.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = OLD.updated_at\n                WHERE id = OLD.profile_id;\n            END"
   ],
   [
     "trigger",
     "trg_check_profile_insert",
     "check_items",
-    "CREATE TRIGGER trg_check_profile_insert\n            AFTER INSERT ON check_items BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
+    "CREATE TRIGGER trg_check_profile_insert\n            AFTER INSERT ON check_items\n            WHEN NEW.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
   ],
   [
     "trigger",
     "trg_check_profile_update",
     "check_items",
-    "CREATE TRIGGER trg_check_profile_update\n            AFTER UPDATE ON check_items BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
+    "CREATE TRIGGER trg_check_profile_update\n            AFTER UPDATE ON check_items\n            WHEN NEW.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
   ],
   [
     "trigger",

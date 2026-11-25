@@ -2,12 +2,16 @@
 
 import json
 
+from app.contracts.task_types import DOCUMENT_TASK_TYPE
+
 DEFAULT_CHECK_PROFILE = "default"
 SOFTWARE_CHECK_PROFILE = "software"
 
 
-def task_check_profile(task) -> dict:
+def task_check_profile(task) -> dict | None:
     values = dict(task)
+    if (values.get("task_type") or DOCUMENT_TASK_TYPE) != DOCUMENT_TASK_TYPE:
+        return None
     profile_id = values.get("check_profile_id") or DEFAULT_CHECK_PROFILE
     try:
         snapshot = json.loads(values.get("check_profile_snapshot_json") or "{}")

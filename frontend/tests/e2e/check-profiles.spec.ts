@@ -33,13 +33,16 @@ test('方案切换联动检查项、保留草稿并提交方案快照', async ({
   await expect(page.locator('.ui-task-composer select[name=profile_id]')).toHaveValue('software')
 })
 
-test('独立规则页面管理软件提示词与默认勾选，系统设置保持运行配置', async ({ page }) => {
+test('独立规则页面管理软件提示词与默认勾选，系统设置管理其他检查方式', async ({ page }) => {
   await page.goto('/__frontend__/admin')
   await page.goto('/admin/settings')
   await expect(page.locator('[name=global_concurrency]')).toBeVisible()
-  await expect(page.locator('[data-prompt-tabs]')).toHaveCount(0)
+  await expect(page.locator('[data-prompt-panel]')).toHaveCount(4)
+  await expect(page.locator('select[name=profile_id]')).toHaveCount(0)
   await page.goto('/admin/rules?profile_id=software')
   await expect(page.locator('[name=global_concurrency]')).toHaveCount(0)
+  await expect(page.locator('[data-prompt-panel]')).toHaveCount(1)
+  await expect(page.locator('[data-prompt-tab]')).toHaveCount(0)
   const panel = page.locator('[data-prompt-panel=document_check]')
   await panel.locator('[data-check-item-toggle]').first().click()
   const editor = panel.locator('[data-check-item-detail]').first()
@@ -63,4 +66,28 @@ test('独立规则页面管理软件提示词与默认勾选，系统设置保�
   await page.getByRole('button', { name: '切换主题' }).click()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: '../instance/check-profiles-mobile.png', fullPage: true })
+})
+
+test('其他检查页面使用系统检查项且不展示方案选择', async ({ page }) => {
+  await page.goto('/__frontend__/admin')
+  for (const path of ['/consistency', '/language-consistency', '/images', '/videos']) {
+    await page.goto(`${path}?profile_id=software`)
+    const form = page.locator('.ui-task-composer')
+    await expect(form).toBeVisible()
+    await expect(form.locator('[name=profile_id]')).toHaveCount(0)
+    await expect(form.locator('input[name=checks]')).not.toHaveCount(0)
+  }
+  await page.goto('/admin/settings')
+  for (const type of [
+    'consistency_check',
+    'language_consistency_check',
+    'image_check',
+    'video_check',
+  ]) {
+    await page.locator(`[data-prompt-tab=${type}]`).click()
+    await expect(page.locator(`[data-prompt-panel=${type}]`)).toBeVisible()
+  }
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: '../instance/system-check-settings-mobile.png', fullPage: true })
 })

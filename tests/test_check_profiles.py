@@ -8,12 +8,21 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 from flask import Flask
+from openpyxl import load_workbook
 
 from app.contracts.check_profiles import task_check_profile
+from app.contracts.task_types import (
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    IMAGE_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+    VIDEO_TASK_TYPE,
+)
 from app.persistence.check_profiles import copy_check_profile
 from app.persistence.connection import get_db
 from app.persistence.defaults import reset_default_check_item_prompt, seed_defaults
 from app.persistence.schema import init_db
+from app.reporting.excel import build_report_workbook
 from app.reporting.service import (
     _maybe_create_report_suppression_candidate,
     _raw_task_results,
@@ -22,6 +31,7 @@ from app.reporting.service import (
 )
 from app.reporting.statistics import _task_report_stat_rows_for_where
 from app.tasks.selection import selected_check_items
+from app.tasks.submission import _enabled_check_item_snapshots
 from tests import test_routes as fixtures
 
 
@@ -56,16 +66,261 @@ class CheckProfilesTest(unittest.TestCase):
 
     def test_rules_page_is_separate_and_profiles_have_distinct_prompts(self):
         settings = BeautifulSoup(self.client.get("/admin/settings").data, "html.parser")
-        self.assertIsNone(settings.select_one("[data-prompt-tabs]"))
-        self.assertIsNone(settings.select_one("[data-report-suppression-rules]"))
+        self.assertEqual(
+            {
+                panel["data-prompt-panel"]
+                for panel in settings.select("[data-prompt-panel]")
+            },
+            {
+                CONSISTENCY_TASK_TYPE,
+                LANGUAGE_CONSISTENCY_TASK_TYPE,
+                IMAGE_TASK_TYPE,
+                VIDEO_TASK_TYPE,
+            },
+        )
+        self.assertIsNone(settings.select_one('select[name="profile_id"]'))
+        self.assertIsNotNone(settings.select_one("[data-report-suppression-rules]"))
         self.assertIsNotNone(settings.select_one('[name="global_concurrency"]'))
         response = self.client.get("/admin/rules?profile_id=software")
         self.assertEqual(response.status_code, 200)
         rules = BeautifulSoup(response.data, "html.parser")
         self.assertIsNotNone(rules.select_one("[data-prompt-tabs]"))
+        self.assertEqual(
+            [
+                panel["data-prompt-panel"]
+                for panel in rules.select("[data-prompt-panel]")
+            ],
+            [DOCUMENT_TASK_TYPE],
+        )
+        self.assertEqual(rules.select("[data-prompt-tab]"), [])
         self.assertIsNone(rules.select_one('[name="global_concurrency"]'))
         self.assertIn("软件文档方案", rules.get_text())
         self.assertNotEqual(self.check()["prompt"], self.check("default")["prompt"])
+
+    def test_other_task_forms_use_system_checks_even_when_document_profiles_are_disabled(
+        self,
+    ):
+        self._configure_provider()
+        with self.app.app_context():
+            db = get_db()
+            db.execute("UPDATE check_profiles SET enabled = 0")
+            db.commit()
+            expected = {
+                task_type: {
+                    str(row["id"])
+                    for row in db.execute(
+                        "SELECT id FROM check_items WHERE profile_id = 'default' AND task_type = ? AND enabled = 1",
+                        (task_type,),
+                    )
+                }
+                for task_type in (
+                    CONSISTENCY_TASK_TYPE,
+                    LANGUAGE_CONSISTENCY_TASK_TYPE,
+                    IMAGE_TASK_TYPE,
+                    VIDEO_TASK_TYPE,
+                )
+            }
+        for path, task_type in (
+            ("/consistency", CONSISTENCY_TASK_TYPE),
+            ("/language-consistency", LANGUAGE_CONSISTENCY_TASK_TYPE),
+            ("/images", IMAGE_TASK_TYPE),
+            ("/videos", VIDEO_TASK_TYPE),
+        ):
+            for prefix in ("", "/admin"):
+                with self.subTest(path=prefix + path):
+                    response = self.client.get(prefix + path + "?profile_id=software")
+                    self.assertEqual(response.status_code, 200)
+                    soup = BeautifulSoup(response.data, "html.parser")
+                    self.assertIsNone(soup.select_one('[name="profile_id"]'))
+                    self.assertIsNone(soup.select_one("[data-check-profiles]"))
+                    self.assertEqual(
+                        {node["value"] for node in soup.select('[name="checks"]')},
+                        expected[task_type],
+                    )
+            with self.app.app_context():
+                ids = [int(value) for value in expected[task_type]]
+                snapshots = _enabled_check_item_snapshots(get_db(), ids, task_type)
+                self.assertEqual(
+                    {str(item["id"]) for item in snapshots}, expected[task_type]
+                )
+                self.assertTrue(all("profile" not in item for item in snapshots))
+                self.assertEqual(
+                    _enabled_check_item_snapshots(get_db(), ids, task_type, "software"),
+                    [],
+                )
+
+    def test_pages_reject_check_operations_outside_their_task_scope(self):
+        with self.app.app_context():
+            image = dict(
+                get_db()
+                .execute(
+                    "SELECT * FROM check_items WHERE task_type = ? AND profile_id = 'default' LIMIT 1",
+                    (IMAGE_TASK_TYPE,),
+                )
+                .fetchone()
+            )
+        document = self.check("default")
+        for path, item in (("/admin/rules", image), ("/admin/settings", document)):
+            for action in (
+                "prompt",
+                "delete_check_item",
+                "reorder_check_items",
+                "create_check_item",
+            ):
+                with self.subTest(path=path, action=action):
+                    response = self.client.post(
+                        path,
+                        data={
+                            "action": action,
+                            "profile_id": "default",
+                            "task_type": item["task_type"],
+                            "item_id": item["id"],
+                            "item_ids": [item["id"]],
+                            "name": "越界检查项",
+                            "prompt": "越界提示词",
+                        },
+                    )
+                    self.assertEqual(response.status_code, 400)
+        for action in ("save_profile", "copy_profile"):
+            self.assertEqual(
+                self.client.post(
+                    "/admin/settings", data={"action": action, "name": "越界方案"}
+                ).status_code,
+                400,
+            )
+
+    def test_system_check_edits_do_not_change_document_profile_revision(self):
+        with self.app.app_context():
+            db = get_db()
+            image = dict(
+                db.execute(
+                    "SELECT * FROM check_items WHERE task_type = ? AND profile_id = 'default' LIMIT 1",
+                    (IMAGE_TASK_TYPE,),
+                ).fetchone()
+            )
+            revision = db.execute(
+                "SELECT revision FROM check_profiles WHERE id = 'default'"
+            ).fetchone()[0]
+        response = self.client.post(
+            "/admin/settings",
+            data={
+                "action": "prompt",
+                "item_id": image["id"],
+                "name": image["name"],
+                "prompt": "系统图片提示词",
+                "enabled": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith("/admin/settings"))
+        with self.app.app_context():
+            db = get_db()
+            self.assertEqual(
+                db.execute(
+                    "SELECT prompt FROM check_items WHERE id = ?", (image["id"],)
+                ).fetchone()[0],
+                "系统图片提示词",
+            )
+            self.assertEqual(
+                db.execute(
+                    "SELECT revision FROM check_profiles WHERE id = 'default'"
+                ).fetchone()[0],
+                revision,
+            )
+            db.execute(
+                "UPDATE check_items SET prompt = '单文档提示词' WHERE profile_id = 'default' AND code = 'compliance'"
+            )
+            self.assertEqual(
+                db.execute(
+                    "SELECT revision FROM check_profiles WHERE id = 'default'"
+                ).fetchone()[0],
+                revision + 1,
+            )
+
+    def test_copy_of_default_profile_contains_only_document_checks(self):
+        with self.app.app_context():
+            db = get_db()
+            copied = copy_check_profile("default", "单文档副本")
+            rows = db.execute(
+                "SELECT task_type, code, prompt FROM check_items WHERE profile_id = ? ORDER BY code",
+                (copied,),
+            ).fetchall()
+            original = db.execute(
+                "SELECT task_type, code, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY code",
+                (DOCUMENT_TASK_TYPE,),
+            ).fetchall()
+            self.assertTrue(rows)
+            self.assertEqual(
+                [tuple(row) for row in rows], [tuple(row) for row in original]
+            )
+
+    def test_other_task_reports_do_not_display_document_profile_metadata(self):
+        task_id = self._insert_report_task()
+        with self.app.app_context():
+            db = get_db()
+            db.execute(
+                "UPDATE tasks SET task_type = ? WHERE id = ?",
+                (IMAGE_TASK_TYPE, task_id),
+            )
+            db.commit()
+            task = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            self.assertIsNone(task_check_profile(task))
+            workbook = load_workbook(build_report_workbook(task), read_only=True)
+            self.assertNotIn("检查方案", workbook.sheetnames)
+            workbook.close()
+        response = self.client.get(f"/admin/tasks/{task_id}")
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.data, "html.parser")
+        self.assertNotIn(
+            "检查方案",
+            [node.get_text(strip=True) for node in soup.select(".report-meta-list dt")],
+        )
+
+    def test_suppression_management_is_split_between_documents_and_other_tasks(self):
+        task_ids = [self._insert_report_task(), self._insert_report_task()]
+        with self.app.app_context():
+            db = get_db()
+            db.execute(
+                "UPDATE tasks SET task_type = ? WHERE id = ?",
+                (CONSISTENCY_TASK_TYPE, task_ids[1]),
+            )
+            rule_ids = []
+            for task_id in task_ids:
+                task = db.execute(
+                    "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+                result = _raw_task_results(task)[0]
+                item = _result_report_items(result)[0]
+                rule_ids.append(
+                    _maybe_create_report_suppression_candidate(
+                        db,
+                        task=task,
+                        result_code=result["code"],
+                        result=result,
+                        item_id=item["id"],
+                        acceptance_status="rejected",
+                        rejection_reason="model_error",
+                        rejection_note="已核实",
+                    )
+                )
+            db.commit()
+        for path, own, other in (
+            ("/admin/rules", rule_ids[0], rule_ids[1]),
+            ("/admin/settings", rule_ids[1], rule_ids[0]),
+        ):
+            soup = BeautifulSoup(self.client.get(path).data, "html.parser")
+            self.assertIsNotNone(soup.select_one(f'[name="rule_id"][value="{own}"]'))
+            self.assertIsNone(soup.select_one(f'[name="rule_id"][value="{other}"]'))
+            data = {
+                "action": "report_suppression_rule",
+                "rule_id": other,
+                "operation": "delete",
+            }
+            self.assertEqual(self.client.post(path, data=data).status_code, 400)
+            data["rule_id"] = own
+            response = self.client.post(path, data=data)
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.location.startswith(path))
 
     def test_profile_picker_only_exposes_available_check_metadata(self):
         self._configure_provider()

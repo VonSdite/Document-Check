@@ -2897,13 +2897,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         with self.app.app_context():
             self.assertEqual(get_ip_username("10.0.0.8"), "")
 
-    def test_admin_settings_shows_document_and_consistency_prompt_groups(self):
-        response = self.client.get("/admin/rules")
+    def test_admin_settings_shows_non_document_prompt_groups(self):
+        response = self.client.get("/admin/settings")
 
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         soup = BeautifulSoup(html, "html.parser")
-        self.assertIn("单文档检查提示词", html)
+        self.assertNotIn("单文档检查提示词", html)
         self.assertIn("多文档对照提示词", html)
         self.assertIn("跨语种检查提示词", html)
         self.assertIn("图片检查提示词", html)
@@ -2917,9 +2917,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         panels = tab_list.select("[data-prompt-panel]")
         self.assertEqual(
             [tab.get_text(strip=True) for tab in tabs],
-            ["单文档检查", "多文档对照", "跨语种检查", "图片检查", "视频检查"],
+            ["多文档对照", "跨语种检查", "图片检查", "视频检查"],
         )
-        self.assertEqual(len(panels), 5)
+        self.assertEqual(len(panels), 4)
         for index, (tab, panel) in enumerate(zip(tabs, panels, strict=True)):
             task_type = tab["data-prompt-tab"]
             self.assertEqual(panel["data-prompt-panel"], task_type)
@@ -2931,9 +2931,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
             task_type_input = _required_tag(panel.find("input", {"name": "task_type"}))
             self.assertEqual(task_type_input.get("value"), task_type)
             self.assertIsNotNone(panel.select_one("[data-create-check-item-form]"))
-        document_tip = _required_tag(
-            soup.find("button", {"aria-label": "单文档检查提示词说明"})
-        )
         consistency_tip = _required_tag(
             soup.find("button", {"aria-label": "多文档对照提示词说明"})
         )
@@ -2945,10 +2942,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
         video_tip = _required_tag(
             soup.find("button", {"aria-label": "视频检查提示词说明"})
-        )
-        self.assertEqual(
-            document_tip.get("data-tip"),
-            "内置检查项不可删除；扩展检查项可新增、停用或删除。",
         )
         self.assertEqual(
             consistency_tip.get("data-tip"),
@@ -4091,7 +4084,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_creates_consistency_check_item(self):
         response = self.client.post(
-            "/admin/rules",
+            "/admin/settings",
             data={
                 "action": "create_check_item",
                 "task_type": CONSISTENCY_TASK_TYPE,
@@ -4238,7 +4231,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_creates_image_check_item(self):
         response = self.client.post(
-            "/admin/rules",
+            "/admin/settings",
             data={
                 "action": "create_check_item",
                 "task_type": IMAGE_TASK_TYPE,
@@ -4271,7 +4264,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
     def test_admin_settings_creates_video_check_item(self):
         response = self.client.post(
-            "/admin/rules",
+            "/admin/settings",
             data={
                 "action": "create_check_item",
                 "task_type": VIDEO_TASK_TYPE,

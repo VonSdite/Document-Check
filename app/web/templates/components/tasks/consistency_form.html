@@ -60,8 +60,6 @@
       <button class="primary-button" type="submit">提交检查</button>
     </div>
   </div>
-
-  {% include "_task_profile_picker.html" %}
   {% with check_label="多文档对照项", check_help="可多选；系统会按检查项逐项调用模型比对素材文档和资料。", check_first_only=true %}
     {% include "_task_check_picker.html" %}
   {% endwith %}

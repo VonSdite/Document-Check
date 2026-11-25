@@ -17,7 +17,7 @@ ASSIGNABLE_PERMISSIONS = {
     },
     "rules.manage": {
         "label": "管理公共规则",
-        "description": "维护公共检查项、提示词和全局误报忽略规则。",
+        "description": "维护单文档检查方案、检查项、提示词和方案内误报忽略规则。",
     },
     "reports.final_review": {
         "label": "报告终审",
