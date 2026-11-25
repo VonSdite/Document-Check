@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from flask import current_app
+
 from app.checks.catalog import get_enabled_check_items
 from app.contracts.task_types import (
     CONSISTENCY_MAX_DATA_FILES,
@@ -17,10 +19,11 @@ from app.contracts.task_types import (
     VIDEO_TASK_TYPE,
     document_groups_from_meta,
 )
-from app.documents.extraction import allowed_file, extension_of
+from app.documents.extraction import DocumentReadError, allowed_file, extension_of
 from app.documents.skill_packages import skill_metadata
 from app.documents.videos import allowed_video_file, video_extension_of
 from app.identity.models import UserIdentity
+from app.models.document_input import compact_model_document_text, validate_model_input
 from app.models.service import _find_enabled_model
 from app.persistence.check_item_pool import LOCAL_CHECK_CODES
 from app.persistence.check_profiles import check_profile_snapshot
@@ -32,6 +35,10 @@ from app.tasks.files import (
     _remove_uploaded_files,
     _save_uploaded_file,
     _upload_destination,
+)
+from app.tasks.runtime.preprocessing import (
+    _build_consistency_task_inputs,
+    _build_document_task_inputs,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +72,57 @@ class SubmissionResult:
 
 
 SUBMISSION_TOKEN_RE = re.compile(r"[0-9a-f]{32}")
+
+
+class DocumentPreflightError(ValueError):
+    """上传文档的文本提取或模型输入长度预检失败。"""
+
+
+def _preflight_document_inputs(
+    task, model: dict, checks: list[dict]
+) -> tuple[str, dict]:
+    label = task["original_filename"]
+    try:
+        if task["task_type"] == DOCUMENT_TASK_TYPE:
+            document_text, document_meta = _build_document_task_inputs(
+                current_app, task
+            )
+        else:
+            document_text, document_meta = _build_consistency_task_inputs(
+                current_app, task, task["task_type"]
+            )
+    except (DocumentReadError, RuntimeError) as exc:
+        raise DocumentPreflightError(
+            f"“{label}”预检失败：{_compact_user_error(exc)}"
+        ) from exc
+
+    ai_checks = [
+        check
+        for check in checks
+        if check.get("executor_code", check["code"]) not in LOCAL_CHECK_CODES
+    ]
+    if ai_checks:
+        model_text = compact_model_document_text(document_text)
+        try:
+            validate_model_input(model_text, model["max_input_chars"])
+            for check in ai_checks:
+                if check.get("check_method") != "skill":
+                    continue
+                input_chars = len(check["prompt"]) + len(model_text)
+                if input_chars > model["max_input_chars"]:
+                    raise RuntimeError(
+                        f"检查项“{check['name']}”的 Skill 指令、参考资料与文档合计 "
+                        f"{input_chars} 字，超过当前模型文本上限 {model['max_input_chars']} 字"
+                    )
+        except RuntimeError as exc:
+            raise DocumentPreflightError(
+                f"“{label}”预检失败：{exc}。请拆分文档或选择文本上限更高的模型。"
+            ) from exc
+    document_meta["preprocessing"] = {
+        "status": "completed",
+        "completed_at": now_text(),
+    }
+    return document_text, document_meta
 
 
 def _row_value(row, key: str, default=None):
@@ -259,6 +317,10 @@ def submit_document_task(
             )
             for upload in uploads
         ]
+    except DocumentPreflightError as exc:
+        _remove_uploaded_files(saved_paths)
+        messages.append((str(exc), "error"))
+        return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
     except Exception as exc:
         _remove_uploaded_files(saved_paths)
         logger.exception("准备单文档检查任务失败")
@@ -310,6 +372,17 @@ def _prepare_document_task_row(
     )
     file_size = _save_uploaded_file(upload, destination)
     saved_paths.append(destination)
+    document_text, document_meta = _preflight_document_inputs(
+        {
+            "task_type": DOCUMENT_TASK_TYPE,
+            "original_filename": original_filename,
+            "stored_filename": stored_filename,
+            "file_type": file_type,
+            "document_meta_json": json.dumps({"check_rounds": check_rounds}),
+        },
+        model,
+        check_snapshots,
+    )
     owner_name = identity.display_name or None
     return (
         DOCUMENT_TASK_TYPE,
@@ -322,11 +395,8 @@ def _prepare_document_task_row(
         stored_filename,
         file_type,
         file_size,
-        None,
-        json.dumps(
-            {"preprocessing": {"status": "pending"}, "check_rounds": check_rounds},
-            ensure_ascii=False,
-        ),
+        document_text,
+        json.dumps(document_meta, ensure_ascii=False),
         json.dumps(check_ids, ensure_ascii=False),
         _check_snapshot_json(check_snapshots),
         check_profile_snapshot(check_snapshots)["id"],
@@ -699,6 +769,15 @@ def submit_consistency_task(
     owner_name = identity.display_name or None
 
     try:
+        document_text, document_meta = _preflight_document_inputs(
+            {
+                "task_type": CONSISTENCY_TASK_TYPE,
+                "original_filename": original_filename,
+                "document_meta_json": json.dumps(document_meta, ensure_ascii=False),
+            },
+            model,
+            check_snapshots,
+        )
         db.execute(
             """
             INSERT INTO tasks(
@@ -722,7 +801,7 @@ def submit_consistency_task(
                 first_file["stored_filename"],
                 "多文档",
                 file_size,
-                None,
+                document_text,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 _check_snapshot_json(check_snapshots),
@@ -742,6 +821,10 @@ def submit_consistency_task(
             ),
         )
         db.commit()
+    except DocumentPreflightError as exc:
+        _remove_uploaded_files(saved_paths)
+        messages.append((str(exc), "error"))
+        return SubmissionResult(CONSISTENCY_TASK_TYPE, messages)
     except Exception:
         db.rollback()
         _remove_uploaded_files(saved_paths)
@@ -822,6 +905,15 @@ def submit_language_consistency_task(
     owner_name = identity.display_name or None
 
     try:
+        document_text, document_meta = _preflight_document_inputs(
+            {
+                "task_type": LANGUAGE_CONSISTENCY_TASK_TYPE,
+                "original_filename": original_filename,
+                "document_meta_json": json.dumps(document_meta, ensure_ascii=False),
+            },
+            model,
+            check_snapshots,
+        )
         db.execute(
             """
             INSERT INTO tasks(
@@ -846,7 +938,7 @@ def submit_language_consistency_task(
                 file_a["stored_filename"],
                 "双文档",
                 file_size,
-                None,
+                document_text,
                 json.dumps(document_meta, ensure_ascii=False),
                 json.dumps(check_ids, ensure_ascii=False),
                 _check_snapshot_json(check_snapshots),
@@ -866,6 +958,10 @@ def submit_language_consistency_task(
             ),
         )
         db.commit()
+    except DocumentPreflightError as exc:
+        _remove_uploaded_files(saved_paths)
+        messages.append((str(exc), "error"))
+        return SubmissionResult(LANGUAGE_CONSISTENCY_TASK_TYPE, messages)
     except sqlite3.IntegrityError:
         db.rollback()
         duplicate = _language_consistency_submission_exists(

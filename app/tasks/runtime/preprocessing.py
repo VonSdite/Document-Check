@@ -85,26 +85,9 @@ def _prepare_task_inputs(
     document_text = str(_task_value(task, "document_text") or "")
     document_meta_raw = _task_value(task, "document_meta_json")
     if not document_text:
-        upload_path = _task_upload_path(app, task)
-        extracted_text, hyperlinks = extract_document(
-            upload_path,
-            task["file_type"],
-            cancel_event=cancel_event,
+        document_text, document_meta = _build_document_task_inputs(
+            app, task, cancel_event=cancel_event
         )
-        extracted_text = extracted_text.strip()
-        if not extracted_text:
-            raise RuntimeError("未能从文档中提取到可检查文本")
-        document_text = format_document_text(task["original_filename"], extracted_text)
-        document_meta = _document_meta(document_meta_raw)
-        if task["file_type"] == "pdf":
-            plain_document_text = strip_script_markers(document_text)
-            if plain_document_text != document_text:
-                document_meta["text_semantics"] = {
-                    "script_marker_format": "caret_brace_v1"
-                }
-        document_meta["hyperlinks"] = [
-            {**item, "source": task["original_filename"]} for item in hyperlinks
-        ]
         document_text, document_meta_raw = _persist_preprocessed_inputs(
             db,
             task,
@@ -113,6 +96,25 @@ def _prepare_task_inputs(
             claim_token,
         )
     return document_text, document_meta_raw
+
+
+def _build_document_task_inputs(app, task, *, cancel_event=None) -> tuple[str, dict]:
+    """为上传预检和任务执行构造完整正文及文档元数据。"""
+    extracted_text, hyperlinks = extract_document(
+        _task_upload_path(app, task), task["file_type"], cancel_event=cancel_event
+    )
+    extracted_text = extracted_text.strip()
+    if not extracted_text:
+        raise RuntimeError("未能从文档中提取到可检查文本")
+    document_text = format_document_text(task["original_filename"], extracted_text)
+    document_meta = _document_meta(_task_value(task, "document_meta_json"))
+    if task["file_type"] == "pdf":
+        if strip_script_markers(document_text) != document_text:
+            document_meta["text_semantics"] = {"script_marker_format": "caret_brace_v1"}
+    document_meta["hyperlinks"] = [
+        {**item, "source": task["original_filename"]} for item in hyperlinks
+    ]
+    return document_text, document_meta
 
 
 def _prepare_image_task_inputs(

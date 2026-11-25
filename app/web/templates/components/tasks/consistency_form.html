@@ -1,5 +1,6 @@
 <div data-component="task-composer">
-<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-check-required-message="请至少选择一个多文档对照项。">
+<form method="post" enctype="multipart/form-data" class="panel create-panel" autocomplete="off" data-require-checks="true" data-check-required-message="请至少选择一个多文档对照项。"
+  data-prevent-double-submit="true" data-submitting-label="提交中..." data-submitting-message="正在上传并预检合并文本长度，请勿重复提交。">
   <div class="panel-head compact-head">
     <h2>新建任务</h2>
   </div>
@@ -58,6 +59,7 @@
 
     <div class="submit-slot">
       <button class="primary-button" type="submit">提交检查</button>
+      <span class="submit-progress" data-submit-progress hidden>正在上传并预检合并文本长度，请勿重复提交。</span>
     </div>
   </div>
   {% with check_label="多文档对照项", check_help="可多选；系统会按检查项逐项调用模型比对素材文档和资料。", check_first_only=true %}

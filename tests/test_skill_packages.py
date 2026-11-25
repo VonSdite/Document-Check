@@ -5,6 +5,7 @@ import stat
 import struct
 import unittest
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 from bs4 import BeautifulSoup
@@ -301,6 +302,39 @@ class SkillCheckRouteTest(unittest.TestCase):
         self.assertEqual(saved["prompt"], original["prompt"])
         self.assertEqual(saved["check_method"], "prompt")
         self.assertEqual(saved["skill_package_json"], "{}")
+
+    def test_upload_preflight_counts_skill_instructions_and_reference_text(self):
+        item_id = self.create()
+        item = self.item(item_id)
+        model_id = self._configure_provider()
+        text = "接口说明"
+        input_chars = len(item["prompt"]) + len("file: doc.txt\n\n" + text)
+        with self.app.app_context():
+            save_profile_check_items("default", [item_id])
+            get_db().execute(
+                "UPDATE user_model_providers SET max_input_chars = ?",
+                (input_chars - 1,),
+            )
+            get_db().commit()
+        response = self.client.post(
+            "/",
+            data={
+                "model_id": model_id,
+                "checks": [str(item_id)],
+                "document": (io.BytesIO(text.encode()), "doc.txt"),
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            f"Skill 指令、参考资料与文档合计 {input_chars} 字",
+            response.get_data(as_text=True),
+        )
+        with self.app.app_context():
+            self.assertEqual(
+                get_db().execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0
+            )
+        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_tasks_execute_frozen_skill_after_replacement_and_deletion(self):
         item_id = self.create()
