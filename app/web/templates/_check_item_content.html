@@ -1,0 +1,36 @@
+{% set method = check_item.check_method if check_item else 'prompt' %}
+{% set package = check_item.skill_package if check_item else {} %}
+{% set local_rule = check_item and (check_item.template_code or check_item.code) in ['sensitive-terms', 'common-terms', 'hyperlink-validity'] %}
+{% if rules_only and not local_rule %}
+<label>检查方式
+  <select name="check_method" data-check-method>
+    <option value="prompt" {{ 'selected' if method == 'prompt' else '' }}>提示词</option>
+    <option value="skill" {{ 'selected' if method == 'skill' else '' }}>Skill 包</option>
+  </select>
+</label>
+{% endif %}
+<div data-prompt-editor {% if method == 'skill' %}hidden{% endif %}>
+  <label>提示词<textarea name="prompt" rows="{{ editor_rows }}" placeholder="{{ prompt_placeholder }}" {% if method == 'skill' %}disabled{% else %}required{% endif %}>{{ check_item.prompt if check_item and method == 'prompt' else '' }}</textarea></label>
+</div>
+{% if rules_only and not local_rule %}
+<div class="skill-package-editor" data-skill-editor {% if method != 'skill' %}hidden{% endif %}>
+  <label>{{ '更新 Skill 文件包' if package else '上传 Skill 文件包' }}
+    <input type="file" name="skill_package" accept=".zip,.skill" data-skill-file data-has-skill="{{ '1' if package else '0' }}" {% if method != 'skill' %}disabled{% elif not package %}required{% endif %}>
+  </label>
+  <p class="subline">支持 ZIP 格式的 .zip / .skill 包，最大 10 MB。包含一份 SKILL.md，可附 Markdown、TXT、JSON、YAML、CSV、PDF、Word、Excel 或 HTML 参考资料；资料中的文字将一并用于模型检查。</p>
+  {% if package %}
+  <div class="skill-package-summary">
+    <strong>{{ package.filename }}</strong>
+    <span>版本 {{ package.sha256[:12] }} · {{ package.files|length }} 个文件 · {{ package.chars }} 字</span>
+    <a href="{{ url_for(request.endpoint, tab='items', profile_id=selected_profile.id, download_skill=check_item.id) }}">下载当前 Skill 包</a>
+  </div>
+  <details><summary>文件清单与检查内容</summary>
+    <ul class="skill-package-files">{% for file in package.files %}<li>{{ file.path }} <span class="subline">{{ file.chars }} 字</span></li>{% endfor %}</ul>
+    <label>模型使用的检查内容<textarea rows="12" readonly data-skill-preview>{{ check_item.prompt }}</textarea></label>
+  </details>
+  <p class="subline">保留当前包时直接保存即可。更新文件包后，新任务使用新版本，已有任务继续使用提交时的内容。</p>
+  {% else %}
+  <p class="subline">检查项名称留空时读取 SKILL.md 中的 name。SKILL.md 可位于根目录或一个顶层文件夹内，参考资料与其放在同一目录树中。</p>
+  {% endif %}
+</div>
+{% endif %}

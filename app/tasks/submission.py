@@ -18,6 +18,7 @@ from app.contracts.task_types import (
     document_groups_from_meta,
 )
 from app.documents.extraction import allowed_file, extension_of
+from app.documents.skill_packages import skill_metadata
 from app.documents.videos import allowed_video_file, video_extension_of
 from app.identity.models import UserIdentity
 from app.models.service import _find_enabled_model
@@ -134,7 +135,8 @@ def _enabled_check_item_snapshots(
         ]
     rows = db.execute(
         f"""
-        SELECT c.id, c.code, c.template_code, c.name, c.prompt, p.id AS profile_id, p.name AS profile_name, p.revision
+        SELECT c.id, c.code, c.template_code, c.name, c.prompt, c.check_method, c.skill_package_json,
+            p.id AS profile_id, p.name AS profile_name, p.revision
         FROM check_items c JOIN check_profile_items m ON m.check_item_id = c.id
         JOIN check_profiles p ON p.id = m.profile_id
         WHERE c.id IN ({placeholders}) AND c.task_type = ? AND p.id = ? AND c.enabled = 1 AND p.enabled = 1 AND c.pool_item_id = c.id
@@ -154,6 +156,14 @@ def _enabled_check_item_snapshots(
             "code": row["code"],
             "name": row["name"],
             "prompt": row["prompt"],
+            **(
+                {
+                    "check_method": "skill",
+                    "skill_package": skill_metadata(row["skill_package_json"]),
+                }
+                if row["check_method"] == "skill"
+                else {}
+            ),
             **(
                 {"executor_code": row["template_code"]}
                 if row["template_code"] in LOCAL_CHECK_CODES

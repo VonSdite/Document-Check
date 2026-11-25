@@ -2,6 +2,29 @@
   margin-bottom: 26px;
 }
 
+.skill-package-editor,
+.skill-package-summary {
+  display: grid;
+  gap: var(--space-3);
+}
+.skill-package-editor[hidden] {
+  display: none;
+}
+.skill-package-editor input[type='file'],
+.skill-package-files li,
+.skill-package-summary {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.skill-package-editor summary {
+  cursor: pointer;
+}
+.skill-package-summary {
+  padding: var(--space-4);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+
 .rules-view-tabs {
   display: flex;
   gap: var(--space-4);
@@ -534,7 +557,35 @@
 .check-item-detail-panel {
   display: grid;
   gap: 12px;
-  padding: 16px 12px 16px 0;
+  padding: 16px 12px 16px 58px;
+}
+
+@media (max-width: 700px) {
+  .check-item-table {
+    min-width: 0;
+  }
+
+  .check-item-table th:nth-child(1) {
+    width: 36px;
+  }
+
+  .check-item-row-main {
+    gap: 4px;
+  }
+
+  .check-item-kind {
+    margin-left: 4px;
+  }
+
+  .check-item-row-actions {
+    gap: 4px;
+    padding-right: 6px;
+  }
+
+  .check-item-detail-panel {
+    padding: var(--space-4);
+    min-width: 0;
+  }
 }
 
 .form-panel,

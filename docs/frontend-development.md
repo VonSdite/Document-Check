@@ -77,3 +77,5 @@ uv run python -m unittest tests.test_routes tests.test_user_domains tests.test_p
 单文档原生表单通过 `_task_profile_picker.html` 提供方案选择及 JSON 目录，目录包含配置的可用检查项名称和说明。`TaskComposer` 切换方案后全选配置项，`UiCheckPicker` 以只读复选框展示并通过隐藏字段完整提交。原生表单挂载时仅从复选框读取检查项，检查项隐藏字段由组件维护，避免重复值。切换方案保留文件和模型，浏览器记住最近选择。其他检查页面使用可编辑的系统检查项选择器。后端校验方案启用状态、检查方式和提交集合与方案配置一致。
 
 `frontend/tests/e2e/check-profiles.spec.ts` 覆盖方案组合保存、搜索、切换、只读提交、文件保留、快照展示和池中提示词编辑，以及其他检查页面和系统设置页签。检查方案和检查项池验证桌面及移动端布局，移动端同时验证深色主题。
+
+`_check_item_content.html` 提供提示词与 Skill 包编辑区域。检查方式切换同步输入框的可见性、启用状态和必填校验，Skill 检查内容通过只读预览展示。创建和编辑使用 multipart 表单；新增片段插入后初始化相同的字段规则，新增表单重置后恢复提示词方式。`frontend/tests/e2e/skill-packages.spec.ts` 验证上传、预览、下载、替换包版本、方案勾选和提交，并检查移动端布局。

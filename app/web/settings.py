@@ -11,6 +11,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     url_for,
 )
 
@@ -35,9 +36,16 @@ from app.contracts.task_types import (
     task_type_label,
 )
 from app.documents.images import DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES
+from app.documents.skill_packages import (
+    load_skill_package,
+    skill_archive_path,
+    skill_metadata,
+    store_skill_package,
+)
 from app.infrastructure.config import save_network_config
 from app.infrastructure.network import suppress_insecure_request_warning
 from app.persistence.check_item_pool import (
+    LOCAL_CHECK_CODES,
     document_check_pool,
     profile_check_ids,
     save_profile_check_items,
@@ -185,6 +193,28 @@ def register_settings_routes(app):
         ).fetchone()
         if rules_only and profile is None:
             abort(400, description="检查方案不存在，请重新选择。")
+        if request.method == "GET" and rules_only and "download_skill" in request.args:
+            item = db.execute(
+                "SELECT * FROM check_items WHERE id = ? AND task_type = ? AND pool_item_id = id AND check_method = 'skill'",
+                (request.args.get("download_skill", type=int), DOCUMENT_TASK_TYPE),
+            ).fetchone()
+            if item is None:
+                abort(404)
+            package = skill_metadata(item["skill_package_json"])
+            try:
+                archive_path = skill_archive_path(package.get("sha256"))
+            except ValueError:
+                abort(404)
+            if not archive_path.is_file():
+                abort(
+                    404,
+                    description="Skill 原始文件包不可用，已保存的检查内容仍可执行。",
+                )
+            return send_file(
+                archive_path,
+                as_attachment=True,
+                download_name=package.get("filename") or "skill.zip",
+            )
         if request.method == "POST" and request.form.get("action") in rule_actions:
             action = request.form.get("action")
             if not rules_only and (
@@ -416,23 +446,21 @@ def register_settings_routes(app):
 
             if action == "create_check_item":
                 task_type = _check_item_task_type(request.form.get("task_type"))
-                name = request.form.get("name", "").strip()
-                description = request.form.get("description", "").strip()
-                prompt = request.form.get("prompt", "").strip()
                 enabled = 1 if request.form.get("enabled") == "on" else 0
-                if not name or not prompt:
+                try:
+                    name, description, prompt, check_method, package_json = (
+                        _check_item_definition(task_type)
+                    )
+                except ValueError as exc:
                     if _wants_json_response():
-                        return {
-                            "ok": False,
-                            "error": "检查项名称和提示词不能为空。",
-                        }, 400
-                    flash("检查项名称和提示词不能为空。", "error")
+                        return {"ok": False, "error": str(exc)}, 400
+                    flash(str(exc), "error")
                     return redirect(_settings_url())
                 now = now_text()
                 cursor = db.execute(
                     """
-                    INSERT INTO check_items(profile_id, task_type, code, name, description, prompt, enabled, sort_order, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO check_items(profile_id, task_type, code, name, description, prompt, check_method, skill_package_json, enabled, sort_order, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         "default" if rules_only else profile_id,
@@ -441,6 +469,8 @@ def register_settings_routes(app):
                         name,
                         description,
                         prompt,
+                        check_method,
+                        package_json,
                         enabled,
                         _next_check_item_sort_order(db, task_type, profile_id),
                         now,
@@ -458,7 +488,7 @@ def register_settings_routes(app):
                         "item_id": int(cursor.lastrowid),
                         "html": render_template(
                             "_check_item_rows.html",
-                            item=item,
+                            item=_check_item_view(item),
                             is_builtin=False,
                             rules_only=rules_only,
                             selected_profile=dict(profile) if profile else {},
@@ -542,25 +572,27 @@ def register_settings_routes(app):
                 return redirect(_settings_url())
 
             item_id = request.form.get("item_id")
-            name = request.form.get("name", "").strip()
-            description = request.form.get("description", "").strip()
-            prompt = request.form.get("prompt", "").strip()
             enabled = 1 if request.form.get("enabled") == "on" else 0
-            if not item_id or not item_id.isdigit() or not name or not prompt:
+            if not item_id or not item_id.isdigit():
                 flash("检查项名称和提示词不能为空。", "error")
                 return redirect(_settings_url())
-            if (
-                db.execute(
-                    "SELECT 1 FROM check_items WHERE id = ?", (item_id,)
-                ).fetchone()
-                is None
-            ):
+            current = db.execute(
+                "SELECT * FROM check_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if current is None:
                 flash("检查项不存在，无法保存。", "error")
+                return redirect(_settings_url())
+            try:
+                name, description, prompt, check_method, package_json = (
+                    _check_item_definition(current["task_type"], current)
+                )
+            except ValueError as exc:
+                flash(str(exc), "error")
                 return redirect(_settings_url())
             db.execute(
                 """
                 UPDATE check_items
-                SET name = ?, description = ?, prompt = ?, enabled = ?,
+                SET name = ?, description = ?, prompt = ?, check_method = ?, skill_package_json = ?, enabled = ?,
                     default_selected = CASE WHEN task_type = 'document_check' THEN default_selected ELSE ? END, updated_at = ?
                 WHERE id = ?
                 """,
@@ -568,6 +600,8 @@ def register_settings_routes(app):
                     name,
                     description,
                     prompt,
+                    check_method,
+                    package_json,
                     enabled,
                     1 if request.form.get("default_selected", "on") == "on" else 0,
                     now_text(),
@@ -575,14 +609,14 @@ def register_settings_routes(app):
                 ),
             )
             db.commit()
-            flash("检查项提示词已保存。", "success")
+            flash("检查项已保存。", "success")
             return redirect(_settings_url())
 
         check_item_groups = [
             {
                 "task_type": DOCUMENT_TASK_TYPE,
                 "tab_title": "单文档检查",
-                "title": "单文档检查提示词",
+                "title": "单文档检查项",
                 "description": "内置检查项不可删除；扩展检查项可新增、停用或删除。",
                 "new_title": "新增单文档检查项",
                 "name_placeholder": "例如：术语一致性检查",
@@ -640,7 +674,12 @@ def register_settings_routes(app):
         check_item_groups = [
             {
                 **group,
-                "items": _check_items_for_task_type(db, group["task_type"], profile_id),
+                "items": [
+                    _check_item_view(item)
+                    for item in _check_items_for_task_type(
+                        db, group["task_type"], profile_id
+                    )
+                ],
             }
             for group in check_item_groups
             if group["task_type"] in allowed_task_types
@@ -879,6 +918,56 @@ def _settings_endpoint():
 
 def _rules_endpoint():
     return "admin_rules" if request.endpoint.startswith("admin_") else "user_rules"
+
+
+def _check_item_view(item):
+    return {**dict(item), "skill_package": skill_metadata(item["skill_package_json"])}
+
+
+def _check_item_definition(task_type, current=None):
+    current = dict(current) if current is not None else {}
+    method = request.form.get("check_method", current.get("check_method", "prompt"))
+    if method not in {"prompt", "skill"}:
+        raise ValueError("请选择提示词或 Skill 包检查方式。")
+    if method == "skill" and (
+        task_type != DOCUMENT_TASK_TYPE
+        or (current.get("template_code") or current.get("code")) in LOCAL_CHECK_CODES
+    ):
+        raise ValueError(
+            "Skill 包适用于单文档的模型检查项，本地规则检查保持当前执行方式。"
+        )
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    upload = request.files.get("skill_package")
+    package = None
+    if method == "skill":
+        if upload and upload.filename:
+            package = load_skill_package(upload)
+            prompt = package.prompt
+            package_json = json.dumps(package.metadata, ensure_ascii=False)
+            name = name or package.metadata["name"]
+            if not current:
+                description = description or package.metadata["description"]
+        elif current.get("check_method") == "skill":
+            prompt = current["prompt"]
+            package_json = current["skill_package_json"]
+        else:
+            raise ValueError("请选择包含 SKILL.md 和参考资料的 Skill 文件包。")
+        if not name:
+            raise ValueError("请输入检查项名称，或在 SKILL.md 中填写 name。")
+    else:
+        if upload and upload.filename:
+            raise ValueError("上传 Skill 文件包时，请选择 Skill 包检查方式。")
+        prompt = request.form.get("prompt", "").strip()
+        package_json = "{}"
+        if not name or not prompt:
+            raise ValueError("检查项名称和提示词不能为空。")
+    if package is not None:
+        try:
+            store_skill_package(package)
+        except OSError as exc:
+            raise ValueError("Skill 文件包保存失败，请检查本地存储。") from exc
+    return name, description, prompt, method, package_json
 
 
 def _settings_url():

@@ -2,7 +2,7 @@
   <div class="settings-section-head prompt-settings-head">
     <div>
       <h2>{{ "检查项池" if rules_only else "提示词设置" }}</h2>
-      <p>{% if rules_only %}统一维护单文档检查项的名称、说明和提示词。修改会用于所有引用该检查项的方案的新任务；已创建任务使用提交时的快照。{% else %}维护多文档对照、跨语种、图片和视频的检查项与提示词。{% endif %}</p>
+      <p>{% if rules_only %}统一维护单文档检查项，支持提示词和 Skill 文件包。修改会用于所有引用该检查项的方案的新任务；已创建任务使用提交时的快照。{% else %}维护多文档对照、跨语种、图片和视频的检查项与提示词。{% endif %}</p>
     </div>
   </div>
   {% if check_item_groups|length > 1 %}
@@ -43,7 +43,7 @@
     </div>
   </div>
   {% if rules_only %}<details class="pool-create-item"><summary>新增检查项</summary>{% endif %}
-  <form method="post" class="settings-new-check-form stack-form" data-create-check-item-form>
+  <form method="post" enctype="multipart/form-data" class="settings-new-check-form stack-form" data-create-check-item-form>
     <input type="hidden" name="profile_id" value="{{ selected_profile.id }}">
     {% if rules_only %}<input type="hidden" name="tab" value="items">{% endif %}
     <input type="hidden" name="action" value="create_check_item">
@@ -67,7 +67,7 @@
         <input name="description" placeholder="{{ group.description_placeholder }}">
       </div>
     </div>
-    <label>提示词<textarea name="prompt" rows="6" placeholder="{{ group.prompt_placeholder }}" required></textarea></label>
+    {% with check_item=none, editor_rows=6, prompt_placeholder=group.prompt_placeholder %}{% include "_check_item_content.html" %}{% endwith %}
     <div class="form-actions">
       <button class="primary-button settings-save-button" type="submit">创建检查项</button>
     </div>

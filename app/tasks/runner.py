@@ -666,6 +666,15 @@ def _run_check_items_concurrently(
                     content = format_hyperlink_report(structured_report)
                 else:
                     validate_model_input(model_document_text, task["max_input_chars"])
+                    if item.get("check_method") == "skill":
+                        skill_chars = len(item["prompt"]) + len(model_document_text)
+                        if (
+                            task["max_input_chars"]
+                            and skill_chars > task["max_input_chars"]
+                        ):
+                            raise RuntimeError(
+                                f"Skill 指令、参考资料与文档合计 {skill_chars} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
+                            )
                     network = outbound_network_config()
                     run_check_kwargs = {
                         "api_base": task["api_base"],
@@ -818,6 +827,9 @@ def _run_check_items_concurrently(
                 result["structured_report"] = structured_report
                 if item.get("executor_code"):
                     result["executor_code"] = item["executor_code"]
+            if item.get("check_method") == "skill":
+                result["check_method"] = "skill"
+                result["skill_package"] = item.get("skill_package", {})
             if round_result is not None:
                 result.update(round_result)
                 result["item_acceptances"] = previous.get("item_acceptances", {})

@@ -3,6 +3,26 @@ import { request as fetch } from '@/api/client'
 
 const PROMPT_TAB_SESSION_KEY = 'document-check:admin-prompt-tab'
 
+function syncCheckMethod(form) {
+  const method = form.querySelector('[data-check-method]')
+  if (!method) return
+  const skill = method.value === 'skill'
+  form.querySelector('[data-prompt-editor]').hidden = skill
+  form.querySelector('[data-skill-editor]').hidden = !skill
+  const prompt = form.querySelector('[name=prompt]')
+  prompt.disabled = skill
+  prompt.required = !skill
+  const file = form.querySelector('[data-skill-file]')
+  file.disabled = !skill
+  file.required = skill && file.dataset.hasSkill !== '1'
+  form.querySelector('[name=name]').required = !skill
+}
+
+document.querySelectorAll('[data-check-method]').forEach((select) => syncCheckMethod(select.form))
+document.addEventListener('change', (event) => {
+  if (event.target.matches('[data-check-method]')) syncCheckMethod(event.target.form)
+})
+
 document.querySelectorAll('[data-profile-switch]').forEach((select) => {
   const switchProfile = () => select.form?.requestSubmit()
   select.addEventListener('change', switchProfile)
@@ -152,7 +172,11 @@ async function createCheckItemWithoutReload(form) {
     }
 
     rows.prepend(template.content)
+    createdDetail
+      .querySelectorAll('[data-check-method]')
+      .forEach((select) => syncCheckMethod(select.form))
     form.reset()
+    syncCheckMethod(form)
     const nameInput = form.querySelector('input[name="name"]')
     if (nameInput instanceof HTMLInputElement) {
       nameInput.focus({ preventScroll: true })

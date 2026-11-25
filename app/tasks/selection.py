@@ -90,6 +90,9 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
             continue
         seen_codes.add(code)
         saved = {"code": code, "name": name, "prompt": prompt}
+        if item.get("check_method") == "skill":
+            saved["check_method"] = "skill"
+            saved["skill_package"] = item.get("skill_package", {})
         if item.get("executor_code") in {
             "sensitive-terms",
             "common-terms",

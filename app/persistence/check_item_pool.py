@@ -14,6 +14,8 @@ def initialize_check_item_pool_schema(db):
     for name, definition in (
         ("pool_item_id", "INTEGER"),
         ("template_code", "TEXT NOT NULL DEFAULT ''"),
+        ("check_method", "TEXT NOT NULL DEFAULT 'prompt'"),
+        ("skill_package_json", "TEXT NOT NULL DEFAULT '{}'"),
     ):
         if name not in columns:
             db.execute(f"ALTER TABLE check_items ADD COLUMN {name} {definition}")

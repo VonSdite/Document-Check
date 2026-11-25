@@ -39,7 +39,7 @@
       {% for item in pool_items %}
       <label class="profile-check-choice" data-profile-check-choice data-search-text="{{ item.name }} {{ item.description or '' }}">
         <input type="checkbox" name="profile_checks" value="{{ item.id }}" {{ 'checked' if item.id in selected_pool_ids else '' }}>
-        <span><strong>{{ item.name }}</strong><small>{{ item.description or '按检查项提示词执行' }}</small>{% if not item.enabled %}<small class="profile-check-disabled">已停用，提交时不执行</small>{% endif %}</span>
+        <span><strong>{{ item.name }}</strong>{% if item.check_method == 'skill' %}<small>Skill 包检查</small>{% endif %}<small>{{ item.description or '按检查项配置执行' }}</small>{% if not item.enabled %}<small class="profile-check-disabled">已停用，提交时不执行</small>{% endif %}</span>
       </label>
       {% else %}<p>检查项池为空，请先添加检查项。</p>{% endfor %}
     </div>

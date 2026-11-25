@@ -1,10 +1,12 @@
 """为前端浏览器验证提供隔离的示例工作区。"""
 
 import atexit
+import io
 import sys
+import zipfile
 from pathlib import Path
 
-from flask import g, redirect, request, session
+from flask import Response, g, redirect, request, session
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -51,6 +53,22 @@ def main():
             set_ip_username(ip, name)
     fixture._insert_suppression_rules(24)
     review_task_id = None
+
+    @fixture.app.get("/__frontend__/skill-package")
+    def skill_package_fixture():
+        output = io.BytesIO()
+        version = (
+            "更新后的接口标准"
+            if request.args.get("version") == "2"
+            else "请求字段应与示例一致"
+        )
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "SKILL.md",
+                "---\nname: 接口资料检查\n---\n依据 references/标准.md 检查接口文档。",
+            )
+            archive.writestr("references/标准.md", version)
+        return Response(output.getvalue(), mimetype="application/zip")
 
     @fixture.app.post("/__frontend__/review-fixture")
     def create_review_fixture():
