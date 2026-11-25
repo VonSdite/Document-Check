@@ -646,17 +646,18 @@ def _run_check_items_concurrently(
                 ensure_active()
                 structured_report = None
                 round_result = None
-                if item["code"] == SENSITIVE_TERMS_CHECK_CODE:
+                executor_code = item.get("executor_code", item["code"])
+                if executor_code == SENSITIVE_TERMS_CHECK_CODE:
                     structured_report = _run_sensitive_terms_check(
                         app, local_rule_document_text, issue_output_limit
                     )
                     content = format_sensitive_terms_report(structured_report)
-                elif item["code"] == COMMON_TERMS_CHECK_CODE:
+                elif executor_code == COMMON_TERMS_CHECK_CODE:
                     structured_report = _run_common_terms_check(
                         app, local_rule_document_text, issue_output_limit
                     )
                     content = format_common_terms_report(structured_report)
-                elif item["code"] == HYPERLINK_CHECK_CODE:
+                elif executor_code == HYPERLINK_CHECK_CODE:
                     structured_report = build_hyperlink_report(
                         hyperlinks_from_meta(document_meta or {}),
                         issue_limit=issue_output_limit,
@@ -815,6 +816,8 @@ def _run_check_items_concurrently(
             }
             if structured_report is not None:
                 result["structured_report"] = structured_report
+                if item.get("executor_code"):
+                    result["executor_code"] = item["executor_code"]
             if round_result is not None:
                 result.update(round_result)
                 result["item_acceptances"] = previous.get("item_acceptances", {})

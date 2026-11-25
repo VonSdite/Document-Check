@@ -72,8 +72,8 @@ uv run python -m unittest tests.test_routes tests.test_user_domains tests.test_p
 
 ## 检查方案页面
 
-`admin_rules.html` 展示单文档检查方案、检查项与方案内误报规则，`admin_settings.html` 展示其他四类检查项、误报规则及运行参数。两页复用 `_settings_check_items.html` 和 `_settings_report_suppression.html`，各自只传入本页管理范围的数据。
+`admin_rules.html` 提供“检查方案”和“检查项池”两个页签。方案页通过下拉框切换方案，在可搜索的检查项列表中勾选组合，保存名称、说明和启停状态，并管理当前方案的误报规则。池页集中编辑检查项及提示词。`admin_settings.html` 展示其他四类检查项、误报规则及运行参数；两页复用 `_settings_check_items.html` 和 `_settings_report_suppression.html`，各自只传入本页管理范围的数据。
 
-单文档原生表单通过 `_task_profile_picker.html` 提供方案选择及 JSON 目录；目录只包含可用检查项的名称、说明和默认勾选，不包含提示词。`TaskComposer` 在切换方案时保留文件、模型和每个方案的勾选草稿，记住最近选择。其他检查页面直接显示系统配置的检查项。后端独立校验方案启用状态、检查方式与检查项归属。
+单文档原生表单通过 `_task_profile_picker.html` 提供方案选择及 JSON 目录，目录包含配置的可用检查项名称和说明。`TaskComposer` 切换方案后全选配置项，`UiCheckPicker` 以只读复选框展示并通过隐藏字段完整提交。原生表单挂载时仅从复选框读取检查项，检查项隐藏字段由组件维护，避免重复值。切换方案保留文件和模型，浏览器记住最近选择。其他检查页面使用可编辑的系统检查项选择器。后端校验方案启用状态、检查方式和提交集合与方案配置一致。
 
-`frontend/tests/e2e/check-profiles.spec.ts` 覆盖单文档方案切换、草稿、真实提交、快照展示、软件提示词编辑、默认勾选，以及其他检查页面的方案选择范围和系统设置页签。规则页验证移动端深色布局，系统设置验证移动端布局。
+`frontend/tests/e2e/check-profiles.spec.ts` 覆盖方案组合保存、搜索、切换、只读提交、文件保留、快照展示和池中提示词编辑，以及其他检查页面和系统设置页签。检查方案和检查项池验证桌面及移动端布局，移动端同时验证深色主题。

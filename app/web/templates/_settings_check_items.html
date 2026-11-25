@@ -1,8 +1,8 @@
 <section class="panel settings-section prompt-settings-section" id="prompt-settings" data-prompt-tabs>
   <div class="settings-section-head prompt-settings-head">
     <div>
-      <h2>提示词设置</h2>
-      <p>{% if rules_only %}当前单文档方案：{{ selected_profile.name }}。维护检查项和提示词，保存后用于新建单文档任务。{% else %}维护多文档对照、跨语种、图片和视频的检查项与提示词。{% endif %}</p>
+      <h2>{{ "检查项池" if rules_only else "提示词设置" }}</h2>
+      <p>{% if rules_only %}统一维护单文档检查项的名称、说明和提示词。修改会用于所有引用该检查项的方案的新任务；已创建任务使用提交时的快照。{% else %}维护多文档对照、跨语种、图片和视频的检查项与提示词。{% endif %}</p>
     </div>
   </div>
   {% if check_item_groups|length > 1 %}
@@ -42,8 +42,10 @@
       </h2>
     </div>
   </div>
+  {% if rules_only %}<details class="pool-create-item"><summary>新增检查项</summary>{% endif %}
   <form method="post" class="settings-new-check-form stack-form" data-create-check-item-form>
     <input type="hidden" name="profile_id" value="{{ selected_profile.id }}">
+    {% if rules_only %}<input type="hidden" name="tab" value="items">{% endif %}
     <input type="hidden" name="action" value="create_check_item">
     <input type="hidden" name="task_type" value="{{ group.task_type }}">
     <div class="panel-head compact-head">
@@ -70,6 +72,7 @@
       <button class="primary-button settings-save-button" type="submit">创建检查项</button>
     </div>
   </form>
+  {% if rules_only %}</details>{% endif %}
 
   <div class="table-wrap">
     <table class="check-item-table" data-check-item-table data-check-item-task-type="{{ group.task_type }}" data-check-profile="{{ selected_profile.id }}">
@@ -81,7 +84,7 @@
       </thead>
       <tbody>
         {% for item in group["items"] %}
-        {% set is_builtin = item.code in group["default_check_codes"] %}
+        {% set is_builtin = (item.template_code or item.code) in group["default_check_codes"] %}
         {% include "_check_item_rows.html" %}
         {% endfor %}
       </tbody>

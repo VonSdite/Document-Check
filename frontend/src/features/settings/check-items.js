@@ -3,6 +3,37 @@ import { request as fetch } from '@/api/client'
 
 const PROMPT_TAB_SESSION_KEY = 'document-check:admin-prompt-tab'
 
+document.querySelectorAll('[data-profile-switch]').forEach((select) => {
+  const switchProfile = () => select.form?.requestSubmit()
+  select.addEventListener('change', switchProfile)
+  const initial = Array.from(select.options).find((option) => option.defaultSelected)?.value
+  if (initial && initial !== select.value) switchProfile()
+})
+
+document.querySelectorAll('[data-profile-composition]').forEach((form) => {
+  const choices = Array.from(form.querySelectorAll('[data-profile-check-choice]'))
+  const search = form.querySelector('[data-profile-check-search]')
+  const updateCount = () => {
+    form.querySelector('[data-profile-check-count]').textContent = String(
+      form.querySelectorAll('[name=profile_checks]:checked').length,
+    )
+  }
+  form.addEventListener('change', updateCount)
+  updateCount()
+  const filterChoices = () => {
+    const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+    choices.forEach((choice) => {
+      const text = choice.dataset.searchText.toLocaleLowerCase()
+      choice.hidden = !terms.every((term) => text.includes(term))
+    })
+    form.querySelector('[data-profile-check-empty]').hidden = choices.some(
+      (choice) => !choice.hidden,
+    )
+  }
+  search.addEventListener('input', filterChoices)
+  filterChoices()
+})
+
 function promptTabButtons(container) {
   return Array.from(container.querySelectorAll('[data-prompt-tab]'))
 }

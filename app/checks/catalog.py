@@ -5,6 +5,7 @@ from app.contracts.task_types import (
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
 )
+from app.persistence.check_item_pool import document_check_pool
 from app.persistence.connection import get_db, now_text
 
 
@@ -33,6 +34,8 @@ def _check_item_code_prefix(task_type: str) -> str:
 
 
 def _check_items_for_task_type(db, task_type: str, profile_id: str = "default"):
+    if task_type == DOCUMENT_TASK_TYPE:
+        return document_check_pool(db)
     return db.execute(
         """
         SELECT *
@@ -47,6 +50,18 @@ def _check_items_for_task_type(db, task_type: str, profile_id: str = "default"):
 def get_enabled_check_items(
     task_type: str = DOCUMENT_TASK_TYPE, profile_id: str = "default"
 ):
+    if task_type == DOCUMENT_TASK_TYPE:
+        return (
+            get_db()
+            .execute(
+                """SELECT c.*, 1 AS profile_selected FROM check_items c
+            JOIN check_profile_items m ON m.check_item_id = c.id
+            WHERE m.profile_id = ? AND c.task_type = ? AND c.enabled = 1 AND c.pool_item_id = c.id
+            ORDER BY c.sort_order, c.id""",
+                (profile_id, task_type),
+            )
+            .fetchall()
+        )
     return (
         get_db()
         .execute(
@@ -65,6 +80,9 @@ def get_enabled_check_items(
 def _next_check_item_sort_order(
     db, task_type: str = DOCUMENT_TASK_TYPE, profile_id: str = "default"
 ) -> int:
+    if task_type == DOCUMENT_TASK_TYPE:
+        rows = document_check_pool(db)
+        return min((row["sort_order"] for row in rows), default=20) - 10
     row = db.execute(
         "SELECT MIN(sort_order) AS value FROM check_items WHERE profile_id = ? AND task_type = ?",
         (profile_id, task_type),
@@ -80,15 +98,7 @@ def _reorder_check_items(
     task_type: str = DOCUMENT_TASK_TYPE,
     profile_id: str = "default",
 ) -> list[int]:
-    rows = db.execute(
-        """
-        SELECT id
-        FROM check_items
-        WHERE profile_id = ? AND task_type = ?
-        ORDER BY sort_order ASC, id ASC
-        """,
-        (profile_id, task_type),
-    ).fetchall()
+    rows = _check_items_for_task_type(db, task_type, profile_id)
     existing_ids = [int(row["id"]) for row in rows]
     existing_set = set(existing_ids)
     ordered_ids = []

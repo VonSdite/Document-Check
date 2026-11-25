@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.checks.catalog import get_enabled_check_items
 from app.contracts.task_types import (
     CONSISTENCY_MAX_DATA_FILES,
     CONSISTENCY_MAX_MATERIAL_FILES,
@@ -20,6 +21,7 @@ from app.documents.extraction import allowed_file, extension_of
 from app.documents.videos import allowed_video_file, video_extension_of
 from app.identity.models import UserIdentity
 from app.models.service import _find_enabled_model
+from app.persistence.check_item_pool import LOCAL_CHECK_CODES
 from app.persistence.check_profiles import check_profile_snapshot
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import document_check_round_settings
@@ -132,9 +134,10 @@ def _enabled_check_item_snapshots(
         ]
     rows = db.execute(
         f"""
-        SELECT c.id, c.code, c.name, c.prompt, p.id AS profile_id, p.name AS profile_name, p.revision
-        FROM check_items c JOIN check_profiles p ON p.id = c.profile_id
-        WHERE c.id IN ({placeholders}) AND c.task_type = ? AND c.profile_id = ? AND c.enabled = 1 AND p.enabled = 1
+        SELECT c.id, c.code, c.template_code, c.name, c.prompt, p.id AS profile_id, p.name AS profile_name, p.revision
+        FROM check_items c JOIN check_profile_items m ON m.check_item_id = c.id
+        JOIN check_profiles p ON p.id = m.profile_id
+        WHERE c.id IN ({placeholders}) AND c.task_type = ? AND p.id = ? AND c.enabled = 1 AND p.enabled = 1 AND c.pool_item_id = c.id
         ORDER BY c.sort_order ASC, c.id ASC
         """,
         tuple(unique_ids + [task_type, profile_id]),
@@ -145,11 +148,18 @@ def _enabled_check_item_snapshots(
                 "id": row["profile_id"],
                 "name": row["profile_name"],
                 "revision": row["revision"],
+                "checks_format": 2,
             },
             "id": row["id"],
             "code": row["code"],
             "name": row["name"],
             "prompt": row["prompt"],
+            **(
+                {"executor_code": row["template_code"]}
+                if row["template_code"] in LOCAL_CHECK_CODES
+                and row["code"] != row["template_code"]
+                else {}
+            ),
         }
         for row in rows
     ]
@@ -208,6 +218,13 @@ def submit_document_task(
     check_snapshots = _enabled_check_item_snapshots(
         db, check_ids, DOCUMENT_TASK_TYPE, submission.profile_id
     )
+    configured = {
+        item["id"]
+        for item in get_enabled_check_items(DOCUMENT_TASK_TYPE, submission.profile_id)
+    }
+    if set(check_ids) != configured:
+        messages.append(("方案检查项已调整，请刷新页面后按方案提交。", "error"))
+        return SubmissionResult(DOCUMENT_TASK_TYPE, messages)
     if len(check_snapshots) != len(set(check_ids)):
         messages.append(("请选择当前可用的检查项。", "error"))
         return SubmissionResult(DOCUMENT_TASK_TYPE, messages)

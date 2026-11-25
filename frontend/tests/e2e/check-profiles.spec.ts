@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test'
 
-test('方案切换联动检查项、保留草稿并提交方案快照', async ({ page }) => {
+test('方案切换固定执行配置的检查项、保留文件并提交方案快照', async ({ page }) => {
   await page.goto('/__frontend__/user')
   const form = page.locator('.ui-task-composer')
   await expect(form).toBeVisible()
-  const first = form.locator('input[name=checks]').first()
+  const first = form.locator('input[type=checkbox][name=checks]').first()
   const defaultId = await first.inputValue()
-  await first.uncheck()
+  await expect(first).toBeChecked()
+  await expect(first).toBeDisabled()
   const file = form.locator('input[type=file]')
   await file.setInputFiles({
     name: '软件方案验证.txt',
@@ -17,11 +18,23 @@ test('方案切换联动检查项、保留草稿并提交方案快照', async ({
   await expect(form.locator(`input[name=checks][value="${defaultId}"]`)).toHaveCount(0)
   await expect(form.locator('input[name=checks]:checked')).not.toHaveCount(0)
   await form.locator('select[name=profile_id]').selectOption('default')
-  await expect(form.locator(`input[name=checks][value="${defaultId}"]`)).not.toBeChecked()
+  await expect(
+    form.locator(`input[type=checkbox][name=checks][value="${defaultId}"]`),
+  ).toBeChecked()
   await form.locator('select[name=profile_id]').selectOption('software')
   expect(await file.evaluate((node: HTMLInputElement) => node.files?.[0]?.name)).toBe(
     '软件方案验证.txt',
   )
+  expect(
+    await form
+      .locator('input[type=checkbox][name=checks]')
+      .evaluateAll((nodes: HTMLInputElement[]) =>
+        nodes.every((node) => node.checked && node.disabled),
+      ),
+  ).toBe(true)
+  expect(
+    await form.evaluate((node: HTMLFormElement) => new FormData(node).getAll('checks').length),
+  ).toBe(await form.locator('input[type=checkbox][name=checks]').count())
   await form.getByRole('button', { name: '提交检查', exact: true }).click()
   const row = page.locator('tr[data-task-id]').filter({ hasText: '软件方案验证.txt' }).first()
   await expect(row).toContainText('软件文档方案')
@@ -33,7 +46,7 @@ test('方案切换联动检查项、保留草稿并提交方案快照', async ({
   await expect(page.locator('.ui-task-composer select[name=profile_id]')).toHaveValue('software')
 })
 
-test('独立规则页面管理软件提示词与默认勾选，系统设置管理其他检查方式', async ({ page }) => {
+test('方案从检查项池勾选组合，池中提示词集中维护', async ({ page }) => {
   await page.goto('/__frontend__/admin')
   await page.goto('/admin/settings')
   await expect(page.locator('[name=global_concurrency]')).toBeVisible()
@@ -41,31 +54,61 @@ test('独立规则页面管理软件提示词与默认勾选，系统设置管�
   await expect(page.locator('select[name=profile_id]')).toHaveCount(0)
   await page.goto('/admin/rules?profile_id=software')
   await expect(page.locator('[name=global_concurrency]')).toHaveCount(0)
-  await expect(page.locator('[data-prompt-panel]')).toHaveCount(1)
+  const composition = page.locator('[data-profile-composition]')
+  await expect(composition).toBeVisible()
+  const choice = composition
+    .locator('[data-profile-check-choice]')
+    .filter({ has: page.getByText('文档规范性检查', { exact: true }) })
+  const check = choice.locator('[name=profile_checks]')
+  const itemId = await check.inputValue()
+  const originalChecked = await check.isChecked()
+  await composition.locator('[data-profile-check-search]').fill('文档规范性')
+  await expect(choice).toBeVisible()
+  await check.check()
+  await composition.getByRole('button', { name: '保存方案', exact: true }).click()
+  await expect(check).toBeChecked()
+  await page.screenshot({ path: '../instance/check-pool-desktop.png', fullPage: true })
+  await page.goto('/?profile_id=software')
+  const submitted = page.locator(
+    `.ui-task-composer input[type=checkbox][name=checks][value="${itemId}"]`,
+  )
+  await expect(submitted).toBeChecked()
+  await expect(submitted).toBeDisabled()
+
+  await page.goto('/admin/rules?tab=items&profile_id=software')
   await expect(page.locator('[data-prompt-tab]')).toHaveCount(0)
   const panel = page.locator('[data-prompt-panel=document_check]')
-  await panel.locator('[data-check-item-toggle]').first().click()
-  const editor = panel.locator('[data-check-item-detail]').first()
+  await panel
+    .locator(`[data-check-item-row][data-check-item-id="${itemId}"] [data-check-item-toggle]`)
+    .click()
+  const editor = page.locator(`#check-item-detail-${itemId}`)
   await expect(editor).toBeVisible()
   const prompt = editor.locator('[name=prompt]')
   const original = await prompt.inputValue()
   await prompt.fill(original + '\n软件方案浏览器验证标记。')
-  await editor.locator('input[type=checkbox][name=default_selected]').uncheck()
+  await expect(editor.locator('[name=default_selected]')).toHaveCount(0)
   await editor.getByRole('button', { name: '保存', exact: true }).click()
-  await expect(page).toHaveURL(/profile_id=software/)
-  await panel.locator('[data-check-item-toggle]').first().click()
+  await expect(page).toHaveURL(/tab=items/)
+  await panel
+    .locator(`[data-check-item-row][data-check-item-id="${itemId}"] [data-check-item-toggle]`)
+    .click()
   await expect(prompt).toHaveValue(original + '\n软件方案浏览器验证标记。')
-  await page.goto('/?profile_id=software')
-  await expect(page.locator('.ui-task-composer input[name=checks]').first()).not.toBeChecked()
-  await page.goto('/admin/rules?profile_id=software')
-  await panel.locator('[data-check-item-toggle]').first().click()
   await prompt.fill(original)
-  await editor.locator('input[type=checkbox][name=default_selected]').check()
   await editor.getByRole('button', { name: '保存', exact: true }).click()
+  await page.goto('/admin/rules?profile_id=software')
+  await check.setChecked(originalChecked)
+  await composition.getByRole('button', { name: '保存方案', exact: true }).click()
+  await page.locator('[data-profile-switch]').selectOption('default')
+  await expect(page).toHaveURL(/profile_id=default/)
+  await page.locator('[data-profile-switch]').selectOption('software')
+  await expect(page).toHaveURL(/profile_id=software/)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('button', { name: '切换主题' }).click()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: '../instance/check-profiles-mobile.png', fullPage: true })
+  await page.getByRole('link', { name: '检查项池', exact: true }).click()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: '../instance/check-pool-mobile.png', fullPage: true })
 })
 
 test('其他检查页面使用系统检查项且不展示方案选择', async ({ page }) => {

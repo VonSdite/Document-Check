@@ -78,7 +78,9 @@ export function readTaskComposer(root: HTMLElement): TaskComposerProps {
     modelLabel: model.closest('label')?.firstChild?.textContent?.trim() || '模型',
     rounds: rounds ? options(rounds) : [],
     round: rounds?.value || '',
-    checks: Array.from(form.querySelectorAll<HTMLInputElement>('[name=checks]')).map((input) => ({
+    checks: Array.from(
+      form.querySelectorAll<HTMLInputElement>('input[type=checkbox][name=checks]'),
+    ).map((input) => ({
       value: input.value,
       label: input.nextElementSibling?.textContent?.trim() || '',
       help: input.closest('label')?.querySelector<HTMLElement>('[data-tip]')?.dataset.tip || '',
@@ -88,8 +90,8 @@ export function readTaskComposer(root: HTMLElement): TaskComposerProps {
     ).map((input) => input.value),
     checkLabel: form.querySelector('.check-row-title > span')?.textContent?.trim() || '检查项',
     checkHelp: form.querySelector<HTMLElement>('.check-row-title [data-tip]')?.dataset.tip || '',
-    hidden: Array.from(form.querySelectorAll<HTMLInputElement>('input[type=hidden]')).map(
-      (input) => ({ name: input.name, value: input.value }),
-    ),
+    hidden: Array.from(
+      form.querySelectorAll<HTMLInputElement>('input[type=hidden]:not([name=checks])'),
+    ).map((input) => ({ name: input.name, value: input.value })),
   }
 }

@@ -4,37 +4,59 @@
 {% block content %}
 <div data-page="settings">
 <section class="page-title">
-  <div>
-    <h1>检查规则</h1>
-    <p>维护单文档检查方案、提示词和方案内误报规则。</p>
-  </div>
+  <div><h1>检查规则</h1><p>检查项统一维护，方案按需组合，用于单文档检查。</p></div>
   <a class="secondary-button" href="{{ url_for('static', filename='rule-library-prototype/index.html') }}" target="_blank" rel="noopener">检查规则库原型 ↗</a>
 </section>
-<section class="panel settings-section">
-  <form method="get" class="form-actions">
+<nav class="rules-view-tabs" aria-label="检查规则管理">
+  <a class="{{ 'is-active' if rules_tab == 'profiles' else '' }}" href="{{ url_for(request.endpoint, profile_id=selected_profile.id) }}" {% if rules_tab == 'profiles' %}aria-current="page"{% endif %}>检查方案</a>
+  <a class="{{ 'is-active' if rules_tab == 'items' else '' }}" href="{{ url_for(request.endpoint, tab='items', profile_id=selected_profile.id) }}" {% if rules_tab == 'items' %}aria-current="page"{% endif %}>检查项池</a>
+</nav>
+{% if rules_tab == 'items' %}
+{% include "_settings_check_items.html" %}
+{% else %}
+<section class="panel settings-section profile-composition">
+  <form method="get" class="profile-picker-form">
     <label>检查方案
-      <select name="profile_id">
+      <select name="profile_id" data-profile-switch>
         {% for profile in profiles %}
         <option value="{{ profile.id }}" {{ 'selected' if profile.id == selected_profile.id else '' }}>{{ profile.name }}{{ '（已停用）' if not profile.enabled else '' }}</option>
         {% endfor %}
       </select>
     </label>
-    <button class="secondary-button" type="submit">切换方案</button>
+    <noscript><button class="secondary-button" type="submit">切换方案</button></noscript>
+    <span class="subline">版本 {{ selected_profile.revision }}</span>
   </form>
-  <h2>{{ selected_profile.name }} · 版本 {{ selected_profile.revision }}</h2>
-  <form method="post" class="stack-form">
+  <form method="post" class="stack-form" data-profile-composition>
     <input type="hidden" name="action" value="save_profile">
     <input type="hidden" name="profile_id" value="{{ selected_profile.id }}">
-    <div class="form-grid">
-      <label>方案名称<input name="name" value="{{ selected_profile.name }}" maxlength="60" required></label>
-      <label>方案说明<input name="description" value="{{ selected_profile.description }}" maxlength="500"></label>
+    <input type="hidden" name="save_checks" value="1">
+    <div class="settings-section-head">
+      <div><h2>为方案勾选检查项</h2><p>已选 <strong data-profile-check-count>{{ selected_pool_ids|length }}</strong> 项。提交文档时执行方案中已启用的检查项。</p></div>
+      <a href="{{ url_for(request.endpoint, tab='items', profile_id=selected_profile.id) }}">管理检查项池</a>
     </div>
+    <label>搜索检查项<input type="search" placeholder="按名称或说明搜索" data-profile-check-search></label>
+    <div class="profile-check-grid">
+      {% for item in pool_items %}
+      <label class="profile-check-choice" data-profile-check-choice data-search-text="{{ item.name }} {{ item.description or '' }}">
+        <input type="checkbox" name="profile_checks" value="{{ item.id }}" {{ 'checked' if item.id in selected_pool_ids else '' }}>
+        <span><strong>{{ item.name }}</strong><small>{{ item.description or '按检查项提示词执行' }}</small>{% if not item.enabled %}<small class="profile-check-disabled">已停用，提交时不执行</small>{% endif %}</span>
+      </label>
+      {% else %}<p>检查项池为空，请先添加检查项。</p>{% endfor %}
+    </div>
+    <p class="subline" data-profile-check-empty hidden>未找到匹配的检查项。</p>
+    <details class="profile-metadata">
+      <summary>方案名称与说明</summary>
+      <div class="form-grid">
+        <label>方案名称<input name="name" value="{{ selected_profile.name }}" maxlength="60" required></label>
+        <label>方案说明<input name="description" value="{{ selected_profile.description }}" maxlength="500"></label>
+      </div>
+    </details>
     <div class="form-actions">
       <label class="switch-line"><input type="checkbox" name="enabled" {{ 'checked' if selected_profile.enabled else '' }}>启用方案</label>
       <button class="primary-button" type="submit">保存方案</button>
     </div>
   </form>
-  <details>
+  <details class="profile-metadata">
     <summary>复制为新方案</summary>
     <form method="post" class="form-actions">
       <input type="hidden" name="action" value="copy_profile">
@@ -44,8 +66,7 @@
     </form>
   </details>
 </section>
-{% include "_settings_check_items.html" %}
 {% include "_settings_report_suppression.html" %}
-
+{% endif %}
 </div>
 {% endblock %}

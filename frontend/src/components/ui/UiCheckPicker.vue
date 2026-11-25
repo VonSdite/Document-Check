@@ -4,6 +4,7 @@ defineProps<{
   options: { value: string; label: string; help: string }[]
   label: string
   help?: string
+  readonly?: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string[]] }>()
 function change(values: string[], value: string, checked: boolean) {
@@ -23,11 +24,18 @@ function change(values: string[], value: string, checked: boolean) {
           type="checkbox"
           :value="option.value"
           :checked="modelValue.includes(option.value)"
+          :disabled="readonly"
           autocomplete="off"
           @change="change(modelValue, option.value, ($event.target as HTMLInputElement).checked)"
         />
         <span>{{ option.label }}</span>
         <span class="help-tip check-chip-tip" tabindex="0" :data-tip="option.help">?</span>
+        <input
+          v-if="readonly && modelValue.includes(option.value)"
+          type="hidden"
+          name="checks"
+          :value="option.value"
+        />
       </label>
       <template v-if="!options.length">
         <input

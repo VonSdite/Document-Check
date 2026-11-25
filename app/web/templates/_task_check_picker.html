@@ -6,9 +6,10 @@
   <div class="check-chip-grid">
     {% for item in check_items %}
     <label class="check-chip">
-      <input type="checkbox" name="checks" value="{{ item.id }}"{% if item.default_selected|default(true) and (not check_first_only|default(false) or loop.first) %} checked{% endif %} autocomplete="off">
+      <input type="checkbox" name="checks" value="{{ item.id }}"{% if item.profile_selected|default(item.default_selected|default(true)) and (not check_first_only|default(false) or loop.first) %} checked{% endif %}{% if task_check_profiles is defined %} disabled{% endif %} autocomplete="off">
       <span>{{ item.name }}</span>
       <span class="help-tip check-chip-tip" tabindex="0" data-tip="{{ item.description or item.name }}">?</span>
+      {% if task_check_profiles is defined %}<input type="hidden" name="checks" value="{{ item.id }}">{% endif %}
     </label>
     {% else %}
     <input class="check-validation-input" data-check-validation aria-label="{{ check_label }}" tabindex="-1" required>

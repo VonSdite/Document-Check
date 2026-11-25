@@ -663,11 +663,13 @@ def default_check_item_codes(task_type: str | None = None) -> set[str]:
 def reset_default_check_item_prompt(item_id: int) -> bool:
     db = get_db()
     row = db.execute(
-        "SELECT code, profile_id FROM check_items WHERE id = ?", (item_id,)
+        "SELECT code, template_code, profile_id FROM check_items WHERE id = ?",
+        (item_id,),
     ).fetchone()
     if row is None:
         return False
-    default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get(row["code"])
+    template_code = row["template_code"] or row["code"]
+    default_item = DEFAULT_CHECK_ITEMS_BY_CODE.get(template_code)
     if default_item is None:
         return False
     profile = db.execute(
@@ -678,7 +680,7 @@ def reset_default_check_item_prompt(item_id: int) -> bool:
 
         default_item = {
             **default_item,
-            "prompt": software_prompt(row["code"]) or default_item["prompt"],
+            "prompt": software_prompt(template_code) or default_item["prompt"],
         }
     db.execute(
         "UPDATE check_items SET prompt = ?, updated_at = ? WHERE id = ?",
@@ -767,6 +769,9 @@ def seed_defaults():
     from app.persistence.software_defaults import seed_software_profile
 
     seed_software_profile(db)
+    from app.persistence.check_item_pool import seed_check_item_pool
+
+    seed_check_item_pool(db)
     db.commit()
 
 

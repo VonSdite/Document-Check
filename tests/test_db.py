@@ -1450,7 +1450,7 @@ issue 必须提供两处可以直接对照的证据。
         original_ids = [
             row["id"]
             for row in db.execute(
-                "SELECT id FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT id FROM check_items WHERE pool_item_id = id AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (DOCUMENT_TASK_TYPE,),
             ).fetchall()
         ]
@@ -1462,7 +1462,7 @@ issue 必须提供两处可以直接对照的证据。
         updated_ids = [
             row["id"]
             for row in db.execute(
-                "SELECT id FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY sort_order ASC, id ASC",
+                "SELECT id FROM check_items WHERE pool_item_id = id AND task_type = ? ORDER BY sort_order ASC, id ASC",
                 (DOCUMENT_TASK_TYPE,),
             ).fetchall()
         ]

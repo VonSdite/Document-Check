@@ -4,6 +4,7 @@ import uuid
 
 from app.contracts.check_profiles import DEFAULT_CHECK_PROFILE
 from app.contracts.task_types import DOCUMENT_TASK_TYPE
+from app.persistence.check_item_pool import initialize_check_item_pool_schema
 from app.persistence.connection import get_db, now_text
 
 
@@ -68,13 +69,15 @@ def initialize_check_profiles(db):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_check_items_profile_type ON check_items(profile_id, task_type, enabled, sort_order)"
     )
+    initialize_check_item_pool_schema(db)
     for operation, record in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
         trigger = f"trg_check_profile_{operation.lower()}"
+        timing = "BEFORE" if operation == "DELETE" else "AFTER"
         sql = f"""CREATE TRIGGER {trigger}
-            AFTER {operation} ON check_items
+            {timing} {operation} ON check_items
             WHEN {record}.task_type = '{DOCUMENT_TASK_TYPE}' BEGIN
                 UPDATE check_profiles SET revision = revision + 1, updated_at = {record}.updated_at
-                WHERE id = {record}.profile_id;
+                WHERE id IN (SELECT profile_id FROM check_profile_items WHERE check_item_id = {record}.id);
             END"""
         existing = db.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
@@ -134,10 +137,9 @@ def copy_check_profile(source_id, name):
         (profile_id, name, source["description"], source["template_id"], now, now),
     )
     db.execute(
-        """INSERT INTO check_items(profile_id, task_type, code, name, description, prompt, enabled, default_selected, sort_order, created_at, updated_at)
-        SELECT ?, task_type, code, name, description, prompt, enabled, default_selected, sort_order, ?, ?
-        FROM check_items WHERE profile_id = ? AND task_type = ?""",
-        (profile_id, now, now, source_id, DOCUMENT_TASK_TYPE),
+        """INSERT INTO check_profile_items(profile_id, check_item_id)
+        SELECT ?, check_item_id FROM check_profile_items WHERE profile_id = ?""",
+        (profile_id, source_id),
     )
     return profile_id
 
@@ -150,7 +152,9 @@ def available_check_profiles(task_type):
     items = [
         dict(row)
         for row in db.execute(
-            "SELECT id, profile_id, name, description, default_selected FROM check_items WHERE task_type = ? AND enabled = 1 ORDER BY sort_order, id",
+            """SELECT c.id, m.profile_id, c.name, c.description, 1 AS default_selected
+            FROM check_items c JOIN check_profile_items m ON m.check_item_id = c.id
+            WHERE c.task_type = ? AND c.enabled = 1 AND c.pool_item_id = c.id ORDER BY c.sort_order, c.id""",
             (task_type,),
         )
     ]

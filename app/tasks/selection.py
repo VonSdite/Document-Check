@@ -89,7 +89,14 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
         if not code or not name or not prompt or code in seen_codes:
             continue
         seen_codes.add(code)
-        items.append({"code": code, "name": name, "prompt": prompt})
+        saved = {"code": code, "name": name, "prompt": prompt}
+        if item.get("executor_code") in {
+            "sensitive-terms",
+            "common-terms",
+            "hyperlink-validity",
+        }:
+            saved["executor_code"] = item["executor_code"]
+        items.append(saved)
     return items
 
 

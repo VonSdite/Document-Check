@@ -240,6 +240,11 @@ class ServerIntegrationTest(unittest.TestCase):
             check_id = db.execute(
                 "SELECT id FROM check_items WHERE code = 'sensitive-terms'"
             ).fetchone()[0]
+            db.execute("DELETE FROM check_profile_items WHERE profile_id = 'default'")
+            db.execute(
+                "INSERT INTO check_profile_items(profile_id, check_item_id) VALUES ('default', ?)",
+                (check_id,),
+            )
             provider_id = db.execute(
                 "INSERT INTO user_model_providers(owner_subject, name, api_base, created_at, updated_at) VALUES (?, '本地检查', 'http://127.0.0.1:1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 ("ip:127.0.0.1",),

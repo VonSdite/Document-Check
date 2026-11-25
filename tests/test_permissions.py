@@ -977,7 +977,7 @@ class UserPermissionTest(unittest.TestCase):
                 "/",
                 data={
                     "document": (io.BytesIO("待检查文档".encode("utf-8")), "检查.txt"),
-                    "checks": [str(check_id)],
+                    "checks": self.fixture._configure_document_scheme(check_id),
                     "model_id": model_id,
                 },
             )
@@ -1222,7 +1222,9 @@ class UserPermissionTest(unittest.TestCase):
         page = self.client.get("/rules")
         soup = BeautifulSoup(page.text, "html.parser")
         self.assertEqual(page.status_code, 200)
-        self.assertIsNotNone(soup.select_one("[data-prompt-tabs]"))
+        self.assertIsNotNone(soup.select_one("[data-profile-composition]"))
+        pool = BeautifulSoup(self.client.get("/rules?tab=items").text, "html.parser")
+        self.assertIsNotNone(pool.select_one("[data-prompt-tabs]"))
         self.assertIsNotNone(soup.select_one("[data-report-suppression-rules]"))
         for action in ("concurrency", "network", "diagnostics", "ip_username"):
             self.assertIsNone(
@@ -1350,7 +1352,7 @@ class UserPermissionTest(unittest.TestCase):
                     },
                     data={
                         "document": (io.BytesIO(b"document"), "proxy.txt"),
-                        "checks": [str(check_id)],
+                        "checks": self.fixture._configure_document_scheme(check_id),
                         "model_id": model_id,
                     },
                 )

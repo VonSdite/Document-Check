@@ -3,6 +3,7 @@ from flask import current_app
 from app.contracts.task_types import (
     DOCUMENT_TASK_TYPE,
 )
+from app.persistence.check_item_pool import task_check_code_aliases
 from app.persistence.connection import get_db, now_text
 from app.reporting.constants import (
     REPORT_COUNT_KEYS,
@@ -173,7 +174,7 @@ def _refresh_stat_ids(task_ids: list[int], versions: dict[str, str]) -> None:
     rows = (
         get_db()
         .execute(
-            f"SELECT id, task_type, check_profile_id, updated_at, result_json FROM tasks WHERE id IN ({placeholders})",
+            f"SELECT id, task_type, check_profile_id, check_profile_snapshot_json, updated_at, result_json FROM tasks WHERE id IN ({placeholders})",
             tuple(task_ids),
         )
         .fetchall()
@@ -186,6 +187,7 @@ def _refresh_stat_ids(task_ids: list[int], versions: dict[str, str]) -> None:
         }
     }
     cache_rows = []
+    aliases_by_profile = {}
     for row in rows:
         task_type = str(row["task_type"] or DOCUMENT_TASK_TYPE)
         totals = _report_item_totals(
@@ -195,6 +197,9 @@ def _refresh_stat_ids(task_ids: list[int], versions: dict[str, str]) -> None:
                 task_id=row["id"],
                 suppression_rules=rules_by_type[(task_type, row["check_profile_id"])],
                 profile_id=row["check_profile_id"],
+                check_code_aliases=task_check_code_aliases(
+                    row, cache=aliases_by_profile
+                ),
             )
         )
         cache_rows.append(

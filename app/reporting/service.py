@@ -16,6 +16,7 @@ from app.contracts.task_types import (
     VIDEO_TASK_TYPE,
     document_groups_from_meta,
 )
+from app.persistence.check_item_pool import task_check_code_aliases
 from app.persistence.connection import get_db, now_text
 from app.reporting.constants import (
     MEDIA_REPORT_ITEM_DETAIL_FIELDS,
@@ -192,6 +193,8 @@ def _task_results(task):
         task_type=task["task_type"] or DOCUMENT_TASK_TYPE,
         task_id=task["id"],
         record_suppression_hits=True,
+        profile_id=dict(task).get("check_profile_id") or "default",
+        check_code_aliases=task_check_code_aliases(task),
     )
     attach_review_metadata(task, results)
     return results
@@ -221,16 +224,23 @@ def _prepare_task_results(
     record_suppression_hits: bool = False,
     suppression_rules: dict[str, list[dict]] | None = None,
     profile_id: str | None = None,
+    check_code_aliases: dict[str, str] | None = None,
 ) -> list[dict]:
     prepared = []
     if profile_id is None and task_id is not None:
         profile = (
             get_db()
-            .execute("SELECT check_profile_id FROM tasks WHERE id = ?", (task_id,))
+            .execute(
+                "SELECT task_type, check_profile_id, check_profile_snapshot_json FROM tasks WHERE id = ?",
+                (task_id,),
+            )
             .fetchone()
         )
         profile_id = profile["check_profile_id"] if profile else "default"
+        if check_code_aliases is None and profile:
+            check_code_aliases = task_check_code_aliases(profile)
     profile_id = profile_id or "default"
+    check_code_aliases = check_code_aliases or {}
     if suppression_rules is None:
         suppression_rules = (
             _enabled_report_suppression_rules(task_type, profile_id)
@@ -240,6 +250,7 @@ def _prepare_task_results(
     for result in results:
         item = dict(result)
         result_code = str(item.get("code") or "")
+        executor_code = item.get("executor_code") or result_code
         structured_report = _result_structured_report(item)
         dictionary_status_items = (
             [
@@ -247,10 +258,10 @@ def _prepare_task_results(
                 for report_item in _structured_report_items(
                     result_code, structured_report
                 )
-                if _is_dictionary_status_item(result_code, report_item)
+                if _is_dictionary_status_item(executor_code, report_item)
             ]
             if structured_report is not None
-            and result_code in REPORT_DICTIONARY_STATUS_CATEGORIES
+            and executor_code in REPORT_DICTIONARY_STATUS_CATEGORIES
             else []
         )
         report_items = _result_report_items(item, structured_report)
@@ -287,6 +298,7 @@ def _prepare_task_results(
             task_type=task_type,
             task_id=task_id,
             result_code=result_code,
+            lookup_code=check_code_aliases.get(result_code, result_code),
             report_items=report_items,
             suppression_rules=suppression_rules,
             record_hits=record_suppression_hits,
@@ -390,6 +402,7 @@ def _apply_report_suppression(
     report_items: list[dict],
     suppression_rules: dict[str, list[dict]],
     record_hits: bool,
+    lookup_code: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     if not task_type or not suppression_rules:
         return report_items, []
@@ -400,7 +413,7 @@ def _apply_report_suppression(
     for item in report_items:
         rule, similarity = _matching_report_suppression_rule(
             item,
-            suppression_rules.get(result_code, []),
+            suppression_rules.get(lookup_code or result_code, []),
         )
         if rule is None:
             visible_items.append(item)
@@ -533,15 +546,47 @@ def _maybe_create_report_suppression_candidate(
         return None
 
     task_type = task["task_type"] or DOCUMENT_TASK_TYPE
+    canonical_code = task_check_code_aliases(task).get(result_code, result_code)
     fingerprint = _report_item_suppression_fingerprint(
         task_type,
-        result_code,
+        canonical_code,
         report_item,
         dict(task).get("check_profile_id") or "default",
     )
     now = now_text()
     reason = REPORT_REJECTION_REASONS.get(rejection_reason, "") or rejection_note
     snapshot = _report_suppression_item_snapshot(report_item)
+    profile_id = dict(task).get("check_profile_id") or "default"
+    legacy_codes = (
+        [
+            row[0]
+            for row in db.execute(
+                "SELECT code FROM check_item_aliases WHERE profile_id = ? AND canonical_code = ? AND code != canonical_code",
+                (profile_id, canonical_code),
+            )
+        ]
+        if task_type == DOCUMENT_TASK_TYPE
+        else []
+    )
+    fingerprints = [
+        fingerprint,
+        *(
+            _report_item_suppression_fingerprint(
+                task_type, code, report_item, profile_id
+            )
+            for code in legacy_codes
+        ),
+    ]
+    existing = db.execute(
+        f"SELECT id FROM report_suppression_rules WHERE task_type = ? AND profile_id = ? AND check_code = ? AND fingerprint IN ({','.join('?' for _ in fingerprints)})",
+        (task_type, profile_id, canonical_code, *fingerprints),
+    ).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE report_suppression_rules SET item_json = ?, reason = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(snapshot, ensure_ascii=False), reason, now, existing["id"]),
+        )
+        return existing["id"]
     db.execute(
         """
         INSERT INTO report_suppression_rules(
@@ -557,7 +602,7 @@ def _maybe_create_report_suppression_candidate(
         """,
         (
             task_type,
-            result_code,
+            canonical_code,
             fingerprint,
             json.dumps(snapshot, ensure_ascii=False),
             reason,
@@ -571,7 +616,7 @@ def _maybe_create_report_suppression_candidate(
     )
     return db.execute(
         "SELECT id FROM report_suppression_rules WHERE task_type = ? AND check_code = ? AND fingerprint = ?",
-        (task_type, result_code, fingerprint),
+        (task_type, canonical_code, fingerprint),
     ).fetchone()[0]
 
 
@@ -623,7 +668,7 @@ def _result_report_items(
         return [
             item
             for item in _structured_report_items(code, structured_report)
-            if not _is_dictionary_status_item(code, item)
+            if not _is_dictionary_status_item(result.get("executor_code") or code, item)
         ]
 
     text = str(result.get("result") or "").strip()

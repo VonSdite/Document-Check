@@ -7,7 +7,13 @@ const props = defineProps<TaskComposerProps>()
 const form = ref<HTMLFormElement>()
 const model = ref(props.model)
 const round = ref(props.round)
-const checks = ref(props.selectedChecks)
+const checks = ref(
+  props.profiles === undefined
+    ? props.selectedChecks
+    : (props.profiles.find((item) => item.id === props.profile)?.checks || []).map((item) =>
+        String(item.id),
+      ),
+)
 const profile = ref(props.profile || '')
 const profileStorageKey = `document-check:last-profile:${props.action || window.location.pathname}`
 const selectedProfile = computed(() => props.profiles?.find((item) => item.id === profile.value))
@@ -23,15 +29,9 @@ const checkOptions = computed(() =>
         help: item.description || item.name,
       })),
 )
-const checkDrafts = new Map<string, string[]>([[profile.value, [...checks.value]]])
 function selectProfile(value: string) {
-  checkDrafts.set(profile.value, [...checks.value])
   profile.value = value
-  checks.value =
-    checkDrafts.get(value) ||
-    (selectedProfile.value?.checks || [])
-      .filter((item) => item.default_selected)
-      .map((item) => String(item.id))
+  checks.value = (selectedProfile.value?.checks || []).map((item) => String(item.id))
 }
 try {
   const saved = localStorage.getItem('document-check:last-model-id')
@@ -112,10 +112,16 @@ onMounted(validate)
       </label>
       <p class="subline">
         {{ selectedProfile?.description || '暂无可用检查方案，请联系规则维护人员。' }}
-        同批文档使用所选方案。
+        同批文档使用所选方案，检查项按方案配置执行。
       </p>
     </div>
-    <UiCheckPicker v-model="checks" :options="checkOptions" :label="checkLabel" :help="checkHelp" />
+    <UiCheckPicker
+      v-model="checks"
+      :options="checkOptions"
+      :label="checkLabel"
+      :help="checkHelp"
+      :readonly="profiles !== undefined"
+    />
     <div class="ui-composer-footer">
       <div class="submit-slot">
         <UiButton type="submit" variant="primary">提交检查</UiButton>

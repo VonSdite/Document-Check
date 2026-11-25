@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from flask import Flask
 from openpyxl import load_workbook
 
+from app.checks.catalog import get_enabled_check_items
 from app.contracts.check_profiles import task_check_profile
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -17,6 +18,10 @@ from app.contracts.task_types import (
     IMAGE_TASK_TYPE,
     LANGUAGE_CONSISTENCY_TASK_TYPE,
     VIDEO_TASK_TYPE,
+)
+from app.persistence.check_item_pool import (
+    profile_check_ids,
+    save_profile_check_items,
 )
 from app.persistence.check_profiles import copy_check_profile
 from app.persistence.connection import get_db
@@ -46,20 +51,26 @@ class CheckProfilesTest(unittest.TestCase):
             return dict(
                 get_db()
                 .execute(
-                    "SELECT * FROM check_items WHERE profile_id = ? AND code = ?",
-                    (profile, code),
+                    "SELECT c.* FROM check_items c JOIN check_profile_items m ON m.check_item_id = c.id WHERE m.profile_id = ? AND (c.template_code = ? OR c.code = ?)",
+                    (profile, code, code),
                 )
                 .fetchone()
             )
 
     def submit(self, profile="software", check_ids=None):
         model = self._configure_provider()
+        if check_ids is None:
+            with self.app.app_context():
+                check_ids = [
+                    item["id"]
+                    for item in get_enabled_check_items(DOCUMENT_TASK_TYPE, profile)
+                ]
         return self.client.post(
             "/",
             data={
                 "model_id": model,
                 "profile_id": profile,
-                "checks": [str(value) for value in (check_ids or [self.check()["id"]])],
+                "checks": [str(value) for value in check_ids],
                 "document": (io.BytesIO("软件接口文档".encode()), "software.txt"),
             },
         )
@@ -84,7 +95,12 @@ class CheckProfilesTest(unittest.TestCase):
         response = self.client.get("/admin/rules?profile_id=software")
         self.assertEqual(response.status_code, 200)
         rules = BeautifulSoup(response.data, "html.parser")
-        self.assertIsNotNone(rules.select_one("[data-prompt-tabs]"))
+        self.assertIsNotNone(rules.select_one("[data-profile-composition]"))
+        self.assertIsNone(rules.select_one("[data-prompt-tabs]"))
+        rules = BeautifulSoup(
+            self.client.get("/admin/rules?tab=items&profile_id=software").data,
+            "html.parser",
+        )
         self.assertEqual(
             [
                 panel["data-prompt-panel"]
@@ -241,18 +257,15 @@ class CheckProfilesTest(unittest.TestCase):
         with self.app.app_context():
             db = get_db()
             copied = copy_check_profile("default", "单文档副本")
-            rows = db.execute(
-                "SELECT task_type, code, prompt FROM check_items WHERE profile_id = ? ORDER BY code",
-                (copied,),
-            ).fetchall()
-            original = db.execute(
-                "SELECT task_type, code, prompt FROM check_items WHERE profile_id = 'default' AND task_type = ? ORDER BY code",
-                (DOCUMENT_TASK_TYPE,),
-            ).fetchall()
-            self.assertTrue(rows)
-            self.assertEqual(
-                [tuple(row) for row in rows], [tuple(row) for row in original]
-            )
+            self.assertEqual(profile_check_ids(copied), profile_check_ids("default"))
+            types = {
+                row[0]
+                for row in db.execute(
+                    "SELECT c.task_type FROM check_items c JOIN check_profile_items m ON m.check_item_id = c.id WHERE m.profile_id = ?",
+                    (copied,),
+                )
+            }
+            self.assertEqual(types, {DOCUMENT_TASK_TYPE})
 
     def test_other_task_reports_do_not_display_document_profile_metadata(self):
         task_id = self._insert_report_task()
@@ -350,7 +363,7 @@ class CheckProfilesTest(unittest.TestCase):
                 "UPDATE check_profiles SET name = '修改后的方案', enabled = 0 WHERE id = 'software'"
             )
             db.commit()
-            task["retry_check_codes_json"] = '["compliance"]'
+            task["retry_check_codes_json"] = json.dumps([original["code"]])
             self.assertEqual(
                 selected_check_items(db, task)[0]["prompt"], original["prompt"]
             )
@@ -380,58 +393,65 @@ class CheckProfilesTest(unittest.TestCase):
             list(Path(self.app.config["UPLOAD_FOLDER"]).rglob("*.txt")), []
         )
 
-    def test_editing_and_reordering_enforce_profile_scope(self):
+    def test_pool_edits_update_all_referencing_profiles(self):
         item = self.check()
-        data = {
-            "action": "prompt",
-            "profile_id": "default",
-            "item_id": item["id"],
-            "name": "错误修改",
-            "prompt": "错误提示词",
-            "enabled": "on",
-        }
-        self.assertEqual(self.client.post("/admin/rules", data=data).status_code, 400)
-        self.assertEqual(
-            self.client.post(
-                "/admin/rules",
-                data={
-                    "action": "reorder_check_items",
-                    "profile_id": "default",
-                    "item_ids": [item["id"]],
-                },
-            ).status_code,
-            400,
-        )
-        data.update(
-            profile_id="software",
-            name=item["name"],
-            prompt="软件专属规则",
-            default_selected="off",
-        )
-        response = self.client.post("/admin/rules", data=data)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("profile_id=software", response.location)
-        self.assertEqual(self.check()["prompt"], "软件专属规则")
-        self.assertEqual(self.check()["default_selected"], 0)
-        self.assertNotEqual(self.check("default")["prompt"], "软件专属规则")
-
-    def test_copy_is_independent_and_keeps_software_reset_template(self):
         with self.app.app_context():
             db = get_db()
-            profile_id = copy_check_profile("software", "软件接口方案")
+            save_profile_check_items(
+                "default", profile_check_ids("default") | {item["id"]}
+            )
             db.commit()
-            item = db.execute(
-                "SELECT * FROM check_items WHERE profile_id = ? AND code = 'compliance'",
-                (profile_id,),
-            ).fetchone()
+            before = {
+                row["id"]: row["revision"]
+                for row in db.execute("SELECT id, revision FROM check_profiles")
+            }
+        response = self.client.post(
+            "/admin/rules?tab=items",
+            data={
+                "action": "prompt",
+                "profile_id": "default",
+                "item_id": item["id"],
+                "name": item["name"],
+                "prompt": "共用软件规则",
+                "enabled": "on",
+                "tab": "items",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("tab=items", response.location)
+        self.assertEqual(self.check()["prompt"], "共用软件规则")
+        self.assertNotEqual(self.check("default")["prompt"], "共用软件规则")
+        with self.app.app_context():
+            for row in get_db().execute("SELECT id, revision FROM check_profiles"):
+                self.assertGreater(row["revision"], before[row["id"]])
+
+    def test_copy_reuses_pool_items_and_keeps_software_reset_template(self):
+        with self.app.app_context():
+            db = get_db()
+            original_ids = profile_check_ids("software")
+            count = db.execute("SELECT COUNT(*) FROM check_items").fetchone()[0]
+            profile_id = copy_check_profile("software", "软件接口方案")
+            self.assertEqual(profile_check_ids(profile_id), original_ids)
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM check_items").fetchone()[0], count
+            )
+            item = dict(
+                db.execute(
+                    "SELECT * FROM check_items WHERE profile_id = 'software' AND template_code = 'compliance'"
+                ).fetchone()
+            )
+            save_profile_check_items(profile_id, [item["id"]])
+            self.assertEqual(profile_check_ids("software"), original_ids)
             db.execute(
                 "UPDATE check_items SET prompt = '自定义' WHERE id = ?", (item["id"],)
             )
             self.assertTrue(reset_default_check_item_prompt(item["id"]))
-            restored = db.execute(
-                "SELECT prompt FROM check_items WHERE id = ?", (item["id"],)
-            ).fetchone()[0]
-            self.assertEqual(restored, item["prompt"])
+            self.assertEqual(
+                db.execute(
+                    "SELECT prompt FROM check_items WHERE id = ?", (item["id"],)
+                ).fetchone()[0],
+                item["prompt"],
+            )
 
     def test_scope_isolates_suppression_candidates_reports_and_statistics(self):
         ids = [self._insert_report_task(), self._insert_report_task()]
@@ -551,7 +571,7 @@ class CheckProfileMigrationTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     db.execute(
-                        "SELECT COUNT(*) FROM check_items WHERE code = 'compliance'"
+                        "SELECT COUNT(*) FROM check_items WHERE template_code = 'compliance' AND pool_item_id = id"
                     ).fetchone()[0],
                     2,
                 )

@@ -7,6 +7,12 @@
   ],
   [
     "index",
+    "idx_profile_items_item",
+    "check_profile_items",
+    "CREATE INDEX idx_profile_items_item ON check_profile_items(check_item_id)"
+  ],
+  [
+    "index",
     "idx_report_review_events_item",
     "report_review_events",
     "CREATE INDEX idx_report_review_events_item\n            ON report_review_events(task_id, result_code, item_id, id)"
@@ -163,9 +169,21 @@
   ],
   [
     "table",
+    "check_item_aliases",
+    "check_item_aliases",
+    "CREATE TABLE check_item_aliases (\n        profile_id TEXT NOT NULL, code TEXT NOT NULL, canonical_code TEXT NOT NULL,\n        check_item_id INTEGER NOT NULL, PRIMARY KEY(profile_id, code)\n    )"
+  ],
+  [
+    "table",
     "check_items",
     "check_items",
-    "CREATE TABLE \"check_items\" (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            profile_id TEXT NOT NULL DEFAULT 'default',\n            task_type TEXT NOT NULL DEFAULT 'document_check', code TEXT NOT NULL,\n            name TEXT NOT NULL, description TEXT, prompt TEXT NOT NULL,\n            enabled INTEGER NOT NULL DEFAULT 1, default_selected INTEGER NOT NULL DEFAULT 1,\n            sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\n            UNIQUE(profile_id, code)\n        )"
+    "CREATE TABLE \"check_items\" (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            profile_id TEXT NOT NULL DEFAULT 'default',\n            task_type TEXT NOT NULL DEFAULT 'document_check', code TEXT NOT NULL,\n            name TEXT NOT NULL, description TEXT, prompt TEXT NOT NULL,\n            enabled INTEGER NOT NULL DEFAULT 1, default_selected INTEGER NOT NULL DEFAULT 1,\n            sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, pool_item_id INTEGER, template_code TEXT NOT NULL DEFAULT '',\n            UNIQUE(profile_id, code)\n        )"
+  ],
+  [
+    "table",
+    "check_profile_items",
+    "check_profile_items",
+    "CREATE TABLE check_profile_items (\n        profile_id TEXT NOT NULL, check_item_id INTEGER NOT NULL,\n        PRIMARY KEY(profile_id, check_item_id)\n    )"
   ],
   [
     "table",
@@ -277,21 +295,33 @@
   ],
   [
     "trigger",
+    "trg_check_item_pool_delete",
+    "check_items",
+    "CREATE TRIGGER trg_check_item_pool_delete\n        AFTER DELETE ON check_items BEGIN\n            DELETE FROM check_profile_items WHERE check_item_id = OLD.id;\n        END"
+  ],
+  [
+    "trigger",
+    "trg_check_item_pool_identity",
+    "check_items",
+    "CREATE TRIGGER trg_check_item_pool_identity\n        AFTER INSERT ON check_items WHEN NEW.pool_item_id IS NULL BEGIN\n            UPDATE check_items SET pool_item_id = NEW.id WHERE id = NEW.id;\n        END"
+  ],
+  [
+    "trigger",
     "trg_check_profile_delete",
     "check_items",
-    "CREATE TRIGGER trg_check_profile_delete\n            AFTER DELETE ON check_items\n            WHEN OLD.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = OLD.updated_at\n                WHERE id = OLD.profile_id;\n            END"
+    "CREATE TRIGGER trg_check_profile_delete\n            BEFORE DELETE ON check_items\n            WHEN OLD.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = OLD.updated_at\n                WHERE id IN (SELECT profile_id FROM check_profile_items WHERE check_item_id = OLD.id);\n            END"
   ],
   [
     "trigger",
     "trg_check_profile_insert",
     "check_items",
-    "CREATE TRIGGER trg_check_profile_insert\n            AFTER INSERT ON check_items\n            WHEN NEW.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
+    "CREATE TRIGGER trg_check_profile_insert\n            AFTER INSERT ON check_items\n            WHEN NEW.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id IN (SELECT profile_id FROM check_profile_items WHERE check_item_id = NEW.id);\n            END"
   ],
   [
     "trigger",
     "trg_check_profile_update",
     "check_items",
-    "CREATE TRIGGER trg_check_profile_update\n            AFTER UPDATE ON check_items\n            WHEN NEW.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id = NEW.profile_id;\n            END"
+    "CREATE TRIGGER trg_check_profile_update\n            AFTER UPDATE ON check_items\n            WHEN NEW.task_type = 'document_check' BEGIN\n                UPDATE check_profiles SET revision = revision + 1, updated_at = NEW.updated_at\n                WHERE id IN (SELECT profile_id FROM check_profile_items WHERE check_item_id = NEW.id);\n            END"
   ],
   [
     "trigger",

@@ -155,6 +155,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def _configure_document_scheme(self, *check_ids):
+        from app.persistence.check_item_pool import save_profile_check_items
+
+        with self.app.app_context():
+            save_profile_check_items("default", check_ids)
+            get_db().commit()
+        return [str(value) for value in check_ids]
+
     def test_document_round_picker_uses_admin_default_and_maximum(self):
         self._configure_provider()
         for route in ("/", "/admin/tasks"):
@@ -188,7 +196,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "/",
                 data={
                     "model_id": model_id,
-                    "checks": [str(check_id)],
+                    "checks": self._configure_document_scheme(check_id),
                     "check_rounds": value,
                     "document": (io.BytesIO(b"document"), "doc.txt"),
                 },
@@ -208,7 +216,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 route,
                 data={
                     "model_id": model_id,
-                    "checks": [str(check_id)],
+                    "checks": self._configure_document_scheme(check_id),
                     "check_rounds": value,
                     "document": (io.BytesIO(b"document"), "doc.txt"),
                 },
@@ -3687,7 +3695,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "/",
             data={
                 "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                "checks": [str(item["id"])],
+                "checks": self._configure_document_scheme(item["id"]),
                 "model_id": model_id,
             },
             headers={"X-Real-IP": "10.20.30.40"},
@@ -4325,7 +4333,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "/",
             data={
                 "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                "checks": [str(item["id"])],
+                "checks": self._configure_document_scheme(item["id"]),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -4398,7 +4406,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "/",
             data={
                 "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                "checks": [str(item["id"])],
+                "checks": self._configure_document_scheme(item["id"]),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -4448,7 +4456,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "/",
             data={
                 "document": (_pdf_with_image_bytes(), filename),
-                "checks": [str(item["id"])],
+                "checks": self._configure_document_scheme(item["id"]),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -4483,7 +4491,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             "/",
             data={
                 "document": (io.BytesIO(long_text.encode("utf-8")), "long.txt"),
-                "checks": [str(item["id"])],
+                "checks": self._configure_document_scheme(item["id"]),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -4522,7 +4530,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     )
                     for index in range(21)
                 ],
-                "checks": [str(item["id"])],
+                "checks": self._configure_document_scheme(item["id"]),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -4570,7 +4578,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                     (io.BytesIO(b"valid document"), "valid.txt"),
                     (io.BytesIO(b"   "), "blank.txt"),
                 ],
-                "checks": [str(item["id"])],
+                "checks": self._configure_document_scheme(item["id"]),
                 "model_id": model_id,
             },
             content_type="multipart/form-data",
@@ -4604,7 +4612,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "/",
                 data={
                     "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                    "checks": [str(item["id"])],
+                    "checks": self._configure_document_scheme(item["id"]),
                     "model_id": model_id,
                 },
                 content_type="multipart/form-data",
@@ -4643,7 +4651,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 "/",
                 data={
                     "document": (io.BytesIO("测试文档".encode("utf-8")), "doc.txt"),
-                    "checks": [str(item["id"])],
+                    "checks": self._configure_document_scheme(item["id"]),
                     "model_id": model_id,
                 },
                 content_type="multipart/form-data",
@@ -9061,7 +9069,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 response = self.client.get(route)
                 self.assertEqual(response.status_code, 200)
                 soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-                checkboxes = soup.select('form.create-panel input[name="checks"]')
+                checkboxes = soup.select(
+                    'form.create-panel input[type="checkbox"][name="checks"]'
+                )
                 self.assertTrue(checkboxes)
                 expected_checked = (
                     1

@@ -37,6 +37,11 @@ from app.contracts.task_types import (
 from app.documents.images import DEFAULT_PDF_PAGE_IMAGE_MAX_PAGES
 from app.infrastructure.config import save_network_config
 from app.infrastructure.network import suppress_insecure_request_warning
+from app.persistence.check_item_pool import (
+    document_check_pool,
+    profile_check_ids,
+    save_profile_check_items,
+)
 from app.persistence.check_profiles import (
     check_profiles,
     copy_check_profile,
@@ -196,10 +201,15 @@ def register_settings_routes(app):
             item_id = request.form.get("item_id")
             if action in {"prompt", "delete_check_item"} and item_id:
                 item = db.execute(
-                    "SELECT task_type FROM check_items WHERE id = ? AND profile_id = ?",
-                    (item_id, profile_id),
+                    "SELECT task_type, profile_id, pool_item_id, id FROM check_items WHERE id = ?",
+                    (item_id,),
                 ).fetchone()
-                if item is None or item["task_type"] not in allowed_task_types:
+                if (
+                    item is None
+                    or item["task_type"] not in allowed_task_types
+                    or (rules_only and item["pool_item_id"] != item["id"])
+                    or (not rules_only and item["profile_id"] != "default")
+                ):
                     abort(400, description="检查项不属于当前页面或方案。")
             if action == "report_suppression_rule":
                 rule_id = request.form.get("rule_id")
@@ -217,6 +227,10 @@ def register_settings_routes(app):
                             profile_id, request.form.get("name", "")
                         )
                     else:
+                        if request.form.get("save_checks") == "1":
+                            save_profile_check_items(
+                                profile_id, request.form.getlist("profile_checks")
+                            )
                         save_check_profile(
                             profile_id,
                             request.form.get("name", ""),
@@ -421,7 +435,7 @@ def register_settings_routes(app):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        profile_id,
+                        "default" if rules_only else profile_id,
                         task_type,
                         f"{_check_item_code_prefix(task_type)}-{uuid.uuid4().hex}",
                         name,
@@ -443,7 +457,11 @@ def register_settings_routes(app):
                         "message": "扩展检查项已创建，可继续添加。",
                         "item_id": int(cursor.lastrowid),
                         "html": render_template(
-                            "_check_item_rows.html", item=item, is_builtin=False
+                            "_check_item_rows.html",
+                            item=item,
+                            is_builtin=False,
+                            rules_only=rules_only,
+                            selected_profile=dict(profile) if profile else {},
                         ),
                     }
                 flash("扩展检查项已创建。", "success")
@@ -482,14 +500,17 @@ def register_settings_routes(app):
                     flash("检查项不存在，无法删除。", "error")
                     return redirect(_settings_url())
                 item = db.execute(
-                    "SELECT code FROM check_items WHERE id = ?", (item_id,)
+                    "SELECT code, template_code FROM check_items WHERE id = ?",
+                    (item_id,),
                 ).fetchone()
                 if item is None:
                     if _wants_json_response():
                         return {"ok": False, "error": "检查项不存在，无法删除。"}, 404
                     flash("检查项不存在，无法删除。", "error")
                     return redirect(_settings_url())
-                if item["code"] in default_check_item_codes():
+                if (
+                    item["template_code"] or item["code"]
+                ) in default_check_item_codes():
                     if _wants_json_response():
                         return {"ok": False, "error": "内置检查项不能删除。"}, 400
                     flash("内置检查项不能删除。", "error")
@@ -539,7 +560,8 @@ def register_settings_routes(app):
             db.execute(
                 """
                 UPDATE check_items
-                SET name = ?, description = ?, prompt = ?, enabled = ?, default_selected = ?, updated_at = ?
+                SET name = ?, description = ?, prompt = ?, enabled = ?,
+                    default_selected = CASE WHEN task_type = 'document_check' THEN default_selected ELSE ? END, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -639,6 +661,9 @@ def register_settings_routes(app):
             "admin_rules.html" if rules_only else "admin_settings.html",
             profiles=check_profiles() if rules_only else [],
             selected_profile=dict(profile) if profile else {},
+            pool_items=document_check_pool(db) if rules_only else [],
+            selected_pool_ids=profile_check_ids(profile_id) if rules_only else set(),
+            rules_tab="items" if request.args.get("tab") == "items" else "profiles",
             rules_only=rules_only,
             active_nav="rules" if rules_only else "settings",
             check_item_groups=check_item_groups,
@@ -746,7 +771,9 @@ def _report_suppression_rule_rows(
             "r.task_type, r.item_json, r.reason)"
         )
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
-    source = "FROM report_suppression_rules r LEFT JOIN check_items c ON c.code = r.check_code AND c.profile_id = r.profile_id"
+    source = """FROM report_suppression_rules r LEFT JOIN check_items c ON c.code = r.check_code
+        AND c.task_type = r.task_type AND ((r.task_type = 'document_check' AND c.pool_item_id = c.id)
+        OR (r.task_type != 'document_check' AND c.profile_id = r.profile_id))"""
     total = db.execute(f"SELECT COUNT(*) {source} {where}", params).fetchone()[0]
     per_page = _per_page_arg()
     page = _bounded_page(_page_arg(), total, per_page)
@@ -862,6 +889,7 @@ def _settings_url():
     }:
         return url_for(
             _rules_endpoint(),
+            tab=request.form.get("tab", request.args.get("tab")),
             profile_id=request.form.get(
                 "profile_id", request.args.get("profile_id", "default")
             ),

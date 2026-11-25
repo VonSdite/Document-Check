@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { UiSecretInput, UiSelect } from '@/components/ui'
+import { UiCheckPicker, UiSecretInput, UiSelect } from '@/components/ui'
 import { mergeFiles } from '@/components/ui/files'
 import { readTaskComposer } from '@/features/tasks/contract'
 
@@ -47,4 +47,35 @@ it('挂载协议保留用户当前选择和提交令牌', () => {
   expect(props.model).toBe('second')
   expect(props.selectedChecks).toEqual(['one'])
   expect(props.hidden).toEqual([{ name: 'submission_token', value: 'page-token' }])
+})
+
+it('方案只读检查项通过隐藏字段完整提交，挂载时忽略重复字段', () => {
+  const root = document.createElement('div')
+  root.innerHTML =
+    '<form><label>模型<select name="model_id"><option value="model">A</option></select></label><input type="hidden" name="submission_token" value="token"></form>'
+  document.body.append(root)
+  const form = root.querySelector('form')!
+  const wrapper = mount(UiCheckPicker, {
+    attachTo: form,
+    props: {
+      modelValue: ['1', '2'],
+      readonly: true,
+      label: '检查项',
+      options: [
+        { value: '1', label: '检查一', help: '' },
+        { value: '2', label: '检查二', help: '' },
+      ],
+    },
+  })
+  expect(new FormData(form).getAll('checks')).toEqual(['1', '2'])
+  expect(
+    wrapper
+      .findAll<HTMLInputElement>('input[type=checkbox]')
+      .every((input) => input.element.checked && input.element.disabled),
+  ).toBe(true)
+  const props = readTaskComposer(root)
+  expect(props.checks.map((item) => item.value)).toEqual(['1', '2'])
+  expect(props.selectedChecks).toEqual(['1', '2'])
+  expect(props.hidden).toEqual([{ name: 'submission_token', value: 'token' }])
+  wrapper.unmount()
 })
