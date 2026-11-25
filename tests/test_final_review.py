@@ -646,6 +646,33 @@ class FinalReviewTest(unittest.TestCase):
         additional = soup.select_one(f'[data-item-id="{self.items[1]["id"]}"]')
         self.assertIn("补充审核条目", additional.get_text())
 
+    def test_excel_cleans_initial_and_final_notes_without_changing_reviews(self):
+        initial_note = "初审\x00说明\n保留换行"
+        final_note = "终审\x0b说明\t保留制表"
+        self.assertEqual(self.initial(note=initial_note).status_code, 200)
+        self.assertEqual(self.final(note=final_note).status_code, 200)
+        export = self.client.get(f"/admin/tasks/{self.task_id}/export.xlsx")
+        self.assertEqual(export.status_code, 200)
+        workbook = load_workbook(io.BytesIO(export.data))
+        self.addCleanup(workbook.close)
+        for sheet_name, header, expected in (
+            ("报告条目", "人工原因", "初审说明\n保留换行"),
+            ("审核记录", "初审说明", "初审说明\n保留换行"),
+            ("审核记录", "终审说明", "终审说明\t保留制表"),
+            ("初审与终审", "终审说明", "终审说明\t保留制表"),
+        ):
+            with self.subTest(sheet=sheet_name, header=header):
+                sheet = workbook[sheet_name]
+                column = next(cell.column for cell in sheet[1] if cell.value == header)
+                self.assertIn(
+                    expected,
+                    [row[column - 1].value for row in sheet.iter_rows(min_row=2)],
+                )
+        self.assertEqual(
+            self.state()["initial"]["acceptance"]["rejection_note"], initial_note
+        )
+        self.assertEqual(self.state()["final"]["note"], final_note)
+
     def test_excel_records_importer_preserves_final_on_noop_and_rejects_stale(self):
         self.initial()
         self.initial(1)

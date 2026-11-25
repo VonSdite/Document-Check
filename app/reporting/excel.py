@@ -3,6 +3,7 @@ import json
 import logging
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -67,12 +68,14 @@ def build_report_workbook(task):
     profile = task_check_profile(task)
     if profile:
         config_sheet = workbook.create_sheet("检查方案")
-        config_sheet.append(["方案标识", "方案名称", "提交版本"])
-        config_sheet.append(
-            [profile["id"], profile["name"], profile["revision"] or "原任务规则"]
+        _append_excel_row(config_sheet, ["方案标识", "方案名称", "提交版本"])
+        _append_excel_row(
+            config_sheet,
+            [profile["id"], profile["name"], profile["revision"] or "原任务规则"],
         )
     audit = workbook.create_sheet("审核记录")
-    audit.append(
+    _append_excel_row(
+        audit,
         [
             "记录ID",
             "检查项编码",
@@ -90,13 +93,14 @@ def build_report_workbook(task):
             "终审说明",
             "条目版本",
             *[label for _, label in REPORT_ITEM_FIELDS],
-        ]
+        ],
     )
     for row in audit_export_rows(task):
-        audit.append([_excel_cell_text(value) for value in row])
+        _append_excel_row(audit, [_excel_cell_text(value) for value in row])
     _style_excel_sheet(audit)
     final_sheet = workbook.create_sheet("初审与终审")
-    final_sheet.append(
+    _append_excel_row(
+        final_sheet,
         [
             "检查项",
             "条目标识",
@@ -108,13 +112,14 @@ def build_report_workbook(task):
             "终审人",
             "终审时间",
             "终审说明",
-        ]
+        ],
     )
     for result in review_context(task)["results"]:
         for item in result["report_items"]:
             state = item["review"]
             initial, final = state["initial"] or {}, state["final"] or {}
-            final_sheet.append(
+            _append_excel_row(
+                final_sheet,
                 [
                     _excel_cell_text(v)
                     for v in [
@@ -129,15 +134,16 @@ def build_report_workbook(task):
                         final.get("created_at"),
                         final.get("note"),
                     ]
-                ]
+                ],
             )
     _style_excel_sheet(final_sheet)
     if any(result.get("round_summary") for result in results):
         sheet = workbook.create_sheet("检查轮次")
-        sheet.append(["检查项", "轮次", "状态", "摘要", "错误", "原始回复"])
+        _append_excel_row(sheet, ["检查项", "轮次", "状态", "摘要", "错误", "原始回复"])
         for result in results:
             for entry in result.get("round_results", []):
-                sheet.append(
+                _append_excel_row(
+                    sheet,
                     [
                         _excel_cell_text(result.get("name")),
                         entry["round"],
@@ -145,7 +151,7 @@ def build_report_workbook(task):
                         _excel_cell_text(entry.get("report", {}).get("summary")),
                         _excel_cell_text(entry.get("error")),
                         _excel_cell_text(entry.get("result")),
-                    ]
+                    ],
                 )
         _style_excel_sheet(sheet)
 
@@ -463,7 +469,7 @@ def _fill_report_items_sheet(
         REPORT_EXPORT_ITEM_ID_HEADER,
         "审核版本（请勿修改）",
     ]
-    sheet.append(headers)
+    _append_excel_row(sheet, headers)
     context = _excel_task_context(task, document_groups)
     for result in results:
         rounds = result.get("round_summary", {})
@@ -474,7 +480,8 @@ def _fill_report_items_sheet(
         )
         report_items = result.get("report_items") or []
         if not report_items:
-            sheet.append(
+            _append_excel_row(
+                sheet,
                 [
                     *context,
                     _excel_cell_text(result.get("name")),
@@ -487,11 +494,12 @@ def _fill_report_items_sheet(
                     "",
                     _excel_cell_text(result.get("code")),
                     "",
-                ]
+                ],
             )
             continue
         for item in report_items:
-            sheet.append(
+            _append_excel_row(
+                sheet,
                 [
                     *context,
                     _excel_cell_text(result.get("name")),
@@ -521,7 +529,7 @@ def _fill_report_items_sheet(
                     _excel_cell_text(result.get("code")),
                     _excel_cell_text(item.get("id")),
                     _excel_cell_text(item.get("review", {}).get("token")),
-                ]
+                ],
             )
     _style_excel_sheet(sheet)
     _configure_report_review_sheet(sheet, headers)
@@ -582,9 +590,9 @@ def _configure_report_review_sheet(sheet, headers: list[str]) -> None:
 
 
 def _fill_report_totals_sheet(sheet, report_totals: dict) -> None:
-    sheet.append(["指标", "值"])
+    _append_excel_row(sheet, ["指标", "值"])
     for label, key in REPORT_TOTAL_EXPORT_ROWS:
-        sheet.append([label, report_totals.get(key, 0)])
+        _append_excel_row(sheet, [label, report_totals.get(key, 0)])
     _style_excel_sheet(sheet)
 
 
@@ -606,6 +614,16 @@ def _excel_document_names(task, document_groups: list[dict]) -> str:
     if names:
         return "\n".join(names)
     return _excel_cell_text(_row_value(task, "original_filename", ""))
+
+
+def _append_excel_row(sheet, values) -> None:
+    """写入前移除 Excel 禁止的控制字符，保留合法空白和单元格类型。"""
+    sheet.append(
+        [
+            ILLEGAL_CHARACTERS_RE.sub("", value) if isinstance(value, str) else value
+            for value in values
+        ]
+    )
 
 
 def _excel_cell_text(value) -> str:
