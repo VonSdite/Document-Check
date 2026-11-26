@@ -5,7 +5,9 @@ import json
 import re
 import unicodedata
 from copy import deepcopy
+from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import cached_property, lru_cache
 
 from app.reporting.constants import REPORT_SEVERITY_ORDER
 from app.reporting.service import (
@@ -31,9 +33,67 @@ _QUOTE = r'[“"‘`]([^”"’`\n]+)[”"’`]'
 _CHANGE_TO = r"(?:统一)?(?:更正|修正|修改|替换|调整|改|补充)为"
 _SPACING_INTENT = re.compile(r"(?:写法|混用|并存|统一|不一致|不统一)")
 _COUNTS = str.maketrans("零一二两三四五六七八九", "01223456789")
+_CROSS_CHECK_FIELDS = ("category", "location", "excerpt", "description", "suggestion")
+_CROSS_CHECK_CACHE_MAX_ITEMS = 512
+_CROSS_CHECK_CACHE_MAX_CHARS = 262_144
 
 
-def _without_references(value, location="") -> str:
+@dataclass
+class _FindingFeatures:
+    """一次匹配中复用条目的文本、修改动作和引用信息。"""
+
+    item: dict
+
+    @cached_property
+    def normalized(self) -> dict[str, str]:
+        return {
+            field: _normalized(self.item.get(field)) for field in _CROSS_CHECK_FIELDS
+        }
+
+    @cached_property
+    def description(self) -> str:
+        return _normalize_report_description(self.item.get("description"))
+
+    @cached_property
+    def correction_edits(self) -> list[tuple[str, str, str, str]]:
+        return _correction_edits(self.item)
+
+    @cached_property
+    def claim_text(self) -> str:
+        return _claim_text(self.item)
+
+    @cached_property
+    def corrected_claim_text(self) -> str:
+        return _claim_text(self.item, same_correction=True)
+
+    @cached_property
+    def spacing_terms(self) -> set[str]:
+        return _spacing_consistency_terms(self.item)
+
+    @cached_property
+    def reference_excerpt(self) -> str:
+        return _without_reference_markers(self.item.get("excerpt"))
+
+    @cached_property
+    def suggestion_targets(self) -> set[str]:
+        return _suggestion_targets(self.item)
+
+    @cached_property
+    def suggestion_text(self) -> str:
+        return _suggestion_comparison_text(self.item)
+
+    @cached_property
+    def named_terms(self) -> set[str]:
+        return _named_object_terms(self.normalized["description"])
+
+    @cached_property
+    def section_refs(self) -> set[str]:
+        return set(
+            re.findall(r"(?<!\d)\d+(?:\.\d+)+(?!\d)", self.normalized["location"])
+        )
+
+
+def _without_reference_markers(value) -> str:
     text = _normalized(value)
     # 根据引用标记、章节语境和条目位置识别编号，保留参数陈述中的数值。
     text = re.sub(
@@ -49,6 +109,12 @@ def _without_references(value, location="") -> str:
         text,
     )
     text = re.sub(rf"(?:同章|正文|参见|见){_SECTION_LIST}(?![\d.a-zA-Z%µΩ])", "", text)
+    return text
+
+
+def _without_location_references(text: str, location) -> str:
+    if not re.search(r"\d+\.\d+", text):
+        return text
     location = _normalized(location)
     for number in set(re.findall(r"\d+(?:\.\d+)+", location)):
         text = re.sub(
@@ -65,6 +131,10 @@ def _without_references(value, location="") -> str:
                 text,
             )
     return text
+
+
+def _without_references(value, location="") -> str:
+    return _without_location_references(_without_reference_markers(value), location)
 
 
 def _corrections(item: dict) -> list[tuple[str, str]]:
@@ -148,11 +218,14 @@ def _correction_edits(item: dict) -> list[tuple[str, str, str, str]]:
     return edits
 
 
-def _same_correction(left: dict, right: dict) -> bool:
-    for removed, added, prefix, suffix in _correction_edits(left):
-        for other_removed, other_added, other_prefix, other_suffix in _correction_edits(
-            right
-        ):
+def _same_correction(left: _FindingFeatures, right: _FindingFeatures) -> bool:
+    for removed, added, prefix, suffix in left.correction_edits:
+        for (
+            other_removed,
+            other_added,
+            other_prefix,
+            other_suffix,
+        ) in right.correction_edits:
             if (removed, added) != (other_removed, other_added):
                 continue
             shared_prefix = min(len(prefix), len(other_prefix))
@@ -200,9 +273,16 @@ def _compatible_numbers(left, right) -> bool:
 
 
 def _compatible_claims(left: dict, right: dict) -> bool:
+    return _compatible_prepared_claims(_FindingFeatures(left), _FindingFeatures(right))
+
+
+def _compatible_prepared_claims(
+    left: _FindingFeatures, right: _FindingFeatures
+) -> bool:
     same_correction = _same_correction(left, right)
     raw_descriptions = [
-        _claim_text(item, same_correction=same_correction) for item in (left, right)
+        item.corrected_claim_text if same_correction else item.claim_text
+        for item in (left, right)
     ]
     if not _compatible_numbers(*raw_descriptions):
         return False
@@ -215,7 +295,7 @@ def _compatible_claims(left: dict, right: dict) -> bool:
         and raw_descriptions[0].casefold() == raw_descriptions[1].casefold()
     ):
         return False
-    if _same_spacing_consistency(left, right):
+    if left.spacing_terms & right.spacing_terms:
         return True
     descriptions = [_normalize_report_description(text) for text in raw_descriptions]
     edits = [
@@ -301,32 +381,39 @@ def _shared_evidence(left, right) -> bool:
 
 
 def _same_finding(left: dict, right: dict) -> bool:
-    if all(
-        _normalized(left.get(field)) == _normalized(right.get(field))
-        for field in ("category", "location", "excerpt", "description")
-    ) and _normalized(left.get("description")):
+    return _same_prepared_finding(_FindingFeatures(left), _FindingFeatures(right))
+
+
+def _same_prepared_finding(left: _FindingFeatures, right: _FindingFeatures) -> bool:
+    if (
+        all(
+            left.normalized[field] == right.normalized[field]
+            for field in ("category", "location", "excerpt", "description")
+        )
+        and left.normalized["description"]
+    ):
         return True
-    location = f"{left.get('location', '')}；{right.get('location', '')}"
+    location = f"{left.normalized['location']}；{right.normalized['location']}"
     if not _shared_evidence(
-        _without_references(left.get("excerpt"), location),
-        _without_references(right.get("excerpt"), location),
+        _without_location_references(left.reference_excerpt, location),
+        _without_location_references(right.reference_excerpt, location),
     ):
         return False
-    left_description = _normalize_report_description(left.get("description"))
-    right_description = _normalize_report_description(right.get("description"))
+    left_description = left.description
+    right_description = right.description
     if not left_description or not right_description:
         return False
     same_correction = _same_correction(left, right)
-    if not _compatible_claims(left, right):
+    if not _compatible_prepared_claims(left, right):
         return False
     if same_correction:
         return True
-    if _same_spacing_consistency(left, right):
+    if left.spacing_terms & right.spacing_terms:
         return True
-    repeated_terms = [_repeated_character_terms(item) for item in (left, right)]
+    repeated_terms = [_repeated_character_terms(item.item) for item in (left, right)]
     if all(repeated_terms):
         return bool(repeated_terms[0] & repeated_terms[1])
-    caption_match = _duplicate_caption_match(left, right)
+    caption_match = _duplicate_caption_match(left.item, right.item)
     if caption_match is not None:
         return caption_match
     # 描述改写较多时，以相近的修改建议补充判定。
@@ -334,7 +421,7 @@ def _same_finding(left: dict, right: dict) -> bool:
     return similarity >= 0.6 or (
         similarity >= 0.45
         and _report_description_similarity(
-            left.get("suggestion"), right.get("suggestion")
+            left.item.get("suggestion"), right.item.get("suggestion")
         )
         >= 0.65
     )
@@ -378,9 +465,9 @@ def _duplicate_caption_match(left: dict, right: dict) -> bool | None:
     return None
 
 
-def _shared_suggestion_target(left: dict, right: dict) -> bool:
-    targets = [_suggestion_targets(item) for item in (left, right)]
-    descriptions = [_normalized(item.get("description")) for item in (left, right)]
+def _shared_suggestion_target(left: _FindingFeatures, right: _FindingFeatures) -> bool:
+    targets = [item.suggestion_targets for item in (left, right)]
+    descriptions = [item.normalized["description"] for item in (left, right)]
     for first in targets[0]:
         for second in targets[1]:
             shorter, longer = sorted((first, second), key=len)
@@ -395,49 +482,29 @@ def _shared_suggestion_target(left: dict, right: dict) -> bool:
     return False
 
 
-def _same_named_object_conflict(left: dict, right: dict) -> bool:
-    descriptions = [_normalized(item.get("description")) for item in (left, right)]
-    for description in descriptions:
-        has_identity = any(
-            marker in description for marker in ("同一", "相同", "等同", "即指")
-        )
-        has_naming = any(
-            marker in description
-            for marker in ("称", "写作", "叫法", "命名", "名称", "术语")
-        )
-        has_conflict = any(
-            marker in description
-            for marker in (
-                "不一致",
-                "不统一",
-                "两种",
-                "多称",
-                "混用",
-                "混淆",
-                "是否即指",
-            )
-        )
-        has_conflict = has_conflict or bool(
-            re.search(r"是否与.{0,24}为同一对象", description)
-        )
-        if not (has_identity and has_naming and has_conflict):
-            return False
+def _named_object_terms(description: str) -> set[str]:
+    has_identity = any(
+        marker in description for marker in ("同一", "相同", "等同", "即指")
+    )
+    has_naming = any(
+        marker in description
+        for marker in ("称", "写作", "叫法", "命名", "名称", "术语")
+    )
+    has_conflict = any(
+        marker in description
+        for marker in ("不一致", "不统一", "两种", "多称", "混用", "混淆", "是否即指")
+    ) or bool(re.search(r"是否与.{0,24}为同一对象", description))
+    if not (has_identity and has_naming and has_conflict):
+        return set()
+    return {term for term in re.findall(_QUOTE, description) if len(term.strip()) >= 2}
 
-    quoted_terms = [
-        {term for term in re.findall(_QUOTE, description) if len(term.strip()) >= 2}
-        for description in descriptions
-    ]
-    shared_terms = quoted_terms[0] & quoted_terms[1]
-    if len(shared_terms) < 2:
-        return False
 
-    section_refs = [
-        set(
-            re.findall(r"(?<!\d)\d+(?:\.\d+)+(?!\d)", _normalized(item.get("location")))
-        )
-        for item in (left, right)
-    ]
-    return bool(section_refs[0] & section_refs[1])
+def _same_named_object_conflict(
+    left: _FindingFeatures, right: _FindingFeatures
+) -> bool:
+    return len(left.named_terms & right.named_terms) >= 2 and bool(
+        left.section_refs & right.section_refs
+    )
 
 
 def group_cross_check_report_items(results: list[dict]) -> list[dict]:
@@ -461,23 +528,83 @@ def group_cross_check_report_items(results: list[dict]) -> list[dict]:
             )
             order += 1
 
-    def same_group_candidate(left: dict, right: dict) -> bool:
-        if not _normalized(left["item"].get("excerpt")) or not _normalized(
-            right["item"].get("excerpt")
-        ):
-            return False
-        if not _compatible_claims(left["item"], right["item"]):
-            return False
-        if not _compatible_suggestions(left["item"], right["item"]):
-            return False
-        if _same_finding(left["item"], right["item"]):
-            return True
-        return (
-            _shared_evidence_text(
-                left["item"].get("excerpt"), right["item"].get("excerpt")
+    if len({candidate["code"] for candidate in candidates}) < 2:
+        return []
+    snapshot = tuple(
+        (
+            candidate["code"],
+            *(str(candidate["item"].get(field) or "") for field in _CROSS_CHECK_FIELDS),
+        )
+        for candidate in candidates
+    )
+    cacheable = (
+        len(snapshot) <= _CROSS_CHECK_CACHE_MAX_ITEMS
+        and sum(len(value) for row in snapshot for value in row)
+        <= _CROSS_CHECK_CACHE_MAX_CHARS
+    )
+    grouped_indexes = (
+        _cached_cross_check_group_indexes(snapshot)
+        if cacheable
+        else _cross_check_group_indexes(snapshot)
+    )
+
+    cross_check_groups = []
+    for group_id, indexes in enumerate(grouped_indexes, start=1):
+        members = [candidates[index] for index in indexes]
+        for member in members:
+            member["item"]["cross_check_group_id"] = group_id
+            identity = f"{member['code']}\0{member['item'].get('id', '')}"
+            member["anchor_id"] = (
+                "report-item-"
+                + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
             )
-            and _shared_suggestion_target(left["item"], right["item"])
-        ) or _same_named_object_conflict(left["item"], right["item"])
+            member["item"]["cross_check_anchor_id"] = member["anchor_id"]
+        cross_check_groups.append(
+            {
+                "id": group_id,
+                "item_count": len(members),
+                "members": members,
+            }
+        )
+    return cross_check_groups
+
+
+@lru_cache(maxsize=32)
+def _cached_cross_check_group_indexes(snapshot: tuple) -> tuple[tuple[int, ...], ...]:
+    # 缓存仅保存不可变的匹配字段和分组索引，展示内容来自当前请求。
+    return _cross_check_group_indexes(snapshot)
+
+
+def _cross_check_group_indexes(snapshot: tuple) -> tuple[tuple[int, ...], ...]:
+    candidates = [
+        {
+            "code": row[0],
+            "features": _FindingFeatures(dict(zip(_CROSS_CHECK_FIELDS, row[1:]))),
+            "order": index,
+        }
+        for index, row in enumerate(snapshot)
+    ]
+
+    def same_group_candidate(left: dict, right: dict) -> bool:
+        left, right = left["features"], right["features"]
+        if not left.normalized["excerpt"] or not right.normalized["excerpt"]:
+            return False
+        # 先核对共享证据或命名对象，再为相关条目解析修改与参数约束。
+        related = (
+            _same_prepared_finding(left, right)
+            or (
+                _shared_suggestion_target(left, right)
+                and _shared_evidence_text(
+                    left.normalized["excerpt"], right.normalized["excerpt"]
+                )
+            )
+            or _same_named_object_conflict(left, right)
+        )
+        if not related:
+            return False
+        return _compatible_suggestion_texts(
+            left.suggestion_text, right.suggestion_text
+        ) and _compatible_prepared_claims(left, right)
 
     links = [set() for _ in candidates]
     for left_index, left in enumerate(candidates):
@@ -503,6 +630,11 @@ def group_cross_check_report_items(results: list[dict]) -> list[dict]:
                     visited.add(linked_index)
                     pending.append(linked_index)
         remaining = {member["order"] for member in component}
+        if len({member["code"] for member in component}) < 2:
+            continue
+        if all(len(links[index]) == len(component) - 1 for index in remaining):
+            components.append(component)
+            continue
         while remaining:
             cliques = []
             for start in sorted(remaining):
@@ -527,44 +659,34 @@ def group_cross_check_report_items(results: list[dict]) -> list[dict]:
             remaining.difference_update(clique)
 
     components.sort(key=lambda members: min(member["order"] for member in members))
-    cross_check_groups = []
-    for members in components:
-        members.sort(key=lambda member: member["order"])
-        group_id = len(cross_check_groups) + 1
-        for member in members:
-            member["item"]["cross_check_group_id"] = group_id
-            identity = f"{member['code']}\0{member['item'].get('id', '')}"
-            member["anchor_id"] = (
-                "report-item-"
-                + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
-            )
-            member["item"]["cross_check_anchor_id"] = member["anchor_id"]
-        cross_check_groups.append(
-            {
-                "id": group_id,
-                "item_count": len(members),
-                "members": members,
-            }
-        )
-    return cross_check_groups
+    return tuple(
+        tuple(sorted(member["order"] for member in members)) for members in components
+    )
 
 
 def _compatible_suggestions(left: dict, right: dict) -> bool:
-    targets = []
-    for item in (left, right):
-        text = _without_references(item.get("suggestion"), item.get("location"))
-        # 同时保留带引号与不带引号的各个修改目标，避免原值影响冲突判定。
-        changes = re.findall(_CHANGE_TO + rf"(?:{_QUOTE}|([^,;。]+))", text)
-        if changes:
-            text = "；".join(quoted or unquoted for quoted, unquoted in changes)
-        targets.append(text)
+    return _compatible_suggestion_texts(
+        _suggestion_comparison_text(left), _suggestion_comparison_text(right)
+    )
+
+
+def _suggestion_comparison_text(item: dict) -> str:
+    text = _without_references(item.get("suggestion"), item.get("location"))
+    # 同时保留带引号与不带引号的各个修改目标，避免原值影响冲突判定。
+    changes = re.findall(_CHANGE_TO + rf"(?:{_QUOTE}|([^,;。]+))", text)
     return (
-        _compatible_numbers(*targets)
-        and set(re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", targets[0]))
-        == set(re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", targets[1]))
-        and not (
-            targets[0] != targets[1] and targets[0].casefold() == targets[1].casefold()
-        )
+        "；".join(quoted or unquoted for quoted, unquoted in changes)
+        if changes
+        else text
+    )
+
+
+def _compatible_suggestion_texts(left: str, right: str) -> bool:
+    return (
+        _compatible_numbers(left, right)
+        and set(re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", left))
+        == set(re.findall(r"(?:[<>]=?|[≤≥≠])[+-]?\d+(?:\.\d+)*", right))
+        and not (left != right and left.casefold() == right.casefold())
     )
 
 

@@ -1,5 +1,9 @@
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from unittest.mock import patch
 
+from app.reporting import rounds
 from app.reporting.rounds import group_cross_check_report_items
 from tests.test_document_rounds import finding
 
@@ -361,6 +365,158 @@ class CrossCheckGroupingTest(unittest.TestCase):
             groups[0]["members"][0]["anchor_id"], groups[0]["members"][1]["anchor_id"]
         )
         self.assertEqual([item["id"] for item in items], ["same-id", "same-id"])
+
+
+class CrossCheckGroupingPerformanceTest(unittest.TestCase):
+    def setUp(self):
+        rounds._cached_cross_check_group_indexes.cache_clear()
+        self.addCleanup(rounds._cached_cross_check_group_indexes.cache_clear)
+
+    def results(self):
+        return [
+            check_result(
+                code,
+                code,
+                report_item(code, suggestion="将“5mV”改为“5MV”。"),
+            )
+            for code in ("compliance", "consistency")
+        ]
+
+    def test_repeated_report_reuses_groups_with_current_items_and_metadata(self):
+        first = self.results()
+        current = deepcopy(first)
+        with patch(
+            "app.reporting.rounds._cross_check_group_indexes",
+            wraps=rounds._cross_check_group_indexes,
+        ) as compute:
+            old_group = group_cross_check_report_items(first)[0]
+            current[0]["name"] = "当前检查名称"
+            current_item = current[0]["report_items"][0]
+            current_item.update(
+                id="current-id",
+                acceptance_status="rejected",
+                severity="high",
+                summary_fields={"description": "当前展示表述"},
+            )
+            new_group = group_cross_check_report_items(current)[0]
+            self.assertEqual(compute.call_count, 1)
+
+        self.assertIs(new_group["members"][0]["item"], current_item)
+        self.assertEqual(new_group["members"][0]["name"], "当前检查名称")
+        self.assertEqual(current_item["acceptance_status"], "rejected")
+        self.assertNotEqual(
+            old_group["members"][0]["anchor_id"],
+            new_group["members"][0]["anchor_id"],
+        )
+        old_group["members"].clear()
+        self.assertEqual(len(group_cross_check_report_items(current)[0]["members"]), 2)
+
+    def test_matching_fields_invalidate_cached_comparison(self):
+        for field in ("category", "location", "excerpt", "description", "suggestion"):
+            with self.subTest(field=field):
+                rounds._cached_cross_check_group_indexes.cache_clear()
+                results = self.results()
+                with patch(
+                    "app.reporting.rounds._cross_check_group_indexes",
+                    wraps=rounds._cross_check_group_indexes,
+                ) as compute:
+                    group_cross_check_report_items(results)
+                    results[0]["report_items"][0][field] += "新增内容"
+                    group_cross_check_report_items(results)
+                    self.assertEqual(compute.call_count, 2)
+
+    def test_changed_correction_target_removes_stale_group_markers(self):
+        results = self.results()
+        self.assertEqual(len(group_cross_check_report_items(results)), 1)
+        results[1]["report_items"][0]["suggestion"] = "将“5mV”改为“5mA”。"
+
+        self.assertEqual(group_cross_check_report_items(results), [])
+        for result in results:
+            self.assertNotIn("cross_check_group_id", result["report_items"][0])
+            self.assertNotIn("cross_check_anchor_id", result["report_items"][0])
+
+    def test_order_and_visible_members_follow_current_report(self):
+        results = self.results()
+        group_cross_check_report_items(results)
+        results.reverse()
+        members = group_cross_check_report_items(results)[0]["members"]
+        self.assertEqual(
+            [member["code"] for member in members], ["consistency", "compliance"]
+        )
+        results.append(
+            check_result("third", "检查三", deepcopy(results[0]["report_items"][0]))
+        )
+        self.assertEqual(group_cross_check_report_items(results)[0]["item_count"], 3)
+        results[1]["report_items"].clear()
+        members = group_cross_check_report_items(results)[0]["members"]
+        self.assertEqual(
+            [member["code"] for member in members], ["consistency", "third"]
+        )
+        results[2]["code"] = "consistency"
+        with patch("app.reporting.rounds._cross_check_group_indexes") as compute:
+            self.assertEqual(group_cross_check_report_items(results), [])
+            compute.assert_not_called()
+
+    def test_unrelated_evidence_skips_correction_parsing(self):
+        results = [
+            check_result(
+                code,
+                code,
+                *(
+                    report_item(str(index), excerpt=chr(0x4E00 + index) * 20)
+                    for index in indexes
+                ),
+            )
+            for code, indexes in (("first", range(20)), ("second", range(20, 40)))
+        ]
+        with patch("app.reporting.rounds._correction_edits") as parse:
+            self.assertEqual(group_cross_check_report_items(results), [])
+            parse.assert_not_called()
+
+    def test_corrections_are_parsed_at_most_once_per_item(self):
+        results = self.results()
+        for result in results:
+            result["report_items"] = [
+                {**result["report_items"][0], "id": f"item-{index}"}
+                for index in range(10)
+            ]
+        with patch(
+            "app.reporting.rounds._correction_edits", wraps=rounds._correction_edits
+        ) as parse:
+            groups = group_cross_check_report_items(results)
+        self.assertEqual(groups[0]["item_count"], 20)
+        self.assertLessEqual(parse.call_count, 20)
+
+    def test_large_reports_bypass_cache_and_still_group(self):
+        for limit in ("_CROSS_CHECK_CACHE_MAX_ITEMS", "_CROSS_CHECK_CACHE_MAX_CHARS"):
+            with self.subTest(limit=limit), patch(f"app.reporting.rounds.{limit}", 1):
+                with patch(
+                    "app.reporting.rounds._cross_check_group_indexes",
+                    wraps=rounds._cross_check_group_indexes,
+                ) as compute:
+                    for _ in range(2):
+                        self.assertEqual(
+                            len(group_cross_check_report_items(self.results())), 1
+                        )
+                    self.assertEqual(compute.call_count, 2)
+                self.assertEqual(
+                    rounds._cached_cross_check_group_indexes.cache_info().currsize, 0
+                )
+
+    def test_concurrent_reports_keep_their_own_items(self):
+        group_cross_check_report_items(self.results())
+
+        def group_report(index):
+            results = self.results()
+            for result in results:
+                result["report_items"][0]["id"] = f"{index}-{result['code']}"
+            groups = group_cross_check_report_items(results)
+            for result, member in zip(results, groups[0]["members"]):
+                self.assertIs(member["item"], result["report_items"][0])
+                self.assertEqual(member["item"]["id"], f"{index}-{result['code']}")
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            list(executor.map(group_report, range(20)))
 
 
 if __name__ == "__main__":
