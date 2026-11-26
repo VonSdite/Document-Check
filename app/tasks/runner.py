@@ -19,6 +19,7 @@ from app.checks.document_release import (
     DOCUMENT_RELEASE_CHECK_CODE,
     build_document_release_report,
 )
+from app.checks.document_scope import DocumentCheckScope, document_check_scope
 from app.checks.guardrails import (
     build_pdf_table_evidence_index,
     sanitize_text_check_result,
@@ -28,11 +29,6 @@ from app.checks.hyperlinks import (
     build_hyperlink_report,
     format_hyperlink_report,
     hyperlinks_from_meta,
-)
-from app.checks.revision_history import (
-    REVISION_SCOPE_INSTRUCTION,
-    REVISION_SCOPE_NOTE,
-    exclude_revision_history,
 )
 from app.checks.sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
@@ -271,8 +267,20 @@ class TaskRunner:
                 else:
                     if not check_items:
                         raise RuntimeError("没有可执行的检查项")
+                    scope = (
+                        document_check_scope(document_text)
+                        if task_type == DOCUMENT_TASK_TYPE
+                        else None
+                    )
                     _validate_document_check_inputs(
-                        document_text, task["max_input_chars"], check_items
+                        scope.ai_text if scope else document_text,
+                        task["max_input_chars"],
+                        [
+                            {**item, "prompt": scope.prompt(item["prompt"])}
+                            for item in check_items
+                        ]
+                        if scope
+                        else check_items,
                     )
                     retry_results = _run_check_items_concurrently(
                         self.app,
@@ -280,6 +288,7 @@ class TaskRunner:
                         check_items,
                         document_text,
                         document_meta=_document_meta(document_meta_raw),
+                        scope=scope,
                         max_workers=max_workers,
                         stream_trace_enabled=get_bool_setting(
                             "llm_stream_trace_enabled", False
@@ -442,6 +451,7 @@ def _run_check_items_concurrently(
     document_text: str,
     *,
     document_meta: dict | None = None,
+    scope: DocumentCheckScope | None = None,
     max_workers: int,
     stream_trace_enabled: bool,
     cancel_event: threading.Event | None = None,
@@ -546,12 +556,21 @@ def _run_check_items_concurrently(
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
     local_rule_document_text = _local_rule_document_text(document_text, document_meta)
-    scoped_text, excluded_sections = (
-        exclude_revision_history(document_text)
-        if task_type == DOCUMENT_TASK_TYPE
-        else (document_text, [])
+    if scope is None and task_type == DOCUMENT_TASK_TYPE:
+        scope = document_check_scope(document_text)
+    term_scope = (
+        scope
+        if local_rule_document_text == document_text
+        else document_check_scope(local_rule_document_text)
+        if scope
+        else None
     )
-    model_document_text = compact_model_document_text(scoped_text)
+    term_document_text = (
+        term_scope.term_text() if term_scope else local_rule_document_text
+    )
+    model_document_text = compact_model_document_text(
+        scope.ai_text if scope else document_text
+    )
     check_rounds = (
         normalize_check_rounds((document_meta or {}).get("check_rounds"))
         if task_type == DOCUMENT_TASK_TYPE
@@ -667,19 +686,24 @@ def _run_check_items_concurrently(
                 structured_report = None
                 round_result = None
                 executor_code = item.get("executor_code", item["code"])
+                scope_note = ""
                 if executor_code == SENSITIVE_TERMS_CHECK_CODE:
+                    scope_note = term_scope.front_note if term_scope else ""
                     structured_report = _run_sensitive_terms_check(
-                        app, local_rule_document_text, issue_output_limit
+                        app, term_document_text, issue_output_limit
                     )
                     content = format_sensitive_terms_report(structured_report)
                 elif executor_code == COMMON_TERMS_CHECK_CODE:
+                    scope_note = term_scope.front_note if term_scope else ""
                     structured_report = _run_common_terms_check(
-                        app, local_rule_document_text, issue_output_limit
+                        app, term_document_text, issue_output_limit
                     )
                     content = format_common_terms_report(structured_report)
                 elif executor_code == HYPERLINK_CHECK_CODE:
+                    scope_note = scope.front_note if scope else ""
+                    links = hyperlinks_from_meta(document_meta or {})
                     structured_report = build_hyperlink_report(
-                        hyperlinks_from_meta(document_meta or {}),
+                        scope.hyperlinks(links) if scope else links,
                         issue_limit=issue_output_limit,
                         network=outbound_network_config(),
                     )
@@ -690,14 +714,12 @@ def _run_check_items_concurrently(
                     )
                     content = json.dumps(structured_report, ensure_ascii=False)
                 else:
+                    scope_note = scope.ai_note if scope else ""
                     scoped_item = {
                         **item,
-                        "prompt": item["prompt"]
-                        + (
-                            "\n\n" + REVISION_SCOPE_INSTRUCTION
-                            if excluded_sections
-                            else ""
-                        ),
+                        "prompt": scope.prompt(item["prompt"])
+                        if scope
+                        else item["prompt"],
                     }
                     _validate_document_check_inputs(
                         model_document_text, task["max_input_chars"], [scoped_item]
@@ -860,10 +882,8 @@ def _run_check_items_concurrently(
             if round_result is not None:
                 result.update(round_result)
                 result["item_acceptances"] = previous.get("item_acceptances", {})
-            if excluded_sections and (
-                structured_report is None or round_result is not None
-            ):
-                result["scope_note"] = REVISION_SCOPE_NOTE
+            if scope_note:
+                result["scope_note"] = scope_note
             with result_lock:
                 round_progress.pop(item["code"], None)
                 completed_by_code[item["code"]] = result
