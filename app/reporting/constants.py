@@ -50,7 +50,7 @@ REPORT_REJECTION_REASON_HINTS = {
     "other": "无法归入以上原因，请补充说明",
 }
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
-REPORT_STATS_PREPARATION_VERSION = "6-check-pool"
+REPORT_STATS_PREPARATION_VERSION = "7-report-filters"
 REPORT_DICTIONARY_STATUS_CATEGORIES = {
     "sensitive-terms": {"敏感词表配置", "敏感词表读取失败"},
     "common-terms": {"常用词检查表配置", "常用词检查表读取失败"},
@@ -242,53 +242,6 @@ REPORT_FIELD_ALIASES = {
         "需核对的依据",
     ),
 }
-REPORT_NO_ACTION_IMPACT_MARKERS = (
-    "无实质影响",
-    "无实际影响",
-    "没有实质影响",
-    "没有实际影响",
-    "无明显影响",
-    "无明确影响",
-    "没有明确影响",
-    "未发现明确影响",
-    "不适用",
-    "不造成实质影响",
-    "影响不大",
-    "影响较小",
-    "影响很小",
-    "无影响",
-    "不影响理解",
-    "不影响使用",
-    "nosubstantiveimpact",
-    "nomaterialimpact",
-    "nosignificantimpact",
-    "norealimpact",
-    "noactualimpact",
-    "notapplicable",
-    "doesnotaffect",
-)
-REPORT_NO_ACTION_SUGGESTION_MARKERS = (
-    "无需修改",
-    "无须修改",
-    "不需修改",
-    "不需要修改",
-    "无需处理",
-    "无须处理",
-    "不需处理",
-    "不需要处理",
-    "无需调整",
-    "无须调整",
-    "不需调整",
-    "无需修正",
-    "保持不变",
-    "nomodificationrequired",
-    "nomodificationneeded",
-    "noneedtomodify",
-    "noneedtochange",
-    "nochangeneeded",
-    "noactionrequired",
-    "noactionneeded",
-)
 REPORT_LEGACY_LABEL_FIELDS = {
     "问题类型": "category",
     "类型": "category",

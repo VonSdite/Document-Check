@@ -91,6 +91,8 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
             continue
         seen_codes.add(code)
         saved = {"code": code, "name": name, "prompt": prompt}
+        if isinstance(item.get("template_code"), str) and item["template_code"]:
+            saved["template_code"] = item["template_code"]
         if item.get("check_method") == "skill":
             saved["check_method"] = "skill"
             saved["skill_package"] = item.get("skill_package", {})

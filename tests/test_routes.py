@@ -4426,6 +4426,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 {
                     "id": item["id"],
                     "code": item["code"],
+                    "template_code": "compliance",
                     "name": item["name"],
                     "prompt": item["prompt"],
                 }
@@ -5393,7 +5394,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(exported.status_code, 200)
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         items = soup.select("[data-report-item]")
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(items), 1)
         meta_labels = [
             node.get_text(strip=True)
             for node in soup.select(".report-meta-list > div > dt")
@@ -5413,20 +5414,20 @@ class AdminSettingsRouteTest(unittest.TestCase):
             _required_tag(soup.select_one('[data-report-count="suggestion"]')).get_text(
                 strip=True
             ),
-            "1",
+            "0",
         )
         self.assertIsNone(soup.select_one('[data-report-count="non_issue"]'))
         self.assertEqual(
             _required_tag(
                 soup.select_one('[data-report-count="pending_review"]')
             ).get_text(strip=True),
-            "2",
+            "1",
         )
         self.assertEqual(
             _required_tag(
                 soup.select_one('[data-report-count="issue_item_ratio"]')
             ).get_text(strip=True),
-            "50.0%",
+            "100.0%",
         )
         self.assertEqual(
             _required_tag(
@@ -5444,6 +5445,11 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         exported_soup = BeautifulSoup(exported.get_data(as_text=True), "html.parser")
         exported_text = exported_soup.get_text(" ", strip=True)
+        for report in (soup, exported_soup):
+            self.assertNotIn(
+                "补充适用范围",
+                _required_tag(report.select_one(".report-table")).get_text(),
+            )
         self.assertIn("dataset.tableColumnResizer", exported.get_data(as_text=True))
         exported_meta_labels = [
             node.get_text(strip=True)
@@ -7322,7 +7328,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             _required_tag(
                 soup.select_one('[data-admin-report-count="suggestion"]')
             ).get_text(strip=True),
-            "1",
+            "0",
         )
         self.assertEqual(
             _required_tag(
@@ -7334,7 +7340,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             _required_tag(
                 soup.select_one('[data-admin-report-count="total"]')
             ).get_text(strip=True),
-            "2",
+            "1",
         )
 
     def test_user_task_list_pagination_allows_page_jump(self):

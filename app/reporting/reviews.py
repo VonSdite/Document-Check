@@ -4,9 +4,14 @@ import hashlib
 import json
 from contextlib import contextmanager
 
+from app.checks.report_filters import report_filter_reason, review_filter_scope
 from app.contracts.task_types import DOCUMENT_TASK_TYPE
 from app.persistence.connection import get_db, now_text
-from app.reporting.constants import REPORT_ITEM_FIELDS, REPORT_ITEM_TYPES
+from app.reporting.constants import (
+    REPORT_ITEM_FIELDS,
+    REPORT_ITEM_TYPES,
+    REPORT_STATS_PREPARATION_VERSION,
+)
 from app.reporting.service import (
     _count_report_items,
     _media_report_item_text,
@@ -128,6 +133,7 @@ def item_review_state(item, acceptance, history):
 
 def review_context(task):
     history = review_events(task["id"])
+    task_type = dict(task).get("task_type") or DOCUMENT_TASK_TYPE
     current_keys = set()
     results = []
     counts = dict.fromkeys(
@@ -145,12 +151,17 @@ def review_context(task):
     required_initial_count = 0
     for result in _raw_task_results(task):
         code = str(result.get("code") or "")
+        review_scope = (
+            review_filter_scope(result) if task_type == DOCUMENT_TASK_TYPE else ""
+        )
         acceptances = result.get("item_acceptances") or {}
         if not isinstance(acceptances, dict):
             acceptances = {}
         items = []
         for item in _result_report_items(result):
-            if item.get("type") not in {"issue", "suggestion"}:
+            if item.get("type") not in {"issue", "suggestion"} or report_filter_reason(
+                item, review_scope=review_scope
+            ):
                 continue
             current_keys.add((code, item["id"]))
             item.update(_normalize_report_acceptance(acceptances.get(item["id"])))
@@ -269,8 +280,11 @@ def final_review_progress(task_ids, *, refresh=True):
     cached = {
         row["task_id"]: dict(row)
         for row in db.execute(
-            f"SELECT * FROM task_final_review_stats WHERE task_id IN ({placeholders})",
-            tuple(task_ids),
+            "SELECT task_id, total, initial_count, required_count, confirmed, returned, "
+            "deferred, pending, status FROM task_final_review_stats "
+            f"WHERE task_id IN ({placeholders}) "
+            "AND preparation_version = ?",
+            (*task_ids, REPORT_STATS_PREPARATION_VERSION),
         )
     }
     missing = (
@@ -281,7 +295,8 @@ def final_review_progress(task_ids, *, refresh=True):
         with db:
             db.execute("BEGIN IMMEDIATE")
             task = db.execute(
-                "SELECT id, status, result_json FROM tasks WHERE id = ?", (task_id,)
+                "SELECT id, task_type, status, result_json FROM tasks WHERE id = ?",
+                (task_id,),
             ).fetchone()
             if task is None:
                 continue
@@ -293,8 +308,8 @@ def _write_final_review_progress(task):
     counts = review_context(task)["progress"]
     get_db().execute(
         "INSERT OR REPLACE INTO task_final_review_stats "
-        "(task_id, total, initial_count, required_count, confirmed, returned, deferred, pending, status) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(task_id, total, initial_count, required_count, confirmed, returned, deferred, pending, status, preparation_version) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task["id"],
             *(
@@ -310,6 +325,7 @@ def _write_final_review_progress(task):
                     "status",
                 )
             ),
+            REPORT_STATS_PREPARATION_VERSION,
         ),
     )
     return counts
@@ -327,7 +343,8 @@ def review_transaction(task_id):
             raise ReviewConflict("任务尚未完成，暂不能审核报告条目。")
         yield task
         updated_task = db.execute(
-            "SELECT id, status, result_json FROM tasks WHERE id = ?", (task_id,)
+            "SELECT id, task_type, status, result_json FROM tasks WHERE id = ?",
+            (task_id,),
         ).fetchone()
         _write_final_review_progress(updated_task)
 

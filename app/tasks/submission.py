@@ -154,6 +154,7 @@ def _enabled_check_item_snapshots(
             },
             "id": row["id"],
             "code": row["code"],
+            "template_code": row["template_code"],
             "name": row["name"],
             "prompt": row["prompt"],
             **(

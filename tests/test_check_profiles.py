@@ -367,6 +367,10 @@ class CheckProfilesTest(unittest.TestCase):
             self.assertEqual(
                 selected_check_items(db, task)[0]["prompt"], original["prompt"]
             )
+            self.assertEqual(
+                selected_check_items(db, task)[0]["template_code"],
+                original["template_code"],
+            )
             self.assertEqual(task_check_profile(task), snapshot)
         page = self.client.get(f"/admin/tasks/{task['id']}").get_data(as_text=True)
         self.assertIn("软件文档方案", page)

@@ -243,7 +243,7 @@
     "table",
     "task_final_review_stats",
     "task_final_review_stats",
-    "CREATE TABLE task_final_review_stats (\n            task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,\n            total INTEGER NOT NULL,\n            initial_count INTEGER NOT NULL,\n            required_count INTEGER NOT NULL DEFAULT 0,\n            confirmed INTEGER NOT NULL,\n            returned INTEGER NOT NULL,\n            deferred INTEGER NOT NULL,\n            pending INTEGER NOT NULL,\n            status TEXT NOT NULL\n        )"
+    "CREATE TABLE task_final_review_stats (\n            task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,\n            total INTEGER NOT NULL,\n            initial_count INTEGER NOT NULL,\n            required_count INTEGER NOT NULL DEFAULT 0,\n            confirmed INTEGER NOT NULL,\n            returned INTEGER NOT NULL,\n            deferred INTEGER NOT NULL,\n            pending INTEGER NOT NULL,\n            status TEXT NOT NULL,\n            preparation_version TEXT NOT NULL DEFAULT ''\n        )"
   ],
   [
     "table",

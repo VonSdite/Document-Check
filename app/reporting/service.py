@@ -7,6 +7,11 @@ from app.checks.guardrails import (
     guarded_report_summary,
     is_unsupported_visual_missing_item,
 )
+from app.checks.report_filters import (
+    is_no_action_finding,
+    report_filter_reason,
+    review_filter_scope,
+)
 from app.contracts.limits import MAX_DOCUMENT_CHECK_ROUNDS, normalize_issue_output_limit
 from app.contracts.task_types import (
     CONSISTENCY_TASK_TYPE,
@@ -35,8 +40,6 @@ from app.reporting.constants import (
     REPORT_JSON_ITEM_KEYS,
     REPORT_JSON_SUMMARY_KEYS,
     REPORT_LEGACY_LABEL_FIELDS,
-    REPORT_NO_ACTION_IMPACT_MARKERS,
-    REPORT_NO_ACTION_SUGGESTION_MARKERS,
     REPORT_REJECTION_REASONS,
     REPORT_SEVERITY_LABELS,
     REPORT_SEVERITY_ORDER,
@@ -266,29 +269,32 @@ def _prepare_task_results(
         )
         report_items = _result_report_items(item, structured_report)
         dictionary_status_ids = {entry["id"] for entry in dictionary_status_items}
-        filtered_visual_missing_count = 0
-        if task_type in {
+        filtered_report_count = 0
+        review_scope = (
+            review_filter_scope(item) if task_type in {None, DOCUMENT_TASK_TYPE} else ""
+        )
+        filter_visual_missing = task_type in {
             DOCUMENT_TASK_TYPE,
             CONSISTENCY_TASK_TYPE,
             LANGUAGE_CONSISTENCY_TASK_TYPE,
-        }:
-            retained_report_items = []
-            for report_item in report_items:
-                if is_unsupported_visual_missing_item(
+        }
+        retained_report_items = []
+        for report_item in report_items:
+            if (
+                report_item.get("type") == "non_issue"
+                or report_filter_reason(report_item, review_scope=review_scope)
+                or filter_visual_missing
+                and is_unsupported_visual_missing_item(
                     report_item,
                     preserve_numbered_references=bool(
                         item.get("cross_reference_guard")
                     ),
-                ):
-                    filtered_visual_missing_count += 1
-                else:
-                    retained_report_items.append(report_item)
-            report_items = retained_report_items
-        report_items = [
-            report_item
-            for report_item in report_items
-            if report_item.get("type") != "non_issue"
-        ]
+                )
+            ):
+                filtered_report_count += 1
+            else:
+                retained_report_items.append(report_item)
+        report_items = retained_report_items
         original_report_item_count = len(report_items)
         multiround = (
             1
@@ -338,7 +344,7 @@ def _prepare_task_results(
             report_item["index"] = display_index
         item["result_summary"] = (
             guarded_report_summary(report_items)
-            if filtered_visual_missing_count
+            if filtered_report_count
             else _result_report_summary(
                 item, structured_report, dictionary_status_items
             )
@@ -1289,14 +1295,7 @@ def _structured_report_item_text(fields: dict) -> str:
 
 
 def _is_no_action_report_item(fields: dict) -> bool:
-    impact = _compact_report_text(fields.get("impact"))
-    suggestion = _compact_report_text(fields.get("suggestion"))
-    return _has_report_marker(
-        impact, REPORT_NO_ACTION_IMPACT_MARKERS
-    ) and _has_report_marker(
-        suggestion,
-        REPORT_NO_ACTION_SUGGESTION_MARKERS,
-    )
+    return is_no_action_finding(fields)
 
 
 def _compact_report_text(value) -> str:
@@ -1305,10 +1304,6 @@ def _compact_report_text(value) -> str:
         "",
         str(value or ""),
     ).lower()
-
-
-def _has_report_marker(text: str, markers: tuple[str, ...]) -> bool:
-    return any(marker in text for marker in markers)
 
 
 def _legacy_report_item_fields(text: str) -> dict:
@@ -1430,17 +1425,8 @@ def _report_item_id(result_code: str, index: int, text: str) -> str:
 
 def _infer_report_item_type(text: str) -> str:
     compact = re.sub(r"\s+", "", str(text or ""))
-    if any(
-        marker in compact
-        for marker in (
-            "非问题",
-            "未发现",
-            "无明显",
-            "未见明显",
-            "无需修改",
-            "未见异常",
-            "无异常",
-        )
+    if is_no_action_finding(_legacy_report_item_fields(text)) or re.match(
+        r"^(?:\d+[.、)]\s*)?非问题[:：]", _clean_report_item_line(text)
     ):
         return "non_issue"
     if any(

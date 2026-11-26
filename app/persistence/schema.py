@@ -272,7 +272,8 @@ def init_db():
             returned INTEGER NOT NULL,
             deferred INTEGER NOT NULL,
             pending INTEGER NOT NULL,
-            status TEXT NOT NULL
+            status TEXT NOT NULL,
+            preparation_version TEXT NOT NULL DEFAULT ''
         );
         CREATE TRIGGER IF NOT EXISTS trg_tasks_final_review_stats_invalidate
         AFTER UPDATE OF result_json, status ON tasks
@@ -421,7 +422,7 @@ def init_db():
 
 
 def _ensure_final_review_stats_scope(db):
-    """终审缓存独立记录初审不认可的条目数量。"""
+    """终审缓存记录初审不认可的条目数量和报告准备版本。"""
     db.execute("SAVEPOINT final_review_scope")
     try:
         db.execute("DELETE FROM task_final_review_stats WHERE 0")
@@ -435,6 +436,11 @@ def _ensure_final_review_stats_scope(db):
                 "ADD COLUMN required_count INTEGER NOT NULL DEFAULT 0"
             )
             db.execute("DELETE FROM task_final_review_stats")
+        if "preparation_version" not in columns:
+            db.execute(
+                "ALTER TABLE task_final_review_stats "
+                "ADD COLUMN preparation_version TEXT NOT NULL DEFAULT ''"
+            )
     except Exception:
         db.execute("ROLLBACK TO final_review_scope")
         raise

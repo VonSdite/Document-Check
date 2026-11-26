@@ -31,6 +31,7 @@ from app.checks.hyperlinks import (
     format_hyperlink_report,
     hyperlinks_from_meta,
 )
+from app.checks.report_filters import review_filter_scope
 from app.checks.sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
     build_sensitive_terms_invalid_report,
@@ -636,6 +637,12 @@ def _run_check_items_concurrently(
             item_cancel_event = check_events[item["code"]]
             execution = item_cancel_event.execution
             execution_meta = {"execution": execution} if execution else {}
+            review_scope = (
+                review_filter_scope(item) if task_type == DOCUMENT_TASK_TYPE else ""
+            )
+            template_code = item.get("template_code") or review_scope
+            if template_code:
+                execution_meta["template_code"] = template_code
 
             def ensure_active():
                 if cancel_event.is_set() or _cancel_requested(db, task_id, claim_token):
@@ -727,10 +734,11 @@ def _run_check_items_concurrently(
                             raw,
                             pdf_table_evidence=pdf_table_evidence,
                             cross_reference_index=cross_reference_index,
+                            review_scope=review_scope,
                         )
                         if removed:
                             logger.info(
-                                "本地证据校验已过滤缺失误报 task_id=%s item=%s count=%s",
+                                "报告后处理已过滤条目 task_id=%s item=%s count=%s",
                                 task_id,
                                 item["name"],
                                 removed,

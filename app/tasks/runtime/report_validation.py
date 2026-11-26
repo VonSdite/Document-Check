@@ -40,7 +40,7 @@ def parse_check_report(
     if any(
         not isinstance(item.get("description"), str)
         or not item["description"].strip()
-        or item.get("status") not in {"issue", "suggestion"}
+        or item.get("status") not in {"issue", "suggestion", "non_issue"}
         for item in report["items"]
     ):
         raise _invalid_report(content, f"{label}报告的问题条目缺少描述或有效判定")
