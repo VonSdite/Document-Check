@@ -2,6 +2,12 @@ import html
 import json
 import re
 
+from app.checks.cross_references import (
+    CrossReferenceIndex,
+    is_disproved_missing_reference,
+    missing_reference_targets,
+)
+
 TEXT_EXTRACTION_LIMITATION = (
     "输入内容是解析器从原文中抽取的文本，不代表原文的全部视觉内容。"
     "图片、图标、矢量图形、公式和表格版式可能未出现在抽取结果中。"
@@ -93,9 +99,13 @@ _TABLE_DATA_MISSING_PATTERNS = (
 )
 
 
-def is_unsupported_visual_missing_item(item: dict) -> bool:
+def is_unsupported_visual_missing_item(
+    item: dict, *, preserve_numbered_references: bool = False
+) -> bool:
     """判断文本检查是否在没有直接证据时声称视觉对象缺失。"""
     if not isinstance(item, dict):
+        return False
+    if preserve_numbered_references and missing_reference_targets(item):
         return False
     excerpt = "\n".join(str(item.get(field) or "") for field in _EXCERPT_FIELDS)
     if _EXPLICIT_PLACEHOLDER_PATTERN.search(excerpt):
@@ -108,12 +118,19 @@ def filter_unsupported_visual_missing_items(
     items: list,
     *,
     pdf_table_evidence: dict | None = None,
+    cross_reference_index: CrossReferenceIndex | None = None,
 ) -> tuple[list, int]:
     filtered = []
     removed_count = 0
     for item in items:
         if isinstance(item, dict) and (
-            is_unsupported_visual_missing_item(item)
+            is_unsupported_visual_missing_item(
+                item, preserve_numbered_references=cross_reference_index is not None
+            )
+            or (
+                cross_reference_index is not None
+                and is_disproved_missing_reference(item, cross_reference_index)
+            )
             or is_unsupported_pdf_table_data_missing_item(
                 item, pdf_table_evidence or {}
             )
@@ -128,8 +145,9 @@ def sanitize_text_check_result(
     content: str,
     *,
     pdf_table_evidence: dict | None = None,
+    cross_reference_index: CrossReferenceIndex | None = None,
 ) -> tuple[str, int]:
-    """在文本检查的最终 JSON 写入报告前过滤无依据的视觉对象缺失结论。"""
+    """入库前核对视觉缺失、图表引用存在性与表格单元格证据。"""
     text = str(content or "")
     payload = _load_report_payload(text)
     if not isinstance(payload, dict):
@@ -143,6 +161,7 @@ def sanitize_text_check_result(
     filtered_items, removed_count = filter_unsupported_visual_missing_items(
         payload[item_key],
         pdf_table_evidence=pdf_table_evidence,
+        cross_reference_index=cross_reference_index,
     )
     if not removed_count:
         return text, 0

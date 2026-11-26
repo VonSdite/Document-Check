@@ -274,7 +274,12 @@ def _prepare_task_results(
         }:
             retained_report_items = []
             for report_item in report_items:
-                if is_unsupported_visual_missing_item(report_item):
+                if is_unsupported_visual_missing_item(
+                    report_item,
+                    preserve_numbered_references=bool(
+                        item.get("cross_reference_guard")
+                    ),
+                ):
                     filtered_visual_missing_count += 1
                 else:
                     retained_report_items.append(report_item)

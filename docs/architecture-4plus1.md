@@ -195,6 +195,7 @@ app/                              Python 命名空间包
     hyperlinks.py                 链接校验
     text_language.py              语种判断
     language_consistency.py       跨语种静态分析
+    cross_references.py           图表编号存在性校验
     guardrails.py                 证据约束
   tasks/
     submission.py                 提交数据、验证、文件入库与任务事务

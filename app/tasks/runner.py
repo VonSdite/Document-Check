@@ -15,6 +15,7 @@ from app.checks.common_terms import (
     format_common_terms_report,
     load_common_terms,
 )
+from app.checks.cross_references import build_cross_reference_index
 from app.checks.document_release import (
     DOCUMENT_RELEASE_CHECK_CODE,
     build_document_release_report,
@@ -558,6 +559,11 @@ def _run_check_items_concurrently(
     local_rule_document_text = _local_rule_document_text(document_text, document_meta)
     if scope is None and task_type == DOCUMENT_TASK_TYPE:
         scope = document_check_scope(document_text)
+    cross_reference_index = (
+        build_cross_reference_index(scope.ai_text)
+        if task_type == DOCUMENT_TASK_TYPE and scope
+        else None
+    )
     term_scope = (
         scope
         if local_rule_document_text == document_text
@@ -715,6 +721,27 @@ def _run_check_items_concurrently(
                     content = json.dumps(structured_report, ensure_ascii=False)
                 else:
                     scope_note = scope.ai_note if scope else ""
+
+                    def sanitize_result(raw):
+                        sanitized, removed = sanitize_text_check_result(
+                            raw,
+                            pdf_table_evidence=pdf_table_evidence,
+                            cross_reference_index=cross_reference_index,
+                        )
+                        if removed:
+                            logger.info(
+                                "本地证据校验已过滤缺失误报 task_id=%s item=%s count=%s",
+                                task_id,
+                                item["name"],
+                                removed,
+                            )
+                        return sanitized
+
+                    guard_meta = (
+                        {"cross_reference_guard": 1}
+                        if cross_reference_index is not None
+                        else {}
+                    )
                     scoped_item = {
                         **item,
                         "prompt": scope.prompt(item["prompt"])
@@ -763,6 +790,7 @@ def _run_check_items_concurrently(
                         previous = previous_by_code.get(item["code"], {})
 
                         def save_round_result(snapshot):
+                            snapshot.update(guard_meta)
                             with result_lock:
                                 partial_by_code[item["code"]] = {
                                     "code": item["code"],
@@ -812,26 +840,15 @@ def _run_check_items_concurrently(
                             ensure_active=ensure_active,
                             on_update=save_round_result,
                             on_round_start=start_round,
-                            sanitize=lambda raw: sanitize_text_check_result(
-                                raw, pdf_table_evidence=pdf_table_evidence
-                            )[0],
+                            sanitize=sanitize_result,
                         )
                         content = round_result["result"]
                         structured_report = round_result["structured_report"]
                     else:
                         content = model_access.run(run_check, **run_check_kwargs)
                         parse_check_report(content, allow_plain_text=True, label="本次")
-                    content, filtered_unsupported_count = sanitize_text_check_result(
-                        content,
-                        pdf_table_evidence=pdf_table_evidence,
-                    )
-                    if filtered_unsupported_count:
-                        logger.info(
-                            "已过滤证据不足的视觉对象或表格数据缺失结论 task_id=%s item=%s count=%s",
-                            task_id,
-                            item["name"],
-                            filtered_unsupported_count,
-                        )
+                        content = sanitize_result(content)
+                    execution_meta.update(guard_meta)
                 ensure_active()
                 if finish_check_activity(
                     task_id,
