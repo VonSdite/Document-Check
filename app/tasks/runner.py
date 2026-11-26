@@ -15,6 +15,10 @@ from app.checks.common_terms import (
     format_common_terms_report,
     load_common_terms,
 )
+from app.checks.document_release import (
+    DOCUMENT_RELEASE_CHECK_CODE,
+    build_document_release_report,
+)
 from app.checks.guardrails import (
     build_pdf_table_evidence_index,
     sanitize_text_check_result,
@@ -24,6 +28,11 @@ from app.checks.hyperlinks import (
     build_hyperlink_report,
     format_hyperlink_report,
     hyperlinks_from_meta,
+)
+from app.checks.revision_history import (
+    REVISION_SCOPE_INSTRUCTION,
+    REVISION_SCOPE_NOTE,
+    exclude_revision_history,
 )
 from app.checks.sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
@@ -537,7 +546,12 @@ def _run_check_items_concurrently(
     issue_output_limit = _issue_output_limit()
     pdf_table_evidence = build_pdf_table_evidence_index(document_text)
     local_rule_document_text = _local_rule_document_text(document_text, document_meta)
-    model_document_text = compact_model_document_text(document_text)
+    scoped_text, excluded_sections = (
+        exclude_revision_history(document_text)
+        if task_type == DOCUMENT_TASK_TYPE
+        else (document_text, [])
+    )
+    model_document_text = compact_model_document_text(scoped_text)
     check_rounds = (
         normalize_check_rounds((document_meta or {}).get("check_rounds"))
         if task_type == DOCUMENT_TASK_TYPE
@@ -670,9 +684,23 @@ def _run_check_items_concurrently(
                         network=outbound_network_config(),
                     )
                     content = format_hyperlink_report(structured_report)
+                elif executor_code == DOCUMENT_RELEASE_CHECK_CODE:
+                    structured_report = build_document_release_report(
+                        local_rule_document_text
+                    )
+                    content = json.dumps(structured_report, ensure_ascii=False)
                 else:
+                    scoped_item = {
+                        **item,
+                        "prompt": item["prompt"]
+                        + (
+                            "\n\n" + REVISION_SCOPE_INSTRUCTION
+                            if excluded_sections
+                            else ""
+                        ),
+                    }
                     _validate_document_check_inputs(
-                        model_document_text, task["max_input_chars"], [item]
+                        model_document_text, task["max_input_chars"], [scoped_item]
                     )
                     network = outbound_network_config()
                     run_check_kwargs = {
@@ -688,7 +716,7 @@ def _run_check_items_concurrently(
                             task, "force_disable_thinking"
                         ),
                         "check_name": item["name"],
-                        "prompt": item["prompt"],
+                        "prompt": scoped_item["prompt"],
                         "document_text": model_document_text,
                         "issue_output_limit": issue_output_limit,
                         "on_content": lambda content: save_partial(
@@ -832,6 +860,10 @@ def _run_check_items_concurrently(
             if round_result is not None:
                 result.update(round_result)
                 result["item_acceptances"] = previous.get("item_acceptances", {})
+            if excluded_sections and (
+                structured_report is None or round_result is not None
+            ):
+                result["scope_note"] = REVISION_SCOPE_NOTE
             with result_lock:
                 round_progress.pop(item["code"], None)
                 completed_by_code[item["code"]] = result

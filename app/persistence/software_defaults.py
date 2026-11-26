@@ -35,7 +35,13 @@ def seed_software_profile(db):
     if db.execute("SELECT 1 FROM settings WHERE key = ?", (key,)).fetchone():
         return
     now = now_text()
-    codes = (*SOFTWARE_PROMPTS, "sensitive-terms", "common-terms", "hyperlink-validity")
+    codes = (
+        *SOFTWARE_PROMPTS,
+        "sensitive-terms",
+        "common-terms",
+        "hyperlink-validity",
+        "document-release-consistency",
+    )
     for code in codes:
         item = db.execute(
             "SELECT * FROM check_items WHERE profile_id = 'default' AND code = ?",

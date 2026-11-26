@@ -6,7 +6,12 @@ from app.contracts.task_types import DOCUMENT_TASK_TYPE
 from app.persistence.connection import get_db, now_text
 
 POOL_MIGRATION_KEY = "document_check_item_pool_v1"
-LOCAL_CHECK_CODES = {"sensitive-terms", "common-terms", "hyperlink-validity"}
+LOCAL_CHECK_CODES = {
+    "sensitive-terms",
+    "common-terms",
+    "hyperlink-validity",
+    "document-release-consistency",
+}
 
 
 def initialize_check_item_pool_schema(db):

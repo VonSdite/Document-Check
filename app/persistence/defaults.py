@@ -26,6 +26,15 @@ _DOCUMENT_CHECK_OUTPUT_REQUIREMENTS = """统一定位与输出要求：
 
 DEFAULT_DOCUMENT_CHECK_ITEMS = (
     {
+        "code": "document-release-consistency",
+        "name": "文档版本与发布日期检查",
+        "description": "通过确定性规则核对封面与修订记录最新文档版本的版本号、发布日期。",
+        "prompt": "本检查项使用本地规则读取封面及修订记录、Change History、Revision History，"
+        "按数字版本号确定最新条目，分别核对版本号与发布日期。"
+        "等价日期格式及版本号前导零按同值处理；证据不足或日期有歧义时给出待确认结果。",
+        "sort_order": 60,
+    },
+    {
         "code": "compliance",
         "name": "文档规范性检查",
         "description": "检查语言文字、术语命名、日期数字与单位、结构层级、编号和交叉引用规范。",
@@ -772,7 +781,36 @@ def seed_defaults():
     from app.persistence.check_item_pool import seed_check_item_pool
 
     seed_check_item_pool(db)
+    _seed_document_release_check(db, now)
     db.commit()
+
+
+def _seed_document_release_check(db, updated_at):
+    key = "document_release_check_seeded_v1"
+    if db.execute("SELECT 1 FROM settings WHERE key = ?", (key,)).fetchone():
+        return
+    code = "document-release-consistency"
+    row = db.execute(
+        "SELECT id FROM check_items WHERE profile_id = 'default' AND code = ?",
+        (code,),
+    ).fetchone()
+    db.execute(
+        "UPDATE check_items SET template_code = ? WHERE id = ?", (code, row["id"])
+    )
+    for profile in ("default", "software"):
+        cursor = db.execute(
+            "INSERT OR IGNORE INTO check_profile_items(profile_id, check_item_id) VALUES (?, ?)",
+            (profile, row["id"]),
+        )
+        if cursor.rowcount:
+            db.execute(
+                "UPDATE check_profiles SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                (updated_at, profile),
+            )
+    db.execute(
+        "INSERT INTO settings(key, value, updated_at) VALUES (?, 'true', ?)",
+        (key, updated_at),
+    )
 
 
 def _migrate_task_file_retention_setting(db, updated_at: str):

@@ -3,6 +3,7 @@
 import json
 
 from app.contracts.task_types import DOCUMENT_TASK_TYPE
+from app.persistence.check_item_pool import LOCAL_CHECK_CODES
 
 
 def selected_check_items(db, task):
@@ -93,11 +94,7 @@ def _check_items_from_snapshot(raw: str | None) -> list[dict]:
         if item.get("check_method") == "skill":
             saved["check_method"] = "skill"
             saved["skill_package"] = item.get("skill_package", {})
-        if item.get("executor_code") in {
-            "sensitive-terms",
-            "common-terms",
-            "hyperlink-validity",
-        }:
+        if item.get("executor_code") in LOCAL_CHECK_CODES:
             saved["executor_code"] = item["executor_code"]
         items.append(saved)
     return items

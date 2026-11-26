@@ -1,6 +1,6 @@
 {% set method = check_item.check_method if check_item else 'prompt' %}
 {% set package = check_item.skill_package if check_item else {} %}
-{% set local_rule = check_item and (check_item.template_code or check_item.code) in ['sensitive-terms', 'common-terms', 'hyperlink-validity'] %}
+{% set local_rule = check_item and (check_item.template_code or check_item.code) in ['sensitive-terms', 'common-terms', 'hyperlink-validity', 'document-release-consistency'] %}
 {% if rules_only and not local_rule %}
 <label>检查方式
   <select name="check_method" data-check-method>
