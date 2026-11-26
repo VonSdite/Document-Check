@@ -123,6 +123,7 @@ def document_body_view(text: str) -> DocumentBodyView:
 def _url_spans(text: str):
     """标识网址和由路径分隔符连接的抽取换行片段。"""
     previous_end = 0
+    line_end = line_content_end = -1
     for match in _URL_RE.finditer(text):
         if match.start() < previous_end:
             continue
@@ -137,12 +138,25 @@ def _url_spans(text: str):
             if value.strip("#") == "":
                 break
             connects = text[end - 1] in "/／-_?&=#%" or value[0] in "/?#&"
-            line_end = text.find("\n", fragment.end())
-            remainder = text[fragment.end() : line_end if line_end >= 0 else len(text)]
-            path_fragment = any(char in value for char in "/?&=#%")
-            if not connects or (not path_fragment and remainder.strip()):
+            if not connects:
                 break
-            end = fragment.end()
+            path_fragment = any(char in value for char in "/?&=#%")
+            fragment_end = fragment.end()
+            if not path_fragment:
+                # 候选按原文顺序出现，同一行按需复用正文结束位置。
+                if fragment_end > line_end:
+                    line_end = text.find("\n", fragment_end)
+                    if line_end < 0:
+                        line_end = len(text)
+                    line_content_end = line_end
+                    while (
+                        line_content_end > fragment_end
+                        and text[line_content_end - 1].isspace()
+                    ):
+                        line_content_end -= 1
+                if fragment_end < line_content_end:
+                    break
+            end = fragment_end
         previous_end = end
         yield match.start(), end
 

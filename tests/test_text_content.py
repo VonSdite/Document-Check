@@ -1,6 +1,92 @@
 import unittest
 
-from app.checks.text_content import document_body_view
+from app.checks.text_content import _url_spans, document_body_view
+
+
+class _MeasuredText(str):
+    """统计显式搜索和字符读取量，验证扫描成本与文本长度的关系。"""
+
+    def __init__(self, value):
+        self.searched_characters = 0
+        self.read_characters = 0
+
+    def find(self, sub, start=0, end=None):
+        end = len(self) if end is None else end
+        result = super().find(sub, start, end)
+        self.searched_characters += (result + len(sub) if result >= 0 else end) - start
+        return result
+
+    def __getitem__(self, key):
+        result = super().__getitem__(key)
+        self.read_characters += len(result)
+        return result
+
+
+class UrlSpanTest(unittest.TestCase):
+    def test_word_continuations_preserve_whitespace_and_prose_boundaries(self):
+        prefix = "https://example.test/downloads/"
+        for gap in (" ", "\t", "\n", "\r\n", "\n  "):
+            for trailing in ("", " \t", "\r\n", "\u00a0\u3000\n"):
+                with self.subTest(gap=gap, trailing=trailing):
+                    url = prefix + gap + "fusionsolar"
+                    self.assertEqual(list(_url_spans(url + trailing)), [(0, len(url))])
+            for prose in (
+                " is mentioned in prose.",
+                " 中文正文",
+                "\u00a0正文",
+                "\ufeff",
+            ):
+                with self.subTest(gap=gap, prose=prose):
+                    source = prefix + gap + "fusionsolar" + prose
+                    self.assertEqual(list(_url_spans(source)), [(0, len(prefix))])
+
+    def test_same_line_candidates_and_following_lines_keep_distinct_boundaries(self):
+        prefix = "https://example.test/"
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=newline):
+                line = f"{prefix} fusionsolar prose {prefix} tail \t\u00a0\u3000"
+                source = newline.join(
+                    [line, f"{prefix} plain", f"{prefix} visible prose", "正文"]
+                )
+                spans = [source[start:end] for start, end in _url_spans(source)]
+                self.assertEqual(
+                    spans,
+                    [prefix, prefix + " tail", prefix + " plain", prefix],
+                )
+                body = document_body_view(source)
+                self.assertEqual(
+                    body.text.split(),
+                    ["fusionsolar", "prose", "visible", "prose", "正文"],
+                )
+                start = body.text.index("visible")
+                self.assertEqual(
+                    body.source_span(start, start + len("visible")),
+                    (source.index("visible"), source.index("visible") + len("visible")),
+                )
+
+    def test_long_lines_bound_tail_scanning_and_copying_by_input_size(self):
+        prefix = "https://example.test/"
+        for count in (100, 1000):
+            independent = " ".join([prefix + "fusionsolar"] * count)
+            connected = prefix + " " + " ".join(["/fusionsolar"] * count)
+            mixed = (prefix + " fusionsolar prose ") * count + prefix + " tail"
+            for source, expected in (
+                (independent, [prefix + "fusionsolar"] * count),
+                (connected, [connected]),
+                (
+                    mixed + " \t\u00a0\u3000" * count,
+                    [prefix] * count + [prefix + " tail"],
+                ),
+            ):
+                with self.subTest(count=count, length=len(source)):
+                    text = _MeasuredText(source)
+                    spans = list(_url_spans(text))
+                    self.assertEqual(
+                        [source[start:end] for start, end in spans], expected
+                    )
+                    self.assertLessEqual(
+                        text.searched_characters + text.read_characters, 3 * len(source)
+                    )
 
 
 class DocumentBodyViewTest(unittest.TestCase):
