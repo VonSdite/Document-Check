@@ -7,7 +7,7 @@ from app.checks.cross_references import (
     is_disproved_missing_reference,
     missing_reference_targets,
 )
-from app.checks.report_filters import report_filter_reason
+from app.checks.report_filters import report_filter_audit
 
 TEXT_EXTRACTION_LIMITATION = (
     "输入内容是解析器从原文中抽取的文本，不代表原文的全部视觉内容。"
@@ -149,7 +149,7 @@ def sanitize_text_check_result(
     cross_reference_index: CrossReferenceIndex | None = None,
     review_scope: str = "",
 ) -> tuple[str, int]:
-    """入库前校验本地证据，过滤无需处理和越出检查范围的补充建议。"""
+    """入库前校验本地证据，保留后处理条目并记录其过滤原因。"""
     text = str(content or "")
     payload = _load_report_payload(text)
     if not isinstance(payload, dict):
@@ -165,17 +165,18 @@ def sanitize_text_check_result(
         pdf_table_evidence=pdf_table_evidence,
         cross_reference_index=cross_reference_index,
     )
-    actionable_items = [
-        item
-        for item in filtered_items
-        if not report_filter_reason(item, review_scope=review_scope)
-    ]
-    removed_count += len(filtered_items) - len(actionable_items)
-    if not removed_count:
+    audit = report_filter_audit(filtered_items, review_scope=review_scope)
+    hidden_count = len(audit["items"])
+    if not removed_count and not hidden_count and "report_filter" not in payload:
         return text, 0
-    payload[item_key] = actionable_items
-    payload["summary"] = guarded_report_summary(actionable_items)
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")), removed_count
+    payload[item_key] = filtered_items
+    payload["report_filter"] = audit
+    if removed_count:
+        payload["summary"] = guarded_report_summary(filtered_items)
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        removed_count + hidden_count,
+    )
 
 
 def build_pdf_table_evidence_index(document_text: str) -> dict:

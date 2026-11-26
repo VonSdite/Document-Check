@@ -6575,7 +6575,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         "category": "缺失与增补",
                         "location": "文档B 第10页目录",
                         "excerpt": "Measurement Methods of PV Optimizers",
-                        "description": "中文版目录缺少英文标题中的冠词，但不影响用户理解。",
+                        "description": "两处含义一致，不构成问题。",
                         "impact": "无实质影响。",
                         "suggestion": "无需修改。",
                     },
@@ -6642,6 +6642,23 @@ class AdminSettingsRouteTest(unittest.TestCase):
             ).get_text(strip=True),
             "100.0%",
         )
+
+        structured_report["items"][0]["description"] = (
+            "中文版目录缺少英文标题中的冠词，但不影响用户理解。"
+        )
+        result_json[0]["result"] = json.dumps(structured_report, ensure_ascii=False)
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET result_json=? WHERE id=?",
+                (json.dumps(result_json, ensure_ascii=False), task_id),
+            )
+            get_db().commit()
+        response = self.client.get(f"/admin/tasks/{task_id}")
+        self.assertEqual(response.status_code, 200)
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        rows = soup.select("[data-report-item]")
+        self.assertEqual(len(rows), 2)
+        self.assertIn("缺少英文标题中的冠词", soup.get_text())
 
     def test_task_detail_parses_double_encoded_structured_json_report(self):
         with self.app.app_context():

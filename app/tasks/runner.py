@@ -31,7 +31,7 @@ from app.checks.hyperlinks import (
     format_hyperlink_report,
     hyperlinks_from_meta,
 )
-from app.checks.report_filters import review_filter_scope
+from app.checks.report_filters import report_filter_audit, review_filter_scope
 from app.checks.sensitive_terms import (
     SENSITIVE_TERMS_CHECK_CODE,
     build_sensitive_terms_invalid_report,
@@ -56,6 +56,7 @@ from app.models.client import LLMError, LLMIncompleteResponseError, run_check
 from app.models.document_input import compact_model_document_text
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
+from app.reporting.service import _result_report_items
 from app.tasks.activity import (
     CHECK_CANCELED_MESSAGE,
     CheckCancelEvent,
@@ -799,6 +800,12 @@ def _run_check_items_concurrently(
 
                         def save_round_result(snapshot):
                             snapshot.update(guard_meta)
+                            snapshot["report_filter"] = report_filter_audit(
+                                _result_report_items(
+                                    {"code": item["code"], **snapshot}
+                                ),
+                                review_scope=review_scope,
+                            )
                             with result_lock:
                                 partial_by_code[item["code"]] = {
                                     "code": item["code"],
@@ -909,6 +916,9 @@ def _run_check_items_concurrently(
                 result["item_acceptances"] = previous.get("item_acceptances", {})
             if scope_note:
                 result["scope_note"] = scope_note
+            result["report_filter"] = report_filter_audit(
+                _result_report_items(result), review_scope=review_scope
+            )
             with result_lock:
                 round_progress.pop(item["code"], None)
                 completed_by_code[item["code"]] = result

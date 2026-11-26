@@ -85,7 +85,11 @@ class ReportFeedbackTest(unittest.TestCase):
                 rejected_item = source["structured_report"]["items"][1]
                 rules = {}
                 if mode == "no_action":
-                    rejected_item.update(impact="无实质影响", suggestion="无需修改")
+                    rejected_item.update(
+                        description="当前表述正确",
+                        impact="无实质影响",
+                        suggestion="无需修改",
+                    )
                 elif mode == "limit":
                     source["issue_output_limit"] = 1
                 elif mode == "duplicate":

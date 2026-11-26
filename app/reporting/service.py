@@ -269,7 +269,7 @@ def _prepare_task_results(
         )
         report_items = _result_report_items(item, structured_report)
         dictionary_status_ids = {entry["id"] for entry in dictionary_status_items}
-        filtered_report_count = 0
+        filtered_report_items = []
         review_scope = (
             review_filter_scope(item) if task_type in {None, DOCUMENT_TASK_TYPE} else ""
         )
@@ -280,18 +280,14 @@ def _prepare_task_results(
         }
         retained_report_items = []
         for report_item in report_items:
-            if (
-                report_item.get("type") == "non_issue"
-                or report_filter_reason(report_item, review_scope=review_scope)
-                or filter_visual_missing
-                and is_unsupported_visual_missing_item(
-                    report_item,
-                    preserve_numbered_references=bool(
-                        item.get("cross_reference_guard")
-                    ),
-                )
+            reason = report_filter_reason(report_item, review_scope=review_scope)
+            if filter_visual_missing and is_unsupported_visual_missing_item(
+                report_item,
+                preserve_numbered_references=bool(item.get("cross_reference_guard")),
             ):
-                filtered_report_count += 1
+                reason = reason or "unsupported_visual_missing"
+            if reason:
+                filtered_report_items.append({**report_item, "filter_reason": reason})
             else:
                 retained_report_items.append(report_item)
         report_items = retained_report_items
@@ -344,7 +340,7 @@ def _prepare_task_results(
             report_item["index"] = display_index
         item["result_summary"] = (
             guarded_report_summary(report_items)
-            if filtered_report_count
+            if filtered_report_items
             else _result_report_summary(
                 item, structured_report, dictionary_status_items
             )
@@ -355,6 +351,7 @@ def _prepare_task_results(
                 part for part in (item["result_summary"], scope_note) if part
             )
         item["report_items"] = report_items
+        item["filtered_report_items"] = filtered_report_items
         item["report_limit"] = report_limit
         item["suppressed_report_items"] = suppressed_items
         item["report_counts"] = _count_report_items(
@@ -1041,7 +1038,11 @@ def _normalize_structured_report_item(raw_item) -> dict:
     fields["type"] = (
         "non_issue"
         if _is_no_action_report_item(fields)
-        else status or _infer_report_item_type(item_text)
+        else (
+            status
+            if status in {"issue", "suggestion"}
+            else _infer_report_item_type(item_text)
+        )
     )
     return fields
 
@@ -1425,9 +1426,7 @@ def _report_item_id(result_code: str, index: int, text: str) -> str:
 
 def _infer_report_item_type(text: str) -> str:
     compact = re.sub(r"\s+", "", str(text or ""))
-    if is_no_action_finding(_legacy_report_item_fields(text)) or re.match(
-        r"^(?:\d+[.、)]\s*)?非问题[:：]", _clean_report_item_line(text)
-    ):
+    if is_no_action_finding(_legacy_report_item_fields(text)):
         return "non_issue"
     if any(
         marker in compact

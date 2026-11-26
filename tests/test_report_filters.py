@@ -5,7 +5,11 @@ from unittest.mock import patch
 from openpyxl import load_workbook
 
 from app.checks.guardrails import sanitize_text_check_result
-from app.checks.report_filters import report_filter_reason, review_filter_scope
+from app.checks.report_filters import (
+    REPORT_FILTER_VERSION,
+    report_filter_reason,
+    review_filter_scope,
+)
 from app.contracts.task_types import DOCUMENT_TASK_TYPE, LANGUAGE_CONSISTENCY_TASK_TYPE
 from app.persistence.connection import get_db
 from app.persistence.schema import init_db
@@ -44,8 +48,11 @@ class ReportFilterRuleTest(unittest.TestCase):
             item("操作步骤过于笼统，缺少具体操作说明。", "细化操作步骤。"),
             item("操作流程不够详细。", "展开操作说明。"),
             item("未说明直流柜并柜时如何操作。", "补充并柜操作步骤。"),
+            item("未说明设备启动时如何配置。", "补充具体操作步骤。"),
             item("参数说明未解释选择依据。"),
             item("参数说明未明确适用条件。"),
+            item("补充适用范围。", "补充温度范围。"),
+            item("缺少环境温度范围。", "补充环境温度范围。"),
             item("引用《用户手册》未提供版本号及获取方式。", "补充版本号和下载地址。"),
             item("未注明手册的下载地址或获取入口。", "提供手册获取方式。"),
             item("请补充适用范围说明。"),
@@ -90,6 +97,20 @@ class ReportFilterRuleTest(unittest.TestCase):
             item("图4-42不存在。", "核对引用编号。"),
             item("文档说明适用版本为V1，示例却使用V2的接口。", "核对接口名称。"),
             item("A明确适用范围仅包括型号甲，B要求型号乙也执行。", "核对型号要求。"),
+            item(
+                "未说明工况，且同一设备的产品型号在第2章为ABC-100，在第3章为ABC-200，型号不一致。",
+                "核对并统一设备型号，同时补充工况说明。",
+            ),
+            item(
+                "未说明适用范围，正文把公司名称写成华未。",
+                "补充适用范围，并将华未替换成华为。",
+            ),
+            item("未说明工况。", "补充工况和单位。"),
+            item("补充适用范围。", "补充温度范围，并需补单位。"),
+            item("温度范围为0至50度，额定温度为60度，存在矛盾。", "补充温度范围。"),
+            item("当前表述无需修改，但仍需添加单位。", ""),
+            item("无需修改数值，但需补单位。", ""),
+            item("未说明工况。", "改用另一种接线方案，并补充工况。"),
         ):
             with self.subTest(description=case["description"]):
                 self.assertEqual(
@@ -108,6 +129,10 @@ class ReportFilterRuleTest(unittest.TestCase):
             item("These descriptions are equivalent.", "No changes required."),
             {"状态": "问题", "问题描述": "该表述可接受。", "修改建议": "不需要修改。"},
             item("格式符合要求。", "", status="non_issue"),
+            item("该术语结合上下文可以接受。", "无需修改。"),
+            item("该交叉引用适用于当前章节。", "无需修改。"),
+            item("该项不是问题。", "无需修改。"),
+            item("明确非问题。", "", status="non_issue"),
         )
         for case in cases:
             with self.subTest(case=case):
@@ -129,6 +154,13 @@ class ReportFilterRuleTest(unittest.TestCase):
             item("没有异常处理步骤。", ""),
             item("没有错误码的说明。", ""),
             item("影响较小，但应统一标点。", "更正标点。"),
+            item("无需修改数值，但需补单位。", "", status="non_issue"),
+            item("无需修改。", "Add units to the input voltage.", status="non_issue"),
+            item("型号前后不一致。", "统一设备型号。", status="non_issue"),
+            item("检查完成。", "", status="non_issue"),
+            item("需核查适用范围。", "无需修改。"),
+            item("该术语结合上下文可以接受，但需补单位。", "无需修改。"),
+            item("该项不是问题。", "仍需添加单位。"),
         ):
             with self.subTest(case=case):
                 self.assertEqual(report_filter_reason(case), "")
@@ -157,7 +189,7 @@ class ReportFilterRuleTest(unittest.TestCase):
         ):
             self.assertEqual(review_filter_scope(check), expected)
 
-    def test_json_aliases_and_summary_reflect_filtered_findings(self):
+    def test_json_aliases_preserve_items_and_record_filter_reasons(self):
         for key in ("items", "issues", "report_items", "findings", "problems"):
             payload = {
                 "summary": "发现3条问题。",
@@ -168,15 +200,139 @@ class ReportFilterRuleTest(unittest.TestCase):
                 review_scope="consistency",
             )
             self.assertEqual(removed, 2)
-            self.assertEqual(json.loads(content)[key], [actionable()])
+            saved = json.loads(content)
+            self.assertEqual(saved[key], payload[key])
+            self.assertEqual(saved["summary"], payload["summary"])
             self.assertEqual(
-                json.loads(content)["summary"], "检查完成，保留 1 条明确问题。"
+                saved["report_filter"],
+                {
+                    "version": REPORT_FILTER_VERSION,
+                    "scope": "consistency",
+                    "items": [
+                        {"index": 1, "reason": "supplement_only"},
+                        {"index": 2, "reason": "no_action"},
+                    ],
+                },
+            )
+            prepared = _prepare_task_results(
+                [{"code": "consistency", "result": content}],
+                task_type=DOCUMENT_TASK_TYPE,
+                suppression_rules={},
+            )[0]
+            self.assertEqual(len(prepared["report_items"]), 1)
+            self.assertEqual(
+                prepared["result_summary"], "检查完成，保留 1 条明确问题。"
+            )
+            self.assertEqual(
+                [entry["filter_reason"] for entry in prepared["filtered_report_items"]],
+                ["supplement_only", "no_action"],
             )
         content, removed = sanitize_text_check_result(
             rounds.report(item()), review_scope="compliance"
         )
         self.assertEqual(removed, 1)
-        self.assertEqual(json.loads(content)["items"], [])
+        self.assertEqual(json.loads(content)["items"], [item()])
+
+    def test_unknown_claims_in_any_position_keep_the_whole_finding(self):
+        for unknown in (
+            "还存在其他待核对事项",
+            "该连接方式需要重新评估",
+            "单位应补上",
+            "公司名称写成华未",
+        ):
+            for separator in ("，", "；", "。", "\n", "，同时"):
+                for description in (
+                    f"未说明工况{separator}{unknown}",
+                    f"{unknown}{separator}未说明工况",
+                    f"无需修改{separator}{unknown}",
+                ):
+                    with self.subTest(description=description):
+                        self.assertEqual(
+                            report_filter_reason(
+                                item(description, ""), review_scope="consistency"
+                            ),
+                            "",
+                        )
+
+    def test_quoted_conclusions_do_not_hide_the_surrounding_claim(self):
+        for description in (
+            "原文写作“无需修改，保持原文”，需要核对指令。",
+            "未说明工况，且“公司名称写成华未”需要处理。",
+            "正文写明“未说明工况”，无法判断其含义。",
+        ):
+            self.assertEqual(
+                report_filter_reason(item(description, ""), review_scope="compliance"),
+                "",
+            )
+
+    def test_non_issue_labels_do_not_override_actions_in_json_or_plain_text(self):
+        for result in (
+            {
+                "code": "consistency",
+                "result": rounds.report(
+                    item("无需修改数值，但需补单位。", "", status="non_issue")
+                ),
+            },
+            {"code": "consistency", "result": "1. 非问题：无需修改数值，但需补单位。"},
+        ):
+            prepared = _prepare_task_results(
+                [result], task_type=DOCUMENT_TASK_TYPE, suppression_rules={}
+            )[0]
+            self.assertEqual(len(prepared["report_items"]), 1)
+            self.assertIn(prepared["report_items"][0]["type"], {"issue", "suggestion"})
+
+    def test_saved_filter_decision_is_recomputed_without_rewriting_source(self):
+        content, _ = sanitize_text_check_result(
+            rounds.report(item(), actionable()), review_scope="compliance"
+        )
+        result = {"code": "compliance", "result": content}
+        kept_id = _result_report_items(result)[1]["id"]
+        self.assertEqual(
+            len(
+                _prepare_task_results([result], suppression_rules={})[0]["report_items"]
+            ),
+            1,
+        )
+        with patch("app.checks.report_filters._supplement_claim", return_value=""):
+            prepared = _prepare_task_results([result], suppression_rules={})[0]
+        self.assertEqual(len(prepared["report_items"]), 2)
+        self.assertIn(kept_id, [entry["id"] for entry in prepared["report_items"]])
+        self.assertEqual(result["result"], content)
+        self.assertEqual(
+            json.loads(content)["report_filter"]["items"][0]["reason"],
+            "supplement_only",
+        )
+
+    def test_multiround_retained_nonissues_keep_distinct_ids_from_actionable_items(
+        self,
+    ):
+        positive = item("当前表述正确。", "无需修改。", status="non_issue")
+        mixed = item("当前表述正确。", "需要补单位。", status="non_issue")
+        result = {
+            "code": "consistency",
+            **build_round_result(
+                "consistency",
+                2,
+                [
+                    rounds.completed(1, positive, mixed),
+                    rounds.completed(2, positive, mixed),
+                ],
+            ),
+        }
+        findings = result["structured_report"]["items"]
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(len({finding["id"] for finding in findings}), 2)
+        self.assertTrue(all(finding["source_rounds"] == [1, 2] for finding in findings))
+        prepared = _prepare_task_results(
+            [result], task_type=DOCUMENT_TASK_TYPE, suppression_rules={}
+        )[0]
+        self.assertEqual(len(prepared["report_items"]), 1)
+        self.assertEqual(prepared["report_items"][0]["suggestion"], mixed["suggestion"])
+        with patch("app.reporting.service.report_filter_reason", return_value=""):
+            restored = _prepare_task_results(
+                [result], task_type=DOCUMENT_TASK_TYPE, suppression_rules={}
+            )[0]
+        self.assertEqual(len(restored["report_items"]), 2)
 
     def test_historical_json_and_legacy_text_use_same_filter_without_changing_ids(self):
         result = {"code": "compliance", "result": rounds.report(item(), actionable())}
@@ -222,7 +378,61 @@ class ReportFilterExecutionTest(unittest.TestCase):
     task = rounds.DocumentRoundExecutionTest.task
     retry = rounds.DocumentRoundExecutionTest.retry
 
-    def test_single_multi_and_renamed_pool_checks_filter_before_persistence(self):
+    def test_mixed_findings_survive_execution_reviews_statistics_and_export(self):
+        mixed = item(
+            "未说明工况，同一设备型号在两处分别写作ABC-100和ABC-200，型号不一致。",
+            "核对并统一设备型号，同时补充工况说明。",
+            excerpt="设备型号ABC-100；设备型号ABC-200",
+        )
+        mislabeled = item("无需修改数值，但需补单位。", "", status="non_issue")
+        raw = rounds.report(item(), item("表述正确。", "无需修改。"), mixed, mislabeled)
+        for planned in (1, 2):
+            with self.subTest(planned=planned):
+                task_id = self.create_task(codes=("consistency",), rounds=planned)
+                with patch("app.tasks.runner.run_check", return_value=raw):
+                    TaskRunner(self.app).run(task_id)
+                task = self.task(task_id)
+                self.assertEqual(task["status"], "completed", task["error"])
+                result = json.loads(task["result_json"])[0]
+                self.assertEqual(len(json.loads(result["result"])["items"]), 4)
+                prepared = _prepare_task_results(
+                    [result], task_type=DOCUMENT_TASK_TYPE, suppression_rules={}
+                )[0]
+                self.assertEqual(
+                    {entry["description"] for entry in prepared["report_items"]},
+                    {mixed["description"], mislabeled["description"]},
+                )
+                self.assertTrue(
+                    all(
+                        entry["type"] in {"issue", "suggestion"}
+                        for entry in prepared["report_items"]
+                    )
+                )
+                db = get_db()
+                db.execute(
+                    "INSERT OR REPLACE INTO task_report_stats "
+                    "(task_id, source_updated_at, suppression_version, issue_count, updated_at) "
+                    "VALUES (?, ?, '7-report-filters|0:0:', 0, 'now')",
+                    (task_id, task["updated_at"]),
+                )
+                db.execute(
+                    "INSERT OR REPLACE INTO task_final_review_stats "
+                    "(task_id, total, initial_count, confirmed, returned, deferred, pending, status, preparation_version) "
+                    "VALUES (?, 0, 0, 0, 0, 0, 0, 'empty', '7-report-filters')",
+                    (task_id,),
+                )
+                db.commit()
+                stats = _task_report_stat_rows_for_where("t.id = ?", (task_id,))[0]
+                self.assertEqual(stats["issue"] + stats["suggestion"], 2)
+                self.assertEqual(final_review_progress([task_id])[task_id]["total"], 2)
+                review = review_report(task)
+                self.assertEqual(len(review["results"][0]["report_items"]), 2)
+                workbook = load_workbook(build_report_workbook(task))
+                self.addCleanup(workbook.close)
+                self.assertEqual(workbook["报告条目"].max_row, 3)
+                self.assertEqual(self.task(task_id)["result_json"], task["result_json"])
+
+    def test_single_multi_and_renamed_pool_checks_preserve_filtered_sources(self):
         for planned, code in ((1, "compliance"), (2, "compliance"), (1, "pool-999")):
             with self.subTest(planned=planned, code=code):
                 task_id = self.create_task(codes=(code,), rounds=planned)
@@ -242,7 +452,8 @@ class ReportFilterExecutionTest(unittest.TestCase):
                 task = self.task(task_id)
                 self.assertEqual(task["status"], "completed", task["error"])
                 result = json.loads(task["result_json"])[0]
-                self.assertEqual(len(json.loads(result["result"])["items"]), 1)
+                self.assertEqual(len(json.loads(result["result"])["items"]), 3)
+                self.assertEqual(len(result["report_filter"]["items"]), 2)
                 self.assertEqual(
                     result["template_code"],
                     "consistency" if code.startswith("pool-") else "compliance",
@@ -250,7 +461,12 @@ class ReportFilterExecutionTest(unittest.TestCase):
                 if planned > 1:
                     for entry in result["round_results"]:
                         self.assertEqual(entry["result"], raw)
-                        self.assertEqual(entry["report"]["items"], [actionable()])
+                        self.assertEqual(
+                            entry["report"]["items"], json.loads(raw)["items"]
+                        )
+                        self.assertEqual(
+                            len(entry["report"]["report_filter"]["items"]), 2
+                        )
                 stats = _task_report_stat_rows_for_where("t.id = ?", (task_id,))[0]
                 self.assertEqual(stats["issue"], 1)
                 workbook = load_workbook(build_report_workbook(task))
@@ -265,7 +481,14 @@ class ReportFilterExecutionTest(unittest.TestCase):
         ):
             TaskRunner(self.app).run(task_id)
         result = json.loads(self.task(task_id)["result_json"])[0]
-        self.assertEqual(json.loads(result["result"])["items"], [item()])
+        self.assertEqual(len(json.loads(result["result"])["items"]), 2)
+        prepared = _prepare_task_results(
+            [result], task_type=DOCUMENT_TASK_TYPE, suppression_rules={}
+        )[0]
+        self.assertEqual(len(prepared["report_items"]), 1)
+        self.assertEqual(
+            prepared["report_items"][0]["description"], item()["description"]
+        )
 
     def test_historical_caches_reviews_and_export_refresh_without_rewriting_report(
         self,
@@ -363,8 +586,17 @@ class ReportFilterExecutionTest(unittest.TestCase):
         model.assert_called_once()
         result = json.loads(self.task(task_id)["result_json"])[0]
         self.assertEqual(result["round_results"][0]["result"], previous["result"])
-        self.assertEqual(result["round_results"][0]["report"]["items"], [actionable()])
-        self.assertEqual(result["structured_report"]["items"][0]["id"], kept_id)
+        self.assertEqual(
+            result["round_results"][0]["report"]["items"], [item(), actionable()]
+        )
+        self.assertEqual(
+            next(
+                entry["id"]
+                for entry in result["structured_report"]["items"]
+                if entry["description"] == actionable()["description"]
+            ),
+            kept_id,
+        )
         prepared = _prepare_task_results(
             [result], task_type=DOCUMENT_TASK_TYPE, suppression_rules={}
         )[0]

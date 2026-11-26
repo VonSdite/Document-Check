@@ -800,7 +800,8 @@ def _new_group(code: str, item: dict) -> dict:
                 "confidence",
             )
         },
-        "id": "round-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24],
+        "id": ("round-non-issue-" if item["type"] == "non_issue" else "round-")
+        + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24],
         "status": item["type"],
         "evidence_refs": item.get("evidence_refs", []),
         "source_rounds": [],
@@ -855,13 +856,12 @@ def _merge_findings(code: str, rounds: list[dict]) -> list[dict]:
         for item in _result_report_items(
             {"code": code, "structured_report": round_result["report"]}
         ):
-            if item.get("type") == "non_issue":
-                continue
             item["_round_number"] = round_number
             matching = [
                 index
-                for index, (_, sources) in enumerate(groups)
-                if any(_same_finding(source, item) for source in sources)
+                for index, (existing, sources) in enumerate(groups)
+                if (existing["status"] == "non_issue") == (item["type"] == "non_issue")
+                and any(_same_finding(source, item) for source in sources)
                 and all(_compatible_claims(source, item) for source in sources)
             ]
             if not matching:
