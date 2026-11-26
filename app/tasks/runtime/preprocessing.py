@@ -31,6 +31,8 @@ from app.documents.images import (
 from app.documents.text_semantics import strip_script_markers
 from app.documents.videos import extract_video_frames, format_video_document_text
 from app.infrastructure.files import remove_directory_tree
+from app.models.document_input import compact_model_document_text, validate_model_input
+from app.persistence.check_item_pool import LOCAL_CHECK_CODES
 from app.persistence.connection import now_text
 from app.persistence.settings import get_setting
 from app.tasks.runtime.artifacts import _path_is_relative_to, _task_image_folder
@@ -99,7 +101,7 @@ def _prepare_task_inputs(
 
 
 def _build_document_task_inputs(app, task, *, cancel_event=None) -> tuple[str, dict]:
-    """为上传预检和任务执行构造完整正文及文档元数据。"""
+    """在任务进程中构造完整正文及文档元数据。"""
     extracted_text, hyperlinks = extract_document(
         _task_upload_path(app, task), task["file_type"], cancel_event=cancel_event
     )
@@ -115,6 +117,30 @@ def _build_document_task_inputs(app, task, *, cancel_event=None) -> tuple[str, d
         {**item, "source": task["original_filename"]} for item in hyperlinks
     ]
     return document_text, document_meta
+
+
+def _validate_document_check_inputs(
+    document_text: str, max_input_chars: int, checks: list[dict]
+) -> None:
+    """在启动文档检查前统一校验所有待执行 AI 检查项的输入长度。"""
+    ai_checks = [
+        item
+        for item in checks
+        if item.get("executor_code", item["code"]) not in LOCAL_CHECK_CODES
+    ]
+    if not ai_checks:
+        return
+    model_text = compact_model_document_text(document_text)
+    validate_model_input(model_text, max_input_chars)
+    for item in ai_checks:
+        if item.get("check_method") != "skill":
+            continue
+        input_chars = len(item["prompt"]) + len(model_text)
+        if input_chars > max_input_chars:
+            raise RuntimeError(
+                f"检查项“{item['name']}”的 Skill 指令、参考资料与文档合计 "
+                f"{input_chars} 字，超过当前模型文本上限 {max_input_chars} 字"
+            )
 
 
 def _prepare_image_task_inputs(

@@ -4391,7 +4391,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 help_tip = _required_tag(field.select_one(".help-tip"))
                 self.assertIn("每个视频独立抽帧并创建任务", help_tip["data-tip"])
 
-    def test_create_task_saves_check_snapshot_and_preflight_text(self):
+    def test_create_task_saves_check_snapshot_and_defers_text_extraction(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = (
@@ -4418,8 +4418,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
         snapshots = json.loads(task["checks_snapshot_json"])
         meta = json.loads(task["document_meta_json"])
         self._assert_task_uses_provider_reference(task, model_id, "high")
-        self.assertEqual(task["document_text"], "file: doc.txt\n\n测试文档")
-        self.assertEqual(meta["preprocessing"]["status"], "completed")
+        self.assertIsNone(task["document_text"])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertEqual(
             snapshots,
             [
@@ -4475,9 +4475,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertTrue(stored_path.is_file())
         self.assertLessEqual(len(str(stored_path.resolve())), UPLOAD_PATH_SAFE_CHARS)
         self.assertEqual(task["original_filename"], filename)
-        self.assertTrue(task["document_text"].startswith(f"file: {filename}\n\n"))
+        self.assertIsNone(task["document_text"])
 
-    def test_create_task_rejects_oversized_text_before_queueing(self):
+    def test_create_task_defers_model_input_limit_check_to_worker(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = (
@@ -4499,8 +4499,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("long.txt", response.get_data(as_text=True))
-        self.assertIn("超过当前模型文本上限 80000 字", response.get_data(as_text=True))
         with self.app.app_context():
             total = (
                 get_db()
@@ -4508,8 +4506,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()["total"]
             )
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-        self.assertEqual(total, 0)
-        self.assertEqual(len(uploaded_files), 0)
+        self.assertEqual(total, 1)
+        self.assertEqual(len(uploaded_files), 1)
 
     def test_create_task_creates_one_task_per_uploaded_document(self):
         model_id = self._configure_provider()
@@ -4557,20 +4555,14 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(tasks[0]["original_filename"], "doc-00.txt")
         self.assertEqual(tasks[-1]["original_filename"], "doc-20.txt")
         self.assertTrue(all(task["status"] == "queued" for task in tasks))
-        self.assertTrue(
-            all(
-                task["document_text"]
-                == f"file: doc-{index:02d}.txt\n\ndocument {index}"
-                for index, task in enumerate(tasks)
-            )
-        )
+        self.assertTrue(all(task["document_text"] is None for task in tasks))
         self.assertEqual(len(uploaded_files), 21)
         snapshots = [json.loads(task["checks_snapshot_json"]) for task in tasks]
         self.assertTrue(
             all(snapshot[0]["code"] == item["code"] for snapshot in snapshots)
         )
 
-    def test_create_task_rejects_entire_batch_when_a_document_has_no_text(self):
+    def test_create_task_queues_entire_batch_before_text_extraction(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = (
@@ -4600,10 +4592,10 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()["total"]
             )
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-        self.assertEqual(total, 0)
-        self.assertEqual(len(uploaded_files), 0)
+        self.assertEqual(total, 2)
+        self.assertEqual(len(uploaded_files), 2)
 
-    def test_create_task_reports_parser_error_during_upload(self):
+    def test_create_task_does_not_parse_document_during_request(self):
         model_id = self._configure_provider()
         with self.app.app_context():
             item = (
@@ -4614,7 +4606,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
 
         with patch(
             "app.tasks.runtime.preprocessing.extract_document",
-            side_effect=DocumentReadError("company parser failed"),
+            side_effect=ValueError("company parser failed"),
         ) as extract_mock:
             response = self.client.post(
                 "/",
@@ -4628,9 +4620,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("doc.txt", response.get_data(as_text=True))
-        self.assertIn("company parser failed", response.get_data(as_text=True))
-        extract_mock.assert_called_once()
+        extract_mock.assert_not_called()
         with self.app.app_context():
             total = (
                 get_db()
@@ -4638,8 +4628,8 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 .fetchone()["total"]
             )
             uploaded_files = list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())
-        self.assertEqual(total, 0)
-        self.assertEqual(len(uploaded_files), 0)
+        self.assertEqual(total, 1)
+        self.assertEqual(len(uploaded_files), 1)
 
     def test_create_task_removes_partial_file_when_upload_save_fails(self):
         model_id = self._configure_provider()
@@ -9161,7 +9151,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
-    def test_create_consistency_task_preflights_and_caches_combined_text(self):
+    def test_create_consistency_task_defers_combined_text_extraction(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = (
@@ -9199,10 +9189,9 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(
             task["original_filename"], "素材文档：master.xlsx / 资料：related.txt"
         )
-        self.assertIn("# 素材文档\n", task["document_text"])
-        self.assertIn("资料参数 12A", task["document_text"])
+        self.assertIsNone(task["document_text"])
         meta = json.loads(task["document_meta_json"])
-        self.assertEqual(meta["preprocessing"]["status"], "completed")
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
         self.assertEqual(
             json.loads(task["checks_snapshot_json"]),
             [
@@ -9324,7 +9313,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(total, 0)
         self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
-    def test_create_language_consistency_task_caches_preflight_and_static_summary(self):
+    def test_create_language_consistency_task_defers_static_precheck(self):
         model_id = self._configure_provider(reasoning_effort="high")
         with self.app.app_context():
             item = (
@@ -9367,15 +9356,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(task["task_type"], LANGUAGE_CONSISTENCY_TASK_TYPE)
         self.assertEqual(task["file_type"], "双文档")
         self.assertIn("跨语种检查：zh.txt / en.txt", task["original_filename"])
-        self.assertIn("# 静态预检摘要\n", task["document_text"])
-        self.assertIn("设备电流为 10A", task["document_text"])
-        self.assertIn("The device current is 12A", task["document_text"])
+        self.assertIsNone(task["document_text"])
         meta = json.loads(task["document_meta_json"])
         self.assertEqual(
             [group["role"] for group in meta["groups"]], ["document_a", "document_b"]
         )
-        self.assertEqual(meta["preprocessing"]["status"], "completed")
-        self.assertIn(meta["static_precheck"], task["document_text"])
+        self.assertEqual(meta["preprocessing"]["status"], "pending")
+        self.assertNotIn("static_precheck", meta)
         self.assertEqual(
             json.loads(task["checks_snapshot_json"]),
             [

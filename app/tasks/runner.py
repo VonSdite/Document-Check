@@ -46,7 +46,7 @@ from app.documents.images import image_items_from_meta
 from app.documents.text_semantics import strip_script_markers
 from app.infrastructure.network import outbound_network_config
 from app.models.client import LLMError, LLMIncompleteResponseError, run_check
-from app.models.document_input import compact_model_document_text, validate_model_input
+from app.models.document_input import compact_model_document_text
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_bool_setting
 from app.tasks.activity import (
@@ -76,7 +76,10 @@ from app.tasks.runtime.common import (
 from app.tasks.runtime.document_rounds import run_document_rounds
 from app.tasks.runtime.image_checks import _run_image_check_items_concurrently
 from app.tasks.runtime.model_requests import TaskModelAccess
-from app.tasks.runtime.preprocessing import _prepare_task_inputs
+from app.tasks.runtime.preprocessing import (
+    _prepare_task_inputs,
+    _validate_document_check_inputs,
+)
 from app.tasks.runtime.report_validation import parse_check_report
 from app.tasks.runtime.state import (
     TaskCanceled,
@@ -259,6 +262,9 @@ class TaskRunner:
                 else:
                     if not check_items:
                         raise RuntimeError("没有可执行的检查项")
+                    _validate_document_check_inputs(
+                        document_text, task["max_input_chars"], check_items
+                    )
                     retry_results = _run_check_items_concurrently(
                         self.app,
                         task,
@@ -665,16 +671,9 @@ def _run_check_items_concurrently(
                     )
                     content = format_hyperlink_report(structured_report)
                 else:
-                    validate_model_input(model_document_text, task["max_input_chars"])
-                    if item.get("check_method") == "skill":
-                        skill_chars = len(item["prompt"]) + len(model_document_text)
-                        if (
-                            task["max_input_chars"]
-                            and skill_chars > task["max_input_chars"]
-                        ):
-                            raise RuntimeError(
-                                f"Skill 指令、参考资料与文档合计 {skill_chars} 字，超过当前模型文本上限 {task['max_input_chars']} 字"
-                            )
+                    _validate_document_check_inputs(
+                        model_document_text, task["max_input_chars"], [item]
+                    )
                     network = outbound_network_config()
                     run_check_kwargs = {
                         "api_base": task["api_base"],

@@ -2580,7 +2580,7 @@ class TaskExecutionTest(unittest.TestCase):
                     self.assertTrue(result["structured_report"]["items"])
                     model.assert_not_called()
 
-    def test_model_limit_failure_preserves_local_check_results(self):
+    def test_model_limit_failure_stops_task_before_local_and_ai_checks(self):
         checks = [
             {
                 "id": 1,
@@ -2596,15 +2596,49 @@ class TaskExecutionTest(unittest.TestCase):
             (json.dumps({"hyperlinks": [{"target": "javascript:alert(1)"}]}), task_id),
         )
         get_db().commit()
+        with (
+            patch("app.tasks.runner.run_check") as model,
+            patch("app.tasks.runner.build_hyperlink_report") as local_check,
+        ):
+            TaskRunner(self.app).run(task_id)
+        task = (
+            get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        )
+        self.assertEqual(task["status"], "failed", task["error"])
+        self.assertFalse(json.loads(task["result_json"] or "[]"))
+        self.assertIn("超过当前模型文本上限", task["error"])
+        self.assertIsNotNone(task["finished_at"])
+        local_check.assert_not_called()
+        model.assert_not_called()
+
+    def test_preflight_failure_during_retry_preserves_existing_results(self):
+        checks = [
+            {"id": 1, "code": "compliance", "name": "规范性检查", "prompt": "检查"},
+            {"id": 2, "code": "clarity", "name": "易理解性检查", "prompt": "检查"},
+        ]
+        task_id = self._insert_running_document_task(checks)
+        original_results = [
+            {"code": "compliance", "name": "规范性检查", "result": "原成功结果"},
+            {
+                "code": "clarity",
+                "name": "易理解性检查",
+                "result": "",
+                "error": "首次失败",
+            },
+        ]
+        get_db().execute(
+            "UPDATE tasks SET max_input_chars = 20, result_json = ?, retry_check_codes_json = ? WHERE id = ?",
+            (json.dumps(original_results), json.dumps(["clarity"]), task_id),
+        )
+        get_db().commit()
         with patch("app.tasks.runner.run_check") as model:
             TaskRunner(self.app).run(task_id)
         task = (
             get_db().execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         )
-        self.assertEqual(task["status"], "partial", task["error"])
-        results = json.loads(task["result_json"])
-        self.assertTrue(results[0]["structured_report"]["items"])
-        self.assertIn("超过当前模型文本上限", results[1]["error"])
+        self.assertEqual(task["status"], "failed", task["error"])
+        self.assertIn("超过当前模型文本上限", task["error"])
+        self.assertEqual(json.loads(task["result_json"]), original_results)
         model.assert_not_called()
 
     def test_long_image_document_checks_only_batch_context(self):

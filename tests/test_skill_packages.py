@@ -18,7 +18,7 @@ from app.persistence.connection import get_db
 from app.persistence.defaults import reset_default_check_item_prompt, seed_defaults
 from app.persistence.schema import init_db
 from app.tasks.activity import clear_activity
-from app.tasks.runner import _run_check_items_concurrently
+from app.tasks.runner import TaskRunner, _run_check_items_concurrently
 from app.tasks.selection import selected_check_items
 from tests import test_routes as fixtures
 
@@ -303,14 +303,25 @@ class SkillCheckRouteTest(unittest.TestCase):
         self.assertEqual(saved["check_method"], "prompt")
         self.assertEqual(saved["skill_package_json"], "{}")
 
-    def test_upload_preflight_counts_skill_instructions_and_reference_text(self):
+    def test_worker_preflight_counts_skill_budget_before_starting_any_ai_check(self):
         item_id = self.create()
         item = self.item(item_id)
         model_id = self._configure_provider()
         text = "接口说明"
-        input_chars = len(item["prompt"]) + len("file: doc.txt\n\n" + text)
+        input_chars = len(item["prompt"].strip()) + len("file: doc.txt\n\n" + text)
         with self.app.app_context():
-            save_profile_check_items("default", [item_id])
+            ordinary_id = (
+                get_db()
+                .execute(
+                    "SELECT id FROM check_items WHERE code = 'compliance' AND pool_item_id = id"
+                )
+                .fetchone()["id"]
+            )
+            save_profile_check_items("default", [ordinary_id, item_id])
+            get_db().execute(
+                "UPDATE check_items SET sort_order = (SELECT sort_order + 1 FROM check_items WHERE id = ?) WHERE id = ?",
+                (ordinary_id, item_id),
+            )
             get_db().execute(
                 "UPDATE user_model_providers SET max_input_chars = ?",
                 (input_chars - 1,),
@@ -320,21 +331,52 @@ class SkillCheckRouteTest(unittest.TestCase):
             "/",
             data={
                 "model_id": model_id,
-                "checks": [str(item_id)],
+                "checks": [str(ordinary_id), str(item_id)],
                 "document": (io.BytesIO(text.encode()), "doc.txt"),
+                "check_rounds": "1",
             },
             follow_redirects=True,
         )
         self.assertEqual(response.status_code, 200)
+        with self.app.app_context():
+            task = dict(get_db().execute("SELECT * FROM tasks").fetchone())
+            self.assertEqual(task["status"], "queued")
+            self.assertIsNone(task["document_text"])
+            self.assertEqual(
+                json.loads(task["checks_snapshot_json"])[0]["id"], ordinary_id
+            )
+            get_db().execute(
+                "UPDATE tasks SET status = 'running' WHERE id = ?", (task["id"],)
+            )
+            get_db().commit()
+        with patch("app.tasks.runner.run_check") as model:
+            TaskRunner(self.app).run(task["id"])
+        model.assert_not_called()
+        with self.app.app_context():
+            task = dict(get_db().execute("SELECT * FROM tasks").fetchone())
+        self.assertEqual(task["status"], "failed", task["error"])
         self.assertIn(
             f"Skill 指令、参考资料与文档合计 {input_chars} 字",
-            response.get_data(as_text=True),
+            task["error"],
         )
+        self.assertIn(f"超过当前模型文本上限 {input_chars - 1} 字", task["error"])
+        self.assertEqual(len(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir())), 1)
+        with self.app.app_context():
+            get_db().execute(
+                "UPDATE tasks SET status = 'running', max_input_chars = ? WHERE id = ?",
+                (input_chars, task["id"]),
+            )
+            get_db().commit()
+        with patch(
+            "app.tasks.runner.run_check",
+            return_value='{"summary":"检查完成","items":[]}',
+        ) as model:
+            TaskRunner(self.app).run(task["id"])
+        self.assertEqual(model.call_count, 2)
         with self.app.app_context():
             self.assertEqual(
-                get_db().execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0
+                get_db().execute("SELECT status FROM tasks").fetchone()[0], "completed"
             )
-        self.assertEqual(list(Path(self.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     def test_tasks_execute_frozen_skill_after_replacement_and_deletion(self):
         item_id = self.create()
