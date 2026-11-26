@@ -3,6 +3,7 @@ import re
 from bisect import bisect_right
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
+from itertools import chain
 
 _METADATA_RE = re.compile(
     r"(?m)^file:[^\r\n]*|^#\s*工作表：[^\r\n]*"
@@ -13,10 +14,17 @@ _METADATA_RE = re.compile(
 )
 _LINK_ANNOTATIONS_RE = re.compile(r"(?ms)^\[超链接\].*?(?=^\[第\d+页\]|\Z)")
 _LINK_TARGET_RE = re.compile(r"（超链接：[^）\r\n]*）")
+_URL_CHARACTER = r"[^\s<>\"'\[\]（），。；！？、]"
 _URL_RE = re.compile(
-    r"\b(?:https?://|ftp://|www\.)[^\s<>\"'\[\]（），。；！？、]+",
+    r"(?<![A-Za-z0-9_@])(?:"
+    r"(?:[A-Za-z][A-Za-z0-9+.-]{1,20}[ \t]*[:：][ \t]*[/／][ \t]*[/／][ \t]*|www\.)"
+    rf"{_URL_CHARACTER}+|"
+    r"(?:[A-Za-z0-9][A-Za-z0-9-]{0,62}\.)+[A-Za-z]{2,63}(?![A-Za-z0-9_-])"
+    rf"(?::\d{{1,5}})?(?:[/／?#]{_URL_CHARACTER}*)?)",
     re.IGNORECASE,
 )
+_URL_GAP_RE = re.compile(r"[ \t]*(?:\r?\n[ \t]*)?")
+_URL_FRAGMENT_RE = re.compile(r"[A-Za-z0-9_~!$&()*+,;=:@%/?#.\-]+")
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _PATH_RE = re.compile(
     r"(?<![\w])(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|~/|/)"
@@ -26,11 +34,12 @@ _PATH_RE = re.compile(
 )
 _MARKDOWN_TARGET_RE = re.compile(r"(?<=\])\([^\r\n()]*\)")
 _MARKDOWN_REFERENCE_RE = re.compile(r"(?m)^ {0,3}\[[^\]\r\n]+\]:[^\r\n]*")
-_FENCED_CODE_RE = re.compile(
-    r"(?ms)^ {0,3}(?P<fence>`{3,}|~{3,})[^\n]*\n"
-    r".*?(?:^ {0,3}(?P=fence)[ \t]*(?=\r?$)|\Z)"
+_FENCE_START_RE = re.compile(r"(?m)^ {0,3}(?P<fence>`{3,}|~{3,})[^\r\n]*(?:\r?\n|$)")
+_INLINE_CODE_RE = re.compile(
+    r"(?<!`)(?P<ticks>`+)(?!`)(?:(?!\r?\n[ \t]*\r?\n).)*?"
+    r"(?<!`)(?P=ticks)(?!`)",
+    re.DOTALL,
 )
-_INLINE_CODE_RE = re.compile(r"(?P<ticks>`+)(?!`)[^\r\n]*?(?P=ticks)(?!`)")
 _BLOCK_TAGS = {
     "br",
     "div",
@@ -88,28 +97,84 @@ def document_body_view(text: str) -> DocumentBodyView:
         _METADATA_RE,
         _LINK_ANNOTATIONS_RE,
         _LINK_TARGET_RE,
-        _URL_RE,
         _EMAIL_RE,
         _PATH_RE,
         _MARKDOWN_TARGET_RE,
         _MARKDOWN_REFERENCE_RE,
-        _FENCED_CODE_RE,
-        _INLINE_CODE_RE,
     ):
         edits.extend(
             (match.start(), match.end(), _blank_text(match.group(0)))
             for match in pattern.finditer(source)
         )
+    for start, end in chain(_url_spans(source), _code_spans(source)):
+        edits.append((start, end, _blank_text(source[start:end])))
     if "<" in source or "&" in source:
         parser = _BodyMarkupParser(source)
         parser.feed(source)
         parser.close()
         edits.extend(parser.edits)
     body = _project_body(source, edits)
-    value = body.text
-    for pattern in (_URL_RE, _EMAIL_RE, _PATH_RE):
+    value = _blank_spans(body.text, _url_spans(body.text))
+    for pattern in (_EMAIL_RE, _PATH_RE):
         value = pattern.sub(lambda match: _blank_text(match.group(0)), value)
     return replace(body, text=value)
+
+
+def _url_spans(text: str):
+    """标识网址和由路径分隔符连接的抽取换行片段。"""
+    previous_end = 0
+    for match in _URL_RE.finditer(text):
+        if match.start() < previous_end:
+            continue
+        end = match.end()
+        while gap := _URL_GAP_RE.match(text, end):
+            if gap.end() == end:
+                break
+            fragment = _URL_FRAGMENT_RE.match(text, gap.end())
+            if not fragment:
+                break
+            value = fragment.group()
+            if value.strip("#") == "":
+                break
+            connects = text[end - 1] in "/／-_?&=#%" or value[0] in "/?#&"
+            line_end = text.find("\n", fragment.end())
+            remainder = text[fragment.end() : line_end if line_end >= 0 else len(text)]
+            path_fragment = any(char in value for char in "/?&=#%")
+            if not connects or (not path_fragment and remainder.strip()):
+                break
+            end = fragment.end()
+        previous_end = end
+        yield match.start(), end
+
+
+def _code_spans(text: str):
+    blocks = list(_fenced_code_spans(text))
+    yield from blocks
+    # 行内代码在围栏之外识别，避免不同代码块之间的正文被反引号连接。
+    for match in _INLINE_CODE_RE.finditer(_blank_spans(text, blocks)):
+        yield match.start(), match.end()
+
+
+def _fenced_code_spans(text: str):
+    position = 0
+    while opening := _FENCE_START_RE.search(text, position):
+        fence = opening.group("fence")
+        closing = re.compile(
+            rf"(?m)^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*(?=\r?$)"
+        ).search(text, opening.end())
+        end = closing.end() if closing else len(text)
+        yield opening.start(), end
+        position = end
+
+
+def _blank_spans(text: str, spans) -> str:
+    parts = []
+    position = 0
+    for start, end in spans:
+        parts.extend((text[position:start], _blank_text(text[start:end])))
+        position = end
+    parts.append(text[position:])
+    return "".join(parts)
 
 
 def _blank_text(value: str) -> str:

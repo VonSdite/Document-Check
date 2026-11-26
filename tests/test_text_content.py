@@ -90,6 +90,42 @@ class DocumentBodyViewTest(unittest.TestCase):
             body.source_span(start, start + 11)[0], source.rindex("smartlogger")
         )
 
+    def test_wrapped_urls_stop_before_prose_and_preserve_source_mapping(self):
+        source = (
+            "https://example.test/downloads/\nfusionsolar/guide\n"
+            "https://example.test/\nfusionsolar is mentioned in prose.\n"
+            "https://example.test/\n\nfusionsolar\n"
+            "https://example.test/guide\n# fusionsolar\n"
+            "https://example.test/guide\n## fusionsolar\n"
+            "<p>fusionsolar &amp; other products.</p>"
+        )
+        body = document_body_view(source)
+        self.assertNotIn("fusionsolar/guide", body.text)
+        self.assertEqual(body.text.count("fusionsolar"), 5)
+        start = body.text.rindex("fusionsolar")
+        self.assertEqual(
+            body.source_span(start, start + 10)[0], source.rindex("fusionsolar")
+        )
+
+    def test_longer_code_fence_keeps_following_prose_and_multiline_inline_code(self):
+        for fence in ("```", "~~~"):
+            with self.subTest(fence=fence):
+                source = f"{fence}\nfusionsolar\n{fence}{fence[0]}\nVisible body."
+                body = document_body_view(source)
+                self.assertNotIn("fusionsolar", body.text)
+                self.assertIn("Visible body.", body.text)
+        body = document_body_view("Run `tool\nfusionsolar` now.\nKeep `unclosed prose.")
+        self.assertNotIn("fusionsolar", body.text)
+        self.assertIn("Run", body.text)
+        self.assertIn("now.", body.text)
+        self.assertIn("unclosed prose.", body.text)
+
+    def test_multiple_code_blocks_keep_every_intervening_prose_paragraph(self):
+        source = "```sh\nignored fusionsolar\n````\nVisible fusionsolar\n" * 4
+        body = document_body_view(source)
+        self.assertNotIn("ignored", body.text)
+        self.assertEqual(body.text.count("fusionsolar"), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

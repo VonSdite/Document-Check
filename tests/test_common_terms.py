@@ -14,6 +14,7 @@ from app.checks.common_terms import (
 )
 from app.checks.sensitive_terms import load_sensitive_terms
 from app.checks.term_cache import clear_term_file_cache
+from app.documents.extraction import extract_document
 
 
 class CommonTermsTest(unittest.TestCase):
@@ -352,6 +353,73 @@ class CommonTermsTest(unittest.TestCase):
         self.assertEqual(report["items"], [])
         self.assertIn("文档语种估计：拉丁字母为主（含英文）", report["summary"])
         self.assertNotIn("已跳过", report["summary"])
+
+    def test_fusionsolar_network_and_code_exclusions_keep_prose_and_locations(self):
+        technical_samples = (
+            "https://support.example.test/en/fusionsolar/fushionsolar",
+            "support.example.test/fusionsolar#fushionsolar",
+            "fusionsolar.example.test fushionsolar.example.test",
+            "访问https://support.example.test/fusionsolar/fushionsolar",
+            "https : // support.example.test/fusionsolar/fushionsolar",
+            "https：／／support.example.test/fusionsolar/fushionsolar",
+            "https://support.example.test/enterprise/en/\nfusionsolar/fushionsolar",
+            "https://support.example.test/en/\nfusionsolar\n?product=fushionsolar",
+            "https://support.example.test/en/ fusionsolar/fushionsolar",
+            "[下载](https://example.test/(fusionsolar)/fushionsolar)",
+            "下载（超链接：../fusionsolar/fushionsolar）",
+            "[超链接] fusionsolar\nfushionsolar（超链接：https://example.test）",
+            "`tool --name\nfusionsolar --alias fushionsolar`",
+            "```shell\nfusionsolar --alias fushionsolar\n````",
+            "~~~~\nfusionsolar fushionsolar\n~~~~~",
+            "<pre><code>fusionsolar &lt; fushionsolar</code></pre>",
+        )
+        for technical in technical_samples:
+            with self.subTest(technical=technical):
+                document = (
+                    f"file: guide.md\n[第5页]\n{technical}\n"
+                    "[第6页]\nUse fusionsolar and fushionsolar in prose."
+                )
+                report = build_common_terms_report(
+                    document,
+                    [CommonTermRule("FusionSolar", ("fushionsolar",))],
+                    source_path=Path("common_terms.xlsx"),
+                    issue_limit=20,
+                )
+                self.assertEqual(len(report["items"]), 2)
+                for item in report["items"]:
+                    self.assertIn("共 1 处", item["description"])
+                    self.assertIn(
+                        f"页码：第6页，行：{len(document.splitlines())}",
+                        item["location"],
+                    )
+
+    def test_html_extraction_keeps_code_out_of_term_matching(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "guide.html"
+            path.write_text(
+                "<p>Run <code>fusionsolar --alias fushionsolar</code>.</p>"
+                '<pre><code>fusionsolar &lt; fushionsolar\nprint("done")</code></pre>'
+                '<p><a href="https://example.test/fusionsolar/fushionsolar">'
+                "https://example.test/\nfusionsolar/fushionsolar</a></p>"
+                "<p>Use fusionsolar and fushionsolar in prose.</p>",
+                encoding="utf-8",
+                newline="\n",
+            )
+            text, links = extract_document(path, "html")
+        self.assertIn('<pre>fusionsolar &lt; fushionsolar\nprint("done")</pre>', text)
+        self.assertEqual(
+            links[0]["target"], "https://example.test/fusionsolar/fushionsolar"
+        )
+        report = build_common_terms_report(
+            text,
+            [CommonTermRule("FusionSolar", ("fushionsolar",))],
+            source_path=Path("common_terms.xlsx"),
+            issue_limit=20,
+        )
+        self.assertEqual(len(report["items"]), 2)
+        for item in report["items"]:
+            self.assertIn("共 1 处", item["description"])
+            self.assertIn("Use fusionsolar and fushionsolar in prose.", item["excerpt"])
 
     def test_keeps_visible_link_errors_and_original_locations(self):
         document_text = (

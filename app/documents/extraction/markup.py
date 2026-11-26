@@ -1,3 +1,4 @@
+from html import escape
 from pathlib import Path
 
 import mistune
@@ -64,4 +65,9 @@ def _extract_html(path: Path, hyperlinks: list[dict] | None = None) -> str:
             ),
         )
         anchor.replace_with(_format_hyperlink_text(label, target))
+    for code in soup.find_all(["pre", "code"]):
+        if code.find_parent(["pre", "code"]) is not None:
+            continue
+        content = escape(code.get_text("", strip=False), quote=False)
+        code.replace_with(f"<{code.name}>{content}</{code.name}>")
     return soup.get_text("\n", strip=True)
