@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from app.contracts.limits import (
@@ -14,6 +15,7 @@ from app.contracts.task_types import (
     VIDEO_TASK_TYPE,
 )
 from app.persistence.connection import get_db, now_text
+from app.persistence.document_review_prompts import DOCUMENT_REVIEW_BOUNDARIES
 
 _DOCUMENT_CHECK_OUTPUT_REQUIREMENTS = """统一定位与输出要求：
 1. 每条问题必须给出真实、可核对的文档证据，不要只写结论。
@@ -57,6 +59,8 @@ DEFAULT_DOCUMENT_CHECK_ITEMS = (
 5. 长句、指代和信息组织问题归入易理解性检查；事实、参数、结论或操作冲突归入全文一致性检查；必要信息缺失归入内容完整性检查。
 
 问题类型建议使用：错别字、漏字或多字、机械性重复、明确语法错误、术语或命名书写不规范、日期数字单位或标点符号不规范、标题层级或章节结构不规范、编号或交叉引用不规范。"""
+        + "\n\n"
+        + DOCUMENT_REVIEW_BOUNDARIES["compliance"]
         + "\n\n"
         + _DOCUMENT_CHECK_OUTPUT_REQUIREMENTS
         + "\n8. 如果未发现明确问题，summary 写“未发现明显规范性问题”，items 返回空数组。",
@@ -105,7 +109,7 @@ DEFAULT_DOCUMENT_CHECK_ITEMS = (
 检查范围：
 1. 结构与内容一致性：目录、章节标题、小节范围、附录、图表和正文引用是否相互对应；章节标题与紧随其后的正文主题是否明显不符；章节号、图号、表号、步骤号、附录号、公式号是否存在重复、错指或对应对象不一致。
 2. 名称与术语一致性：同一产品、部件、功能、页面、菜单、参数、字段、角色、机构、术语、缩写及中英文名称在不同位置使用不同叫法，并且差异会导致对象混淆或含义变化；文内定义、上下位关系以及全称与简称关系用于验证两处叫法是否等价。
-3. 数据与技术参数一致性：同一参数、默认值、阈值、范围、端口、容量、数量、金额、版本、日期、环境要求或配置值在正文、表格、示例中是否不一致；比较前先完成单位换算并核对参数所属对象。
+3. 数据与技术参数一致性：同一参数、默认值、阈值、范围、端口、容量、数量、金额、版本、日期、环境要求或配置值在正文、表格、示例中是否不一致；比较前先完成单位换算，核对参数含义、所属对象、测量位置和适用条件，分别比较额定值、工作范围、验收值、告警阈值及示例值。
 4. 条件与适用范围一致性：同一功能、步骤、限制或例外在不同位置的适用对象、型号、版本、场景、权限、状态、阶段或前提条件是否不一致。
 5. 逻辑与结论一致性：前提与结论、原因与结果、正文与总结之间是否直接矛盾；同一状态是否被同时描述为支持和不支持、允许和禁止、成功和失败；步骤跳转、先后顺序或结果说明是否相互冲突。
 6. 操作内容一致性：同一操作在不同位置的入口、对象、参数、动作、顺序、完成标志或预期结果是否互相冲突；候选必须包含两处操作描述或一处操作描述与一份权威依据。
@@ -115,7 +119,7 @@ DEFAULT_DOCUMENT_CHECK_ITEMS = (
 本检查项准入条件：
 1. issue 必须提供两处可直接对照的证据；依据权威材料判断时，分别提供待检查内容和权威依据。两处证据必须描述同一对象、同一参数、同一命题或明确的引用对应关系，并具有相同或重叠的型号、版本、场景、条件、状态和阶段。
 2. location 分别列出证据A、证据B的位置，excerpt 逐字引用两处原文；description 使用“A为X、B为Y，在条件C下不能同时成立”的形式说明冲突关系。
-3. suggestion 也必须具备两处直接证据并能确认比较对象相同，但允许型号、版本、场景、条件、状态或阶段中恰有一项无法从文内确认；description 必须写明待核实的具体条件。只有一处原文、没有对照对象或仅有泛泛怀疑的候选不满足准入条件。
+3. suggestion 也必须具备两处直接证据，并能确认比较对象、参数含义及适用条件相同或重叠；仅在冲突关系已成立、仍需人工核实哪处应修正时使用，description 写明两处证据及待核实的具体陈述。适用条件尚未证实相同、只有一处原文、没有对照对象或仅有泛泛怀疑的候选不输出。
 4. 单位换算后等价、数值相同、全称与简称并用，或者两处证据属于不同参数、部件、型号、条件或阶段时，比较结果不构成冲突；issue 的冲突关系必须在不借助外部常识或未提供公式的情况下成立。
 5. PDF表格候选必须能把每个比较值明确映射到表头、行名、列名、型号和字段；缺少任一关键映射时不满足表格证据门槛。
 6. 章节、图表、步骤和附件引用可以使用“引用原文”和“被引用位置或全文结构线索”作为两处证据；全文结构线索必须足以确认对象确实缺失、错指或不对应。
@@ -123,6 +127,8 @@ DEFAULT_DOCUMENT_CHECK_ITEMS = (
 8. 错别字、标点、书写格式和表达正式程度归入文档规范性检查；理解障碍归入易理解性检查；必要信息缺失归入内容完整性检查。
 
 问题类型建议使用：结构与内容不一致、名称或术语不一致、参数或数据不一致、版本或日期不一致、条件或适用范围不一致、逻辑或结论冲突、操作内容冲突、约束强度冲突、风险处置冲突、编号或交叉引用错误、清单或对应关系不一致。"""
+        + "\n\n"
+        + DOCUMENT_REVIEW_BOUNDARIES["consistency"]
         + "\n\n"
         + _DOCUMENT_CHECK_OUTPUT_REQUIREMENTS
         + "\n8. 如果未发现明确问题，summary 写“未发现明显全文一致性问题”，items 返回空数组。",
@@ -782,7 +788,60 @@ def seed_defaults():
 
     seed_check_item_pool(db)
     _seed_document_release_check(db, now)
+    _sync_document_review_prompts(db, now)
     db.commit()
+
+
+_DOCUMENT_REVIEW_STOCK_HASHES = {
+    (
+        "default",
+        "compliance",
+    ): "07d0d75494f246866145333bd3a60ea1e6be1d8575b0702444babb04062c1def",
+    (
+        "default",
+        "consistency",
+    ): "86b3e6736831bc7c95c0909bd236711150e4e4bc153c84d0c1a4465b4cf4a5b9",
+    (
+        "software",
+        "compliance",
+    ): "6301907ab2078940aec2fe776c5ce77257b8b9423db4feef730251a03bb00283",
+    (
+        "software",
+        "consistency",
+    ): "45a9e02b7a4b8a7c6285aa96428a72658c2d7534825f94ef5c390df1a5ce83e8",
+}
+
+
+def _sync_document_review_prompts(db, updated_at: str) -> int:
+    """按内置正文指纹同步两项审查边界，保留自定义规则和任务快照。"""
+    from app.persistence.software_defaults import software_prompt
+
+    rows = db.execute(
+        """SELECT c.id, c.prompt, c.template_code,
+                  COALESCE(p.template_id, 'default') AS template_id
+           FROM check_items c LEFT JOIN check_profiles p ON p.id = c.profile_id
+           WHERE c.task_type = ? AND c.pool_item_id = c.id
+             AND c.check_method = 'prompt'
+             AND c.template_code IN ('compliance', 'consistency')""",
+        (DOCUMENT_TASK_TYPE,),
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        code, template = row["template_code"], row["template_id"]
+        digest = hashlib.sha256(row["prompt"].encode("utf-8")).hexdigest()
+        if digest != _DOCUMENT_REVIEW_STOCK_HASHES.get((template, code)):
+            continue
+        prompt = (
+            software_prompt(code)
+            if template == "software"
+            else DEFAULT_CHECK_ITEMS_BY_CODE[code]["prompt"]
+        )
+        changed += db.execute(
+            "UPDATE check_items SET prompt = ?, updated_at = ? "
+            "WHERE id = ? AND prompt = ? AND check_method = 'prompt'",
+            (prompt, updated_at, row["id"], row["prompt"]),
+        ).rowcount
+    return changed
 
 
 def _seed_document_release_check(db, updated_at):

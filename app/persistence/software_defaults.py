@@ -1,6 +1,7 @@
 """软件文档方案的初始检查规则。"""
 
 from app.persistence.connection import now_text
+from app.persistence.document_review_prompts import DOCUMENT_REVIEW_BOUNDARIES
 
 SOFTWARE_PROMPTS = {
     "compliance": """你是软件技术文档规范审查专家。检查正文语言、标题编号和引用，以及功能、菜单、API、配置项、参数、命令的命名书写。
@@ -27,7 +28,10 @@ SOFTWARE_EVIDENCE = """统一证据要求：仅依据提供材料，引用真实
 
 def software_prompt(code):
     prompt = SOFTWARE_PROMPTS.get(code)
-    return prompt + "\n\n" + SOFTWARE_EVIDENCE if prompt else None
+    if not prompt:
+        return None
+    boundary = DOCUMENT_REVIEW_BOUNDARIES.get(code)
+    return prompt + "\n\n" + SOFTWARE_EVIDENCE + ("\n\n" + boundary if boundary else "")
 
 
 def seed_software_profile(db):

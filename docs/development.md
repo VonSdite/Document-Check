@@ -217,6 +217,8 @@ Web 层从当前身份构造操作者参数，IP 模式的管理员操作记录�
 
 `persistence/check_profiles.py` 保存单文档方案目录、启用状态与版本。`persistence/check_item_pool.py` 管理共享检查项池，`check_profile_items` 保存方案与检查项的引用关系。池中检查项满足 `pool_item_id = id`，拥有稳定且独立的运行编码，`template_code` 和来源方案确定内置提示词重置模板。本地词表和链接执行器使用快照中的 `executor_code` 或原始运行编码。共享检查项编辑、排序和删除会更新所有引用方案的版本，复制方案复制引用关系。软件初始规则由 `persistence/software_defaults.py` 提供。
 
+`persistence/document_review_prompts.py` 为通用和软件方案定义规范性、一致性的检查边界。一致性要求比较对象、参数含义及适用条件均有原文证据，待确认建议继续满足同一门槛；规范性中的补充内容建议按范围排除。`defaults.py` 按完整提示词指纹同步池中这两项的内置规则，只更新提示词和更新时间，自定义内容、Skill 包、方案引用及已保存任务快照保持各自配置。`tests/test_document_review_prompts.py` 验证同步幂等、共享方案版本、自定义保护、新提交与重试快照，以及完整性和易理解性提示词的独立性。
+
 单文档提交服务读取启用方案引用的全部已启用检查项，校验提交集合与方案配置一致，保存 `check_profile_id`、`check_profile_snapshot_json` 和 `checks_snapshot_json`。快照包含方案名称、版本、检查项名称、提示词及本地执行器标识，`checks_format = 2` 表示池中检查项编码。后台执行与重试使用快照，报告通过 `contracts/check_profiles.py` 展示提交时的方案信息。`check_item_aliases` 按方案映射历史检查项编码，保留任务原始快照、结果和审核标识。其他检查方式使用系统设置中的检查项和提示词快照，提交与执行独立于单文档方案的启用状态。
 
 规则页面管理单文档方案、检查项池与方案内误报规则，系统设置管理其他四类检查项和误报规则；页面读写均校验检查方式范围。误报规则保存 `profile_id`，候选指纹、规则读取和页面操作均包含方案范围。批量统计按 `(task_type, profile_id)` 缓存所需规则，按方案缓存历史编码映射，统计失效版本按任务类型统一刷新。`tests/test_check_profiles.py` 与 `tests/test_check_item_pool.py` 覆盖初始化、共享引用、组合保存、严格提交、提示词保护、任务快照及误报隔离。
