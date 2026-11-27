@@ -850,6 +850,8 @@ class CheckItemDefaultsTest(unittest.TestCase):
         self.assertIn("大小写不一致", common_terms_item["description"])
         self.assertIn("常见错误/不推荐用法", common_terms_item["prompt"])
         self.assertIn("严格区分大小写", common_terms_item["prompt"])
+        self.assertIn("是否大小写敏感", common_terms_item["prompt"])
+        self.assertIn("填写“否”时跳过该词条的大小写检查", common_terms_item["prompt"])
         self.assertNotIn(
             "image-ui-step-consistency", default_check_item_codes(IMAGE_TASK_TYPE)
         )

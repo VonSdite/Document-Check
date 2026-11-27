@@ -1,3 +1,4 @@
+import csv
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,7 +87,193 @@ class CommonTermsTest(unittest.TestCase):
         self.assertEqual(rules[0].standard, "OpenAI")
         self.assertEqual(rules[0].discouraged, ("Open AI", "open-ai", "OPEN AI"))
         self.assertEqual(rules[0].language_scope, "all")
+        self.assertTrue(rules[0].case_sensitive)
         self.assertEqual(rules[1].discouraged, ("登陆",))
+
+    def test_case_sensitivity_column_controls_excel_and_csv_reports(self):
+        rows = [
+            ["是否大小写敏感", "常用词", "常见错误/不推荐用法", "适用语种"],
+            ["否", "OpenAI", "OpenAI；openai；OPENAI；Open AI；open-ai", "全部"],
+            ["是", "Wi-Fi", "WiFi", "全部"],
+            ["", "SmartLogger", "", "全部"],
+        ]
+        for suffix in (".xlsx", ".xlsm", ".csv"):
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / f"common_terms{suffix}"
+                if suffix == ".csv":
+                    with path.open("w", encoding="utf-8", newline="") as file:
+                        csv.writer(file, lineterminator="\n").writerows(rows)
+                else:
+                    workbook = Workbook()
+                    sheet = workbook.active
+                    assert sheet is not None
+                    for row in rows:
+                        sheet.append(row)
+                    workbook.save(path)
+                    workbook.close()
+
+                rules = load_common_terms(path)
+                report = build_common_terms_report(
+                    "OpenAI openai OPENAI Open AI open-ai Wi-Fi wi-fi WiFi smartlogger",
+                    rules,
+                    source_path=path,
+                    issue_limit=20,
+                )
+
+                self.assertEqual(
+                    [rule.case_sensitive for rule in rules], [False, True, True]
+                )
+                self.assertEqual(len(report["items"]), 5)
+                descriptions = "\n".join(
+                    item["description"] for item in report["items"]
+                )
+                for term in ("OpenAI", "openai", "OPENAI"):
+                    self.assertNotIn(f"“{term}”", descriptions)
+                for term in ("Open AI", "open-ai", "WiFi"):
+                    self.assertIn(f"不推荐用法“{term}”", descriptions)
+                for term in ("wi-fi", "smartlogger"):
+                    self.assertIn(f"文档中的“{term}”", descriptions)
+
+    def test_loads_case_sensitivity_aliases_and_boolean_values(self):
+        cases = [
+            (None, True),
+            ("是", True),
+            ("否", False),
+            (" YES ", True),
+            (" No ", False),
+            ("Y", True),
+            ("n", False),
+            ("TRUE", True),
+            ("false", False),
+            (True, True),
+            (False, False),
+            (1, True),
+            (0, False),
+        ]
+        for header in (
+            "是否大小写敏感",
+            " 大小写敏感 ",
+            "是否区分大小写",
+            "区分大小写",
+        ):
+            with self.subTest(header=header), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "common_terms.xlsx"
+                workbook = Workbook()
+                sheet = workbook.active
+                assert sheet is not None
+                sheet.append(["常用词", "常见错误/不推荐用法", header])
+                for index, (value, _) in enumerate(cases):
+                    sheet.append([f"Term{index}", "", value])
+                workbook.save(path)
+                workbook.close()
+
+                rules = load_common_terms(path)
+
+                self.assertEqual(
+                    [rule.case_sensitive for rule in rules],
+                    [expected for _, expected in cases],
+                )
+
+    def test_rejects_invalid_case_sensitivity_with_row_context(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "common_terms.csv"
+            path.write_text(
+                "常用词,常见错误/不推荐用法,是否大小写敏感\nOpenAI,,maybe\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "工作表“CSV”第 2 行的“是否大小写敏感”值“maybe”无效"
+            ):
+                load_common_terms(path)
+
+    def test_csv_missing_case_sensitivity_column_or_cell_checks_case(self):
+        for header in (
+            "常用词,常见错误/不推荐用法",
+            "常用词,常见错误/不推荐用法,是否大小写敏感",
+        ):
+            with self.subTest(header=header), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "common_terms.csv"
+                path.write_text(
+                    f"{header}\nOpenAI,Open AI\n", encoding="utf-8", newline="\n"
+                )
+                report = build_common_terms_report(
+                    "openai",
+                    load_common_terms(path),
+                    source_path=path,
+                    issue_limit=20,
+                )
+
+                self.assertEqual(len(report["items"]), 1)
+                self.assertEqual(report["items"][0]["category"], "常用词/大小写不一致")
+
+    def test_duplicate_terms_preserve_case_sensitivity_and_language_scope(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "common_terms.csv"
+            path.write_text(
+                "常用词,常见错误/不推荐用法,适用语种,是否大小写敏感\n"
+                "OpenAI,Open AI,全部,否\n"
+                "OpenAI,open-ai,全部,否\n"
+                "OpenAI,OPENAI,中文,是\n"
+                "OpenAI,open ai,中文,否\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            rules = load_common_terms(path)
+            report = build_common_terms_report(
+                "This English customer guide describes the openai service and OPENAI settings. "
+                "Use Open AI or open-ai to configure the application and verify the results.",
+                rules,
+                source_path=path,
+                issue_limit=20,
+            )
+
+        self.assertEqual(len(rules), 3)
+        self.assertEqual(rules[0].discouraged, ("Open AI", "open-ai"))
+        self.assertEqual(
+            [(rule.language_scope, rule.case_sensitive) for rule in rules],
+            [("all", False), ("zh", True), ("zh", False)],
+        )
+        self.assertEqual(len(report["items"]), 2)
+        self.assertTrue(
+            all(
+                item["category"] == "常用词/错误或不推荐用法"
+                for item in report["items"]
+            )
+        )
+
+    def test_case_insensitive_rule_still_honors_language_scope(self):
+        rules = [
+            CommonTermRule(
+                "OpenAI",
+                ("OPENAI", "Open AI"),
+                language_scope="zh",
+                case_sensitive=False,
+            )
+        ]
+        samples = (
+            (
+                "这是中文产品资料，用于说明设备安装、配置、操作、验证和维护方法。"
+                "请使用 openai 或 OPENAI 服务，Open AI 为不推荐用法。",
+                1,
+            ),
+            (
+                "This English customer guide explains how to configure the OPENAI service. "
+                "Open AI provides the application settings and operational verification results.",
+                0,
+            ),
+        )
+        for text, expected_count in samples:
+            with self.subTest(text=text):
+                report = build_common_terms_report(
+                    text, rules, source_path=Path("common_terms.xlsx"), issue_limit=20
+                )
+                self.assertEqual(len(report["items"]), expected_count)
+                if expected_count:
+                    self.assertIn(
+                        "不推荐用法“Open AI”", report["items"][0]["description"]
+                    )
 
     def test_loads_optional_language_scope_and_keeps_scopes_separate(self):
         with tempfile.TemporaryDirectory() as temp_dir:

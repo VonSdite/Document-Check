@@ -66,6 +66,15 @@ _LANGUAGE_HEADER_NAMES = {
     "规则适用语种",
 }
 
+_CASE_SENSITIVE_HEADER_NAMES = {
+    "是否大小写敏感",
+    "大小写敏感",
+    "是否区分大小写",
+    "区分大小写",
+}
+_CASE_SENSITIVE_TRUE_VALUES = {"", "是", "yes", "y", "true", "1"}
+_CASE_SENSITIVE_FALSE_VALUES = {"否", "no", "n", "false", "0"}
+
 _EMPTY_DISCOURAGED_VALUES = {"", "-", "--", "—", "/", "无", "不涉及", "na", "n/a"}
 _DISCOURAGED_SEPARATOR_RE = re.compile(r"[\r\n,，;；、]+")
 _LANGUAGE_SCOPE_ALL = "all"
@@ -107,6 +116,7 @@ class CommonTermRule:
     sheet: str = ""
     row_number: int = 0
     language_scope: str = _LANGUAGE_SCOPE_ALL
+    case_sensitive: bool = True
 
 
 def find_common_terms_file(
@@ -324,10 +334,16 @@ def _rules_from_rows(rows, sheet_name: str):
             sheet_name=sheet_name,
             row_number=row_number,
         )
+        case_sensitive = _normalize_case_sensitive(
+            _row_cell(values, header.get("case_sensitive")),
+            sheet_name=sheet_name,
+            row_number=row_number,
+        )
         yield CommonTermRule(
             standard=standard,
             discouraged=tuple(discouraged),
             language_scope=language_scope,
+            case_sensitive=case_sensitive,
             sheet=sheet_name,
             row_number=row_number,
         )
@@ -337,6 +353,7 @@ def _header_mapping(row: list) -> dict | None:
     standard_index = None
     discouraged_index = None
     language_index = None
+    case_sensitive_index = None
     for index, value in enumerate(row):
         kind = _header_kind(value)
         if kind == "standard" and standard_index is None:
@@ -345,12 +362,15 @@ def _header_mapping(row: list) -> dict | None:
             discouraged_index = index
         if kind == "language" and language_index is None:
             language_index = index
+        if kind == "case_sensitive" and case_sensitive_index is None:
+            case_sensitive_index = index
     if standard_index is None or discouraged_index is None:
         return None
     return {
         "standard": standard_index,
         "discouraged": discouraged_index,
         "language": language_index,
+        "case_sensitive": case_sensitive_index,
     }
 
 
@@ -364,6 +384,8 @@ def _header_kind(value) -> str:
         return "standard"
     if text in _LANGUAGE_HEADER_NAMES:
         return "language"
+    if text in _CASE_SENSITIVE_HEADER_NAMES:
+        return "case_sensitive"
     return ""
 
 
@@ -409,13 +431,25 @@ def _normalize_language_scope(value: str, *, sheet_name: str, row_number: int) -
     )
 
 
+def _normalize_case_sensitive(value: str, *, sheet_name: str, row_number: int) -> bool:
+    normalized = value.strip().lower()
+    if normalized in _CASE_SENSITIVE_TRUE_VALUES:
+        return True
+    if normalized in _CASE_SENSITIVE_FALSE_VALUES:
+        return False
+    raise ValueError(
+        f"工作表“{sheet_name}”第 {row_number} 行的“是否大小写敏感”值“{value}”无效；"
+        "请填写是/否、yes/no、y/n、true/false 或 1/0，留空默认是。"
+    )
+
+
 def _dedupe_rules(rules) -> list[CommonTermRule]:
     result = []
     positions = {}
     for rule in rules:
         if not rule.standard:
             continue
-        key = (rule.standard, rule.language_scope)
+        key = (rule.standard, rule.language_scope, rule.case_sensitive)
         if key not in positions:
             positions[key] = len(result)
             result.append(rule)
@@ -427,6 +461,7 @@ def _dedupe_rules(rules) -> list[CommonTermRule]:
             standard=existing.standard,
             discouraged=discouraged,
             language_scope=existing.language_scope,
+            case_sensitive=existing.case_sensitive,
             sheet=existing.sheet,
             row_number=existing.row_number,
         )
@@ -462,9 +497,14 @@ def _find_common_term_matches(
         for discouraged in rule.discouraged:
             if discouraged == rule.standard:
                 continue
+            if (
+                not rule.case_sensitive
+                and discouraged.casefold() == rule.standard.casefold()
+            ):
+                continue
             for match in _term_pattern(discouraged).finditer(text):
                 candidates.append(_candidate(match, rule.standard, "discouraged", body))
-        if _has_case(rule.standard):
+        if rule.case_sensitive and _has_case(rule.standard):
             for match in _term_pattern(rule.standard, ignore_case=True).finditer(text):
                 if match.group(0) != rule.standard:
                     candidates.append(_candidate(match, rule.standard, "case", body))

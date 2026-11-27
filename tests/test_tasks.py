@@ -2033,9 +2033,10 @@ class TaskExecutionTest(unittest.TestCase):
         workbook = Workbook()
         sheet = workbook.active
         assert sheet is not None
-        sheet.append(["常用词", "常见错误/不推荐用法"])
-        sheet.append(["OpenAI", "Open AI"])
-        sheet.append(["登录", "登陆"])
+        sheet.append(["常用词", "常见错误/不推荐用法", "是否大小写敏感"])
+        sheet.append(["OpenAI", "Open AI", "是"])
+        sheet.append(["Email", "EMAIL；E-mail", "否"])
+        sheet.append(["登录", "登陆", ""])
         workbook.save(terms_path)
         workbook.close()
         self.app.config["COMMON_TERMS_PATH"] = str(terms_path)
@@ -2066,7 +2067,11 @@ class TaskExecutionTest(unittest.TestCase):
                 "prompt": "本地检查",
             }
         ]
-        document_text = "file: doc.txt\n\n[第2页]\nOpenAI 正确，openai 错误，Open AI 不推荐，请勿写成登陆。"
+        document_text = (
+            "file: doc.txt\n\n[第2页]\n"
+            "OpenAI 正确，openai 错误，Open AI 不推荐，请勿写成登陆。"
+            "Email、email 和 EMAIL 均可使用，E-mail 为不推荐用法。"
+        )
 
         with patch(
             "app.tasks.runner.run_check",
@@ -2083,9 +2088,13 @@ class TaskExecutionTest(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         report = results[0]["structured_report"]
-        self.assertIn("发现 3 类常用词写法问题", report["summary"])
-        self.assertEqual(len(report["items"]), 3)
+        self.assertIn("发现 4 类常用词写法问题", report["summary"])
+        self.assertEqual(len(report["items"]), 4)
         self.assertTrue(all(item["type"] == "issue" for item in report["items"]))
+        descriptions = "\n".join(item["description"] for item in report["items"])
+        self.assertIn("不推荐用法“E-mail”", descriptions)
+        self.assertNotIn("“email”", descriptions)
+        self.assertNotIn("“EMAIL”", descriptions)
 
     def test_hyperlink_check_uses_local_rules_without_llm(self):
         db = get_db()

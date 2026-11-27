@@ -344,7 +344,9 @@ PDF 表格使用已有字符边界索引定位文字候选，空白区域直接�
 
 单文档检查内置“敏感词检查”。请将公司内部词表放到 `instance/sensitive_terms.xlsx`，也支持同目录下的 `sensitive_terms.xlsm`、`sensitive_terms.xls`、`sensitive_terms.csv`、`sensitive_words.xlsx`、`sensitive_words.xlsm`、`sensitive_words.xls`、`sensitive_words.csv`。词表至少需要包含“不规范用语”和“规范用语”两列；可参考 `data/sensitive_terms_example.csv` 的表头。`instance/` 和 `data/sensitive_terms.*` 已加入 `.gitignore`，真实内部词表不会被提交。
 
-单文档检查还内置“常用词检查”。请将检查表放到 `instance/common_terms.xlsx`；同目录下的 `common_terms`、`common_words`、`常用词检查表`、`常用词表` 文件名均可使用，支持 `xlsx`、`xlsm`、`xls`、`csv` 格式。检查表必须包含“常用词”和“常见错误/不推荐用法”两列；“常用词”列是唯一正确写法，英文大小写严格敏感，文档中的写法只有与该单元格完全一致才视为正确。“常见错误/不推荐用法”单元格可使用换行、逗号、分号或顿号填写多个写法。可参考 `data/common_terms_example.csv`；真实内部检查表作为本地运行数据维护。
+单文档检查还内置“常用词检查”。请将检查表放到 `instance/common_terms.xlsx`；同目录下的 `common_terms`、`common_words`、`常用词检查表`、`常用词表` 文件名均可使用，支持 `xlsx`、`xlsm`、`xls`、`csv` 格式。检查表必须包含“常用词”和“常见错误/不推荐用法”两列；“常用词”列提供标准写法，默认严格检查英文大小写。“常见错误/不推荐用法”单元格可使用换行、逗号、分号或顿号填写多个写法。可参考 `data/common_terms_example.csv`；真实内部检查表作为本地运行数据维护。
+
+可选增加“是否大小写敏感”列，也支持“大小写敏感”“是否区分大小写”“区分大小写”列名。填写“否”时跳过该词条的大小写检查，包括不推荐用法中与标准写法仅有大小写差异的变体；其他错误或不推荐用法继续按原样匹配。填写“是”、留空或省略该列时检查大小写。同时支持 `yes/no`、`y/n`、`true/false` 和 `1/0`，英文值忽略大小写及两端空白；其他值会提示所在工作表和行号。例如，`OpenAI` 填“否”时，`openai` 和 `OPENAI` 均可通过，词表列出的 `Open AI` 仍会报告。同一标准词、适用语种和大小写设置的重复行合并不推荐用法，不同设置分别作为规则执行。
 
 敏感词表和常用词检查表未配置、无有效规则或读取失败时，报告展示“检查未执行”的状态、原因和配置说明。文档问题与建议统计、结论认可和人工复核仅针对实际检出条目。
 

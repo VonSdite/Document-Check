@@ -1,5 +1,6 @@
-常用词,常见错误/不推荐用法,适用语种
-App,APP；app,中文
-OpenAI,Open AI；open-ai,全部
-Wi-Fi,WiFi；wifi；WIFI,全部
-登录,登陆,中文
+常用词,常见错误/不推荐用法,适用语种,是否大小写敏感
+App,APP；app,中文,是
+OpenAI,Open AI；open-ai,全部,是
+Wi-Fi,WiFi；wifi；WIFI,全部,是
+登录,登陆,中文,
+Email,E-mail,全部,否
