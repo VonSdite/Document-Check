@@ -70,6 +70,7 @@ describe('模型配置', () => {
     form.className = 'provider-modal-form'
     form.dataset.fetchModelsUrl = '/models/fetch'
     form.dataset.testModelUrl = '/models/test'
+    form.dataset.testImageModelUrl = '/models/test-image'
     form.innerHTML =
       '<input name="api_base" value="https://example.test"><input name="api_key" value="example-key"><input name="request_timeout" value="600"><div id="editor"></div>'
     document.body.append(form)
@@ -141,6 +142,62 @@ describe('模型配置', () => {
     await flushPromises()
     expect(wrapper.get('dialog').attributes('open')).toBeUndefined()
     expect(wrapper.text()).not.toContain('stale-model')
+    wrapper.unmount()
+  })
+  it('图片识别测试单独验证，修改模型后要求重新验证', async () => {
+    vi.mocked(modelsApi.test).mockResolvedValue({ ok: true, message: '图片识别测试通过。' })
+    const { wrapper } = editor()
+    await wrapper.get('[data-test-image-model]').trigger('click')
+    await flushPromises()
+    expect(modelsApi.test).toHaveBeenCalledWith(
+      '/models/test-image',
+      expect.objectContaining({ model_name: 'model-a' }),
+      expect.any(AbortSignal),
+    )
+    expect(wrapper.get('[data-image-capability]').text()).toContain('可检查图片和视频')
+    await wrapper.get('[data-model-name]').setValue('text-model')
+    expect(wrapper.get('[data-image-capability]').text()).toContain('尚未验证')
+    wrapper.unmount()
+  })
+  it('模型连接改变会取消图片测试，旧结果不恢复验证状态', async () => {
+    let resolve!: (value: { ok: boolean; message: string }) => void
+    vi.mocked(modelsApi.test).mockReturnValue(
+      new Promise((done) => {
+        resolve = done
+      }),
+    )
+    const { form, wrapper } = editor()
+    await wrapper.get('[data-test-image-model]').trigger('click')
+    const signal = vi.mocked(modelsApi.test).mock.calls[0][2]!
+    const key = form.querySelector<HTMLInputElement>('[name=api_key]')!
+    key.value = 'changed-key'
+    key.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(signal.aborted).toBe(true)
+    resolve({ ok: true, message: '过期结果' })
+    await flushPromises()
+    expect(wrapper.get('[data-image-capability]').text()).toContain('尚未验证')
+    expect(wrapper.text()).not.toContain('过期结果')
+    wrapper.unmount()
+  })
+  it('图片测试失败保留可理解的提示', async () => {
+    vi.mocked(modelsApi.test).mockRejectedValue(new Error('模型未正确读取测试图片。'))
+    const { wrapper } = editor()
+    await wrapper.get('[data-test-image-model]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-image-capability]').text()).toContain('未通过')
+    expect(wrapper.text()).toContain('模型未正确读取测试图片')
+    wrapper.unmount()
+  })
+  it('计算图片识别状态时保留正在输入的 API 地址', async () => {
+    const { form, wrapper } = editor()
+    const input = form.querySelector<HTMLInputElement>('[name=api_base]')!
+    expect(input.value).toBe('https://example.test')
+    for (const value of ['https://a', 'https://api.', 'https://api.example.test/proxy']) {
+      input.value = value
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await flushPromises()
+      expect(input.value).toBe(value)
+    }
     wrapper.unmount()
   })
 })

@@ -170,6 +170,14 @@ def init_db():
             UNIQUE(provider_id, model_name, force_disable_thinking)
         );
 
+        CREATE TABLE IF NOT EXISTS model_image_capabilities (
+            owner_subject TEXT NOT NULL,
+            model_signature TEXT NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0,
+            checked_at TEXT NOT NULL,
+            PRIMARY KEY(owner_subject, model_signature)
+        );
+
         CREATE TABLE IF NOT EXISTS ip_usernames (
             ip TEXT PRIMARY KEY,
             username TEXT NOT NULL,

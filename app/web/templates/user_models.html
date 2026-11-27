@@ -47,6 +47,7 @@
                 {% for model in provider_models %}
                 <span class="chip" data-provider-model{% if loop.index > 5 %} hidden{% endif %}>
                   {{ model.model_name }}
+                  <span class="model-chip-meta">{{ "可检查图片和视频" if model.image_input_status == "verified" else "图片识别待验证" }}</span>
                   {% if model.reasoning_effort %}<span class="model-chip-meta">思考 {{ model.reasoning_effort }}</span>{% endif %}
                   {% if model.force_disable_thinking %}<span class="model-chip-meta">关闭思考</span>{% endif %}
                 </span>

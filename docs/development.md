@@ -52,6 +52,8 @@ ASGI 适配器在每个 WSGI 请求线程内创建独立 Flask 应用上下文�
 
 ## 文档解析与列表读取
 
+`models/image_capabilities.py` 生成图片识别测试并保存能力记录，模型连接配置的摘要包含规范化端点、密钥、模型名称和思考参数，记录按用户隔离。`models/client.py` 校验图片中随机数字的识别结果，`web/models.py` 提供独立的图片测试入口。`tasks/submission.py` 在文件保存前校验能力，`tasks/retries.py` 使用重试凭据和原模型快照校验，`tasks/supervisor.py` 在认领前核对排队任务；不满足条件的任务记录明确提示并保持执行槽位可用。`tests/test_model_image_capabilities.py` 覆盖识别结果、配置变化、用户隔离、页面选择、提交拦截、队列及重试。
+
 `checks/document_scope.py` 根据真实第一章标题生成单文档检查范围，识别中英文章节、目录条目、列表、代码和表格边界。AI 使用正文视图，词表清空模板文字并保留原始字符位置、行号与页码，超链接按引用页或目标原文位置过滤；边界或链接定位不足时保留相应内容。`checks/revision_history.py` 为 AI 正文视图排除修订记录章节。`tasks/runner.py` 对预检、各轮及重试复用同一范围，结果保存 `scope_note`，页面与导出摘要展示起始位置。发布信息专项检查及其他任务类型使用完整文本。`tests/test_document_scope.py` 覆盖章节边界、词表与链接范围、定位保留、输入预算、多轮与重试。
 
 `checks/document_release.py` 从封面明确标签和修订记录的版本条目、表格列读取发布字段，按数字版本号确定最新条目，独立比较版本号与发布日期。报告包含原文、页码和字段比较结果；歧义日期、多份独立修订记录、无法排序的版本及不可靠表格产生待确认建议。`document-release-consistency` 属于本地执行器，参与检查方案和快照，在多轮任务中只执行一次。`tests/test_document_release.py` 覆盖日期与版本归一化、版本排序、章节边界、原文保留和任务执行。

@@ -5,7 +5,7 @@
       <h2>{{ title }}</h2>
       <button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button>
     </div>
-    <form method="post" class="stack-form provider-modal-form" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}">
+    <form method="post" class="stack-form provider-modal-form" data-fetch-models-url="{{ url_for('user_fetch_models') }}" data-test-model-url="{{ url_for('user_test_model') }}" data-test-image-model-url="{{ url_for('user_test_image_model') }}">
       {% if provider %}<input type="hidden" name="provider_id" value="{{ provider.id }}">{% endif %}
       <div class="form-grid">
         <label>提供商名称<input name="name" value="{{ provider.name if provider else '' }}" placeholder="例如 OpenAI 兼容服务" required></label>

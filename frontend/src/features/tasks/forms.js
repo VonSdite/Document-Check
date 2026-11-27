@@ -9,7 +9,9 @@ function syncTaskFormValidity(form) {
   })
   const model = form.querySelector('select[name="model_id"]')
   if (model instanceof HTMLSelectElement) {
-    model.setCustomValidity(model.value ? '' : '请先在模型管理中添加并启用模型。')
+    model.setCustomValidity(
+      model.value ? '' : form.dataset.modelRequiredMessage || '请先在模型管理中添加并启用模型。',
+    )
   }
   const firstCheck = form.querySelector('input[name="checks"]')
   const checkInput = firstCheck || form.querySelector('[data-check-validation]')
@@ -84,7 +86,9 @@ function resetDoubleSubmitForm(form) {
     progress.hidden = true
   }
   form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach((button) => {
-    button.disabled = false
+    button.disabled =
+      form.dataset.requireImageModel === 'true' &&
+      !form.querySelector('select[name="model_id"]')?.value
     if (button instanceof HTMLButtonElement && 'originalText' in button.dataset) {
       button.textContent = button.dataset.originalText || ''
       delete button.dataset.originalText

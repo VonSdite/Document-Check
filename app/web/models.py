@@ -8,6 +8,12 @@ from app.models.client import (
     test_model_connection,
 )
 from app.models.discovery import ModelDiscoveryError, fetch_models
+from app.models.image_capabilities import (
+    image_capabilities,
+    image_model_status,
+    image_test_challenge,
+    record_image_capability,
+)
 from app.models.service import (
     PROVIDER_INPUT_LIMIT_DEFAULT,
     PROVIDER_TIMEOUT_DEFAULT,
@@ -60,8 +66,9 @@ def register_models_routes(app):
         return {"fetched_models": models, "fetched_count": len(models)}
 
     @app.post("/models/test")
+    @app.post("/models/test-image", endpoint="user_test_image_model")
     def user_test_model():
-        _current_user_identity()
+        identity = _current_user_identity()
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return {"ok": False, "error": "请求数据格式不正确。"}, 400
@@ -72,6 +79,15 @@ def register_models_routes(app):
         if not model_name:
             return {"ok": False, "error": "请先填写模型 ID。"}, 400
         network = outbound_network_config()
+        image_test = request.path.endswith("/test-image")
+        model = {
+            **provider_data,
+            "model_name": model_name,
+            "reasoning_effort": normalize_reasoning_effort(
+                data.get("reasoning_effort")
+            ),
+            "force_disable_thinking": _form_bool(data.get("force_disable_thinking")),
+        }
         try:
             message = test_model_connection(
                 api_base=provider_data["api_base"],
@@ -87,9 +103,14 @@ def register_models_routes(app):
                     data.get("reasoning_effort")
                 ),
                 force_disable_thinking=_form_bool(data.get("force_disable_thinking")),
+                **({"image_challenge": image_test_challenge()} if image_test else {}),
             )
         except LLMError as exc:
+            if image_test:
+                record_image_capability(identity.subject, model, verified=False)
             return {"ok": False, "error": str(exc)}, 400
+        if image_test:
+            record_image_capability(identity.subject, model, verified=True)
         return {"ok": True, "message": message}
 
     @app.route(f"{admin_prefix}/models", methods=["GET", "POST"])
@@ -128,6 +149,12 @@ def _model_management_response(identity: UserIdentity, redirect_endpoint: str):
         )
         for provider in providers
     }
+    capabilities = image_capabilities(identity.subject)
+    for provider in providers:
+        for model in models_by_provider[provider["id"]]:
+            model["image_input_status"] = image_model_status(
+                {**provider, **model}, capabilities
+            )
     return render_template(
         "user_models.html",
         providers=providers,

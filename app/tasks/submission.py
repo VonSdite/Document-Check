@@ -21,6 +21,7 @@ from app.documents.extraction import allowed_file, extension_of
 from app.documents.skill_packages import skill_metadata
 from app.documents.videos import allowed_video_file, video_extension_of
 from app.identity.models import UserIdentity
+from app.models.image_capabilities import image_model_error
 from app.models.service import _find_enabled_model
 from app.persistence.check_item_pool import LOCAL_CHECK_CODES
 from app.persistence.check_profiles import check_profile_snapshot
@@ -394,6 +395,10 @@ def submit_image_task(
         messages.append(("请选择可用模型。", "error"))
         return SubmissionResult(IMAGE_TASK_TYPE, messages)
 
+    if error := image_model_error(model, identity.subject):
+        messages.append((error, "error"))
+        return SubmissionResult(IMAGE_TASK_TYPE, messages)
+
     original_filename = _clean_upload_filename(upload.filename, file_type)
     created_at = now_text()
     stored_filename, destination = _upload_destination(
@@ -494,6 +499,10 @@ def submit_video_task(
     model = _find_enabled_model(model_id, identity.subject)
     if model is None:
         messages.append(("请选择可用模型。", "error"))
+        return SubmissionResult(VIDEO_TASK_TYPE, messages)
+
+    if error := image_model_error(model, identity.subject):
+        messages.append((error, "error"))
         return SubmissionResult(VIDEO_TASK_TYPE, messages)
 
     created_count = 0

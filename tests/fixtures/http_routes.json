@@ -411,6 +411,14 @@
     ]
   ],
   [
+    "/models/test-image",
+    "user_test_image_model",
+    [
+      "OPTIONS",
+      "POST"
+    ]
+  ],
+  [
     "/overview",
     "user_overview",
     [

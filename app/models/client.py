@@ -989,6 +989,7 @@ def test_model_connection(
     model_name: str,
     reasoning_effort: str | None = None,
     force_disable_thinking: bool = False,
+    image_challenge: tuple[str, str] | None = None,
 ) -> str:
     connect_timeout, read_timeout = model_request_timeout(request_timeout)
     endpoint = _chat_completions_endpoint(api_base)
@@ -1001,6 +1002,12 @@ def test_model_connection(
         "temperature": 0,
         "max_tokens": 16,
     }
+    if image_challenge:
+        payload["messages"][0]["content"] = [
+            {"type": "text", "text": "请读取图片中的8位数字，仅回复这8位数字。"},
+            {"type": "image_url", "image_url": {"url": image_challenge[0]}},
+        ]
+        payload["max_tokens"] = 1024
     _apply_reasoning_effort(payload, reasoning_effort)
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
@@ -1024,6 +1031,11 @@ def test_model_connection(
                 try:
                     data = response.json()
                 except ValueError:
+                    if image_challenge:
+                        raise LLMError(
+                            "图片识别测试未通过：模型响应不是有效 JSON。",
+                            retryable=False,
+                        )
                     return "模型服务已返回 200，但响应不是 JSON。"
                 service_error = _extract_service_error(data)
                 if service_error:
@@ -1034,6 +1046,16 @@ def test_model_connection(
                             data, service_error
                         ),
                     )
+                if image_challenge:
+                    digits = re.findall(
+                        r"(?<!\d)[0-9]{8}(?!\d)", _extract_chat_content(data)
+                    )
+                    if digits != [image_challenge[1]]:
+                        raise LLMError(
+                            "图片识别测试未通过：模型未正确读取测试图片。请更换支持图片输入的模型后重试。",
+                            retryable=False,
+                        )
+                    return "图片识别测试通过，可用于图片和视频检查。"
                 return "模型连通性测试通过。"
             finally:
                 _close_response(response)

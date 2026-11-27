@@ -3,6 +3,7 @@
 import json
 
 from app.contracts.task_types import IMAGE_TASK_TYPE, VIDEO_TASK_TYPE
+from app.models.image_capabilities import image_task_model_error
 from app.persistence.connection import get_db, now_text
 from app.tasks.activity import RETRYABLE_PHASES, load_activity, save_activity
 from app.tasks.runtime.common import _check_results_from_json
@@ -66,7 +67,8 @@ def request_task_retry(task_id: int) -> int:
         db.execute("BEGIN IMMEDIATE")
         task = db.execute(
             "SELECT status, checks_snapshot_json, result_json, retry_check_codes_json, "
-            "provider_id, owner_subject FROM tasks WHERE id = ?",
+            "provider_id, owner_subject, task_type, model_name, api_base, "
+            "force_disable_thinking, reasoning_effort FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         if task is None:
@@ -80,6 +82,10 @@ def request_task_retry(task_id: int) -> int:
         ).fetchone()
         if provider is None:
             raise TaskRetryError("原任务使用的模型提供商已不存在，无法重试。")
+        if error := image_task_model_error(
+            {**dict(task), "api_key": provider["api_key"]}
+        ):
+            raise TaskRetryError(error)
         now = now_text()
         db.execute(
             "UPDATE tasks SET status='queued', progress=0, cancel_requested=0, "
@@ -130,7 +136,8 @@ def request_check_retry(task_id, code, execution):
         db.execute("BEGIN IMMEDIATE")
         task = db.execute(
             "SELECT status, task_type, claim_token, checks_snapshot_json, result_json, "
-            "retry_check_codes_json, provider_id, owner_subject FROM tasks WHERE id = ?",
+            "retry_check_codes_json, provider_id, owner_subject, model_name, api_base, "
+            "force_disable_thinking, reasoning_effort FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         if task is None or task["status"] == "canceling":
@@ -209,6 +216,10 @@ def request_check_retry(task_id, code, execution):
                 ).fetchone()
                 if provider is None:
                     raise CheckRetryError("原模型提供商的访问凭据已不可用，无法重试。")
+                if error := image_task_model_error(
+                    {**dict(task), "api_key": provider["api_key"]}
+                ):
+                    raise CheckRetryError(error)
                 now = now_text()
                 db.execute(
                     "UPDATE tasks SET status='queued', progress=0, cancel_requested=0, "
