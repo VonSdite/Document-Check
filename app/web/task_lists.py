@@ -178,9 +178,7 @@ def _render_user_task_list(identity, task_type, template_name):
         **_task_filter_values(),
         review_status_filters=REPORT_REVIEW_FILTERS,
         check_items=[] if partial else get_enabled_check_items(task_type),
-        models=[]
-        if partial
-        else get_enabled_models(identity.subject, task_type=task_type),
+        models=[] if partial else get_enabled_models(identity.subject),
         submission_token=uuid.uuid4().hex,
         refresh_url=url_for("user_task_statuses", task_type=task_type),
         active_nav=task_type,
@@ -603,9 +601,7 @@ def _render_admin_task_list(
         global_concurrency=get_setting("global_concurrency", 3),
         user_concurrency=get_setting("user_concurrency", 1),
         check_items=check_items,
-        models=[]
-        if _task_list_partial()
-        else get_enabled_models(identity.subject, task_type=task_type),
+        models=[] if _task_list_partial() else get_enabled_models(identity.subject),
         submission_token=uuid.uuid4().hex,
         refresh_url=url_for(_task_endpoint("task_statuses"), task_type=task_type),
         active_nav=task_type,

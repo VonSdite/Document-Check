@@ -12,8 +12,6 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from app.identity.models import UserIdentity  # noqa: E402
-from app.models.image_capabilities import record_image_capability  # noqa: E402
-from app.models.service import _find_enabled_model  # noqa: E402
 from app.persistence.connection import get_db  # noqa: E402
 from app.persistence.permissions import (  # noqa: E402
     register_subject,
@@ -29,7 +27,7 @@ def main():
     fixture.app.config["TEMPLATES_AUTO_RELOAD"] = True
     fixture.app.jinja_env.auto_reload = True
     atexit.register(fixture.tearDown)
-    model_id = fixture._configure_provider(api_key="example-frontend-key")
+    fixture._configure_provider(api_key="example-frontend-key")
     fixture._insert_report_task()
     for task_type, filename in [
         ("document_check", "VX120 安装手册.pdf"),
@@ -55,15 +53,6 @@ def main():
             set_ip_username(ip, name)
     fixture._insert_suppression_rules(24)
     review_task_id = None
-
-    @fixture.app.post("/__frontend__/image-model-capability")
-    def image_model_capability_fixture():
-        record_image_capability(
-            "ip:127.0.0.1",
-            _find_enabled_model(model_id, "ip:127.0.0.1"),
-            verified=bool((request.get_json() or {}).get("verified")),
-        )
-        return {"ok": True}
 
     @fixture.app.get("/__frontend__/skill-package")
     def skill_package_fixture():

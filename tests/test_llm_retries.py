@@ -40,6 +40,117 @@ class LLMRetryPolicyTest(unittest.TestCase):
             }
         )
 
+    def run_image_check(self, **kwargs):
+        return llm.run_multimodal_document_check(
+            api_base="https://example.test/v1/chat/completions",
+            api_key="key",
+            model_name="test-model",
+            check_name="图片检查",
+            prompt="检查图片",
+            document_text="文档",
+            image_items=[{"data_url": "data:image/png;base64,AAAA"}],
+            **kwargs,
+        )
+
+    def test_unsupported_image_input_stops_http_and_stream_errors_without_retry(self):
+        messages = (
+            "This model does not support image input.",
+            "Image input is not supported for this model.",
+            "The model does not support multi-modal inputs.",
+            "Invalid content type. image_url is only supported by certain models.",
+            "messages[1].content[1]: unknown variant `image_url`, expected `text`",
+            "The selected model only supports text inputs.",
+            "unsupported_image_input",
+            "当前模型不支持图片输入",
+            "该模型不支持图像",
+            "该接口仅支持纯文本输入",
+        )
+        for message in messages:
+            for status, prefix in (
+                (400, None),
+                (503, None),
+                (200, "data: "),
+                (200, ""),
+            ):
+                with self.subTest(message=message, status=status, prefix=prefix):
+                    body = json.dumps({"error": {"message": message}})
+                    response = FakeResponse(
+                        status_code=status,
+                        text=body,
+                        lines=[prefix + body] if prefix is not None else [],
+                    )
+                    self.session.responses = [response]
+                    self.session.calls.clear()
+                    phases = []
+                    with self.assertRaisesRegex(
+                        llm.LLMError, "模型选择不匹配"
+                    ) as caught:
+                        self.run_image_check(
+                            on_activity=lambda phase, attempt: phases.append(phase)
+                        )
+                    self.assertFalse(caught.exception.retryable)
+                    self.assertIn("不会自动重试", str(caught.exception))
+                    self.assertIn(message, str(caught.exception))
+                    self.assertEqual(len(self.session.calls), 1)
+                    self.assertTrue(response.closed)
+                    self.assertNotIn("retrying", phases)
+        self.wait.assert_not_called()
+
+    def test_image_file_and_transport_errors_keep_their_original_meaning(self):
+        for message in (
+            "Invalid image URL: could not download image",
+            "This model does not support image input format TIFF",
+            "This model does not support image size 99999",
+            "Unsupported image format",
+            "Unsupported image input format TIFF",
+            "Unsupported image URL scheme",
+            "This model does not support image URL schemes",
+            "不支持图片格式 TIFF",
+            "当前模型不支持图像输入尺寸",
+            "Image input service temporarily unavailable",
+            "response_format is unsupported for image inputs",
+        ):
+            with self.subTest(message=message):
+                self.session.responses = [FakeResponse(status_code=400, text=message)]
+                self.session.calls.clear()
+                with self.assertRaises(llm.LLMError) as caught:
+                    self.run_image_check()
+                self.assertNotIn("模型选择不匹配", str(caught.exception))
+                self.assertEqual(len(self.session.calls), 1)
+        self.wait.assert_not_called()
+        self.session.responses = [
+            FakeResponse(
+                status_code=503, text="image input service temporarily unavailable"
+            ),
+            completed_response(),
+        ]
+        self.session.calls.clear()
+        self.assertEqual(self.run_image_check(), "检查完成")
+        self.assertEqual(len(self.session.calls), 2)
+        self.wait.assert_called_once()
+
+    def test_text_requests_and_normal_model_output_do_not_trigger_image_error(self):
+        self.session.responses = [
+            FakeResponse(
+                status_code=400, text="This model does not support image input."
+            )
+        ]
+        with self.assertRaises(llm.LLMError) as caught:
+            self.run_check()
+        self.assertNotIn("模型选择不匹配", str(caught.exception))
+        content = "文档描述：该模型不支持图片输入。"
+        self.session.responses = [
+            FakeResponse(
+                lines=[
+                    "data: "
+                    + json.dumps({"choices": [{"delta": {"content": content}}]}),
+                    "data: [DONE]",
+                ]
+            )
+        ]
+        self.assertEqual(self.run_image_check(), content)
+        self.wait.assert_not_called()
+
     def test_permanent_http_errors_stop_without_wait_or_retry_activity(self):
         for status in (400, 401, 402, 403, 404, 405, 413, 422, 501, 505, 511):
             with self.subTest(status=status):

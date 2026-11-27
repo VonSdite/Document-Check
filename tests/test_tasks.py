@@ -22,6 +22,7 @@ from app.contracts.task_types import (
 )
 from app.documents.images import format_image_document_text
 from app.documents.videos import format_video_document_text
+from app.models import client as llm
 from app.models.client import LLMError
 from app.models.document_input import compact_model_document_text
 from app.persistence.connection import get_db, now_text
@@ -58,6 +59,7 @@ from app.tasks.runtime.video_checks import (
 )
 from app.tasks.supervisor import TaskSupervisor
 from tests.fixtures.pdf_tables import TABLE_ID, normalized_pdf_table
+from tests.test_llm import FakeResponse, FakeSession
 
 
 class TaskExecutionTest(unittest.TestCase):
@@ -3649,6 +3651,70 @@ class TaskExecutionTest(unittest.TestCase):
 
         self.assertEqual(calls[0]["check_name"], "多文档对照检查")
         self.assertEqual(calls[0]["prompt"], "默认多文档对照提示词")
+
+    def test_media_model_mismatch_stops_task_without_retry_or_later_batches(self):
+        checks = [
+            {"id": 101, "code": "first", "name": "第一项", "prompt": "检查"},
+            {"id": 102, "code": "second", "name": "第二项", "prompt": "检查"},
+        ]
+        set_setting("image_check_batch_size", 1)
+        set_setting("check_item_concurrency", 1)
+        image = Path(self.app.config["IMAGE_FOLDER"]) / "sample.png"
+        image.write_bytes(b"test-image")
+        frames = [
+            {
+                "id": f"frame-{index}",
+                "filename": "sample.png",
+                "relative_path": "sample.png",
+                "mime_type": "image/png",
+                "position": f"00:0{index}.000",
+                "size_bytes": 10,
+                "timestamp_seconds": float(index),
+            }
+            for index in range(1, 4)
+        ]
+        self.addCleanup(llm._reset_http_session_pools)
+        for task_type, field in (
+            (IMAGE_TASK_TYPE, "images"),
+            (VIDEO_TASK_TYPE, "frames"),
+        ):
+            with self.subTest(task_type=task_type):
+                task_id = self._insert_running_document_task(checks)
+                get_db().execute(
+                    "UPDATE tasks SET task_type=?, document_meta_json=?, "
+                    "claim_token='media-test', lease_expires_at='2099-01-01 00:00:00' WHERE id=?",
+                    (task_type, json.dumps({field: frames}), task_id),
+                )
+                get_db().commit()
+                llm._reset_http_session_pools()
+                session = FakeSession(
+                    [
+                        FakeResponse(
+                            status_code=503,
+                            text='{"error":{"message":"This model does not support image input"}}',
+                        )
+                    ]
+                )
+                with (
+                    patch.object(llm.requests, "Session", return_value=session),
+                    patch.object(llm, "_wait_before_retry") as wait,
+                ):
+                    TaskRunner(self.app).run(task_id, "media-test")
+                task = (
+                    get_db()
+                    .execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+                    .fetchone()
+                )
+                self.assertEqual(task["status"], "failed")
+                self.assertIn("模型选择不匹配", task["error"])
+                self.assertIn("不会自动重试", task["error"])
+                self.assertIn("更换支持图片识别的模型", task["error"])
+                self.assertIsNotNone(task["finished_at"])
+                self.assertIsNone(task["api_key"])
+                self.assertIsNone(task["claim_token"])
+                self.assertIsNone(task["lease_expires_at"])
+                self.assertEqual(len(session.calls), 1)
+                wait.assert_not_called()
 
     def test_image_task_runs_multimodal_check_for_extracted_images(self):
         image_dir = Path(self.app.config["IMAGE_FOLDER"]) / "task-images"

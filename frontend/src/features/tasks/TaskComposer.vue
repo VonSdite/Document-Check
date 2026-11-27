@@ -6,11 +6,6 @@ import { syncTaskFormValidity } from './forms'
 const props = defineProps<TaskComposerProps>()
 const form = ref<HTMLFormElement>()
 const model = ref(props.model)
-const imageModelMissing = computed(
-  () =>
-    props.attributes['data-require-image-model'] === 'true' &&
-    !props.models.some((option) => option.value),
-)
 const round = ref(props.round)
 const checks = ref(
   props.profiles === undefined
@@ -104,10 +99,6 @@ onMounted(validate)
         <UiSelect v-model="round" name="check_rounds" :options="rounds" required />
       </label>
     </div>
-    <p v-if="attributes['data-model-help']" class="subline" role="status">
-      {{ attributes['data-model-help'] }}
-      <a :href="attributes['data-model-management-url']">前往模型管理</a>
-    </p>
     <div v-if="props.profiles !== undefined" class="task-profile-field">
       <label>
         检查方案
@@ -133,7 +124,7 @@ onMounted(validate)
     />
     <div class="ui-composer-footer">
       <div class="submit-slot">
-        <UiButton type="submit" variant="primary" :disabled="imageModelMissing">提交检查</UiButton>
+        <UiButton type="submit" variant="primary">提交检查</UiButton>
         <span class="submit-progress" data-submit-progress hidden>
           {{ attributes['data-submitting-message'] }}
         </span>

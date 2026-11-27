@@ -603,6 +603,7 @@ def run_image_check(
         check_canceled=check_canceled,
         on_activity=on_activity,
         on_output=on_output,
+        image_input=True,
     )
 
 
@@ -748,6 +749,7 @@ def run_multimodal_document_check(
         check_canceled=check_canceled,
         on_activity=on_activity,
         on_output=on_output,
+        image_input=True,
     )
 
 
@@ -804,6 +806,7 @@ def _run_payload_with_retries(
     check_canceled: Optional[Callable[[], None]] = None,
     on_activity: Optional[Callable[[str, int | None], None]] = None,
     on_output: Optional[Callable[[dict], None]] = None,
+    image_input: bool = False,
 ) -> str:
     last_error = None
     last_incomplete_response = None
@@ -881,6 +884,18 @@ def _run_payload_with_retries(
                 on_content("")
             if isinstance(exc, (LLMRequestCanceled, _StreamOutputLimitError)):
                 raise
+            if (
+                image_input
+                and not exc.authentication_failed
+                and _is_image_input_unsupported_error(exc)
+            ):
+                raise LLMError(
+                    "模型选择不匹配：当前模型不支持图片输入，无法执行图片或视频检查。"
+                    "任务已终止，不会自动重试。请更换支持图片识别的模型后重新提交。"
+                    f"原始错误：{_short_text(str(exc), 500)}",
+                    retryable=False,
+                    status_code=exc.status_code,
+                ) from exc
             if (
                 not response_format_fallback_used
                 and not exc.authentication_failed
@@ -989,7 +1004,6 @@ def test_model_connection(
     model_name: str,
     reasoning_effort: str | None = None,
     force_disable_thinking: bool = False,
-    image_challenge: tuple[str, str] | None = None,
 ) -> str:
     connect_timeout, read_timeout = model_request_timeout(request_timeout)
     endpoint = _chat_completions_endpoint(api_base)
@@ -1002,12 +1016,6 @@ def test_model_connection(
         "temperature": 0,
         "max_tokens": 16,
     }
-    if image_challenge:
-        payload["messages"][0]["content"] = [
-            {"type": "text", "text": "请读取图片中的8位数字，仅回复这8位数字。"},
-            {"type": "image_url", "image_url": {"url": image_challenge[0]}},
-        ]
-        payload["max_tokens"] = 1024
     _apply_reasoning_effort(payload, reasoning_effort)
     if force_disable_thinking:
         _disable_thinking_in_payload(payload, api_base=api_base, model_name=model_name)
@@ -1031,11 +1039,6 @@ def test_model_connection(
                 try:
                     data = response.json()
                 except ValueError:
-                    if image_challenge:
-                        raise LLMError(
-                            "图片识别测试未通过：模型响应不是有效 JSON。",
-                            retryable=False,
-                        )
                     return "模型服务已返回 200，但响应不是 JSON。"
                 service_error = _extract_service_error(data)
                 if service_error:
@@ -1046,16 +1049,6 @@ def test_model_connection(
                             data, service_error
                         ),
                     )
-                if image_challenge:
-                    digits = re.findall(
-                        r"(?<!\d)[0-9]{8}(?!\d)", _extract_chat_content(data)
-                    )
-                    if digits != [image_challenge[1]]:
-                        raise LLMError(
-                            "图片识别测试未通过：模型未正确读取测试图片。请更换支持图片输入的模型后重试。",
-                            retryable=False,
-                        )
-                    return "图片识别测试通过，可用于图片和视频检查。"
                 return "模型连通性测试通过。"
             finally:
                 _close_response(response)
@@ -1864,6 +1857,27 @@ def _raise_for_http_error(
             status_code=response.status_code,
             authentication_failed=_is_authentication_error(data, raw_body),
         )
+
+
+def _is_image_input_unsupported_error(error: LLMError) -> bool:
+    """识别服务明确返回的图片输入能力错误。"""
+    text = re.sub(r"[\s_-]+", " ", str(error).lower())
+    media = r"(?:images?(?: inputs?)?|image url|vision|multi ?modal(?: inputs?)?)"
+    capability_only = r"(?!\s+(?:inputs?\s+)?(?:formats?|types?|sizes?|resolutions?|detail|url|schemes?|encoding))"
+    patterns = (
+        rf"\b(?:does not|doesn't|do not|cannot|can't) support {media}\b{capability_only}",
+        rf"\b{media} (?:is |are )?(?:not supported|unsupported)\b",
+        rf"\bunsupported (?:image inputs?|image url|vision|multi ?modal inputs?)\b{capability_only}",
+        r"\bimage url\b.{0,60}\bonly supported by\b",
+        r"\b(?:unknown variant|invalid content type|unsupported content type)"
+        r"\s*:?\s*['\"`]?image url\b",
+        r"\bmodel\b[^.;\n]{0,80}\bonly supports? text\b(?!\s+output)",
+        r"不支持(?:图片|图像|视觉|多模态)(?:输入|消息|内容)?"
+        r"(?![\u4e00-\u9fff]*(?:格式|尺寸|大小|分辨率))",
+        r"(?:图片|图像|多模态)输入(?:暂)?不(?:被)?支持",
+        r"(?:模型|接口)[^。；\n]{0,40}(?:仅|只)支持(?:纯)?文本(?!输出)",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def _is_retryable_request_error(error: requests.RequestException) -> bool:

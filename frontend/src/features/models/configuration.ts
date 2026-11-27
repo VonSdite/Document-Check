@@ -2,7 +2,6 @@ export interface ModelConfig {
   model_name: string
   reasoning_effort: string
   force_disable_thinking: boolean
-  image_input_status?: 'unknown' | 'verified' | 'failed'
 }
 export const efforts = ['', 'low', 'medium', 'high', 'xhigh', 'max']
 export function normalizeModels(values: Partial<ModelConfig>[]): ModelConfig[] {
@@ -20,7 +19,6 @@ export function normalizeModels(values: Partial<ModelConfig>[]): ModelConfig[] {
         reasoning_effort: efforts.includes(value.reasoning_effort || '')
           ? value.reasoning_effort || ''
           : '',
-        ...(value.image_input_status ? { image_input_status: value.image_input_status } : {}),
       },
     ]
   })

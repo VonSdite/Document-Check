@@ -26,7 +26,6 @@ from app.contracts.task_types import (
 )
 from app.documents.extraction.common import DocumentReadError
 from app.infrastructure.config import CONFIG_FILENAME
-from app.models.image_capabilities import record_image_capability
 from app.models.service import _find_enabled_model, get_enabled_models
 from app.persistence.connection import get_db
 from app.persistence.defaults import seed_defaults
@@ -1203,16 +1202,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         for task_type in (IMAGE_TASK_TYPE, VIDEO_TASK_TYPE):
             media_id, _, _, _ = self._insert_retryable_task(task_type=task_type)
             with self.app.app_context():
-                task = (
-                    get_db()
-                    .execute("SELECT * FROM tasks WHERE id=?", (media_id,))
-                    .fetchone()
-                )
-                record_image_capability(
-                    task["owner_subject"],
-                    {**dict(task), "api_key": "retry-secret"},
-                    verified=True,
-                )
                 get_db().execute(
                     "UPDATE tasks SET status='running' WHERE id=?", (media_id,)
                 )
@@ -1277,7 +1266,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
         owner_subject: str = "ip:127.0.0.1",
         api_key: str = "provider-secret",
         reasoning_effort: str | None = None,
-        image_verified: bool = True,
     ) -> str:
         with self.app.app_context():
             now = "2026-05-01 09:00:00"
@@ -1304,12 +1292,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 (provider_id, reasoning_effort, now, now),
             )
             get_db().commit()
-            if image_verified:
-                record_image_capability(
-                    owner_subject,
-                    _find_enabled_model(f"{provider_id}:0:model-a", owner_subject),
-                    verified=True,
-                )
         return f"{provider_id}:0:model-a"
 
     def _assert_task_uses_provider_reference(
@@ -2028,11 +2010,6 @@ class AdminSettingsRouteTest(unittest.TestCase):
                 (provider_id, now, now),
             )
             get_db().commit()
-            record_image_capability(
-                "ip:127.0.0.1",
-                _find_enabled_model(f"{provider_id}:1:model-a", "ip:127.0.0.1"),
-                verified=True,
-            )
 
         task_routes = (
             "/",
@@ -2155,7 +2132,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         model_group = _required_tag(soup.select_one("[data-provider-model-group]"))
         model_chips = model_group.select("[data-provider-model]")
         self.assertEqual(
-            [chip.find(string=True, recursive=False).strip() for chip in model_chips],
+            [chip.get_text(" ", strip=True) for chip in model_chips],
             [f"model-{letter}" for letter in "abcde"],
         )
         self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips))
@@ -2191,7 +2168,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
         model_list = _required_tag(model_group.select_one("[data-provider-model-list]"))
         model_chips = model_list.select("[data-provider-model]")
         self.assertEqual(
-            [chip.find(string=True, recursive=False).strip() for chip in model_chips],
+            [chip.get_text(" ", strip=True) for chip in model_chips],
             [f"model-{letter}" for letter in "abcdefg"],
         )
         self.assertTrue(all(not chip.has_attr("hidden") for chip in model_chips[:5]))
@@ -9029,7 +9006,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
             other_response.get_json()["error"], "选择其他原因时必须填写具体原因。"
         )
 
-    def test_task_submission_controls_require_verified_media_models(self):
+    def test_task_submission_controls_stay_enabled_with_missing_configuration(self):
         routes = (
             "/",
             "/consistency",
@@ -9065,11 +9042,7 @@ class AdminSettingsRouteTest(unittest.TestCase):
                         model = _required_tag(
                             form.select_one('select[name="model_id"]')
                         )
-                        self.assertEqual(
-                            button.has_attr("disabled"),
-                            route.endswith(("/images", "/videos"))
-                            and not models_available,
-                        )
+                        self.assertFalse(button.has_attr("disabled"))
                         self.assertFalse(model.has_attr("disabled"))
                         self.assertTrue(model.has_attr("required"))
                         self.assertEqual(

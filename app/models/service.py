@@ -2,11 +2,6 @@ import json
 
 from app.models.client import normalize_reasoning_effort
 from app.models.endpoints import normalize_chat_completions_endpoint
-from app.models.image_capabilities import (
-    IMAGE_INPUT_TASK_TYPES,
-    image_capabilities,
-    image_model_status,
-)
 from app.persistence.connection import get_db, now_text
 
 PROVIDER_TIMEOUT_DEFAULT = 600
@@ -350,20 +345,13 @@ def _model_config_reasoning_effort(model_config) -> str:
     return normalize_reasoning_effort(model_config.get("reasoning_effort")) or ""
 
 
-def get_enabled_models(owner_subject: str, *, task_type: str = ""):
+def get_enabled_models(owner_subject: str):
     models = []
     for provider in _load_user_model_providers(owner_subject):
         if not provider["is_active"]:
             continue
         for model_config in provider["models"]:
             models.append(_model_option(provider, model_config))
-    if task_type in IMAGE_INPUT_TASK_TYPES:
-        capabilities = image_capabilities(owner_subject)
-        models = [
-            model
-            for model in models
-            if image_model_status(model, capabilities) == "verified"
-        ]
     return sorted(
         models,
         key=lambda model: (

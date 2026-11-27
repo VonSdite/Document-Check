@@ -9,7 +9,6 @@ from pathlib import Path
 import portalocker
 import psutil
 
-from app.models.image_capabilities import image_task_model_error
 from app.persistence.connection import get_db, now_text
 from app.persistence.settings import get_setting
 from app.tasks.activity import activity_key
@@ -302,8 +301,6 @@ class TaskSupervisor:
                     ),
                     ranked_candidates AS (
                         SELECT queued.id, queued.owner_subject, queued.created_at,
-                               queued.task_type, queued.model_name, queued.api_base, queued.api_key,
-                               queued.force_disable_thinking, queued.reasoning_effort,
                                owners.running_for_user,
                                ROW_NUMBER() OVER (
                                    PARTITION BY queued.owner_subject ORDER BY queued.id
@@ -316,8 +313,7 @@ class TaskSupervisor:
                             ORDER BY id LIMIT ?
                         )
                     )
-                    SELECT id, owner_subject, running_for_user, task_type, model_name,
-                           api_base, api_key, force_disable_thinking, reasoning_effort
+                    SELECT id, owner_subject, running_for_user
                     FROM ranked_candidates
                     WHERE owner_queue_position <= ? - running_for_user
                     ORDER BY created_at ASC, id ASC
@@ -342,15 +338,6 @@ class TaskSupervisor:
                         int(task["running_for_user"] or 0),
                     )
                     if running_for_user >= user_limit:
-                        continue
-
-                    if error := image_task_model_error(task):
-                        db.execute(
-                            "UPDATE tasks SET status='failed', progress=0, api_key=NULL, "
-                            "claim_token=NULL, lease_expires_at=NULL, summary=?, error=?, "
-                            "updated_at=?, finished_at=? WHERE id=? AND status='queued'",
-                            (error, error, now, now, task["id"]),
-                        )
                         continue
 
                     claim_token = uuid.uuid4().hex
