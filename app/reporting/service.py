@@ -346,11 +346,6 @@ def _prepare_task_results(
                 item, structured_report, dictionary_status_items
             )
         )
-        scope_note = str(item.get("scope_note") or "").strip()
-        if scope_note:
-            item["result_summary"] = "\n".join(
-                part for part in (item["result_summary"], scope_note) if part
-            )
         item["report_items"] = report_items
         item["filtered_report_items"] = filtered_report_items
         item["report_limit"] = report_limit

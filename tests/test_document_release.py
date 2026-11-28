@@ -320,7 +320,8 @@ class ReleaseExecutionTest(unittest.TestCase):
                 json.loads(task["result_json"]), suppression_rules={}
             )
             ai = next(entry for entry in prepared if entry["code"] == "compliance")
-            self.assertIn("已排除第一章之前的模板内容", ai["result_summary"])
+            self.assertIn("已排除第一章之前的模板内容", ai["scope_note"])
+            self.assertNotIn("检查范围：", ai["result_summary"])
             self.assertNotIn("scope_note", local)
 
     def test_aliased_local_executor_is_preserved_by_snapshot(self):

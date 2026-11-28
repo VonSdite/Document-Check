@@ -207,7 +207,8 @@ class ScopeExecutionTest(unittest.TestCase):
                 self.assertIn("发布日期一致", result["result_summary"])
                 self.assertNotIn("scope_note", result)
             else:
-                self.assertIn("第一章之前", result["result_summary"])
+                self.assertIn("第一章之前", result["scope_note"])
+                self.assertNotIn("检查范围：", result["result_summary"])
 
     def test_input_budget_counts_scoped_body_and_retry_reuses_full_source(self):
         task_id = self.create_task(rounds=1)
