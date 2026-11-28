@@ -281,7 +281,11 @@ def _prepare_task_results(
         }
         retained_report_items = []
         for report_item in report_items:
-            reason = report_filter_reason(report_item, review_scope=review_scope)
+            reason = report_filter_reason(
+                report_item,
+                review_scope=review_scope,
+                filter_script_notation=filter_visual_missing or task_type is None,
+            )
             if filter_visual_missing and is_unsupported_visual_missing_item(
                 report_item,
                 preserve_numbered_references=bool(item.get("cross_reference_guard")),

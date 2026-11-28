@@ -50,7 +50,7 @@ REPORT_REJECTION_REASON_HINTS = {
     "other": "无法归入以上原因，请补充说明",
 }
 REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD = 0.56
-REPORT_STATS_PREPARATION_VERSION = "10-no-impact"
+REPORT_STATS_PREPARATION_VERSION = "11-script-notation-scope"
 REPORT_DICTIONARY_STATUS_CATEGORIES = {
     "sensitive-terms": {"敏感词表配置", "敏感词表读取失败"},
     "common-terms": {"常用词检查表配置", "常用词检查表读取失败"},

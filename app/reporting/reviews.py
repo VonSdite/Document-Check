@@ -5,7 +5,11 @@ import json
 from contextlib import contextmanager
 
 from app.checks.report_filters import report_filter_reason, review_filter_scope
-from app.contracts.task_types import DOCUMENT_TASK_TYPE
+from app.contracts.task_types import (
+    CONSISTENCY_TASK_TYPE,
+    DOCUMENT_TASK_TYPE,
+    LANGUAGE_CONSISTENCY_TASK_TYPE,
+)
 from app.persistence.connection import get_db, now_text
 from app.reporting.constants import (
     REPORT_ITEM_FIELDS,
@@ -160,7 +164,14 @@ def review_context(task):
         items = []
         for item in _result_report_items(result):
             if item.get("type") not in {"issue", "suggestion"} or report_filter_reason(
-                item, review_scope=review_scope
+                item,
+                review_scope=review_scope,
+                filter_script_notation=task_type
+                in {
+                    DOCUMENT_TASK_TYPE,
+                    CONSISTENCY_TASK_TYPE,
+                    LANGUAGE_CONSISTENCY_TASK_TYPE,
+                },
             ):
                 continue
             current_keys.add((code, item["id"]))

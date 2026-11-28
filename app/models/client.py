@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import requests
 
 from app.checks.guardrails import TEXT_EXTRACTION_LIMITATION
+from app.checks.report_filters import SCRIPT_REVIEW_BOUNDARY
 from app.contracts.limits import (
     DEFAULT_ISSUE_OUTPUT_LIMIT,
     normalize_issue_output_limit,
@@ -114,6 +115,7 @@ _EXECUTION_BOUNDARY_TEMPLATE = """执行边界：
 5. {pdf_table_input_instruction}
 6. 输出明确问题或建议时，每条只描述一个问题或建议。
 7. {issue_output_limit_instruction}
+8. {script_review_boundary}
 
 {report_decision_rules}
 
@@ -160,6 +162,7 @@ def _issue_output_limit_instruction(value, subject: str) -> str:
 def _execution_boundary(issue_output_limit=DEFAULT_ISSUE_OUTPUT_LIMIT) -> str:
     return _EXECUTION_BOUNDARY_TEMPLATE.format(
         text_extraction_limitation=TEXT_EXTRACTION_LIMITATION,
+        script_review_boundary=SCRIPT_REVIEW_BOUNDARY,
         pdf_table_input_instruction=PDF_TABLE_INPUT_INSTRUCTION,
         issue_output_limit_instruction=_issue_output_limit_instruction(
             issue_output_limit, "单次回复"
@@ -428,7 +431,7 @@ def run_check(
                 "role": "system",
                 "content": (
                     "你是文档智能门禁系统中的审查助手。请严格基于用户提供的文档内容进行检查，"
-                    f"输出中文结果。{TEXT_EXTRACTION_LIMITATION}"
+                    f"输出中文结果。{TEXT_EXTRACTION_LIMITATION}{SCRIPT_REVIEW_BOUNDARY}"
                 ),
             },
             {

@@ -1,10 +1,15 @@
-"""按条目结论过滤无需处理及越出规范性、一致性范围的补充说明建议。"""
+"""按检查范围和条目结论过滤报告，保留原始内容供追溯。"""
 
 import re
 import unicodedata
 
 REVIEW_SCOPES = frozenset({"compliance", "consistency"})
-REPORT_FILTER_VERSION = "3-no-impact"
+REPORT_FILTER_VERSION = "4-script-notation-scope"
+SCRIPT_REVIEW_BOUNDARY = (
+    "上下标检查属于文档审查的排除范围：上下标的设置、样式、位置、缺失及普通字符与上下标之间的转换，"
+    "均不输出问题或建议，也不归入格式、单位、公式、编号引用或一致性问题。"
+    "文档中的数值、单位含义、公式内容和程序数组索引仍按原文证据核对。"
+)
 _DESCRIPTION = (
     "description",
     "issue",
@@ -149,6 +154,23 @@ _UNRESOLVED_DESCRIPTION = re.compile(
     r"need|please|may|might|cannot)\b",
     re.I,
 )
+_SCRIPT_TOPIC = re.compile(
+    r"上下标|(?:上标|下标)(?!注|明|识|记|示|出|题)|\b(?:super|sub)[ -]?scripts?\b", re.I
+)
+_ARRAY_INDEX = re.compile(
+    r"数组|索引|下标越界|\b(?:array|index(?:es|ing)?|indices)\b|"
+    r"subscript\s+out\s+of\s+(?:range|bounds)",
+    re.I,
+)
+_SCRIPT_FORMATTING = re.compile(
+    r"排版|样式|字号|字体|上下标|上标|superscript|\b(?:formatting|font|typography)\b",
+    re.I,
+)
+_SCRIPT_FORM = re.compile(r"[¹²³\u2070-\u209f]|[\^_]\{([^{}\r\n]+)\}")
+_SCRIPT_REPLACEMENT = re.compile(
+    r"(?:建议|请)?(?:将|把)?\s*(.+?)\s*"
+    r"(?:应(?:改|写)?为|(?:修改|改|更正|修正|调整|写)(?:为|成))\s*(.+?)[。.!]?"
+)
 
 
 def _text(item: dict, fields: tuple[str, ...]) -> str:
@@ -182,6 +204,50 @@ def is_no_action_finding(item: dict) -> bool:
     if decisions and all(decisions) and "no_action" in decisions:
         return True
     return _no_impact_without_action(item)
+
+
+def is_script_notation_finding(item: dict) -> bool:
+    """从判定和修改目标识别上下标检查，原文摘录只作为证据保留。"""
+    decision = _QUOTED.sub(
+        "\ufff0",
+        _text(
+            item,
+            _DESCRIPTION
+            + _SUGGESTION
+            + ("category", "issue_type", "problem_type", "问题类型"),
+        ),
+    )
+    if _ARRAY_INDEX.search(decision) and not _SCRIPT_FORMATTING.search(decision):
+        return False
+    if _SCRIPT_TOPIC.search(decision):
+        return True
+    # 修改前后的文字相同且仅上下标形式变化时，识别未写明排版名称的建议。
+    suggestions = [
+        value.strip()
+        for field in _SUGGESTION
+        for value in re.split(r"[；;\n]+", str(item.get(field) or ""))
+        if value.strip()
+    ]
+    return bool(suggestions) and all(
+        _script_only_replacement(value) for value in suggestions
+    )
+
+
+def _script_only_replacement(suggestion: str) -> bool:
+    match = _SCRIPT_REPLACEMENT.fullmatch(suggestion)
+    if not match:
+        return False
+    source, target = (value.strip(' \t“”「」"`') for value in match.groups())
+    if source == target or not _SCRIPT_FORM.search(source + target):
+        return False
+
+    def plain(value):
+        return unicodedata.normalize(
+            "NFKC",
+            _SCRIPT_FORM.sub(lambda found: found.group(1) or found.group(), value),
+        )
+
+    return plain(source) == plain(target)
 
 
 def is_supplement_only_finding(item: dict) -> bool:
@@ -311,9 +377,13 @@ def report_filter_audit(items: list, *, review_scope: str = "") -> dict:
     }
 
 
-def report_filter_reason(item: dict, *, review_scope: str = "") -> str:
+def report_filter_reason(
+    item: dict, *, review_scope: str = "", filter_script_notation: bool = True
+) -> str:
     if not isinstance(item, dict):
         return ""
+    if filter_script_notation and is_script_notation_finding(item):
+        return "script_notation"
     if is_no_action_finding(item):
         return "no_action"
     if review_scope in REVIEW_SCOPES and is_supplement_only_finding(item):
