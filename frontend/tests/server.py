@@ -11,6 +11,7 @@ from flask import Response, g, redirect, request, session
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from app.contracts.task_types import DOCUMENT_TASK_TYPE, TASK_TYPE_LABELS  # noqa: E402
 from app.identity.models import UserIdentity  # noqa: E402
 from app.persistence.connection import get_db  # noqa: E402
 from app.persistence.permissions import (  # noqa: E402
@@ -73,15 +74,19 @@ def main():
     @fixture.app.post("/__frontend__/review-fixture")
     def create_review_fixture():
         nonlocal review_task_id
+        task_type = request.args.get("task_type", DOCUMENT_TASK_TYPE)
+        if task_type not in TASK_TYPE_LABELS:
+            return {"error": "Unknown fixture task type"}, 400
         if review_task_id is None:
             review_task_id = fixture._insert_report_task()
         db = get_db()
         db.execute(
-            "UPDATE tasks SET owner_subject=? WHERE id=?",
+            "UPDATE tasks SET owner_subject=?, task_type=? WHERE id=?",
             (
                 "ip:127.0.0.1"
                 if request.args.get("mode") == "ip"
                 else "cookie_session:review-author",
+                task_type,
                 review_task_id,
             ),
         )

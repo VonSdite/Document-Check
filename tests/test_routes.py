@@ -6214,20 +6214,33 @@ class AdminSettingsRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
         headers = [
-            node.get_text(strip=True)
-            for node in soup.select_one("[data-report-item]").select(
-                ".report-field-heading"
-            )
+            node.get_text(strip=True) for node in soup.select(".report-table thead th")
         ]
         self.assertEqual(
             headers,
-            ["位置", "原文/证据", "问题描述", "影响", "修改建议"],
+            [
+                "条目",
+                "严重程度",
+                "证据可信度",
+                "问题类型",
+                "位置",
+                "原文/证据",
+                "问题描述",
+                "影响",
+                "修改建议",
+                "AI判定",
+                "是否认可 AI 结论",
+            ],
         )
-        row = _required_tag(soup.select_one("[data-report-item]"))
+        row = _required_tag(soup.select_one(".report-table tr[data-report-item]"))
         self.assertEqual(row.get("data-item-id"), "video-stable-item-1")
-        frame = _required_tag(row.select_one(".video-evidence-frame img"))
+        frame = _required_tag(
+            row.select_one(".report-field-excerpt .video-evidence-frame img")
+        )
         self.assertEqual(frame.get("src"), f"/admin/tasks/{task_id}/media/frame-0001")
-        jump = _required_tag(row.select_one("[data-video-timestamp]"))
+        jump = _required_tag(
+            row.select_one(".report-field-location [data-video-timestamp]")
+        )
         self.assertEqual(jump.get("data-video-timestamp"), "1.0")
         player = _required_tag(soup.select_one("video[data-report-video-player]"))
         self.assertEqual(player.get("src"), f"/admin/tasks/{task_id}/video")
@@ -6485,15 +6498,13 @@ class AdminSettingsRouteTest(unittest.TestCase):
         soup = BeautifulSoup(detail.get_data(as_text=True), "html.parser")
         headers = [
             node.get_text(strip=True)
-            for node in soup.select_one("[data-report-item]").select(
-                ".report-field-heading"
-            )
+            for node in soup.select(".report-table-media thead th")
         ]
-        self.assertEqual(headers, ["AI检查结论"])
-        self.assertIsNotNone(soup.select_one(".report-entry-body-media"))
-        row_text = _required_tag(soup.select_one("[data-report-item]")).get_text(
-            " ", strip=True
-        )
+        self.assertEqual(headers, ["条目", "AI检查结论", "AI判定", "是否认可 AI 结论"])
+        self.assertIsNone(soup.select_one(".report-review-card"))
+        row_text = _required_tag(
+            soup.select_one(".report-table-media tr[data-report-item]")
+        ).get_text(" ", strip=True)
         self.assertIn("图中配置项与步骤文字一致", row_text)
         self.assertIn("问题类型：界面步骤一致性", row_text)
         self.assertIn("位置/画面：第25页 / 图3-1", row_text)

@@ -2,12 +2,14 @@ import io
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from itertools import product
 from unittest.mock import patch
 
 from bs4 import BeautifulSoup
 from flask import g, request
 from openpyxl import load_workbook
 
+from app.contracts.task_types import TASK_TYPE_LABELS
 from app.identity.models import UserIdentity
 from app.persistence.connection import get_db
 from app.persistence.permissions import register_subject, replace_subject_permissions
@@ -470,14 +472,21 @@ class FinalReviewTest(unittest.TestCase):
         )
         self.assertEqual(self.state()["status"], "deferred")
 
-    def test_report_table_and_separate_final_review_page_have_distinct_entries(self):
+    def test_all_report_types_use_tables_and_separate_final_review_entries(self):
         initial_note = "结合上下文核对，原文参数含义一致。"
         self.initial(note=initial_note)
-        for prefix in ("", "/admin"):
+        for task_type, prefix in product(TASK_TYPE_LABELS, ("", "/admin")):
+            with self.app.app_context():
+                get_db().execute(
+                    "UPDATE tasks SET task_type=? WHERE id=?", (task_type, self.task_id)
+                )
+                get_db().commit()
             report = self.client.get(f"{prefix}/tasks/{self.task_id}")
+            self.assertEqual(report.status_code, 200, (task_type, prefix))
             soup = BeautifulSoup(report.data, "html.parser")
             self.assertEqual(len(soup.select(".report-table [data-report-item]")), 2)
             self.assertFalse(soup.select("[data-audit-item], [data-final-review-form]"))
+            self.assertFalse(soup.select("[data-save-initial], .report-review-card"))
             self.assertFalse(soup.select("[data-report-review-progress]"))
             self.assertIsNotNone(
                 soup.find("a", href=f"{prefix}/tasks/{self.task_id}/reviews")

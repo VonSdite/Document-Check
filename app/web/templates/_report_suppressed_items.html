@@ -1,7 +1,7 @@
 <details class="result-raw-details">
   <summary>已忽略误报 {{ result.suppressed_report_items|length }} 条</summary>
   <div class="report-table-wrap">
-    <table class="report-table">
+    <table class="report-table{% if media_report %} report-table-media{% endif %}">
       <thead>
         <tr>
           <th class="report-index-cell">条目</th>
