@@ -38,7 +38,211 @@ def actionable():
     )
 
 
+def no_impact_finding(**overrides):
+    return (
+        item(
+            "表3-1中引用“如表3-3”指向电源输入模块，实际表3-3标题为“电源输入模块”，"
+            "引用正确。表3-1中输出模块行引用“如表3-4”，实际表3-4标题为“电源输出模块”，"
+            "引用正确。未发现明显错误。",
+            "",
+            impact="无影响。",
+        )
+        | overrides
+    )
+
+
 class ReportFilterRuleTest(unittest.TestCase):
+    def test_no_impact_and_empty_suggestions_hide_mislabeled_long_findings(self):
+        for impact in (
+            "无影响",
+            "无影响。",
+            "无实质影响。",
+            "没有实际影响",
+            "无",
+            "No impact.",
+        ):
+            for suggestion in (
+                "",
+                None,
+                " \n ",
+                "无",
+                "无建议。",
+                "—",
+                "N/A",
+                "None",
+                "无需修改。",
+            ):
+                with self.subTest(impact=impact, suggestion=suggestion):
+                    case = no_impact_finding(impact=impact, suggestion=suggestion)
+                    self.assertEqual(report_filter_reason(case), "no_action")
+        for status in ("issue", "suggestion", "non_issue"):
+            self.assertEqual(
+                report_filter_reason(no_impact_finding(status=status)), "no_action"
+            )
+        self.assertEqual(
+            report_filter_reason(
+                {
+                    "状态": "问题",
+                    "问题描述": no_impact_finding()["description"],
+                    "影响说明": "无影响。",
+                    "修改建议": "",
+                }
+            ),
+            "no_action",
+        )
+
+    def test_uncertain_partial_and_quoted_impact_statements_are_retained(self):
+        for impact in (
+            "",
+            None,
+            "影响较小。",
+            "基本无影响。",
+            "可能无影响。",
+            "暂时无影响。",
+            "无影响？",
+            "None",
+            "N/A",
+            "对显示无影响，但影响设备运行。",
+            "无影响，但存在误接风险。",
+            "若两处指向同一设备则无影响。",
+            "原文称“无影响”。",
+        ):
+            with self.subTest(impact=impact):
+                self.assertEqual(
+                    report_filter_reason(no_impact_finding(impact=impact)), ""
+                )
+
+    def test_no_impact_does_not_override_defects_or_review_requests_in_description(
+        self,
+    ):
+        for description in (
+            "阈值误写为阀值。",
+            "公司名称写成华未。",
+            "两处设备型号不一致。",
+            "同一工况下，两处电压要求存在直接冲突。",
+            "单位应补上。",
+            "缺少电压单位。",
+            "未说明异常处理步骤。",
+            "需核查适用范围。",
+            "该连接方式需要重新评估。",
+            "还存在其他待核对事项。",
+            "当前引用正确，但另一处引用错误。",
+            "参数5V应为12V。",
+            "如果两处含义一致，则无需修改。",
+            "不能认为没有问题。",
+            "The voltage unit is wrong.",
+            "Please verify the wiring.",
+            "引用指向图3-1，却在目录标为图3-2。",
+            "参数单位应标注。",
+            "正文将电压标成电流。",
+            "同一端口一处为5V，另一处为12V。",
+            "无法判断该术语是否准确。",
+            "假如参数一致即可保留。",
+            "统一设备型号。",
+            "修改参数值。",
+            "补单位。",
+            "Add units to the voltage.",
+            "并非无问题。",
+            "不是无需修改。",
+            "两处是否指向同一设备？",
+        ):
+            with self.subTest(description=description):
+                self.assertEqual(
+                    report_filter_reason(no_impact_finding(description=description)), ""
+                )
+                for mixed in (
+                    no_impact_finding()["description"] + description,
+                    description + no_impact_finding()["description"],
+                ):
+                    self.assertEqual(
+                        report_filter_reason(no_impact_finding(description=mixed)), ""
+                    )
+        self.assertEqual(
+            report_filter_reason(no_impact_finding(excerpt="TODO：核实接线")), ""
+        )
+        self.assertEqual(
+            report_filter_reason(
+                no_impact_finding(description="修改记录与正文的标题一致。")
+            ),
+            "no_action",
+        )
+
+    def test_no_impact_field_aliases_and_merged_values_use_the_same_rule(self):
+        for description_key, impact_key, suggestion_key in (
+            ("description", "risk", "recommendation"),
+            ("差异说明", "客户影响", "建议处理方式"),
+            ("冲突或缺失说明", "可能影响", "需核对的依据"),
+            ("偏差说明", "影响", "建议修改"),
+        ):
+            for suggestion, expected in (("无", "no_action"), ("核对图号。", "")):
+                with self.subTest(
+                    fields=(description_key, impact_key, suggestion_key),
+                    suggestion=suggestion,
+                ):
+                    case = {
+                        description_key: no_impact_finding()["description"],
+                        impact_key: "无影响。\n没有实际影响。",
+                        suggestion_key: suggestion,
+                        "status": "issue",
+                    }
+                    content, count = sanitize_text_check_result(rounds.report(case))
+                    self.assertEqual(count, int(bool(expected)))
+                    self.assertEqual(json.loads(content)["items"], [case])
+                    normalized = _result_report_items({"result": content})[0]
+                    self.assertEqual(report_filter_reason(normalized), expected)
+        self.assertEqual(
+            report_filter_reason(no_impact_finding(suggestion="无。\n无需修改。")),
+            "no_action",
+        )
+
+    def test_no_impact_with_an_actual_suggestion_is_retained(self):
+        for suggestion in (
+            "统一图号。",
+            "核实引用目标。",
+            "保持原文，但需要补充单位。",
+            "N/A；请核对电压。",
+            "Add units to the voltage.",
+            "无需修改？",
+        ):
+            with self.subTest(suggestion=suggestion):
+                self.assertEqual(
+                    report_filter_reason(no_impact_finding(suggestion=suggestion)), ""
+                )
+
+    def test_no_impact_filter_preserves_source_and_ids_in_json_and_plain_text(self):
+        for result in (
+            {
+                "code": "consistency",
+                "result": rounds.report(no_impact_finding(), actionable()),
+            },
+            {
+                "code": "consistency",
+                "result": (
+                    "1. 问题描述："
+                    + no_impact_finding()["description"]
+                    + "\n影响：无影响。\n修改建议：\n\n"
+                    "2. 问题描述：同一端口两处电压要求存在直接冲突。\n"
+                    "影响：可能错误接线。\n修改建议：核实电压要求。"
+                ),
+            },
+        ):
+            original = result["result"]
+            items = _result_report_items(result)
+            result["item_acceptances"] = {items[0]["id"]: {"status": "accepted"}}
+            prepared = _prepare_task_results([result], suppression_rules={})[0]
+            self.assertEqual(
+                [entry["id"] for entry in prepared["report_items"]], [items[1]["id"]]
+            )
+            self.assertEqual(
+                prepared["filtered_report_items"][0]["filter_reason"], "no_action"
+            )
+            self.assertEqual(
+                prepared["result_summary"], "检查完成，保留 1 条明确问题。"
+            )
+            self.assertEqual(prepared["report_counts"]["accepted"], 1)
+            self.assertEqual(prepared["report_counts"]["pending_review"], 1)
+            self.assertEqual(result["result"], original)
+
     def test_supplement_only_cases_are_filtered_in_both_review_scopes(self):
         cases = [
             item(),
@@ -445,15 +649,18 @@ class ReportFilterExecutionTest(unittest.TestCase):
                     )
                     get_db().commit()
                 raw = rounds.report(
-                    item(), item("表述符合要求。", "", status="non_issue"), actionable()
+                    item(),
+                    item("表述符合要求。", "", status="non_issue"),
+                    no_impact_finding(),
+                    actionable(),
                 )
                 with patch("app.tasks.runner.run_check", return_value=raw):
                     TaskRunner(self.app).run(task_id)
                 task = self.task(task_id)
                 self.assertEqual(task["status"], "completed", task["error"])
                 result = json.loads(task["result_json"])[0]
-                self.assertEqual(len(json.loads(result["result"])["items"]), 3)
-                self.assertEqual(len(result["report_filter"]["items"]), 2)
+                self.assertEqual(len(json.loads(result["result"])["items"]), 4)
+                self.assertEqual(len(result["report_filter"]["items"]), 3)
                 self.assertEqual(
                     result["template_code"],
                     "consistency" if code.startswith("pool-") else "compliance",
@@ -465,7 +672,7 @@ class ReportFilterExecutionTest(unittest.TestCase):
                             entry["report"]["items"], json.loads(raw)["items"]
                         )
                         self.assertEqual(
-                            len(entry["report"]["report_filter"]["items"]), 2
+                            len(entry["report"]["report_filter"]["items"]), 3
                         )
                 stats = _task_report_stat_rows_for_where("t.id = ?", (task_id,))[0]
                 self.assertEqual(stats["issue"], 1)
@@ -497,7 +704,10 @@ class ReportFilterExecutionTest(unittest.TestCase):
         result = {
             "code": "compliance",
             "result": rounds.report(
-                item(), item("表述可接受。", "无需修改。"), actionable()
+                item(),
+                item("表述可接受。", "无需修改。"),
+                no_impact_finding(),
+                actionable(),
             ),
         }
         source_json = json.dumps([result], ensure_ascii=False)
@@ -509,13 +719,13 @@ class ReportFilterExecutionTest(unittest.TestCase):
         db.execute(
             "INSERT INTO task_report_stats "
             "(task_id, source_updated_at, suppression_version, issue_count, updated_at) "
-            "VALUES (?, ?, '6-check-pool|0:0:', 3, 'now')",
+            "VALUES (?, ?, '9-unique-report-item-ids|0:0:', 4, 'now')",
             (task_id, self.task(task_id)["updated_at"]),
         )
         db.execute(
             "INSERT INTO task_final_review_stats "
             "(task_id, total, initial_count, confirmed, returned, deferred, pending, status) "
-            "VALUES (?, 3, 0, 0, 0, 0, 0, 'not_required')",
+            "VALUES (?, 4, 0, 0, 0, 0, 0, 'not_required')",
             (task_id,),
         )
         db.execute(
@@ -557,6 +767,33 @@ class ReportFilterExecutionTest(unittest.TestCase):
         )
         db.commit()
         self.assertEqual(final_review_progress([task_id])[task_id]["total"], 1)
+
+    def test_previous_filter_version_refreshes_final_review_cache(self):
+        task_id = self.create_task(rounds=1)
+        result = {
+            "code": "consistency",
+            "result": rounds.report(no_impact_finding(), actionable()),
+        }
+        db = get_db()
+        db.execute(
+            "UPDATE tasks SET result_json=?, status='completed' WHERE id=?",
+            (json.dumps([result]), task_id),
+        )
+        db.execute(
+            "INSERT INTO task_final_review_stats "
+            "(task_id, total, initial_count, confirmed, returned, deferred, pending, "
+            "status, preparation_version) "
+            "VALUES (?, 2, 0, 0, 0, 0, 0, 'not_required', '9-unique-report-item-ids')",
+            (task_id,),
+        )
+        db.commit()
+        self.assertEqual(final_review_progress([task_id], refresh=False), {})
+        self.assertEqual(final_review_progress([task_id])[task_id]["total"], 1)
+        saved = db.execute(
+            "SELECT preparation_version FROM task_final_review_stats WHERE task_id=?",
+            (task_id,),
+        ).fetchone()
+        self.assertEqual(saved["preparation_version"], REPORT_STATS_PREPARATION_VERSION)
 
     def test_retry_filters_retained_rounds_and_preserves_reviewed_finding_identity(
         self,

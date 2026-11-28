@@ -4,9 +4,30 @@ import re
 import unicodedata
 
 REVIEW_SCOPES = frozenset({"compliance", "consistency"})
-REPORT_FILTER_VERSION = "2-whole-finding"
-_DESCRIPTION = ("description", "issue", "problem", "finding", "问题描述", "问题判断")
-_SUGGESTION = ("suggestion", "recommendation", "fix", "修改建议", "建议")
+REPORT_FILTER_VERSION = "3-no-impact"
+_DESCRIPTION = (
+    "description",
+    "issue",
+    "problem",
+    "finding",
+    "疑似问题",
+    "问题描述",
+    "偏差说明",
+    "差异说明",
+    "冲突或缺失说明",
+    "问题判断",
+)
+_SUGGESTION = (
+    "suggestion",
+    "recommendation",
+    "fix",
+    "修改建议",
+    "建议修改",
+    "建议处理方式",
+    "需核对的依据",
+    "建议",
+)
+_IMPACT = ("impact", "risk", "影响", "影响说明", "客户影响", "可能影响")
 _EXCERPT = ("excerpt", "quote", "original", "evidence", "原文摘录", "原文", "证据")
 _QUOTED = re.compile(r'“[^”\n]*”|「[^」\n]*」|"[^"\n]*"|`[^`\n]*`')
 _ERROR_NOUN = (
@@ -107,6 +128,27 @@ _UNSCOPED_VALUES = re.compile(
 _RANGE_BACKGROUND = re.compile(
     r"(?:文中|正文|表中)?(?:给出|提供|列出)了?[一二三四五六七八九十两\d]+(?:个|种)?范围"
 )
+_NO_IMPACT_VALUE = r"(?:无|(?:无|没有|并无)(?:实际|实质性?)?影响|no\s+impact)"
+_NO_IMPACT = re.compile(
+    rf"{_NO_IMPACT_VALUE}(?:[。.!;,\s]+{_NO_IMPACT_VALUE})*[。.!;,\s]*", re.I
+)
+_EMPTY_SUGGESTION = re.compile(r"无(?:建议|修改建议)?|[-—–]+|N/?A|None|null", re.I)
+_UNRESOLVED_DESCRIPTION = re.compile(
+    r"错误|有误|不正确|不一致|不统一|不相同|不同|不符|不匹配|矛盾|冲突|差异|歧义|"
+    r"写成|标成|写反|误用|颠倒|遗漏|漏掉|未找到|未发现|未见|不存在|"
+    r"(?:存在|出现|有)[^,;。\n]{0,12}(?:问题|异常|风险|偏差)|"
+    r"需|须|应当|必须|建议|请|待|核实|核对|核查|复核|验证|评估|"
+    r"统一|补充|补齐|补全|补上|补写|补入|补单位|改用|改正|删除|删去|去掉|"
+    r"修正|纠正|更正|替换|调整|增加|添加|完善|修改(?!记录|历史|日志)|"
+    r"应(?:为|补|改|添|增|删|标|注明|统一|调整|使用)|"
+    r"疑似|可能|尚未|仍未|不确定|不一定|或许|也许|无法|不能|不应|不宜|"
+    r"并非|不是|不代表|难以|假如|仅当|另一处|却|"
+    r"^(?:add|remove|change|correct|update|replace)\b|"
+    r"\b(?:wrong|incorrect|inconsistent|inconsistency|conflict|mismatch|missing|"
+    r"error|defect|unclear|uncertain|verify|check|review|confirm|should|must|"
+    r"need|please|may|might|cannot)\b",
+    re.I,
+)
 
 
 def _text(item: dict, fields: tuple[str, ...]) -> str:
@@ -132,12 +174,14 @@ def review_filter_scope(check: dict) -> str:
 
 
 def is_no_action_finding(item: dict) -> bool:
-    """描述和建议的全部主张均确认无需处理时隐藏，标签仅作为原始信息保留。"""
+    """结合描述、影响和建议确认无需处理，标签仅作为原始信息保留。"""
     if _has_placeholder(item):
         return False
     claims = _claims(item)
     decisions = [_no_action_claim(claim) for claim in claims]
-    return bool(decisions) and all(decisions) and "no_action" in decisions
+    if decisions and all(decisions) and "no_action" in decisions:
+        return True
+    return _no_impact_without_action(item)
 
 
 def is_supplement_only_finding(item: dict) -> bool:
@@ -176,13 +220,44 @@ def _has_placeholder(item: dict) -> bool:
     return bool(_PLACEHOLDER.search(_text(item, _DESCRIPTION + _EXCERPT)))
 
 
-def _claims(item: dict) -> list[str]:
-    text = _QUOTED.sub("\ufff0", _text(item, _DESCRIPTION + _SUGGESTION))
+def _claims(
+    item: dict, fields: tuple[str, ...] = _DESCRIPTION + _SUGGESTION
+) -> list[str]:
+    text = _QUOTED.sub("\ufff0", _text(item, fields))
     return [
         cleaned
         for part in _CLAUSE_BOUNDARY.split(text)
         if (cleaned := re.sub(r"^(?:且|仍|还|则)\s*", "", part.strip()).strip())
     ]
+
+
+def _no_impact_without_action(item: dict) -> bool:
+    if not _NO_IMPACT.fullmatch(_text(item, _IMPACT)):
+        return False
+    if "?" in _QUOTED.sub("", _text(item, _DESCRIPTION + _SUGGESTION)):
+        return False
+    if any(
+        not _EMPTY_SUGGESTION.fullmatch(claim)
+        and _no_action_claim(claim) != "no_action"
+        for claim in _claims(item, _SUGGESTION)
+    ):
+        return False
+    claims = _claims(item, _DESCRIPTION)
+    # 明确无影响且无有效建议时允许背景叙述，独立错误和待核实事项保留。
+    return bool(claims) and all(
+        _no_action_claim(claim)
+        or not any(
+            pattern.search(claim)
+            for pattern in (
+                _CONDITIONAL,
+                _DEFECT,
+                _CORRECTION,
+                _MISSING_PATTERN,
+                _UNRESOLVED_DESCRIPTION,
+            )
+        )
+        for claim in claims
+    )
 
 
 def _no_action_claim(claim: str) -> str:
