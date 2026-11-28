@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 from functools import cached_property, lru_cache
 
 from app.reporting.constants import REPORT_SEVERITY_ORDER
+from app.reporting.identities import ensure_unique_report_item_ids
 from app.reporting.service import (
     _merge_report_evidence_refs,
     _merge_report_field_values,
@@ -938,7 +939,13 @@ def build_round_result(
     completed = sum(entry.get("status") == "completed" for entry in rounds)
     failed = sum(entry.get("status") == "failed" for entry in rounds)
     items = _merge_findings(code, rounds)
+    previous_items = _result_report_items(
+        {"code": code, "structured_report": {"items": list(previous_items)}}
+    )
+    previous_ids = {item["id"] for item in previous_items}
     used_ids = set()
+    retained_items = []
+    new_items = []
     for item in items:
         origins = {(entry["round"], entry["item"]) for entry in item["source_items"]}
         for previous in previous_items:
@@ -952,7 +959,14 @@ def build_round_result(
             if origins & previous_origins:
                 item["id"] = previous_id
                 used_ids.add(previous_id)
+                retained_items.append(item)
                 break
+        else:
+            new_items.append(item)
+    # 按来源复用的标识优先保留，新增分组避开上一报告的全部标识。
+    ensure_unique_report_item_ids(
+        retained_items + new_items, reserved_ids=previous_ids - used_ids
+    )
     summary = f"计划 {planned} 轮，已完成 {completed} 轮，失败 {failed} 轮，合并后共 {len(items)} 条。"
     report = {"summary": summary, "items": items}
     result = {

@@ -49,6 +49,7 @@ from app.reporting.constants import (
     REPORT_SUPPRESSION_DESCRIPTION_SIMILARITY_THRESHOLD,
     REPORT_SUPPRESSION_FIELDS,
 )
+from app.reporting.identities import ensure_unique_report_item_ids
 
 
 def _row_value(row, key: str, default=None):
@@ -963,6 +964,7 @@ def _structured_report_items(result_code: str, structured_report: dict) -> list[
                 "type": item_type,
             }
         )
+    ensure_unique_report_item_ids(items)
     return items
 
 
